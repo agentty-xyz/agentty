@@ -1,6 +1,6 @@
 //! Agentty adapter for the frontend-neutral `ag-session` programmatic API.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -22,6 +22,7 @@ use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
 use crate::app::graph_question::GraphAnswerOutcome;
 use crate::app::message_admission::MessagePlan;
 use crate::app::prompt_intent::PromptModelChange;
+use crate::app::review::ReviewCacheEntry;
 use crate::app::session::{
     SessionCreationSettings, SessionGitStatus, migrate_session_off_retired_model,
 };
@@ -31,7 +32,7 @@ use crate::app::{
     App, AppError, AppEvent, LocalQuery, ProjectQuery, ProjectSyncPhase, ProjectSyncStatus,
     SessionError, SessionQuery, SessionRuntimeCommand, SessionRuntimeHandle, review, spawn,
 };
-use crate::domain::agent::{AgentKind, AgentSelection, HarnessModelStatus};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, HarnessModelStatus};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::question_answer_message;
 use crate::domain::session::Session;
@@ -354,7 +355,9 @@ impl App {
     /// mailbox. Foreground callers use this helper so awaiting their own
     /// response never deadlocks the foreground executor. Pending creation also
     /// pumps reducer events so its background completion can acknowledge the
-    /// request; other commands retain their normal snapshot ordering.
+    /// request; other commands retain their normal snapshot ordering. Each
+    /// pumped event ends with the remote revision check the foreground cycle
+    /// makes.
     pub(crate) async fn drive_session_request<RequestFuture>(
         &mut self,
         request: RequestFuture,
@@ -386,6 +389,9 @@ impl App {
                             self.apply_session_runtime_command(*command).await;
                         }
                     }
+                    // This loop stands in for the foreground cycle until the
+                    // request finishes.
+                    self.publish_reported_state_changes();
                 }
             }
         }
@@ -428,6 +434,9 @@ impl App {
             }
             SessionRuntimeCommand::Mutation(command) => {
                 let _ = self.admit_session_command(command).await;
+                // A mutation may write only the database, such as a
+                // transcript or a task, which the foreground fingerprint
+                // does not hold.
                 self.publish_session_change();
             }
         }
@@ -535,7 +544,7 @@ impl App {
     /// Summarizes the loaded sessions in their display order, with the diff
     /// size, model, timer, branch, and review figures the session list and
     /// the session footer show.
-    fn list_api_session_entries(&self) -> Vec<ag_session::SessionListEntry> {
+    pub(super) fn list_api_session_entries(&self) -> Vec<ag_session::SessionListEntry> {
         let git_statuses = self.sessions.render_parts().session_git_statuses;
 
         self.sessions
@@ -555,6 +564,26 @@ impl App {
                 }
             })
             .collect()
+    }
+
+    /// Collects what a session snapshot reports from the loaded `session`
+    /// rather than its stored row, with its shown focused review as
+    /// `focused_review` reports it. Remote clients compare the same details,
+    /// so every live input of a snapshot is listed here once.
+    pub(super) fn live_session_details<FocusedReview>(
+        &self,
+        session: &Session,
+        focused_review: impl Fn(
+            &HashMap<SessionId, ReviewCacheEntry>,
+            &Session,
+        ) -> Option<FocusedReview>,
+    ) -> LiveSessionDetails<FocusedReview> {
+        LiveSessionDetails {
+            focused_review: focused_review(&self.review_cache, session),
+            progress: session.status_line(self.session_progress_message(&session.id)),
+            queued_actions: session.queued_action_labels(),
+            queued_messages: session.queued_message_texts(),
+        }
     }
 
     /// Answers one programmatic file-listing query: captures the session's
@@ -714,16 +743,22 @@ impl App {
     /// Describes the active project, its base branch and default model, and
     /// the creation modes [`Self::validate_api_session_request`] accepts now.
     async fn api_host_context(&mut self) -> Result<HostContext, ApiSessionError> {
-        let project_id = self.active_project_id();
-        let project = self.api_project_creation_context(None)?;
+        let HostInputs {
+            base_branch,
+            harness_model,
+            has_agent_cli,
+            models,
+            project_id,
+            project_name,
+        } = self.api_host_inputs();
+        let project = self.api_project_creation_context(base_branch)?;
         let settings = self
             .sessions
             .resolve_session_creation_settings(&self.services, project_id, None)
             .await
             .map_err(api_error_from_session)?;
-        let harness_model = self.services.harness_availability().default_model();
         let mut session_modes = Vec::new();
-        if self.services.has_agent_cli() {
+        if has_agent_cli {
             session_modes.push(HostSessionMode {
                 agent: settings.agent,
                 mode: CreateSessionMode::Regular,
@@ -752,17 +787,30 @@ impl App {
         Ok(HostContext {
             base_branch: project.base_branch,
             default_model,
-            models: self.api_session_models(),
+            models,
             project_id,
-            project_name: self.projects.project_name().to_string(),
+            project_name,
             session_modes,
         })
+    }
+
+    /// Collects what [`Self::api_host_context`] reads from host memory.
+    /// Remote clients compare the same inputs, so each is listed here once.
+    pub(super) fn api_host_inputs(&self) -> HostInputs {
+        HostInputs {
+            base_branch: self.projects.git_branch().map(str::to_string),
+            harness_model: self.services.harness_availability().default_model(),
+            has_agent_cli: self.services.has_agent_cli(),
+            models: self.api_session_models(),
+            project_id: self.active_project_id(),
+            project_name: self.projects.project_name().to_string(),
+        }
     }
 
     /// Reports the active project's branch, its ahead and behind counts from
     /// the latest background fetch, and the explicit sync the status bar
     /// shows for it. A sync of another project is left out.
-    fn api_project_status(&self) -> HostProjectStatus {
+    pub(super) fn api_project_status(&self) -> HostProjectStatus {
         let project_id = self.active_project_id();
         let project = self.projects.render_parts();
 
@@ -985,18 +1033,14 @@ impl App {
             .await
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
         let live_session = self.sessions.session_for_id(session_id);
-        let queued_messages = live_session.map_or_default(|session| {
-            session
-                .queued_messages
-                .iter()
-                .map(|message| message.transcript_text().to_string())
-                .collect()
+        let LiveSessionDetails {
+            focused_review,
+            progress,
+            queued_actions,
+            queued_messages,
+        } = live_session.map_or_default(|session| {
+            self.live_session_details(session, review::shown_focused_review)
         });
-        let progress = live_session
-            .and_then(|session| session.status_line(self.session_progress_message(session_id)));
-        let queued_actions = live_session.map_or_default(Session::queued_action_labels);
-        let focused_review = live_session
-            .and_then(|session| review::shown_focused_review(&self.review_cache, session));
         let graph = self.api_graph_summary(session_id).await;
 
         let live_status = live_session.map(|session| session.status);
@@ -1547,6 +1591,51 @@ impl App {
 
         self.services.emit_app_event(AppEvent::RefreshSessions);
     }
+}
+
+/// What a session snapshot reports from the loaded session rather than its
+/// stored row, with the shown focused review as `FocusedReview`: the review
+/// itself for the snapshot, or only its identity where it is compared.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct LiveSessionDetails<FocusedReview> {
+    /// Focused review the session shows.
+    pub(super) focused_review: Option<FocusedReview>,
+    /// Line describing the session's current work.
+    pub(super) progress: Option<String>,
+    /// Labels of the workflow actions waiting behind the active turn.
+    pub(super) queued_actions: Vec<String>,
+    /// Messages waiting behind the active turn.
+    pub(super) queued_messages: Vec<String>,
+}
+
+impl<FocusedReview> Default for LiveSessionDetails<FocusedReview> {
+    /// Reports no live detail, as for a session the host has not loaded.
+    fn default() -> Self {
+        Self {
+            focused_review: None,
+            progress: None,
+            queued_actions: Vec::new(),
+            queued_messages: Vec::new(),
+        }
+    }
+}
+
+/// What the host context reads from host memory. Its creation defaults come
+/// from stored settings.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct HostInputs {
+    /// Active project's branch, which new sessions start from.
+    base_branch: Option<String>,
+    /// Model new Harness sessions start on, while one is available.
+    harness_model: Option<AgentModel>,
+    /// Whether any agent CLI can run regular sessions.
+    has_agent_cli: bool,
+    /// Agents and models a session can switch to.
+    models: Vec<AgentSelection>,
+    /// Active project new sessions start in.
+    project_id: i64,
+    /// Active project's name.
+    project_name: String,
 }
 
 /// Worktree inputs resolved for one API-requested project.

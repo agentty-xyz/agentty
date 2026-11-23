@@ -351,12 +351,6 @@ where
         }
     }
 
-    // Terminal input changes live session details, such as clearing a
-    // focused review, that no app event follows.
-    if handled_terminal_events > 0 {
-        app.publish_live_session_changes();
-    }
-
     let remaining_events = event_rx.len();
     if remaining_events > 0 {
         debug!(

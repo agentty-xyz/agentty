@@ -805,38 +805,51 @@ async fn terminal_project_sync_steps_advance_the_remote_revision() {
         .times(2)
         .returning(|_, _, _, _| {});
     app.sync_main_runner = Arc::new(sync_main_runner);
-    let mut revisions = app.remote_control.subscribe_revisions();
-    let mut revision = move || *revisions.borrow_and_update();
-    let initial_revision = revision();
+    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    // Each step ends with the check the foreground cycle makes.
+    let mut revision = move |app: &mut App| {
+        app.publish_reported_state_changes();
+
+        *revisions.borrow_and_update()
+    };
+    let initial_revision = revision(&mut app);
+    let first_project_context = app.sync_handle.context_snapshot();
 
     // Act: a started sync, a duplicate, and a sync of another project that
     // waits for the first.
     app.start_sync_main();
-    let after_start = revision();
+    let after_start = revision(&mut app);
     app.start_sync_main();
-    let after_duplicate = revision();
-    let mut second_project_context = app.sync_handle.context_snapshot();
+    let after_duplicate = revision(&mut app);
+    let mut second_project_context = first_project_context.clone();
     second_project_context.project_id = app.active_project_id() + 1;
     second_project_context.project_name = "second-project".to_string();
     app.sync_handle.publish_context(second_project_context);
     app.start_sync_main();
-    let after_queued = revision();
-    // The first sync ends, so the queued one starts.
+    let after_queued = revision(&mut app);
+    // The first sync ends, so the queued one starts; devices see only the
+    // active project's sync, which is gone.
     app.project_sync_status = None;
     app.start_next_project_sync_from_queue();
-    let after_queued_start = revision();
-    // A merge now blocks a new sync of the second project.
+    let after_queued_start = revision(&mut app);
+    // A merge now blocks a new sync of the second project, which devices do
+    // not see, and then one of the active project, which they do.
     app.project_sync_status = None;
     app.merge_queue.enqueue("pending-merge".into());
     app.start_sync_main();
-    let after_blocked = revision();
+    let after_other_blocked = revision(&mut app);
+    app.sync_handle.publish_context(first_project_context);
+    app.project_sync_status = None;
+    app.start_sync_main();
+    let after_active_blocked = revision(&mut app);
 
     // Assert
     assert_eq!(after_start, initial_revision + 1);
     assert_eq!(after_duplicate, after_start);
     assert_eq!(after_queued, after_start);
     assert_eq!(after_queued_start, after_start + 1);
-    assert_eq!(after_blocked, after_queued_start + 1);
+    assert_eq!(after_other_blocked, after_queued_start);
+    assert_eq!(after_active_blocked, after_queued_start + 1);
 }
 
 #[tokio::test]

@@ -24,6 +24,7 @@ use super::{driver_session, graph, seed_session};
 use crate::app::execution_graph::{
     GraphDriverRegistration, GraphDriverSession, GraphNodeLeases, SessionStatusGraphRunner,
 };
+use crate::app::test_support::start_fake_listener;
 use crate::app::{App, AppServices};
 use crate::domain::session::Status;
 use crate::infra::db::GRAPH_NODE_ACTIVITY_OPERATION_KIND;
@@ -254,6 +255,70 @@ async fn unclaimed_checks_wake_resource_blocked_drivers_without_external_events(
         assert_eq!(started.as_deref(), Some("waiting"));
         app.services.wait_for_cleanup_tasks(None).await;
     }
+}
+
+#[tokio::test]
+async fn live_driver_changes_advance_the_remote_revision_once_each() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let mut revisions = start_fake_listener(&mut app).await;
+    let mut budgeted = utility_graph("budgeted", &["first", "second"]);
+    for node in &mut budgeted.nodes {
+        node.execution.shared_budget_id = Some("calls".into());
+    }
+    let budget = ProviderCallBudget::new(1);
+    let (started, _started_rx) = mpsc::unbounded_channel();
+    let executor = Arc::new(GraphExecutor::new(
+        app.services.db().graph_dispatch(),
+        Arc::new(
+            app.services
+                .graph_resources
+                .with_budgets(HashMap::from([("calls".into(), budget.clone())])),
+        ),
+        Arc::new(StaggeredRunner {
+            fast_fails: false,
+            fast_release: Notify::new(),
+            runs: app.services.db().runs(),
+            slow_release: Notify::new(),
+            started,
+        }),
+    ));
+    // A second live driver, so reports are ordered by graph.
+    let _unbudgeted = GraphDriverRegistration::register(
+        &app.services.graph_drivers,
+        &utility_graph("unbudgeted", &["only"]),
+        Arc::clone(&executor),
+    );
+    // Each step ends with the check the foreground cycle makes.
+    let mut revision = move |app: &mut App| {
+        app.publish_reported_state_changes();
+
+        *revisions.borrow_and_update()
+    };
+    let initial_revision = revision(&mut app);
+
+    // Act
+    let registration =
+        GraphDriverRegistration::register(&app.services.graph_drivers, &budgeted, executor);
+    let after_register = revision(&mut app);
+    let unchanged = revision(&mut app);
+    budget.consume().expect("the budget has one call");
+    let after_exhausted = revision(&mut app);
+    budget.extend(1);
+    let after_extended = revision(&mut app);
+    registration.cancellation.cancel();
+    let after_cancel = revision(&mut app);
+    drop(registration);
+    let after_unregister = revision(&mut app);
+
+    // Assert
+    assert_eq!(after_register, initial_revision + 1);
+    assert_eq!(unchanged, after_register);
+    assert_eq!(after_exhausted, after_register + 1);
+    assert_eq!(after_extended, after_exhausted + 1);
+    // A cancelled driver reports what no driver reports.
+    assert_eq!(after_cancel, after_extended + 1);
+    assert_eq!(after_unregister, after_cancel);
 }
 
 #[tokio::test]

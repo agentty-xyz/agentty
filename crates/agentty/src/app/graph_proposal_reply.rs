@@ -101,6 +101,23 @@ impl App {
             .contains_key(proposal_id)
     }
 
+    /// Returns the proposals whose chat reply is being decided, sorted. A
+    /// session snapshot hides a proposal's questions while its reply is
+    /// decided, and the decision ends off the foreground task.
+    pub(super) fn deciding_graph_proposal_replies(&self) -> Vec<String> {
+        let mut proposal_ids = self
+            .services
+            .proposal_reply_decisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        proposal_ids.sort_unstable();
+
+        proposal_ids
+    }
+
     /// Sends answers to the exact proposal version whose clarification
     /// questions the user answered, rejecting them as stale once that version
     /// no longer waits for answers.

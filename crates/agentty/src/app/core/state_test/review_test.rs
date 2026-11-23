@@ -783,13 +783,15 @@ async fn test_apply_review_request_status_update_persists_summary() {
         }),
         session_id: session_id.into(),
     };
-    let mut revisions = app.remote_control.subscribe_revisions();
+    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
 
-    // Act
+    // Act: each update ends with the check the foreground cycle makes.
     app.apply_review_request_status_update(update()).await;
+    app.publish_reported_state_changes();
     let after_first_update = *revisions.borrow_and_update();
     app.apply_review_request_status_update(update()).await;
+    app.publish_reported_state_changes();
     let after_same_update = *revisions.borrow_and_update();
 
     // Assert
