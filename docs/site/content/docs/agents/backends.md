@@ -226,7 +226,7 @@ defaults; change those in [Settings](@/docs/usage/workflow.md#settings-scope).
 agent CLIs. It runs Agentty's built-in agent loop instead of an external CLI, against a
 free local model server or a paid hosted provider:
 
-| Provider     | Cost | Key                                  | Endpoint                              |
+| Provider     | Cost | Key imported from                    | Endpoint                              |
 | ------------ | ---- | ------------------------------------ | ------------------------------------- |
 | Local server | Free | Optional `OPENAI_COMPATIBLE_API_KEY` | Optional `OPENAI_COMPATIBLE_BASE_URL` |
 | Muse         | Paid | `MODEL_API_KEY`                      | Optional `MODEL_API_BASE_URL`         |
@@ -239,13 +239,21 @@ free local model server or a paid hosted provider:
 Kimi defaults to Moonshot AI's international endpoint, `https://api.moonshot.ai/v1`; set
 `KIMI_BASE_URL` to use another, such as `https://api.moonshot.cn/v1`.
 
+<a id="backends-harness-api-keys"></a> Harness API keys live in
+`~/.agentty/auth/api_keys.json` (or `$AGENTTY_ROOT/auth/api_keys.json`), readable only
+by you. Pressing `Enter` on a hosted `/model` row whose provider has no stored key opens
+a popup where you paste the key; Agentty saves it and switches the session to the model.
+A key exported in the table's variable is copied into the file the first time Agentty
+finds none stored for that provider; after that the file wins and the variable is
+ignored. To replace a key, edit its entry in the file, or remove the entry and select
+that provider's model in `/model` to paste a new key.
+
 `/model` lists every hosted model, but one runs only once its key, sign-in, or local
-server is available: selecting a model without its key shows the missing variable and
-keeps the current model, and a `chatgpt/` model offers its sign-in. While an agent CLI
-is installed, new sessions keep starting on the configured CLI model. Without one,
-Agentty starts only when a harness model is ready or you picked a local model earlier,
-and new sessions start on it; a model that still needs a key or sign-in is never chosen
-as the default.
+server is available: a model without its key asks for it, and a `chatgpt/` model offers
+its sign-in. While an agent CLI is installed, new sessions keep starting on the
+configured CLI model. Without one, Agentty starts only when a harness model is ready or
+you picked a local model earlier, and new sessions start on it; a model that still needs
+a key or sign-in is never chosen as the default.
 
 - Inspection turns can read the worktree. Chat turns can also write files and run
   `bash`. Provider keys and endpoints are removed from the `bash` environment.
@@ -254,8 +262,9 @@ as the default.
   disk but write only the session worktree, its Git metadata, and the session's own
   temporary directory. Credential stores such as `~/.ssh`, `~/.aws`, `~/.config/gh`, the
   keychains, and browser profiles stay hidden, and so do Agentty's database, pasted
-  images, harness history, and ChatGPT sign-in. Agentty never reruns a blocked command
-  outside the sandbox; it shows a `[Sandbox]` hint when a command may have been blocked.
+  images, harness history, stored API keys, and ChatGPT sign-in. Agentty never reruns a
+  blocked command outside the sandbox; it shows a `[Sandbox]` hint when a command may
+  have been blocked.
 - Commands keep network access, including to services listening on `localhost` such as
   local databases or a Docker TCP socket, but cannot reach Unix sockets: not Docker's,
   and not the SSH agent's, so Git over SSH with agent keys fails inside a session.
@@ -357,15 +366,16 @@ most $2.50, `premium` at least $15, and `standard` in between. The cheap models,
 messages. Meta may train on prompts and completions sent to
 `muse-spark-1.3-contributor`.
 
-Pressing `Enter` on a row that cannot run a turn, such as a model without tool calls or
-a provider without its key, keeps the current model and shows what is missing, such as
-`` `kimi-k3` needs `KIMI_API_KEY` ``. The list refreshes each time you open it, so newly
-pulled models and started servers appear without a restart.
+Pressing `Enter` on a row that needs an API key or sign-in opens a popup to provide it.
+On a row that cannot run a turn otherwise, such as a model without tool calls or a
+provider without its base URL, it keeps the current model and shows what is missing,
+such as `` `qwen3.8-flash` needs `DASHSCOPE_BASE_URL` ``. The list refreshes each time
+you open it, so newly pulled models and started servers appear without a restart.
 
 The harness model you pick never changes the project default model. It becomes the model
 new sessions start on when no backend CLI is installed. Until you pick one, those
 sessions prefer a ready local model, then the first ready paid model in list order. An
-exported API key, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set for other tools,
+imported API key, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set for other tools,
 therefore never displaces a ready local model or a provider listed before it; when
 nothing else is ready, its first model, `gpt-6.1-sol` or `claude-sonnet-5-5`, becomes
 the default. A remembered local model stays the default while its server is stopped; a
@@ -375,12 +385,8 @@ remembered paid model whose key is gone gives way to the next ready model.
 
 <a id="backends-harness-openai"></a> The harness runs `gpt-6.1-sol`, `gpt-6-astra`,
 `gpt-6-luna`, and `gpt-5.6-terra` through OpenAI's Responses API with a paid OpenAI
-Platform API key:
-
-```sh
-export OPENAI_API_KEY=sk-...
-agentty   # then choose a gpt-* model under ag-harness in /model
-```
+Platform API key: choose a `gpt-*` model under `ag-harness` in `/model` and paste the
+key, or export `OPENAI_API_KEY` before the first launch to import it.
 
 - Usage is billed to the key's organization. To use a ChatGPT subscription instead, pick
   a `chatgpt/` model
@@ -409,27 +415,25 @@ agentty   # then choose a chatgpt/ model under ag-harness in /model
 - Pressing `Enter` on such a row, or sending a prompt on a signed-out `chatgpt/` model,
   opens a sign-in popup that opens your browser and then switches the session to the
   model.
-- A `chatgpt/` model always uses the plan and a bare `gpt-*` model always uses
-  `OPENAI_API_KEY`; neither falls back to the other.
+- A `chatgpt/` model always uses the plan and a bare `gpt-*` model always uses the
+  stored OpenAI API key; neither falls back to the other.
 
 ### Claude Models
 
 <a id="backends-harness-claude"></a> The harness runs `claude-sonnet-5-5`,
 `claude-opus-5-5`, `claude-fable-5-2`, and `claude-haiku-5-5` through Anthropic's
-Messages API with a Claude Console API key:
-
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-agentty   # then choose a claude-* model under ag-harness in /model
-```
+Messages API with a Claude Console API key: choose a `claude-*` model under `ag-harness`
+in `/model` and paste the key, or export `ANTHROPIC_API_KEY` before the first launch to
+import it.
 
 - Usage is billed to the key's Console organization at API rates, never to a Claude
   subscription.
 - `ag-harness` and the **claude** agent share these model names and descriptions but not
-  their backend: `ag-harness` rows, badged `[paid]`, always use `ANTHROPIC_API_KEY`, and
-  `claude` rows always use the `claude` CLI; neither falls back to the other. Settings
-  and the status bar show them as `claude/<model>` and `harness/<model>`, and harness
-  rows in Settings add their price class, such as `harness/claude-haiku-5-5 · cheap`.
+  their backend: `ag-harness` rows, badged `[paid]`, always use the stored Anthropic API
+  key, and `claude` rows always use the `claude` CLI; neither falls back to the other.
+  Settings and the status bar show them as `claude/<model>` and `harness/<model>`, and
+  harness rows in Settings add their price class, such as
+  `harness/claude-haiku-5-5 · cheap`.
 - `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com/v1`) selects another Messages
   API endpoint. It also accepts the origin alone, such as `https://api.anthropic.com`,
   as Anthropic's SDKs and Claude Code read it.

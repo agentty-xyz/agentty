@@ -1338,7 +1338,7 @@ fn labeled_harness_models() -> Vec<HarnessModelOption> {
             AgentModel::KimiK3,
             ModelCost::Premium,
             "Kimi",
-            HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
+            HarnessModelStatus::ApiKeyRequired("kimi"),
         ),
         harness_option(
             AgentModel::ChatGptGpt61Sol,
@@ -1478,7 +1478,7 @@ fn harness_model_stage_labels_free_local_models_and_paid_price_classes() {
 }
 
 #[test]
-fn harness_model_stage_reports_what_unavailable_models_need() {
+fn harness_model_stage_offers_api_key_entry_and_reports_what_unavailable_models_need() {
     // Arrange
     let harness_models = vec![
         harness_option(
@@ -1488,10 +1488,16 @@ fn harness_model_stage_reports_what_unavailable_models_need() {
             HarnessModelStatus::Ready,
         ),
         harness_option(
+            AgentModel::Qwen38Flash,
+            ModelCost::Cheap,
+            "Qwen",
+            HarnessModelStatus::MissingConfiguration("DASHSCOPE_BASE_URL"),
+        ),
+        harness_option(
             AgentModel::KimiK3,
             ModelCost::Premium,
             "Kimi",
-            HarnessModelStatus::MissingConfiguration("KIMI_API_KEY"),
+            HarnessModelStatus::ApiKeyRequired("kimi"),
         ),
     ];
 
@@ -1502,9 +1508,15 @@ fn harness_model_stage_reports_what_unavailable_models_need() {
         AgentKind::Harness,
         PromptSlashCommandSet::WithApply,
     );
+    let missing_base_url = resolve_prompt_slash_selection(
+        "/model",
+        &harness_model_stage(harness_models.clone(), 1),
+        AgentKind::Harness,
+        PromptSlashCommandSet::WithApply,
+    );
     let missing_key = resolve_prompt_slash_selection(
         "/model",
-        &harness_model_stage(harness_models, 1),
+        &harness_model_stage(harness_models, 2),
         AgentKind::Harness,
         PromptSlashCommandSet::WithApply,
     );
@@ -1518,10 +1530,18 @@ fn harness_model_stage_reports_what_unavailable_models_need() {
         )))
     );
     assert_eq!(
-        missing_key,
+        missing_base_url,
         Some(PromptSuggestionSelection::Unavailable(
-            "`kimi-k3` needs `KIMI_API_KEY`. Set it before starting Agentty.".to_string()
+            "`qwen3.8-flash` needs `DASHSCOPE_BASE_URL`. Set it before starting Agentty."
+                .to_string()
         ))
+    );
+    assert_eq!(
+        missing_key,
+        Some(PromptSuggestionSelection::ApiKey(AgentSelection::new(
+            AgentKind::Harness,
+            AgentModel::KimiK3,
+        )))
     );
 }
 

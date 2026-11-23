@@ -25,7 +25,7 @@ integration tests exercise supported APIs without exposing private implementatio
 | Isolated model calls           | `OneShotClient`                 |
 | Provider setup                 | `AgentBackend`                  |
 | Provider runtime lifecycle     | `AppServerClient`               |
-| Provider availability, sign-in | `AgentAvailabilityProbe`        |
+| Provider availability, keys    | `AgentAvailabilityProbe`        |
 | Forge requests and comments    | `ReviewRequestClient`           |
 | Programmatic session lifecycle | `SessionBackend`                |
 | Terminal events                | `EventSource`                   |

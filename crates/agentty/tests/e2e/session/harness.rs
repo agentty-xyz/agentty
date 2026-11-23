@@ -389,23 +389,22 @@ async fn test_ag_harness_models_are_listed_without_provider_keys() -> E2eResult 
                     // Rows: the no-local-models hint, then muse-spark-1.3.
                     .press_key("j")
                     .press_key("Enter")
-                    .wait_for_text("Set it before starting Agentty", 3000)
+                    .wait_for_text("Paste API Key", 3000)
+                    .capture_labeled("api_key_prompt", "A keyless model asks for its key")
+                    .press_key("Esc")
+                    .step(common::wait_for_prompt_composer())
             },
             |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    let notice = frame
+                    let prompt = common::frame_from_capture(&report.captures[3])
                         .all_text()
                         .split_whitespace()
                         .collect::<Vec<_>>()
                         .join(" ");
-                    // The transcript renders the notice's code spans as
-                    // plain text.
-                    assert!(
-                        notice.contains("muse-spark-1.3 needs MODEL_API_KEY"),
-                        "{notice}"
-                    );
-                    // The session keeps its agent CLI model.
+                    assert!(prompt.contains("needs a Muse API key"), "{prompt}");
+                    // Cancelling keeps the session on its agent CLI model.
+                    assertion::assert_not_visible(frame, "Paste API Key");
                     assertion::assert_not_visible(frame, "harness/");
                     let session_types = common::frame_from_capture(&report.captures[0]);
                     assertion::assert_text_in_region(&session_types, "Draft", &full);
@@ -1240,6 +1239,113 @@ async fn test_harness_model_picker_marks_kimi_ready_with_only_an_api_key() -> E2
             },
         )
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_harness_model_picker_saves_a_pasted_api_key() -> E2eResult {
+    // Arrange
+    let muse = MockServer::start().await;
+    let kimi = scripted_provider().await;
+    let git_directory = git_only_path()?;
+    let agentty_root = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let setup_root = std::sync::Arc::clone(&agentty_root);
+
+    // Act, Assert
+    FeatureTest::new("harness_api_key_entry")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .env("ANTHROPIC_API_KEY", "")
+        .env("DASHSCOPE_API_KEY", "")
+        .env("CHATGPT_AUTH_FILE", "")
+        .env("KIMI_API_KEY", "")
+        .env("KIMI_BASE_URL", kimi.uri())
+        .env("OPENAI_API_KEY", "")
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", muse.uri())
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .setup(move |env| {
+            *setup_root.lock().expect("root lock") = Some(env.agentty_root.clone());
+
+            Box::pin(async { Ok(()) })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("harness/muse-spark-1.3", 5000)
+                    .compose(&open_model_picker())
+                    .wait_for_text("kimi-k3", 3000)
+                    // Rows: the local hint, muse-spark-1.3, its contributor
+                    // tier, then kimi-k3.
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Paste API Key", 3000)
+                    .write_text("sk-kimi-e2e")
+                    .wait_for_text("•••••••••••", 3000)
+                    .capture_labeled("api_key_masked", "The pasted key stays masked")
+                    .press_key("Enter")
+                    .wait_for_text("Saved your Kimi API key", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("harness/kimi-k3", 3000)
+                    .write_text("Create notes")
+                    .wait_for_text("Create notes", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, HARNESS_ANSWER, &full)
+                        },
+                    )
+            },
+            move |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "harness/kimi-k3", &full);
+                    let masked = common::frame_from_capture(&report.captures[0]).all_text();
+                    assert!(!masked.contains("sk-kimi-e2e"), "{masked}");
+                    let root = agentty_root
+                        .lock()
+                        .expect("root lock")
+                        .clone()
+                        .expect("setup records the data directory");
+                    let key_file = root.join("auth/api_keys.json");
+                    let stored: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&key_file).expect("API key file"))
+                            .expect("API key JSON");
+                    assert_eq!(stored["providers"]["kimi"]["api_key"], "sk-kimi-e2e");
+                    // The exported Muse key is imported on the first listing.
+                    assert_eq!(stored["providers"]["muse"]["api_key"], "test-key");
+                    let mode = std::fs::metadata(&key_file)
+                        .expect("API key file metadata")
+                        .permissions()
+                        .mode();
+                    assert_eq!(mode & 0o777, 0o600);
+                })
+            },
+        )
+        .await?;
+
+    let kimi_requests = kimi.received_requests().await.unwrap_or_default();
+    assert!(!kimi_requests.is_empty());
+    assert!(kimi_requests.iter().all(|request| {
+        request
+            .headers
+            .get("authorization")
+            .is_some_and(|value| value == "Bearer sk-kimi-e2e")
+    }));
 
     Ok(())
 }

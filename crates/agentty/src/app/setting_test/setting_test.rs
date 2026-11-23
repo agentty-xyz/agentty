@@ -1261,7 +1261,7 @@ async fn shared_harness_models_report_ready_models_as_the_list_changes() {
         test_services_with_available_agent_kinds(vec![AgentKind::Codex]).await;
     let harness_models = services.harness_models();
     let mut unready = crate::test_support::ready_harness_model(AgentModel::KimiK3);
-    unready.status = HarnessModelStatus::MissingConfiguration("KIMI_API_KEY");
+    unready.status = HarnessModelStatus::ApiKeyRequired("kimi");
 
     // Act
     let without_models = harness_models.ready_models();
@@ -1285,7 +1285,7 @@ async fn settings_offer_ready_harness_models_for_the_fast_default() {
     persist_harness_fast_default(&services, project_id, AgentModel::Qwen38Flash.as_str()).await;
     let qwen_flash = AgentSelection::new(AgentKind::Harness, AgentModel::Qwen38Flash);
     let mut unready = crate::test_support::ready_harness_model(AgentModel::KimiK3);
-    unready.status = HarnessModelStatus::MissingConfiguration("KIMI_API_KEY");
+    unready.status = HarnessModelStatus::ApiKeyRequired("kimi");
 
     // Act
     let mut manager = SettingsManager::from_repositories(

@@ -531,7 +531,7 @@ async fn native_linux_system_reads_mount_a_private_proc_and_a_minimal_dev() {
 /// Replacement refs, grafts, the shallow boundary, and object alternates
 /// change the history Git run outside the sandbox shows without changing
 /// the objects it pushes, so commands cannot write them, whether they exist
-/// or not.
+/// or not, nor move the directories holding them to swap in replacements.
 #[tokio::test]
 async fn native_git_writes_keep_history_rewrites_read_only() {
     // Arrange
@@ -548,7 +548,10 @@ async fn native_git_writes_keep_history_rewrites_read_only() {
              if printf x >> \"$common/objects/info/alternates\"; then exit 92; fi; if printf x > \
              \"$common/objects/info/http-alternates\"; then exit 93; fi; if printf x > \
              \"$common/info/grafts\"; then exit 94; fi; if printf x > \"$common/shallow\"; then \
-             exit 95; fi; printf confined",
+             exit 95; fi; if mv \"$common/objects/info\" \"$common/objects/aside\" 2>/dev/null; \
+             then exit 96; fi; if mv \"$common/objects\" \"$common/objects-aside\" 2>/dev/null; \
+             then exit 97; fi; if mv \"$common/refs\" \"$common/refs-aside\" 2>/dev/null; then \
+             exit 98; fi; printf confined",
             fixture.configuration(),
         )
         .await;

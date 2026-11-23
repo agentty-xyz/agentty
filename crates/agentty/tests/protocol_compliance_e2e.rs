@@ -129,6 +129,7 @@ async fn harness_protocol_compliance_e2e() {
         let result = assert_provider_protocol_compliance(AgentKind::Harness, model, &config).await;
         if let Err(error) = result
             && !error.contains("before starting Agentty")
+            && !error.contains("to paste its API key")
         {
             failures.push(error);
         }

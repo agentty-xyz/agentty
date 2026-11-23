@@ -819,6 +819,12 @@ pub enum AppMode {
         /// Sign-in step, target model, and composer restored afterwards.
         dialog: Box<crate::presentation::chatgpt_sign_in::ChatGptSignInDialog>,
     },
+    /// Harness provider API key popup rendered above the prompt composer
+    /// that opened it.
+    ApiKeyInput {
+        /// Pasted key, step, target model, and composer restored afterwards.
+        dialog: Box<crate::presentation::api_key::ApiKeyDialog>,
+    },
     /// Launch-configuration selector overlay opened from session view when
     /// multiple entries are configured.
     LaunchConfigurationSelector {

@@ -2359,9 +2359,14 @@ fn bash_grader_rejects_the_former_sandbox_claim_and_missing_command_output() {
 }
 
 /// Returns the native harness environment for a scripted provider at
-/// `server`, with no local model server and the host `PATH` for Git.
-fn scripted_harness_environment(server: &MockServer) -> BTreeMap<String, String> {
+/// `server`, with no local model server, the host `PATH` for Git, and an
+/// API key file under `data_root` so tests never share stored keys.
+fn scripted_harness_environment(server: &MockServer, data_root: &Path) -> BTreeMap<String, String> {
     BTreeMap::from([
+        (
+            "AGENTTY_ROOT".to_string(),
+            data_root.to_string_lossy().into_owned(),
+        ),
         ("HOME".to_string(), "/tmp".to_string()),
         ("MODEL_API_BASE_URL".to_string(), server.uri()),
         ("MODEL_API_KEY".to_string(), "test-key".to_string()),
@@ -2385,7 +2390,7 @@ async fn bash_evaluation_refuses_to_run_commands_without_the_sandbox() {
     let server = MockServer::start().await;
     let data_root = tempfile::tempdir().expect("harness data root");
     let worktree = tempfile::tempdir().expect("worktree");
-    let environment = scripted_harness_environment(&server);
+    let environment = scripted_harness_environment(&server, data_root.path());
     let database = Database::open_in_memory().await.expect("database");
     let worker = RunWorker::new(
         &RuntimeConfig::default()
@@ -2491,7 +2496,7 @@ async fn unavailable_tool_evaluation_recovers_through_the_harness() {
     let server = scripted_unavailable_tool_provider().await;
     let data_root = tempfile::tempdir().expect("harness data root");
     let worktree = tempfile::tempdir().expect("worktree");
-    let environment = scripted_harness_environment(&server);
+    let environment = scripted_harness_environment(&server, data_root.path());
     let database = Database::open_in_memory().await.expect("database");
     let worker = RunWorker::new(
         &RuntimeConfig::default()
@@ -2583,7 +2588,7 @@ async fn switching_models_replays_foreign_reasoning_as_a_quoted_note_through_the
     let server = scripted_switching_provider().await;
     let data_root = tempfile::tempdir().expect("harness data root");
     let worktree = tempfile::tempdir().expect("worktree");
-    let mut environment = scripted_harness_environment(&server);
+    let mut environment = scripted_harness_environment(&server, data_root.path());
     environment.insert("KIMI_API_KEY".to_string(), "test-key".to_string());
     environment.insert("KIMI_BASE_URL".to_string(), server.uri());
     let config = RuntimeConfig::default()

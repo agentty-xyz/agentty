@@ -55,6 +55,26 @@ fn configuration_status_requires_a_base_url_only_without_a_default() {
 }
 
 #[test]
+/// Asks for a missing base URL before a missing key, so that saving a key
+/// never marks ready a provider that still cannot serve requests.
+fn configuration_status_asks_for_the_base_url_before_the_key() {
+    // Arrange
+    let without_url = environment(&[]);
+    let with_url = environment(&[("DASHSCOPE_BASE_URL", "https://dashscope.test/v1")]);
+
+    // Act
+    let missing_both = configuration_status(ModelProvider::Qwen, &without_url, |_| false);
+    let missing_key = configuration_status(ModelProvider::Qwen, &with_url, |_| false);
+
+    // Assert
+    assert_eq!(
+        missing_both,
+        HarnessModelStatus::MissingConfiguration("DASHSCOPE_BASE_URL")
+    );
+    assert_eq!(missing_key, HarnessModelStatus::ApiKeyRequired("qwen"));
+}
+
+#[test]
 /// Locates Agentty's `ChatGPT` sign-in from the named file, then its data
 /// directory, then the home directory.
 fn chatgpt_auth_file_prefers_the_named_file_then_agentty_root_then_home() {
@@ -332,9 +352,9 @@ async fn harness_models_list_local_then_paid_models_with_their_status() {
         .iter()
         .map(|option| (option.model, option.cost, option.status))
         .collect::<Vec<_>>();
-    let anthropic = HarnessModelStatus::MissingConfiguration("ANTHROPIC_API_KEY");
-    let dashscope = HarnessModelStatus::MissingConfiguration("DASHSCOPE_API_KEY");
-    let openai = HarnessModelStatus::MissingConfiguration("OPENAI_API_KEY");
+    let anthropic = HarnessModelStatus::ApiKeyRequired("anthropic");
+    let dashscope = HarnessModelStatus::MissingConfiguration("DASHSCOPE_BASE_URL");
+    let openai = HarnessModelStatus::ApiKeyRequired("openai");
     let ready = HarnessModelStatus::Ready;
     let sign_in = HarnessModelStatus::SignInRequired("ag-harness login chatgpt");
     assert_eq!(
@@ -1426,7 +1446,7 @@ fn claude_models_register_on_the_anthropic_provider() {
     assert!(budgeted_client.replays_turn_instructions());
     let error = missing_key.err().expect("a missing key should be reported");
     assert!(
-        error.ends_with("Set ANTHROPIC_API_KEY before starting Agentty."),
+        error.ends_with("Pick the model with `/model` to paste its API key, then retry."),
         "{error}"
     );
     let resume_only = resume_only.expect("resume-only harness");

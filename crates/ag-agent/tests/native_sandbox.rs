@@ -38,6 +38,8 @@ const TEST_NAME: &str = "session_commands_commit_in_a_linked_worktree_and_stay_c
 const MODEL: &str = "muse-spark-1.3";
 /// Session whose harness history the command tries to read.
 const SESSION_ID: &str = "session-sandbox";
+/// Stored API key file, under the Agentty root, the command tries to read.
+const API_KEY_FILE: &str = "auth/api_keys.json";
 
 fn main() -> ExitCode {
     if let Some(helper) = dispatch_sandbox_helper() {
@@ -237,6 +239,11 @@ impl Fixture {
         let agentty_root = tempfile::tempdir()?;
         std::fs::create_dir(agentty_root.path().join("db"))?;
         std::fs::write(agentty_root.path().join("db/agentty.db"), "transcripts")?;
+        std::fs::create_dir(agentty_root.path().join("auth"))?;
+        std::fs::write(
+            agentty_root.path().join(API_KEY_FILE),
+            r#"{"providers":{"muse":{"api_key":"muse-key"}},"version":1}"#,
+        )?;
 
         Ok(Self {
             agentty_root,
@@ -250,13 +257,14 @@ impl Fixture {
 
     /// Returns the command the model runs: a commit, a temporary file, a
     /// write outside the worktree, and reads of the harness history and of
-    /// Agentty's application database.
+    /// Agentty's application database and stored API keys.
     fn command(&self) -> String {
         format!(
             "printf 'sandboxed\\n' > notes.txt && git add notes.txt && git -c user.name=Agentty \
              -c user.email=agentty@example.com commit -qm 'Add notes' && touch \
              \"$TMPDIR/scratch\" && echo committed; touch '{}' && echo escaped; cat '{}' > \
-             /dev/null && echo read-history; cat '{}' > /dev/null && echo read-database",
+             /dev/null && echo read-history; cat '{}' > /dev/null && echo read-database; cat '{}' \
+             > /dev/null && echo read-keys",
             self.escape().display(),
             self.data_root
                 .path()
@@ -264,6 +272,7 @@ impl Fixture {
                 .join("harness.db")
                 .display(),
             self.agentty_root.path().join("db/agentty.db").display(),
+            self.agentty_root.path().join(API_KEY_FILE).display(),
         )
     }
 

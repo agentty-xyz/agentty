@@ -3,6 +3,7 @@
 //! This parent module intentionally exposes child modules and re-exports app
 //! orchestration types and functions.
 
+mod api_key;
 mod assist;
 pub(crate) mod at_mention_task;
 mod branch_publish;

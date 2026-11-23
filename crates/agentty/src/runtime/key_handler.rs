@@ -63,6 +63,7 @@ where
         AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
         AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
         AppMode::ChatGptSignIn { .. } => Ok(mode::chatgpt_sign_in::handle(app, key)),
+        AppMode::ApiKeyInput { .. } => Ok(mode::api_key::handle(app, key).await),
         AppMode::View { .. } => {
             mode::session_view::handle_with_cache(
                 app,

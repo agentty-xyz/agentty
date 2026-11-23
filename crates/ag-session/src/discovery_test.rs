@@ -86,3 +86,20 @@ async fn probes_without_harness_discovery_reject_chatgpt_sign_in_without_a_url()
     );
     assert!(opened.lock().expect("opened lock").is_empty());
 }
+
+#[tokio::test]
+async fn probes_without_harness_discovery_reject_saving_api_keys() {
+    // Arrange
+    let probe = StaticAgentAvailabilityProbe {
+        available_agent_kinds: AgentKind::ALL.to_vec(),
+    };
+
+    // Act
+    let result = probe.save_harness_api_key("kimi", "sk-test").await;
+
+    // Assert
+    assert_eq!(
+        result,
+        Err("API keys cannot be saved in this launch.".to_string())
+    );
+}

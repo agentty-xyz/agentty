@@ -16,6 +16,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use super::activity::ActivityBridge;
+use super::api_key::with_stored_api_keys;
 use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig, RunOptions};
 use super::failure;
 use super::sandbox::UTILITY_SANDBOX;
@@ -115,6 +116,7 @@ pub(crate) async fn run_one_shot(
         .map_err(|error| error.to_string())?;
     let environment = config.environment();
     let selection = ModelSelection::resolve(&request.model, &environment)?;
+    let environment = with_stored_api_keys(environment).await;
     let profile = request.request_kind.protocol_profile();
     let repository = config::repository(&request.folder, &environment)?;
     // Kept until the run settles; dropping it removes the run's temporary

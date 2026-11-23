@@ -40,6 +40,7 @@ use crate::infra::browser::MockBrowserClient;
 use crate::infra::project_discovery::MockProjectDiscoveryClient;
 use crate::infra::resource::MockResourceClient;
 use crate::infra::terminal_clipboard::MockTerminalClipboard;
+use crate::presentation::api_key::ApiKeyDialog;
 use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
 use crate::presentation::chatgpt_sign_in::ChatGptSignInDialog;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
@@ -430,6 +431,28 @@ pub(crate) fn sign_in_required_harness_model(model: AgentModel) -> HarnessModelO
         provider: "ChatGPT".to_string(),
         status: HarnessModelStatus::SignInRequired("ag-harness login chatgpt"),
         ..ready_harness_model(model)
+    }
+}
+
+/// Returns a Kimi harness option for `model` that still needs the `kimi`
+/// API key.
+pub(crate) fn api_key_required_harness_model(model: AgentModel) -> HarnessModelOption {
+    HarnessModelOption {
+        status: HarnessModelStatus::ApiKeyRequired("kimi"),
+        ..ready_harness_model(model)
+    }
+}
+
+/// Builds the API key popup for `kimi-k3` above a composer of `session_id`
+/// holding a draft.
+pub(crate) fn api_key_input_mode(session_id: &str) -> AppMode {
+    AppMode::ApiKeyInput {
+        dialog: Box::new(ApiKeyDialog::new(
+            AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3),
+            "kimi",
+            "Kimi".to_string(),
+            prompt_mode_snapshot(session_id, "draft"),
+        )),
     }
 }
 

@@ -90,6 +90,18 @@ fn visible_review_session_id_includes_chatgpt_sign_in_composer() {
 }
 
 #[test]
+fn visible_review_session_id_includes_api_key_composer() {
+    // Arrange
+    let mode = crate::test_support::api_key_input_mode("session-id");
+
+    // Act
+    let session_id = visible_review_session_id(&mode);
+
+    // Assert
+    assert_eq!(session_id, Some("session-id"));
+}
+
+#[test]
 fn inspector_does_not_project_the_session_review_over_its_graph_snapshot() {
     // Arrange
     let mode = AppMode::ExecutionGraph(Box::new(

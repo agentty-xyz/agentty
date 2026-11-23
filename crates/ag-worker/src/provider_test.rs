@@ -118,6 +118,13 @@ async fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path(
             .await;
         assert!(sign_in.is_err_and(|error| !error.is_empty()));
         assert!(opened_urls.lock().expect("opened lock").is_empty());
+        let saved = RealAgentAvailabilityProbe
+            .save_harness_api_key("chatgpt", "key")
+            .await;
+        assert_eq!(
+            saved,
+            Err("The `chatgpt` provider takes no API key.".to_string())
+        );
         return;
     }
     let auth_directory = tempfile::tempdir().expect("auth directory");
@@ -126,6 +133,7 @@ async fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path(
     // Act
     let output = Command::new(env::current_exe().expect("test executable"))
         .args(["--exact", "provider::tests::provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path"])
+        .env("AGENTTY_ROOT", auth_directory.path())
         .env("CHATGPT_AUTH_FILE", &unreadable_auth_file)
         .env(MARKER, "1").env("PATH", "").env("MODEL_API_KEY", "test-key")
         .env("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1").env_remove("OPENAI_COMPATIBLE_MODEL")

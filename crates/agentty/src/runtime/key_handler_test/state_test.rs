@@ -439,6 +439,31 @@ async fn failed_terminal_queries_surface_without_requesting_redraw() {
 }
 
 #[tokio::test]
+async fn test_handle_key_event_routes_api_key_cancel_to_the_composer() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.mode = crate::test_support::api_key_input_mode("session-id");
+    let backend = ratatui::backend::TestBackend::new(120, 30);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    // Act
+    let result = handle_key_event(
+        &mut app,
+        &PresentationState::default(),
+        &mut terminal,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { input, .. } if input.text() == "draft"
+    ));
+}
+
+#[tokio::test]
 async fn test_handle_key_event_routes_chatgpt_sign_in_cancel_to_the_composer() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;

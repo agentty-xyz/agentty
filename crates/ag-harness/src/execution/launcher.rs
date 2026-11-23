@@ -335,10 +335,11 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
         .map_err(io::Error::other)?;
         // Path rules follow names, so the directories holding protected
         // entries must not move either: a command could otherwise move one
-        // aside, change what it holds, and move it back.
+        // aside, or build a replacement under another name and move it into
+        // place.
         writeln!(
             profile,
-            "(deny file-write* (regex #\"^{}(/worktrees(/[^/]+)?)?$\"))",
+            "(deny file-write* (regex #\"^{}(/(worktrees(/[^/]+)?|refs|objects(/info)?))?$\"))",
             pattern(&git.common)?
         )
         .map_err(io::Error::other)?;
@@ -528,7 +529,7 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         // and log stores and to files at the top of the worktree's own
         // administration directory, whose links stay mounted read-only.
         command.arg("--bind").arg(&git.common).arg(&git.common);
-        protect_git_history(&mut command, &git.common);
+        protect_git_history(&mut command, &git.common)?;
         if let Some(admin) = &git.admin {
             command.arg("--bind").arg(admin).arg(admin);
             for name in super::landlock::GIT_ADMIN_PROTECTED {
@@ -563,8 +564,20 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
 /// outside the sandbox shows. Existing ones are mounted over themselves,
 /// missing ones covered by an empty read-only directory or file. Grafts and
 /// the shallow boundary lie outside the stores already.
+///
+/// Mounts follow a renamed directory, so `objects/info`, which the object
+/// store's write grant could otherwise move aside and recreate, is mounted
+/// writable over itself first: a mount point cannot be renamed or removed.
+/// `refs/replace` is a mount point itself, and `refs` and `objects` lie
+/// outside the write grant.
+///
+/// # Errors
+/// Returns an error when a missing `objects/info` cannot be created.
 #[cfg(target_os = "linux")]
-fn protect_git_history(command: &mut Command, common: &std::path::Path) {
+fn protect_git_history(command: &mut Command, common: &std::path::Path) -> io::Result<()> {
+    let object_info = common.join("objects/info");
+    std::fs::create_dir_all(&object_info)?;
+    command.arg("--bind").arg(&object_info).arg(&object_info);
     for (relative, is_directory) in GIT_HISTORY_PROTECTED {
         let path = common.join(relative);
         if path.exists() {
@@ -579,6 +592,8 @@ fn protect_git_history(command: &mut Command, common: &std::path::Path) {
             command.arg("--ro-bind").arg("/dev/null").arg(&path);
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -24,8 +24,9 @@ fn base_policy() -> BashConfig {
 }
 
 /// Returns the policy Agentty's grants must produce for `temporary` and
-/// the hidden `data_root` and `auth_file`, with the application database
-/// and pasted images of the Agentty root `/agentty-root` hidden too.
+/// the hidden `data_root` and `auth_file`, with the stored API keys,
+/// application database and pasted images of the Agentty root
+/// `/agentty-root` hidden too.
 fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> BashConfig {
     let mut expected = base_policy()
         .with_full_disk_read()
@@ -35,6 +36,7 @@ fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> Bash
         .and_then(|config| config.with_temporary_directory(temporary.to_path_buf()))
         .and_then(|config| config.with_hidden_path(data_root.to_path_buf()))
         .and_then(|config| config.with_hidden_path(auth_file.to_path_buf()))
+        .and_then(|config| config.with_hidden_path(PathBuf::from("/agentty-root/auth")))
         .and_then(|config| config.with_hidden_path(PathBuf::from("/agentty-root/db")))
         .and_then(|config| config.with_hidden_path(PathBuf::from("/agentty-root/tmp")))
         .expect("expected grants");

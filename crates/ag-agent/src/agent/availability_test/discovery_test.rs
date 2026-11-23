@@ -6,7 +6,10 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::{env, fs};
 
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind};
+use ag_session::{
+    AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel, HarnessModelOption,
+    HarnessModelStatus,
+};
 use tempfile::tempdir;
 
 use crate::agent::availability::{
@@ -33,19 +36,43 @@ async fn test_real_agent_availability_probe_reads_an_isolated_process_environmen
                 recorder.lock().expect("opened lock").push(url);
             }))
             .await;
+        let saved = RealAgentAvailabilityProbe
+            .save_harness_api_key("kimi", "kimi-pasted")
+            .await;
+        let relisted = RealAgentAvailabilityProbe.native_harness_models().await;
 
         // Assert
+        let status_of = |options: &[HarnessModelOption], model: AgentModel| {
+            options
+                .iter()
+                .find(|option| option.model == model)
+                .map(|option| option.status)
+        };
         assert_eq!(available_agent_kinds, [] as [AgentKind; 0]);
         assert_eq!(available_agent_clis, [] as [AgentCliInfo; 0]);
         assert!(harness_models.iter().all(|option| option.cost.is_paid()));
+        assert_eq!(
+            status_of(&harness_models, AgentModel::MuseSpark13),
+            Some(HarnessModelStatus::Ready)
+        );
+        assert_eq!(
+            status_of(&harness_models, AgentModel::KimiK3),
+            Some(HarnessModelStatus::ApiKeyRequired("kimi"))
+        );
         assert!(sign_in.is_err_and(|error| !error.is_empty()));
         assert!(opened_urls.lock().expect("opened lock").is_empty());
+        assert_eq!(saved, Ok(()));
+        assert_eq!(
+            status_of(&relisted, AgentModel::KimiK3),
+            Some(HarnessModelStatus::Ready)
+        );
 
         return;
     }
     let auth_directory = tempdir().expect("auth directory");
     let unreadable_auth_file = auth_directory.path().join("chatgpt.json");
     fs::write(&unreadable_auth_file, "not json").expect("unreadable sign-in");
+    let data_root = tempdir().expect("data root");
 
     // Act
     let output = Command::new(env::current_exe().expect("test executable"))
@@ -54,10 +81,12 @@ async fn test_real_agent_availability_probe_reads_an_isolated_process_environmen
             "agent::availability::tests::discovery::\
              test_real_agent_availability_probe_reads_an_isolated_process_environment",
         ])
+        .env("AGENTTY_ROOT", data_root.path())
         .env("CHATGPT_AUTH_FILE", &unreadable_auth_file)
         .env(MARKER, "1")
         .env("PATH", "")
         .env("MODEL_API_KEY", "test-key")
+        .env_remove("KIMI_API_KEY")
         .env("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:9/v1")
         .env_remove("OPENAI_COMPATIBLE_MODEL")
         .output()
@@ -66,10 +95,17 @@ async fn test_real_agent_availability_probe_reads_an_isolated_process_environmen
     // Assert
     assert!(
         output.status.success(),
-        "{}",
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    let stored: serde_json::Value = serde_json::from_slice(
+        &fs::read(data_root.path().join("auth/api_keys.json")).expect("API key file"),
+    )
+    .expect("API key JSON");
+    assert_eq!(stored["providers"]["muse"]["api_key"], "test-key");
+    assert_eq!(stored["providers"]["kimi"]["api_key"], "kimi-pasted");
 }
 
 #[test]

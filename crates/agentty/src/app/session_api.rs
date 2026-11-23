@@ -848,8 +848,8 @@ impl App {
         {
             return Err(ApiSessionError::Operation(
                 "Harness sessions need a runnable model: a local Ollama or OpenAI-compatible \
-                 server serving a model, `MODEL_API_KEY`, `KIMI_API_KEY`, or `DASHSCOPE_API_KEY` \
-                 with `DASHSCOPE_BASE_URL`."
+                 server serving a model, or a hosted model whose API key is stored or exported, \
+                 such as `MODEL_API_KEY`."
                     .to_string(),
             ));
         }

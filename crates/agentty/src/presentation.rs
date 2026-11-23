@@ -1,5 +1,7 @@
 //! Frontend-neutral interaction state shared by runtime input and UI output.
 
+/// Harness provider API key popup opened from the prompt composer.
+pub mod api_key;
 /// Frontend-neutral application modes and restorable overlay state.
 pub mod app_mode;
 /// `ChatGPT` plan sign-in popup opened from the prompt composer.

@@ -284,6 +284,18 @@ open.
 | `Enter` | Open the browser sign-in, or close the finished result       |
 | `Esc`   | Cancel, including a running sign-in, and return to the draft |
 
+## API Key Popup
+
+Opens from the Harness `/model` list on a hosted model whose provider has no stored key.
+The pasted key stays masked; see
+[Harness API keys](@/docs/agents/backends.md#backends-harness-api-keys).
+
+| Key                | Action                                           |
+| ------------------ | ------------------------------------------------ |
+| paste or text keys | Enter the key on one line                        |
+| `Enter`            | Save the key, or close the saved result          |
+| `Esc`              | Cancel without saving and return to the composer |
+
 ## Launch Configuration Selector
 
 | Key         | Action                                 |
