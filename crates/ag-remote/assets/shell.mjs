@@ -49,22 +49,32 @@ export function applyTheme(document, theme) {
 
 // Reads the address fragment. A pairing link wins over a session route,
 // so `parsePairingLink` from relay.mjs is asked first. The open session
-// lives in the fragment as `#s=<session id>`, which the browser never
-// sends to a server.
+// lives in the fragment, which the browser never sends to a server, as
+// `#s=<session id>`, or as `#i=<instance id>&s=<session id>` when the page
+// shows the sessions of Agenttys it reaches through a relay. `instanceId`
+// is `null` when the fragment names none.
 export function parseRoute(hash, parsePairingLink) {
   const link = parsePairingLink(hash);
   if (link) {
     return { kind: "pairing", link: link };
   }
-  const sessionId = new URLSearchParams(hash.replace(/^#/, "")).get("s");
+  const parameters = new URLSearchParams(hash.replace(/^#/, ""));
+  const sessionId = parameters.get("s");
 
-  return sessionId ? { kind: "session", sessionId: sessionId } : { kind: "home" };
+  return sessionId
+    ? { kind: "session", instanceId: parameters.get("i") || null, sessionId: sessionId }
+    : { kind: "home" };
 }
 
-// Returns the fragment of the route to `sessionId`, or an empty one for
-// home.
-export function routeHash(sessionId) {
-  return sessionId ? "#s=" + encodeURIComponent(sessionId) : "";
+// Returns the fragment of the route to `sessionId` of the Agentty with
+// `instanceId`, if one is named, or an empty one for home.
+export function routeHash(sessionId, instanceId = null) {
+  if (!sessionId) {
+    return "";
+  }
+  const session = "s=" + encodeURIComponent(sessionId);
+
+  return instanceId ? "#i=" + encodeURIComponent(instanceId) + "&" + session : "#" + session;
 }
 
 // The drawer's state machine. `isOpen` is whether the drawer shows, and
@@ -107,8 +117,8 @@ const CLOSED = Object.freeze({ hasEntry: false, isOpen: false });
 // the sidebar on wide screens). `onRoute` runs with the parsed route when
 // the back or forward gesture changes it.
 //
-// Returns `showSession(sessionId)`, which routes to a session chosen in
-// the list (or home with `null`), `reset()`, and `isOpen()`.
+// Returns `showSession(sessionId, instanceId)`, which routes to a session
+// chosen in the list (or home with `null`), `reset()`, and `isOpen()`.
 export function createShell({ document, window, elements, parsePairingLink, onRoute }) {
   const narrow = window.matchMedia(NARROW_QUERY);
   let drawer = CLOSED;
@@ -216,8 +226,8 @@ export function createShell({ document, window, elements, parsePairingLink, onRo
     // Choosing the route already shown only closes the drawer, through its
     // own entry, so no back step is left that returns to the same place
     // and whatever the route's entry opened stays reachable.
-    showSession: (sessionId) => {
-      const hash = routeHash(sessionId);
+    showSession: (sessionId, instanceId = null) => {
+      const hash = routeHash(sessionId, instanceId);
       apply(window.location.hash === hash ? "dismiss" : "choose", hash);
     },
   };

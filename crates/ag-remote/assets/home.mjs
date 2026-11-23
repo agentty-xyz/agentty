@@ -87,9 +87,9 @@ export function newSession(host, mode, picks = {}) {
   }
   const session = {
     agent: start.agent,
-    // Ids differ per mode, so models loaded for one agent are not reused
-    // for another.
-    id: "new:" + mode,
+    // Ids differ per Agentty and mode, so models loaded for one agent are
+    // not reused for another.
+    id: "new:" + (host.scope ? host.scope + ":" : "") + mode,
     model: start.name,
     model_id: start.id,
     reasoning: start.reasoning,
@@ -148,6 +148,9 @@ export function createHome({
     // Settings picked for the new session, as `set_session_settings`
     // names them.
     picks: {},
+    // The Agentty new sessions start on, among several; see
+    // `setCapabilities`.
+    scope: "",
   };
   const composer = createComposer({
     // A pick waits for the session; nothing is sent until it exists.
@@ -159,6 +162,7 @@ export function createHome({
       capabilities: state.capabilities,
       draftId: HOME_DRAFT_ID,
       fileScope: "project",
+      projectKey: state.scope,
       isConnected: state.isConnected,
       isRunning: false,
       session: chosenSession(),
@@ -244,7 +248,7 @@ export function createHome({
     if (load !== state.loads) {
       return;
     }
-    state.host = host;
+    state.host = host && { ...host, scope: state.scope };
     // The chosen mode stays while the host still offers it.
     if (!host?.modes.includes(state.mode)) {
       state.mode = host?.modes[0] ?? null;
@@ -330,7 +334,20 @@ export function createHome({
       }
     },
     host: () => state.host,
-    setCapabilities: (capabilities) => {
+    // Whether a session is being created; its requests go to the Agentty
+    // home described when it started.
+    isCreating: () => state.isCreating,
+    // Describes the host again with `capabilities`. A page that shows
+    // several Agenttys names the one in `scope`, so what home looked up for
+    // another is not reused.
+    setCapabilities: (capabilities, scope = "") => {
+      if (scope !== state.scope) {
+        state.scope = scope;
+        state.host = null;
+        state.mode = null;
+        state.picks = {};
+        render();
+      }
       state.capabilities = capabilities;
 
       return loadHost();

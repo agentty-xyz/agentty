@@ -59,6 +59,11 @@ function byId(id) {
   return document.getElementById(id);
 }
 
+// A part of the one Agentty's view, which sits above the filter.
+function part(name) {
+  return byId("instance-slot").querySelector('[data-part="' + name + '"]');
+}
+
 function report(step) {
   process.stdout.write(JSON.stringify(step) + "\n");
 }
@@ -454,24 +459,24 @@ async function routeFlow() {
 
   // The sidebar names the project and its branch. Its Sync asks first, and
   // the next listing reports the sync.
-  const branch = byId("project-branch").textContent + " " + byId("project-counts").textContent;
-  byId("project-sync").click();
+  const branch = part("project-branch").textContent + " " + part("project-counts").textContent;
+  part("project-sync").click();
   const projectAskedFirst = byId("project-sync-dialog").open;
   const target = byId("project-sync-target").textContent;
   byId("project-sync-dialog").querySelector('button[value="confirm"]').click();
-  await waitFor("the sync to be accepted", () => byId("project-sync-label").textContent === "Sync");
+  await waitFor("the sync to be accepted", () => part("project-sync-label").textContent === "Sync");
   report({
     step: "project",
     askedFirst: projectAskedFirst,
     branch: branch,
-    error: byId("project-error").textContent,
+    error: part("project-error").textContent,
     target: target,
   });
-  await waitFor("the sync's progress", () => !byId("project-status").hidden);
+  await waitFor("the sync's progress", () => !part("project-status").hidden);
   report({
     step: "syncing",
-    status: byId("project-status").textContent,
-    syncDisabled: byId("project-sync").disabled,
+    status: part("project-status").textContent,
+    syncDisabled: part("project-sync").disabled,
   });
 }
 
@@ -488,8 +493,8 @@ async function createFlow() {
     settings: (settingsButton.hidden ? byId("home-composer-meta") : settingsButton).textContent,
     settingsButton: !settingsButton.hidden,
     modesHidden: byId("home-modes").hidden,
-    newSessionHidden: byId("new-session").hidden,
-    project: byId("project-name").textContent,
+    newSessionHidden: part("new-session").hidden,
+    project: part("project-name").textContent,
     title: byId("home-title").textContent,
   });
 

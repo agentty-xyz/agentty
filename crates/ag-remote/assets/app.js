@@ -1,14 +1,18 @@
 // Agentty remote control client. Speaks protocol version 1 over one
-// WebSocket at /ws, or over an encrypted stream through the relay that
-// serves this page; see crates/ag-remote/src/protocol.rs for the frames.
+// WebSocket at /ws, or over encrypted streams through the relay that
+// serves this page, one for each Agentty this browser paired with; see
+// crates/ag-remote/src/protocol.rs for the frames.
 
-import { connectionLostError, createChat, createRefreshGate } from "./chat.mjs";
+import { createChat, createRefreshGate } from "./chat.mjs";
+import { CREDENTIAL_REJECTIONS, PROTOCOL_VERSION, createConnection } from "./connection.mjs";
 import { forgetDeviceKey, loadDeviceKey } from "./device_key.mjs";
 import { createDiff } from "./diff.mjs";
 import { parseProject } from "./format.mjs";
 import { createGraph } from "./graph.mjs";
-import { createHome } from "./home.mjs";
+import { createHome, offersCreation } from "./home.mjs";
+import { createInstanceView, fallbackName } from "./instance.mjs";
 import { isSupported } from "./noise.mjs";
+import { forgetPairing, instanceIdOf, loadPairings, savePairing } from "./pairings.mjs";
 import { createProject } from "./project.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
 import { TICK_MS, createSessionList } from "./session_list.mjs";
@@ -28,16 +32,11 @@ import {
 // could set it before the first paint.
 applyTheme(document, loadTheme(window));
 
-const PROTOCOL_VERSION = 1;
 const TOKEN_KEY = "agentty.remote.token";
-const RELAY_KEY = "agentty.remote.relay";
 const DEVICE_NAME_KEY = "agentty.remote.device_name";
-const MAX_BACKOFF_MS = 30000;
-// Rejections that mean the stored credential can never work again.
-const CREDENTIAL_REJECTIONS = new Set(["Unknown device token", "Device revoked"]);
 // A relay serves this page with the marker set to "relay". The device then
-// pairs with a link and reaches Agentty through that relay, encrypted end
-// to end, and its key replaces the token.
+// pairs with a link and reaches each Agentty through that relay, encrypted
+// end to end, and its key replaces the token.
 const usesRelay =
   document.querySelector('meta[name="agentty-transport"]')?.content === "relay";
 // What the device footer says in each connection state.
@@ -49,6 +48,8 @@ const CONNECTION_LABELS = {
   rejected: "Disconnected",
   waiting: "Waiting for approval",
 };
+// What an Agentty's heading says in each state, beside its name.
+const STATE_LABELS = { ...CONNECTION_LABELS, connected: "Connected" };
 
 // Each id is a literal, so the contract test in
 // crates/ag-remote/tests/server/http.rs can check it exists in index.html.
@@ -68,36 +69,30 @@ const elements = {
   "pair-error": document.getElementById("pair-error"),
   "pair-submit": document.getElementById("pair-submit"),
   "pair-cancel": document.getElementById("pair-cancel"),
+  "pair-back": document.getElementById("pair-back"),
   "pair-foot": document.getElementById("pair-foot"),
   shell: document.getElementById("shell"),
   sidebar: document.getElementById("sidebar"),
   "sidebar-hide": document.getElementById("sidebar-hide"),
   "drawer-close": document.getElementById("drawer-close"),
-  project: document.getElementById("project"),
-  "project-name": document.getElementById("project-name"),
-  "project-branch": document.getElementById("project-branch"),
-  "project-counts": document.getElementById("project-counts"),
-  "project-sync": document.getElementById("project-sync"),
-  "project-sync-label": document.getElementById("project-sync-label"),
-  "project-status": document.getElementById("project-status"),
-  "project-error": document.getElementById("project-error"),
+  "instance-slot": document.getElementById("instance-slot"),
+  "instance-prototype": document.getElementById("instance-prototype"),
   "project-sync-dialog": document.getElementById("project-sync-dialog"),
   "project-sync-target": document.getElementById("project-sync-target"),
   "project-sync-branch": document.getElementById("project-sync-branch"),
-  "new-session": document.getElementById("new-session"),
   filter: document.getElementById("filter"),
   "filter-key": document.getElementById("filter-key"),
   chips: document.getElementById("chips"),
   sessions: document.getElementById("sessions"),
-  "sessions-empty": document.getElementById("sessions-empty"),
   "filter-summary": document.getElementById("filter-summary"),
-  "list-error": document.getElementById("list-error"),
   "device-name": document.getElementById("device-name"),
   connection: document.getElementById("connection"),
   "device-more": document.getElementById("device-more"),
   "device-menu": document.getElementById("device-menu"),
   forget: document.getElementById("forget"),
+  "forget-each": document.getElementById("forget-each"),
   "forget-dialog": document.getElementById("forget-dialog"),
+  "forget-target": document.getElementById("forget-target"),
   scrim: document.getElementById("scrim"),
   main: document.getElementById("main"),
   menu: document.getElementById("menu"),
@@ -220,36 +215,35 @@ const elements = {
 };
 
 const state = {
-  backoffMs: 1000,
-  // Optional requests the server supports; offer a feature only when listed.
-  capabilities: [],
-  // One of the keys of `CONNECTION_LABELS`.
-  connection: "offline",
-  currentSessionId: null,
+  // The open session and the Agentty it runs on, or null on home.
+  current: null,
   // This browser's key pair for relay streams.
   deviceKey: null,
-  isAuthenticated: false,
-  // Whether the instance behind `relay` knows this browser's key.
-  isRelayPaired: false,
-  nextRequestId: 1,
+  // The Agentty `Forget this device` asks about.
+  forgetTarget: null,
+  // The Agentty the user chose for new sessions, by id, if any.
+  homeId: null,
+  // The Agentty home describes; see `describeHome`.
+  homeTarget: null,
+  // Every Agentty in the sidebar, in the order they were paired. Without a
+  // relay, the one behind this page's listener, with the id "".
+  instances: [],
+  // The pairing in progress, `{ instance, deviceName }`, until Agentty
+  // answers it. Its Agentty joins `instances` once paired.
+  pairing: null,
   // Pairing link this page was opened with, until pairing succeeds.
   pairingLink: null,
-  pendingPairing: null,
-  pending: new Map(),
-  // Name of the project the last listing named, if any did.
-  projectName: null,
-  // When the next reconnect attempt starts, in milliseconds since the epoch.
-  reconnectAt: 0,
-  reconnectTimer: null,
-  // Why Agentty refused this device for good, until the page reloads.
-  rejection: null,
-  // Relay address and instance key that relay streams connect to.
-  relay: null,
-  sessionCount: 0,
-  stopReconnecting: false,
+  // The relay pairings saved in this browser; see pairings.mjs.
+  pairings: [],
   // Ticks the banner's reconnect countdown.
   tickTimer: null,
-  transport: null,
+};
+
+// Storage for pairings.mjs, whose calls tolerate a throwing storage.
+const storage = {
+  getItem: (key) => window.localStorage.getItem(key),
+  removeItem: (key) => window.localStorage.removeItem(key),
+  setItem: (key, value) => window.localStorage.setItem(key, value),
 };
 
 function readStored(key) {
@@ -284,26 +278,13 @@ function setToken(value) {
   writeStored(TOKEN_KEY, value);
 }
 
-// The relay and instance this browser last paired with, if any, saved as
-// the instance key and the relay address with a space between them.
-function storedRelay() {
-  const [instanceKey, relayUrl] = (readStored(RELAY_KEY) || "").split(" ");
-
-  return instanceKey && relayUrl ? { instanceKey: instanceKey, relayUrl: relayUrl } : null;
-}
-
-function hasCredential() {
-  return usesRelay ? state.isRelayPaired : Boolean(token());
-}
-
-function forgetCredential() {
-  if (usesRelay) {
-    state.isRelayPaired = false;
-    writeStored(RELAY_KEY, null);
-  } else {
-    setToken(null);
+// Whether `instance` holds a pairing it can resume.
+function hasCredential(instance) {
+  if (!usesRelay) {
+    return Boolean(token());
   }
-  writeStored(DEVICE_NAME_KEY, null);
+
+  return state.pairings.some((pairing) => pairing.instanceId === instance.id);
 }
 
 // A relay device sends no token: its encrypted stream proves its key.
@@ -342,47 +323,236 @@ function socketUrl() {
   return scheme + "//" + window.location.host + "/ws";
 }
 
-// Shows `kind`, one of the keys of `CONNECTION_LABELS`, in the device
-// footer, announces a change once, and updates the banner and composer.
-function setConnection(kind) {
-  const label = CONNECTION_LABELS[kind];
-  elements.connection.textContent = label;
-  elements.connection.classList.toggle("is-online", kind === "connected");
-  elements.connection.classList.toggle("is-error", kind === "rejected");
-  if (state.connection !== kind) {
-    elements.announcer.textContent = label;
+// One WebSocket to Agentty's own listener, with the same shape as a relay
+// transport: `send(text)` reports whether the frame was accepted, and
+// `close()` ends it without running `onclose`.
+function openLocalTransport({ onclose, onmessage, onopen }) {
+  const socket = new WebSocket(socketUrl());
+  socket.onopen = onopen;
+  socket.onmessage = (event) => onmessage(event.data);
+  socket.onclose = onclose;
+
+  return {
+    close: () => {
+      socket.onclose = null;
+      socket.close();
+    },
+    send: (text) => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      socket.send(text);
+
+      return true;
+    },
+  };
+}
+
+// Whether the sidebar shows several Agenttys, each under its own heading.
+function isMany() {
+  return state.instances.length > 1;
+}
+
+// The id a route names `instance` by: none without a relay.
+function routeId(instance) {
+  return usesRelay ? instance.id : null;
+}
+
+function findInstance(id) {
+  return state.instances.find((instance) => instance.id === id) ?? null;
+}
+
+// Builds the Agentty with `id`; `pairing` holds its relay pairing.
+function createInstance(id, pairing) {
+  const view = createInstanceView({ document: document, prototype: elements["instance-prototype"] });
+  const instance = {
+    connection: null,
+    id: id,
+    // Whether a listing arrived since the page loaded.
+    isListed: false,
+    // The connection state the announcer last read out.
+    lastKind: null,
+    name: id ? fallbackName(id) : "",
+    pairing: pairing,
+    project: null,
+    // Name of the project the last listing named, if any did.
+    projectName: null,
+    refreshGate: null,
+    // Why Agentty refused this device for good, until the page reloads.
+    rejection: null,
+    sessions: [],
+    view: view,
+  };
+  instance.connection = createConnection({
+    canReconnect: () => hasCredential(instance) && state.pairing?.instance !== instance,
+    helloFrame: helloFrame,
+    on: {
+      authenticated: (frame) => onAuthenticated(instance, frame),
+      awaiting: (confirmation) => {
+        if (state.pairing?.instance === instance) {
+          setPairingWait(confirmation);
+        }
+      },
+      changed: () => instance.refreshGate.request(false),
+      pairingLost: () => onPairingLost(instance),
+      rejected: (reason, wasPairing) => onRejected(instance, reason, wasPairing),
+      state: () => onConnectionState(instance),
+    },
+    openTransport: (handlers) =>
+      usesRelay
+        ? openRelayTransport({
+            ...handlers,
+            deviceKey: state.deviceKey,
+            instanceKey: instance.pairing.instanceKey,
+            relayUrl: instance.pairing.relayUrl,
+          })
+        : openLocalTransport(handlers),
+    window: window,
+  });
+  instance.project = createProject({
+    elements: {
+      ...view.project,
+      dialog: elements["project-sync-dialog"],
+      dialogBranch: elements["project-sync-branch"],
+      dialogTarget: elements["project-sync-target"],
+    },
+    request: instance.connection.request,
+  });
+  // Reloads the list and the open session, at most once a second and not
+  // while the page is hidden, since a relay limits how much a device
+  // reads. Changes that arrive meanwhile coalesce into one more reload.
+  instance.refreshGate = createRefreshGate({
+    document: document,
+    run: () => loadSessions(instance),
+    window: window,
+  });
+  view.newSession.addEventListener("click", () => startNewSession(instance));
+  view.setName(instance.name);
+  view.setState("offline", STATE_LABELS.offline);
+
+  return instance;
+}
+
+function isConnected(instance) {
+  return instance?.connection.kind() === "connected";
+}
+
+// The Agentty whose state the banner and the composers follow: the open
+// session's, or on home the one new sessions start on.
+function activeInstance() {
+  return state.current?.instance ?? state.homeTarget;
+}
+
+// Lays the Agenttys out: one alone keeps the single page's layout, several
+// each get a heading. The footer's menu offers forgetting each.
+function placeInstances() {
+  const slot = elements["instance-slot"];
+  if (isMany()) {
+    slot.replaceChildren();
+    slot.hidden = true;
+    elements.sessions.replaceChildren(
+      ...state.instances.flatMap((instance) => instance.view.mount(false, slot)),
+    );
+  } else {
+    const nodes = state.instances[0]?.view.mount(true, slot) ?? [];
+    slot.hidden = nodes.length === 0;
+    if (nodes.length === 0) {
+      slot.replaceChildren();
+    }
+    elements.sessions.replaceChildren(...nodes);
   }
-  state.connection = kind;
+  renderForgetItems();
+  renderSessions();
+  renderFooter();
+}
+
+// Shows each Agentty's state in its heading and the device footer,
+// announces a change once, and updates the banner and composers.
+function onConnectionState(instance) {
+  const kind = instance.connection.kind();
+  instance.view.setState(kind, STATE_LABELS[kind]);
+  if (instance.lastKind !== kind && (state.instances.includes(instance) || state.pairing?.instance === instance)) {
+    elements.announcer.textContent = isMany()
+      ? instance.name + ": " + STATE_LABELS[kind]
+      : CONNECTION_LABELS[kind];
+  }
+  instance.lastKind = kind;
+  instance.project.setConnected(kind === "connected");
+  renderFooter();
+  renderNewSessionButtons();
   renderOffline();
 }
 
-// While the device is paired but not connected, a banner under the header
-// says so and the composer keeps its draft without sending it.
+// The device footer: one Agentty's state, or how many of several are
+// connected.
+function renderFooter() {
+  const shown = state.instances.length > 0 ? state.instances : state.pairing ? [state.pairing.instance] : [];
+  const kinds = shown.map((instance) => instance.connection.kind());
+  let label;
+  if (kinds.length <= 1) {
+    label = CONNECTION_LABELS[kinds[0] ?? "offline"];
+  } else {
+    const connected = kinds.filter((kind) => kind === "connected").length;
+    label = connected === kinds.length ? CONNECTION_LABELS.connected : connected + " of " + kinds.length + " connected";
+  }
+  elements.connection.textContent = label;
+  elements.connection.classList.toggle("is-online", kinds.length > 0 && kinds.every((kind) => kind === "connected"));
+  elements.connection.classList.toggle("is-error", kinds.includes("rejected"));
+}
+
+// With several Agenttys, the device menu forgets this device on each.
+function renderForgetItems() {
+  elements.forget.hidden = isMany();
+  elements["forget-each"].hidden = !isMany();
+  elements["forget-each"].replaceChildren(
+    ...(isMany() ? state.instances : []).map((instance) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "menu-item is-danger";
+      item.setAttribute("role", "menuitem");
+      item.textContent = "Forget on " + instance.name;
+      item.addEventListener("click", () => askToForget(instance));
+
+      return item;
+    }),
+  );
+}
+
+// While the Agentty in view is paired but not connected, a banner under
+// the header says so and the composer keeps its draft without sending it.
 function renderOffline() {
   window.clearInterval(state.tickTimer);
   state.tickTimer = null;
-  const kind = state.connection;
-  const isOffline = kind === "reconnecting" || kind === "offline";
-  elements.banner.hidden = !state.rejection && !isOffline;
-  elements.banner.classList.toggle("is-error", Boolean(state.rejection));
-  elements.retry.hidden = !isOffline || Boolean(state.rejection);
-  elements.reload.hidden = !state.rejection;
-  if (state.rejection) {
-    elements["banner-text"].textContent = state.rejection;
+  const active = activeInstance();
+  const kind = active?.connection.kind() ?? "offline";
+  const rejection = active?.rejection ?? null;
+  const isOffline = Boolean(active) && (kind === "reconnecting" || kind === "offline");
+  elements.banner.hidden = !rejection && !isOffline;
+  elements.banner.classList.toggle("is-error", Boolean(rejection));
+  elements.retry.hidden = !isOffline || Boolean(rejection);
+  elements.reload.hidden = !rejection;
+  if (rejection) {
+    elements["banner-text"].textContent = bannerText(active, rejection);
   } else if (kind === "reconnecting") {
     tickCountdown();
     state.tickTimer = window.setInterval(tickCountdown, 1000);
   } else {
-    elements["banner-text"].textContent = "Offline";
+    elements["banner-text"].textContent = bannerText(active, "Offline");
   }
-  chat.setConnected(kind === "connected");
-  home.setConnected(kind === "connected");
-  project.setConnected(kind === "connected");
+  chat.setConnected(isConnected(state.current?.instance));
+  home.setConnected(isConnected(state.homeTarget));
+}
+
+// The banner names the Agentty it is about when the page shows several.
+function bannerText(instance, text) {
+  return isMany() && instance ? instance.name + " · " + text : text;
 }
 
 function tickCountdown() {
-  const seconds = Math.max(1, Math.ceil((state.reconnectAt - Date.now()) / 1000));
-  elements["banner-text"].textContent = "Reconnecting in " + seconds + "s";
+  const active = activeInstance();
+  const reconnectAt = active?.connection.reconnectAt() ?? Date.now();
+  const seconds = Math.max(1, Math.ceil((reconnectAt - Date.now()) / 1000));
+  elements["banner-text"].textContent = bannerText(active, "Reconnecting in " + seconds + "s");
 }
 
 // Shows the pairing card instead of the app. Through a relay the code
@@ -392,6 +562,7 @@ function showPairing() {
   // The drawer and the session route belong to the app this card replaces.
   shell.reset();
   clearSessionRoute();
+  leaveSession();
   setPairingWait(null);
   if (usesRelay) {
     const link = state.pairingLink;
@@ -421,9 +592,10 @@ function setPairingWait(confirmation) {
   setPairingPhase(confirmation === null ? "idle" : "waiting", confirmation);
 }
 
-// Shows the pairing form in `phase`: `idle` offers Pair; `connecting`
-// and `waiting` offer Cancel instead, and `waiting` adds the confirmation
-// code Agentty shows.
+// Shows the pairing form in `phase`: `idle` offers Pair, and Back to
+// sessions when other Agenttys are paired; `connecting` and `waiting`
+// offer Cancel instead, and `waiting` adds the confirmation code Agentty
+// shows.
 function setPairingPhase(phase, confirmation = null) {
   const isBusy = phase !== "idle";
   const isWaiting = phase === "waiting";
@@ -434,8 +606,9 @@ function setPairingPhase(phase, confirmation = null) {
   elements["pair-confirmation"].textContent = confirmation || "";
   elements["pair-confirmation"].hidden = !isWaiting;
   elements["pair-wait-hint"].hidden = !isWaiting;
-  elements["pair-submit"].hidden = isBusy;
+  elements["pair-submit"].hidden = isBusy || (usesRelay && !state.pairingLink);
   elements["pair-cancel"].hidden = !isBusy;
+  elements["pair-back"].hidden = isBusy || !usesRelay || state.instances.length === 0;
 }
 
 // Removes a session route from the address without a new history entry.
@@ -447,10 +620,10 @@ function clearSessionRoute() {
 
 // Shows home or the open session in the main area.
 function renderMain() {
-  const sessionId = state.currentSessionId;
-  elements["home-view"].hidden = Boolean(sessionId);
-  elements["session-view"].hidden = !sessionId;
-  if (!sessionId) {
+  const isOpen = Boolean(state.current);
+  elements["home-view"].hidden = isOpen;
+  elements["session-view"].hidden = !isOpen;
+  if (!isOpen) {
     chat.close();
     elements.heading.textContent = "agentty";
     renderHome();
@@ -460,12 +633,21 @@ function renderMain() {
 // Home asks for a new session's first message when the host offers that,
 // and otherwise offers the sessions to pick from.
 function renderHome() {
-  const isEmpty = state.isAuthenticated && state.sessionCount === 0;
+  const isAuthenticated = state.instances.some((instance) => instance.connection.isAuthenticated());
+  const count = state.instances.reduce((total, instance) => total + instance.sessions.length, 0);
+  const isEmpty = isAuthenticated && count === 0;
   const host = home.host();
   elements["home-view"].classList.toggle("is-composing", Boolean(host));
   if (host) {
-    elements["home-eyebrow"].textContent =
-      "New session · " + host.project + (host.baseBranch ? " · base " + host.baseBranch : "");
+    const parts = ["New session"];
+    if (isMany()) {
+      parts.push(state.homeTarget.name);
+    }
+    parts.push(host.project);
+    if (host.baseBranch) {
+      parts.push("base " + host.baseBranch);
+    }
+    elements["home-eyebrow"].textContent = parts.join(" · ");
     elements["home-title"].textContent = "What should the agent work on?";
   } else {
     elements["home-eyebrow"].textContent = isEmpty ? "Connected" : "Remote control";
@@ -475,8 +657,12 @@ function renderHome() {
   elements["home-none"].hidden = !isEmpty || Boolean(host);
   elements["home-sessions"].hidden = isEmpty;
   let summary = "";
-  if (state.isAuthenticated) {
-    summary = isEmpty ? "no sessions in this project" : sessionCountText(state.sessionCount);
+  if (isAuthenticated) {
+    if (!isEmpty) {
+      summary = sessionCountText(count);
+    } else {
+      summary = isMany() ? "no sessions" : "no sessions in this project";
+    }
   }
   elements["heading-sub"].replaceChildren(summary);
 }
@@ -485,298 +671,314 @@ function sessionCountText(count) {
   return count === 1 ? "1 session" : count + " sessions";
 }
 
-function send(frame) {
-  return Boolean(state.transport?.send(JSON.stringify(frame)));
-}
-
-function request(body) {
-  return new Promise((resolve, reject) => {
-    const id = state.nextRequestId++;
-    if (!state.isAuthenticated || !send({ type: "request", id: id, request: body })) {
-      reject(new Error("Not connected"));
-
-      return;
-    }
-    state.pending.set(id, { reject: reject, resolve: resolve });
-  });
-}
-
-// Ends the requests in flight when the connection drops. Their error says
-// so, as Agentty may still run them.
-function failPending(message) {
-  for (const pending of state.pending.values()) {
-    pending.reject(connectionLostError(message));
-  }
-  state.pending.clear();
-}
-
-// One WebSocket to Agentty's own listener, with the same shape as a relay
-// transport: `send(text)` reports whether the frame was accepted, and
-// `close()` ends it without running `onclose`.
-function openLocalTransport({ onclose, onmessage, onopen }) {
-  const socket = new WebSocket(socketUrl());
-  socket.onopen = onopen;
-  socket.onmessage = (event) => onmessage(event.data);
-  socket.onclose = onclose;
-
-  return {
-    close: () => {
-      socket.onclose = null;
-      socket.close();
-    },
-    send: (text) => {
-      if (socket.readyState !== WebSocket.OPEN) {
-        return false;
-      }
-      socket.send(text);
-
-      return true;
-    },
-  };
-}
-
-function connect(firstFrame) {
-  window.clearTimeout(state.reconnectTimer);
-  state.transport?.close();
-  state.stopReconnecting = false;
-  state.isAuthenticated = false;
-  setConnection("connecting");
-
-  const handlers = {
-    onclose: () => handleClose(transport),
-    onmessage: handleFrame,
-    onopen: () => transport.send(JSON.stringify(firstFrame)),
-  };
-  const transport = usesRelay
-    ? openRelayTransport({
-        ...handlers,
-        deviceKey: state.deviceKey,
-        instanceKey: state.relay.instanceKey,
-        relayUrl: state.relay.relayUrl,
-      })
-    : openLocalTransport(handlers);
-  state.transport = transport;
-}
-
-// Ends the connection until the next `connect`.
-function disconnect() {
-  window.clearTimeout(state.reconnectTimer);
-  state.stopReconnecting = true;
-  state.transport?.close();
-  state.transport = null;
-  state.isAuthenticated = false;
-  failPending("Disconnected");
-  setConnection("offline");
-}
-
-function handleFrame(data) {
-  let frame;
-  try {
-    frame = JSON.parse(data);
-  } catch (_error) {
-    return;
+// Sends a request about the open session, or, without a session, to the
+// Agentty in view. A request that names a session goes to the Agentty that
+// lists it, so an action that outlasts switching sessions still reaches
+// its own.
+function sessionRequest(body) {
+  const owner = body.session_id ? sessionOwner(body.session_id) : null;
+  const instance = owner ?? activeInstance();
+  if (!instance) {
+    return Promise.reject(new Error("Not connected"));
   }
 
-  switch (frame.type) {
-    case "awaiting_approval":
-      setPairingWait(String(frame.confirmation));
-      setConnection("waiting");
-      break;
-    case "paired":
-      if (!usesRelay) {
-        setToken(frame.token);
-      }
-      state.capabilities = Array.isArray(frame.capabilities) ? frame.capabilities : [];
-      onAuthenticated();
-      break;
-    case "welcome":
-      // A relay device that pairs again with a key Agentty already knows
-      // is welcomed directly.
-      state.capabilities = Array.isArray(frame.capabilities) ? frame.capabilities : [];
-      onAuthenticated();
-      break;
-    case "response": {
-      const pending = state.pending.get(frame.id);
-      if (!pending) {
-        break;
-      }
-      state.pending.delete(frame.id);
-      if (frame.result && "ok" in frame.result) {
-        pending.resolve(frame.result.ok);
-      } else {
-        pending.reject(new Error(frame.result?.error || "Request failed"));
-      }
-      break;
-    }
-    case "changed":
-      refresh();
-      break;
-    case "rejected":
-      onRejected(frame.reason || "Connection rejected");
-      break;
-    default:
-      break;
-  }
+  return instance.connection.request(body);
 }
 
-function onAuthenticated() {
-  chat.setCapabilities(state.capabilities);
-  project.setCapabilities(state.capabilities);
-  if (state.pendingPairing) {
-    writeStored(DEVICE_NAME_KEY, state.pendingPairing.deviceName);
-    state.pendingPairing = null;
+// The Agentty that lists `sessionId`, preferring the open session's.
+function sessionOwner(sessionId) {
+  const current = state.current;
+  if (current && (current.sessionId === sessionId || current.instance.sessions.some((session) => session.id === sessionId))) {
+    return current.instance;
   }
-  if (usesRelay) {
-    state.isRelayPaired = true;
-    state.pairingLink = null;
-    writeStored(RELAY_KEY, state.relay.instanceKey + " " + state.relay.relayUrl);
-  }
-  state.isAuthenticated = true;
-  state.backoffMs = 1000;
-  elements["list-error"].textContent = "";
-  elements["pair-error"].textContent = "";
-  setConnection("connected");
-  showShell();
-  refresh(true);
-  // Starting a session needs the `host` and `create_session` capabilities;
-  // the button appears once the host described its project.
-  void home.setCapabilities(state.capabilities);
+
+  return (
+    state.instances.find((instance) => instance.sessions.some((session) => session.id === sessionId)) ?? null
+  );
 }
 
-// Pairing failures, including a denial or a missed approval in the
-// terminal, return to the pair form with the reason.
-function onRejected(reason) {
-  state.stopReconnecting = true;
-  if (state.pendingPairing || CREDENTIAL_REJECTIONS.has(reason)) {
-    if (CREDENTIAL_REJECTIONS.has(reason)) {
-      forgetCredential();
-    }
-    state.pendingPairing = null;
-    state.currentSessionId = null;
-    elements["pair-error"].textContent = reason;
-    showPairing();
-  } else {
-    // Other rejections, such as an unsupported protocol version, last
-    // until Agentty or the server of this page is updated.
-    state.rejection = reason;
+// Requests of home's composer go to the Agentty it describes, which does
+// not change while it creates a session.
+function homeRequest(body) {
+  const instance = state.homeTarget;
+  if (!instance) {
+    return Promise.reject(new Error("Not connected"));
   }
-  setConnection("rejected");
+
+  return instance.connection.request(body);
 }
 
-function handleClose(transport) {
-  if (state.transport !== transport) {
-    return;
-  }
-  state.isAuthenticated = false;
-  state.transport = null;
-  failPending("Disconnected");
-  if (state.pendingPairing) {
-    // The connection ended before Agentty answered the pairing.
-    state.pendingPairing = null;
-    setPairingWait(null);
-    elements["pair-error"].textContent =
-      "Could not reach Agentty. Check that remote control is on, then try again.";
-  }
-  if (state.stopReconnecting || !hasCredential()) {
-    // A rejection already said why the connection ended.
-    if (state.connection !== "rejected") {
-      setConnection("offline");
-    }
-
-    return;
-  }
-  const delay = state.backoffMs;
-  state.backoffMs = Math.min(state.backoffMs * 2, MAX_BACKOFF_MS);
-  state.reconnectAt = Date.now() + delay;
-  state.reconnectTimer = window.setTimeout(() => {
-    connect(helloFrame());
-  }, delay);
-  setConnection("reconnecting");
-}
-
-// Reloads the list and the open session, at most once a second and not
-// while the page is hidden, since a relay limits how much a device reads.
-// Changes that arrive meanwhile coalesce into one more reload.
-// `refresh(true)` skips the wait, as when a session opens.
-function refresh(isUrgent = false) {
-  refreshGate.request(isUrgent);
-}
-
-async function loadSessions() {
-  if (!state.isAuthenticated) {
+async function loadSessions(instance) {
+  if (!instance.connection.isAuthenticated()) {
     return;
   }
   // A session opened while this runs is loaded by the next run, and an
   // answer for this one is dropped once another is open.
-  const sessionId = state.currentSessionId;
+  const sessionId = state.current?.instance === instance ? state.current.sessionId : null;
+  const isStillOpen = () => state.current?.instance === instance && state.current.sessionId === sessionId;
   try {
-    const listed = await request({ method: "list_sessions" });
+    const listed = await instance.connection.request({ method: "list_sessions" });
     const sessions = listed.sessions || [];
-    renderSessions(sessions);
-    showProject(parseProject(listed));
-    elements["list-error"].textContent = "";
+    instance.sessions = sessions;
+    instance.isListed = true;
+    renderSessions();
+    showProject(instance, parseProject(listed));
+    instance.view.error.textContent = instance.rejection ?? "";
     if (sessionId) {
-      const loaded = await request({ method: "get_session", session_id: sessionId });
-      if (sessionId === state.currentSessionId) {
+      const loaded = await instance.connection.request({ method: "get_session", session_id: sessionId });
+      if (isStillOpen()) {
         // The listing carries the figures the header shows beside the
         // snapshot.
         chat.render(loaded.session, sessions.find((summary) => summary.id === sessionId));
       }
     }
   } catch (error) {
-    if (sessionId) {
+    if (sessionId && isStillOpen()) {
       chat.showLoadError(sessionId, error.message);
     } else {
-      elements["list-error"].textContent = error.message;
+      instance.view.error.textContent = error.message;
     }
   }
 }
 
 // Shows the project a listing names. When the terminal switched to another
 // project, home describes the host again: new sessions start there.
-function showProject(listed) {
-  project.update(listed);
-  if (listed && state.projectName !== null && listed.name !== state.projectName) {
-    void home.setCapabilities(state.capabilities);
+function showProject(instance, listed) {
+  instance.project.update(listed);
+  if (
+    listed &&
+    instance.projectName !== null &&
+    listed.name !== instance.projectName &&
+    instance === state.homeTarget
+  ) {
+    void describeHome(true);
   }
-  state.projectName = listed?.name ?? state.projectName;
+  instance.projectName = listed?.name ?? instance.projectName;
 }
 
-function renderSessions(sessions) {
-  state.sessionCount = sessions.length;
-  sessionList.update(sessions, state.currentSessionId);
-  if (!state.currentSessionId) {
+function renderSessions() {
+  sessionList.setSources(
+    state.instances.map((instance) => ({
+      empty: instance.view.empty,
+      id: instance.id,
+      isListed: instance.isListed,
+      list: instance.view.list,
+      name: isMany() ? instance.name : null,
+      sessions: instance.sessions,
+    })),
+  );
+  if (!state.current) {
     renderHome();
   }
 }
 
-// Opens `sessionId` in the main area. The caller has already routed to it.
-// `failure` is a first message from home that did not go through.
-function enterSession(sessionId, failure = null) {
-  if (sessionId === state.currentSessionId) {
+// Opens `sessionId` of `instance` in the main area. The caller has already
+// routed to it. `failure` is a first message from home that did not go
+// through.
+function enterSession(instance, sessionId, failure = null) {
+  if (state.current?.instance === instance && state.current.sessionId === sessionId) {
     return;
   }
-  state.currentSessionId = sessionId;
+  state.current = { instance: instance, sessionId: sessionId };
+  chat.setCapabilities(instance.connection.capabilities());
   chat.open(sessionId, failure);
   markCurrentRow();
   renderMain();
-  refresh(true);
+  renderOffline();
+  instance.refreshGate.request(true);
 }
 
 // Returns to home. The caller has already routed there.
 function leaveSession() {
-  if (!state.currentSessionId) {
+  const instance = state.current?.instance;
+  if (!instance) {
     return;
   }
-  state.currentSessionId = null;
+  state.current = null;
   markCurrentRow();
   renderMain();
-  refresh(true);
+  renderOffline();
+  instance.refreshGate.request(true);
 }
 
 // Marks the open session's row in the list and counts it as seen.
 function markCurrentRow() {
-  sessionList.setOpen(state.currentSessionId);
+  sessionList.setOpen(state.current?.sessionId ?? null, state.current?.instance.id ?? "");
+}
+
+// The Agentty a route names: without a relay, or when an older address
+// names none, the first one.
+function routedInstance(route) {
+  return route.instanceId ? findInstance(route.instanceId) : (state.instances[0] ?? null);
+}
+
+// The Agentty home describes: the one the user chose with its `New
+// session`, otherwise the first connected one that offers new sessions,
+// otherwise the first one.
+function homeInstance() {
+  const chosen = state.homeId === null ? null : findInstance(state.homeId);
+  if (chosen) {
+    return chosen;
+  }
+
+  return (
+    state.instances.find(
+      (instance) => isConnected(instance) && offersCreation(instance.connection.capabilities()),
+    ) ??
+    state.instances[0] ??
+    null
+  );
+}
+
+// Points home at `homeInstance()` and describes its host, when it changed
+// or `force` says its host may have. A session being created keeps home
+// where it is.
+async function describeHome(force = false) {
+  if (home.isCreating()) {
+    return;
+  }
+  const target = homeInstance();
+  if (target === state.homeTarget && !force) {
+    return;
+  }
+  state.homeTarget = target;
+  renderOffline();
+  await home.setCapabilities(
+    isConnected(target) ? target.connection.capabilities() : [],
+    target && usesRelay ? target.id : "",
+  );
+}
+
+// Each Agentty's `New session`: home's shows once its host is described,
+// another's whenever it offers new sessions.
+function renderNewSessionButtons() {
+  for (const instance of state.instances) {
+    const isShown =
+      instance === state.homeTarget
+        ? Boolean(home.host())
+        : isConnected(instance) && offersCreation(instance.connection.capabilities());
+    instance.view.newSession.hidden = !isShown;
+  }
+}
+
+// `New session` leads to the home composer, for that Agentty.
+function startNewSession(instance) {
+  shell.showSession(null);
+  leaveSession();
+  state.homeId = instance.id;
+  if (instance === state.homeTarget && home.host()) {
+    home.focus();
+
+    return;
+  }
+  void describeHome(true).then(() => home.focus());
+}
+
+function onAuthenticated(instance, frame) {
+  if (!usesRelay && frame.type === "paired") {
+    setToken(frame.token);
+  }
+  const pairing = state.pairing?.instance === instance ? state.pairing : null;
+  if (pairing) {
+    writeStored(DEVICE_NAME_KEY, pairing.deviceName);
+    state.pairing = null;
+    state.pairingLink = null;
+    if (usesRelay) {
+      state.pairings = savePairing(storage, state.pairings, instance.pairing);
+    }
+    if (!state.instances.includes(instance)) {
+      state.instances.push(instance);
+      placeInstances();
+    }
+  }
+  instance.rejection = null;
+  instance.view.error.textContent = "";
+  elements["pair-error"].textContent = "";
+  instance.project.setCapabilities(instance.connection.capabilities());
+  if (state.current?.instance === instance) {
+    chat.setCapabilities(instance.connection.capabilities());
+  }
+  onConnectionState(instance);
+  if (pairing) {
+    showShell();
+  }
+  instance.refreshGate.request(true);
+  // Starting a session needs the `host` and `create_session`
+  // capabilities; the button appears once the host described its project.
+  void describeHome(instance === homeInstance());
+}
+
+// A pairing that Agentty refused returns to the pairing form with the
+// reason. A credential that can never work again is forgotten; with other
+// Agenttys paired, its Agentty stays in the sidebar with the reason until
+// the page reloads. Other rejections, such as an unsupported protocol
+// version, last until Agentty or the server of this page is updated.
+function onRejected(instance, reason, wasPairing) {
+  if (wasPairing || state.pairing?.instance === instance) {
+    state.pairing = null;
+    elements["pair-error"].textContent = reason;
+    showPairing();
+    if (state.instances.includes(instance) && hasCredential(instance)) {
+      instance.connection.connect();
+    }
+
+    return;
+  }
+  if (CREDENTIAL_REJECTIONS.has(reason)) {
+    forgetCredential(instance);
+    if (!usesRelay || !isMany()) {
+      if (usesRelay) {
+        removeInstance(instance);
+      }
+      elements["pair-error"].textContent = reason;
+      showPairing();
+
+      return;
+    }
+    instance.sessions = [];
+  }
+  instance.rejection = reason;
+  instance.view.error.textContent = reason;
+  renderSessions();
+  renderOffline();
+}
+
+// The connection ended before Agentty answered the pairing.
+function onPairingLost(instance) {
+  if (state.pairing?.instance !== instance) {
+    return;
+  }
+  state.pairing = null;
+  setPairingWait(null);
+  elements["pair-error"].textContent =
+    "Could not reach Agentty. Check that remote control is on, then try again.";
+}
+
+// Forgets the credential `instance` connects with.
+function forgetCredential(instance) {
+  if (usesRelay) {
+    state.pairings = forgetPairing(storage, state.pairings, instance.id);
+  } else {
+    setToken(null);
+  }
+  if (!usesRelay || state.pairings.length === 0) {
+    writeStored(DEVICE_NAME_KEY, null);
+  }
+}
+
+// Takes `instance` out of the sidebar, leaving its open session.
+function removeInstance(instance) {
+  instance.connection.disconnect();
+  if (state.current?.instance === instance) {
+    shell.showSession(null);
+    leaveSession();
+  }
+  state.instances = state.instances.filter((known) => known !== instance);
+  if (state.homeId === instance.id) {
+    state.homeId = null;
+  }
+  placeInstances();
+  void describeHome();
 }
 
 // The settings sheet, for the open session and for home's new one.
@@ -794,7 +996,7 @@ const settingsSheet = createSettings({
     speedRow: elements["settings-speed-row"],
     style: elements["settings-style"],
   },
-  request: request,
+  request: sessionRequest,
 });
 
 const chat = createChat({
@@ -806,7 +1008,7 @@ const chat = createChat({
       summary: elements["diff-summary"],
       view: elements["diff-view"],
     },
-    request: request,
+    request: sessionRequest,
   }),
   document: document,
   graph: createGraph({
@@ -827,7 +1029,7 @@ const chat = createChat({
       title: elements["graph-title"],
       view: elements["graph-view"],
     },
-    request: request,
+    request: sessionRequest,
     window: window,
   }),
   elements: {
@@ -903,13 +1105,12 @@ const chat = createChat({
     shell.showSession(null);
     leaveSession();
   },
-  onRefresh: () => refresh(true),
-  request: request,
+  // An action that changed the open session reloads its Agentty.
+  onRefresh: () => state.current?.instance.refreshGate.request(true),
+  request: sessionRequest,
   settings: settingsSheet,
   window: window,
 });
-
-const refreshGate = createRefreshGate({ document: document, run: loadSessions, window: window });
 
 const shell = createShell({
   document: document,
@@ -926,8 +1127,12 @@ const shell = createShell({
     if (!elements["pair-view"].hidden) {
       // An unpaired page has no sessions to route to.
       clearSessionRoute();
-    } else if (route.kind === "session") {
-      enterSession(route.sessionId);
+
+      return;
+    }
+    const instance = route.kind === "session" ? routedInstance(route) : null;
+    if (instance) {
+      enterSession(instance, route.sessionId);
     } else {
       leaveSession();
     }
@@ -941,10 +1146,8 @@ const sessionList = createSessionList({
   elements: {
     cards: elements["home-cards"],
     chips: elements.chips,
-    empty: elements["sessions-empty"],
     filter: elements.filter,
     filterKey: elements["filter-key"],
-    list: elements.sessions,
     summary: elements["filter-summary"],
     waiting: elements["home-waiting"],
   },
@@ -959,9 +1162,13 @@ const sessionList = createSessionList({
       ? shell.isOpen()
       : !elements.shell.classList.contains("is-sidebar-hidden");
   },
-  onOpen: (sessionId) => {
-    shell.showSession(sessionId);
-    enterSession(sessionId);
+  onOpen: (sessionId, instanceId) => {
+    const instance = findInstance(instanceId);
+    if (!instance) {
+      return;
+    }
+    shell.showSession(sessionId, routeId(instance));
+    enterSession(instance, sessionId);
   },
   window: window,
 });
@@ -973,24 +1180,6 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     sessionList.markSeen();
   }
-});
-
-// The sidebar's project line and its sync.
-const project = createProject({
-  elements: {
-    branch: elements["project-branch"],
-    counts: elements["project-counts"],
-    dialog: elements["project-sync-dialog"],
-    dialogBranch: elements["project-sync-branch"],
-    dialogTarget: elements["project-sync-target"],
-    error: elements["project-error"],
-    line: elements.project,
-    name: elements["project-name"],
-    status: elements["project-status"],
-    sync: elements["project-sync"],
-    syncLabel: elements["project-sync-label"],
-  },
-  request: request,
 });
 
 const home = createHome({
@@ -1008,33 +1197,27 @@ const home = createHome({
   // The new session opens only if the user is still on home; otherwise it
   // shows up in the list, with an unsent first message kept as its draft.
   onCreated: (sessionId, failure) => {
-    if (state.currentSessionId === null) {
-      shell.showSession(sessionId);
-      enterSession(sessionId, failure);
+    const instance = state.homeTarget;
+    if (state.current === null) {
+      shell.showSession(sessionId, routeId(instance));
+      enterSession(instance, sessionId, failure);
     } else {
       if (failure) {
         chat.keepDraft(sessionId, failure.draft);
       }
-      refresh(true);
+      instance.refreshGate.request(true);
     }
   },
   onHost: (host) => {
-    elements["new-session"].hidden = !host;
-    project.setHostName(host?.project ?? null);
-    if (!state.currentSessionId) {
+    state.homeTarget?.project.setHostName(host?.project ?? null);
+    renderNewSessionButtons();
+    if (!state.current) {
       renderHome();
     }
   },
-  request: request,
+  request: homeRequest,
   settings: settingsSheet,
   window: window,
-});
-
-// New session leads to the home composer.
-elements["new-session"].addEventListener("click", () => {
-  shell.showSession(null);
-  leaveSession();
-  home.focus();
 });
 
 elements["pair-name"].value = readStored(DEVICE_NAME_KEY) || defaultDeviceName();
@@ -1042,38 +1225,67 @@ elements["pair-name"].value = readStored(DEVICE_NAME_KEY) || defaultDeviceName()
 elements["pair-form"].addEventListener("submit", (event) => {
   event.preventDefault();
   const code = elements["pair-code"].value.trim();
-  if (!code || state.pendingPairing) {
+  if (!code || state.pairing) {
     return;
   }
-  if (usesRelay) {
-    const link = state.pairingLink;
-    if (!link || !state.deviceKey) {
-      return;
-    }
-    // An earlier pairing stays saved until this one succeeds, but is not
-    // used to reconnect to the instance this link names.
-    state.isRelayPaired = false;
-    state.relay = { instanceKey: link.instanceKey, relayUrl: link.relayUrl };
+  const link = state.pairingLink;
+  if (usesRelay && (!link || !state.deviceKey)) {
+    return;
   }
   const deviceName = elements["pair-name"].value.trim();
   elements["pair-error"].textContent = "";
-  state.pendingPairing = { code: code, deviceName: deviceName };
   // Cancel shows at once, so a connection that hangs can be abandoned.
   setPairingPhase("connecting");
-  connect({
-    type: "pair",
-    code: code,
-    device_name: deviceName,
-    protocol_version: PROTOCOL_VERSION,
+  void pairingInstance(link).then((instance) => {
+    // A pairing with an Agentty this browser already knows replaces it
+    // once Agentty approves; until then the earlier one is not used to
+    // reconnect.
+    state.pairing = { deviceName: deviceName, instance: instance };
+    instance.rejection = null;
+    instance.connection.pair({
+      type: "pair",
+      code: code,
+      device_name: deviceName,
+      protocol_version: PROTOCOL_VERSION,
+    });
   });
 });
 
+// The Agentty `link` pairs with, already in the sidebar or new; without a
+// relay, the one behind this page.
+async function pairingInstance(link) {
+  if (!usesRelay) {
+    return state.instances[0];
+  }
+  const instanceId = await instanceIdOf(link.instanceKey);
+  const pairing = { instanceId: instanceId, instanceKey: link.instanceKey, relayUrl: link.relayUrl };
+  const known = findInstance(instanceId);
+  if (known) {
+    known.pairing = pairing;
+
+    return known;
+  }
+
+  return createInstance(instanceId, pairing);
+}
+
 // Stops waiting for approval. Agentty drops the request once the
-// connection closes.
+// connection closes; an Agentty that was paired before reconnects.
 elements["pair-cancel"].addEventListener("click", () => {
-  state.pendingPairing = null;
-  disconnect();
+  const instance = state.pairing?.instance;
+  state.pairing = null;
+  instance?.connection.disconnect();
+  if (instance && state.instances.includes(instance) && hasCredential(instance)) {
+    instance.connection.connect();
+  }
   setPairingWait(null);
+});
+
+// Returns from a pairing link to the Agenttys already paired.
+elements["pair-back"].addEventListener("click", () => {
+  state.pairingLink = null;
+  elements["pair-error"].textContent = "";
+  showShell();
 });
 
 for (const button of document.querySelectorAll("[data-theme]")) {
@@ -1115,30 +1327,48 @@ elements.sidebar.addEventListener("keydown", (event) => {
   }
 });
 
-elements.forget.addEventListener("click", () => {
+// Asks before forgetting this device on `instance`.
+function askToForget(instance) {
   setDeviceMenu(false);
+  state.forgetTarget = instance;
+  elements["forget-target"].textContent = isMany() ? " to " + instance.name : "";
   elements["forget-dialog"].returnValue = "";
   elements["forget-dialog"].showModal();
+}
+
+elements.forget.addEventListener("click", () => {
+  if (state.instances[0]) {
+    askToForget(state.instances[0]);
+  }
 });
 
 elements["forget-dialog"].addEventListener("close", () => {
-  if (elements["forget-dialog"].returnValue !== "confirm") {
+  const instance = state.forgetTarget;
+  state.forgetTarget = null;
+  if (elements["forget-dialog"].returnValue !== "confirm" || !instance) {
     return;
   }
-  forgetCredential();
-  state.currentSessionId = null;
-  chat.close();
-  disconnect();
-  if (usesRelay) {
-    // Agentty lists the old key until it is removed there; a later pairing
-    // uses a new one.
-    state.deviceKey = null;
-    void forgetDeviceKey()
-      .then(loadDeviceKey)
-      .then((deviceKey) => {
-        state.deviceKey = deviceKey.keyPair;
-      });
+  forgetCredential(instance);
+  if (!usesRelay) {
+    instance.connection.disconnect();
+    elements["pair-name"].value = defaultDeviceName();
+    showPairing();
+
+    return;
   }
+  removeInstance(instance);
+  if (state.instances.length > 0) {
+    return;
+  }
+  // Agentty lists the old key until it is removed there; a later pairing
+  // uses a new one. Other Agenttys still know the key, so it stays while
+  // any is paired.
+  state.deviceKey = null;
+  void forgetDeviceKey()
+    .then(loadDeviceKey)
+    .then((deviceKey) => {
+      state.deviceKey = deviceKey.keyPair;
+    });
   elements["pair-name"].value = defaultDeviceName();
   showPairing();
 });
@@ -1146,8 +1376,9 @@ elements["forget-dialog"].addEventListener("close", () => {
 elements["home-sessions"].addEventListener("click", () => elements.menu.click());
 
 elements.retry.addEventListener("click", () => {
-  if (hasCredential()) {
-    connect(helloFrame());
+  const active = activeInstance();
+  if (active && hasCredential(active)) {
+    active.connection.connect();
   }
 });
 
@@ -1169,17 +1400,24 @@ function adoptPairingLink() {
 // Opens the session the address names, if any, once the app connects.
 function adoptSessionRoute() {
   const route = parseRoute(window.location.hash, parsePairingLink);
-  state.currentSessionId = route.kind === "session" ? route.sessionId : null;
-  if (state.currentSessionId) {
-    chat.open(state.currentSessionId);
+  const instance = route.kind === "session" ? routedInstance(route) : null;
+  if (instance) {
+    state.current = { instance: instance, sessionId: route.sessionId };
+    chat.open(route.sessionId);
+    markCurrentRow();
+  } else {
+    clearSessionRoute();
   }
 }
 
-// Shows the app and connects with the saved credential.
+// Shows the app and connects every Agentty with its saved credential.
 function resume() {
   adoptSessionRoute();
   showShell();
-  connect(helloFrame());
+  void describeHome();
+  for (const instance of state.instances) {
+    instance.connection.connect();
+  }
 }
 
 async function startThroughRelay() {
@@ -1195,32 +1433,32 @@ async function startThroughRelay() {
   }
   const deviceKey = await loadDeviceKey();
   state.deviceKey = deviceKey.keyPair;
+  state.pairings = await loadPairings(storage);
   // A link opened in a tab that already shows this page only changes the
-  // fragment.
+  // fragment. It replaces whatever this tab was doing; the Agenttys already
+  // paired stay connected behind the pairing card.
   window.addEventListener("hashchange", () => {
     if (adoptPairingLink()) {
-      // The link replaces whatever this tab was doing.
-      disconnect();
-      state.currentSessionId = null;
-      chat.close();
-      state.pendingPairing = null;
+      const instance = state.pairing?.instance;
+      state.pairing = null;
+      instance?.connection.disconnect();
+      if (instance && state.instances.includes(instance) && hasCredential(instance)) {
+        instance.connection.connect();
+      }
       elements["pair-error"].textContent = "";
       showPairing();
     }
   });
-  const relay = storedRelay();
-  if (adoptPairingLink() || !relay) {
-    showPairing();
-
-    return;
-  }
-  if (deviceKey.origin !== "saved") {
+  const hasLink = adoptPairingLink();
+  if (state.pairings.length > 0 && deviceKey.origin !== "saved") {
     // The key Agentty knows is not available, so connecting would only be
-    // refused. A key that is gone ends the pairing; storage that could not
-    // be read may work again after a reload, so the pairing stays.
+    // refused. A key that is gone ends the pairings; storage that could not
+    // be read may work again after a reload, so the pairings stay.
     if (deviceKey.origin === "created") {
-      forgetCredential();
-    } else {
+      for (const pairing of state.pairings) {
+        state.pairings = forgetPairing(storage, state.pairings, pairing.instanceId);
+      }
+    } else if (!hasLink) {
       elements["pair-error"].textContent =
         "This browser's saved key could not be read. Reload the page to try again.";
     }
@@ -1228,15 +1466,28 @@ async function startThroughRelay() {
 
     return;
   }
-  state.relay = relay;
-  state.isRelayPaired = true;
+  state.instances = state.pairings.map((pairing) => createInstance(pairing.instanceId, pairing));
+  placeInstances();
+  if (hasLink || state.instances.length === 0) {
+    showPairing();
+    void describeHome();
+    for (const instance of state.instances) {
+      instance.connection.connect();
+    }
+
+    return;
+  }
   resume();
 }
 
 if (usesRelay) {
   await startThroughRelay();
-} else if (token()) {
-  resume();
 } else {
-  showPairing();
+  state.instances = [createInstance("", null)];
+  placeInstances();
+  if (token()) {
+    resume();
+  } else {
+    showPairing();
+  }
 }

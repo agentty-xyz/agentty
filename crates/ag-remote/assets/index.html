@@ -138,6 +138,7 @@
                 <p id="pair-error" class="error" role="alert"></p>
                 <button id="pair-submit" type="submit" class="btn btn--primary btn--lg">Pair</button>
                 <button id="pair-cancel" type="button" class="btn btn--lg" hidden>Cancel</button>
+                <button id="pair-back" type="button" class="btn btn--lg" hidden>Back to sessions</button>
             </form>
             <p id="pair-foot" class="pair-foot" hidden>Through a relay · encrypted end to end</p>
         </div>
@@ -168,28 +169,7 @@
                     </button>
                 </div>
                 <div class="sidebar-actions">
-                    <div id="project" class="project" hidden>
-                        <p class="project-line">
-                            <span class="visually-hidden">Project</span>
-                            <b id="project-name"></b>
-                            <span id="project-branch" class="project-branch" hidden></span>
-                            <span id="project-counts" class="project-counts" hidden></span>
-                        </p>
-                        <button id="project-sync" class="project-sync" type="button" hidden>
-                            <svg class="icon icon--sm" aria-hidden="true">
-                                <use href="#i-sync" />
-                            </svg>
-                            <span id="project-sync-label">Sync</span>
-                        </button>
-                        <output id="project-status" class="project-status" hidden></output>
-                        <p id="project-error" class="error" role="alert"></p>
-                    </div>
-                    <button id="new-session" class="new-session" type="button" hidden>
-                        <svg class="icon" aria-hidden="true">
-                            <use href="#i-plus" />
-                        </svg>
-                        New session
-                    </button>
+                    <div id="instance-slot" class="instance-slot" hidden></div>
                     <label class="filter">
                         <svg class="icon icon--sm" aria-hidden="true">
                             <use href="#i-search" />
@@ -207,9 +187,7 @@
                 </div>
                 <nav class="session-list" aria-label="Session list">
                     <div id="sessions" class="sessions"></div>
-                    <p id="sessions-empty" class="list-empty" hidden>No sessions in the active project.</p>
                     <output id="filter-summary" class="list-summary" hidden></output>
-                    <p id="list-error" class="error" role="alert"></p>
                 </nav>
                 <footer class="sidebar-foot">
                     <fieldset class="segmented" aria-label="Color theme">
@@ -239,6 +217,7 @@
                         </button>
                         <div id="device-menu" class="menu" role="menu" hidden>
                             <button id="forget" class="menu-item is-danger" type="button" role="menuitem">Forget this device</button>
+                            <div id="forget-each" class="menu-group" hidden></div>
                         </div>
                     </div>
                 </footer>
@@ -686,7 +665,7 @@
                 <form method="dialog">
                     <h2 id="forget-dialog-title">Forget this device?</h2>
                     <p>
-                        This browser stops connecting and needs a new pairing code to come back. Agentty lists the device until you remove it in the Remote tab.
+                        This browser stops connecting<span id="forget-target"></span> and needs a new pairing code to come back. Agentty lists the device until you remove it in the Remote tab.
                     </p>
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Keep pairing</button>
@@ -694,6 +673,39 @@
                     </div>
                 </form>
             </dialog>
+        </div>
+        <div id="instance-prototype" hidden>
+            <div class="instance-head" data-part="head">
+                <h2 class="instance-name" data-part="name"></h2>
+                <span class="status status--idle" data-part="connection"><i class="status-dot"></i><span data-part="connection-label"></span></span>
+            </div>
+            <div class="instance-top" data-part="top">
+                <div class="project" data-part="project" hidden>
+                    <p class="project-line">
+                        <span class="visually-hidden">Project</span>
+                        <b data-part="project-name"></b>
+                        <span class="project-branch" data-part="project-branch" hidden></span>
+                        <span class="project-counts" data-part="project-counts" hidden></span>
+                    </p>
+                    <button class="project-sync" type="button" data-part="project-sync" hidden>
+                        <svg class="icon icon--sm" aria-hidden="true">
+                            <use href="#i-sync" />
+                        </svg>
+                        <span data-part="project-sync-label">Sync</span>
+                    </button>
+                    <output class="project-status" data-part="project-status" hidden></output>
+                    <p class="error" role="alert" data-part="project-error"></p>
+                </div>
+                <button class="new-session" type="button" data-part="new-session" hidden>
+                    <svg class="icon" aria-hidden="true">
+                        <use href="#i-plus" />
+                    </svg>
+                    New session
+                </button>
+            </div>
+            <div class="instance-sessions" data-part="list"></div>
+            <p class="list-empty" data-part="empty" hidden>No sessions in the active project.</p>
+            <p class="error" role="alert" data-part="error"></p>
         </div>
     </body>
 </html>

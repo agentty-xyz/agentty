@@ -298,6 +298,56 @@ body {
   padding: var(--space-2xs) var(--space-md) 0.6rem;
 }
 
+/* One Agentty's project line and New session: above the filter when the
+   page shows one Agentty, under its heading when it shows several. */
+.instance-slot,
+.instance-top {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+/* Each of several Agenttys, under a heading with its connection state. */
+.instance + .instance {
+  margin-top: var(--space-md);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--color-border);
+}
+
+.instance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: var(--control-height-sm);
+  margin: var(--space-2xs) 0;
+}
+
+.instance-name {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  line-height: var(--line-height-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-head .status {
+  flex: none;
+}
+
+.instance .instance-top {
+  margin-bottom: var(--space-md);
+}
+
+.menu-group {
+  display: grid;
+}
+
 /* .button.button-secondary, left aligned */
 .new-session {
   display: flex;
@@ -1145,8 +1195,17 @@ body {
   font-size: var(--font-size-2xs);
 }
 
-.card-meta .time::before {
+.card-meta .time::before,
+.card-meta .card-source::before {
   content: "· ";
+}
+
+/* The Agentty a card's session runs on, when the page shows several. */
+.card-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-title {

@@ -4,9 +4,22 @@ import test from "node:test";
 
 import { createDocument } from "./fake_dom.mjs";
 import { parseProject } from "../../assets/format.mjs";
+import { createInstanceView } from "../../assets/instance.mjs";
 import { createProject, offersProjectSync } from "../../assets/project.mjs";
 
 const INDEX_HTML = readFileSync(new URL("../../assets/index.html", import.meta.url), "utf8");
+// The parts of an Agentty's view in instance.mjs, by the names these tests
+// use.
+const PARTS = {
+  project: "line",
+  "project-branch": "branch",
+  "project-counts": "counts",
+  "project-error": "error",
+  "project-name": "name",
+  "project-status": "status",
+  "project-sync": "sync",
+  "project-sync-label": "syncLabel",
+};
 
 // The project a listing names, with `fields` over `agentty` on `main`,
 // two commits behind its upstream.
@@ -16,26 +29,28 @@ function listed(fields = {}) {
   });
 }
 
-// Mounts the project line on the client's page, connected and with
-// `capabilities`. `respond(body)` answers each request; the requests sent
-// are recorded.
-function mountProject({ capabilities = ["sync_project"], respond = () => ({ kind: "accepted" }) } = {}) {
-  const document = createDocument(INDEX_HTML);
-  const byId = (id) => document.getElementById(id);
+// Mounts the project line of an Agentty's view on the client's page,
+// connected and with `capabilities`. `respond(body)` answers each request;
+// the requests sent are recorded. `byId` finds the view's parts by the
+// names in `PARTS` and the page's elements by id.
+function mountProject({
+  capabilities = ["sync_project"],
+  document = createDocument(INDEX_HTML),
+  respond = () => ({ kind: "accepted" }),
+} = {}) {
+  const view = createInstanceView({
+    document: document,
+    prototype: document.getElementById("instance-prototype"),
+  });
+  document.getElementById("sessions").append(view.root);
+  const byId = (id) => (Object.hasOwn(PARTS, id) ? view.project[PARTS[id]] : document.getElementById(id));
   const requests = [];
   const project = createProject({
     elements: {
-      branch: byId("project-branch"),
-      counts: byId("project-counts"),
+      ...view.project,
       dialog: byId("project-sync-dialog"),
       dialogBranch: byId("project-sync-branch"),
       dialogTarget: byId("project-sync-target"),
-      error: byId("project-error"),
-      line: byId("project"),
-      name: byId("project-name"),
-      status: byId("project-status"),
-      sync: byId("project-sync"),
-      syncLabel: byId("project-sync-label"),
     },
     request: async (body) => {
       requests.push(body);
@@ -46,7 +61,7 @@ function mountProject({ capabilities = ["sync_project"], respond = () => ({ kind
   project.setCapabilities(capabilities);
   project.setConnected(true);
 
-  return { byId, project, requests };
+  return { byId, document, project, requests };
 }
 
 // Lets the promises a click started run to their end.
@@ -95,10 +110,11 @@ test("a listed project shows its branch, its distance from upstream and the sync
   assert.equal(byId("project-sync").hidden, false);
   assert.equal(byId("project-sync").disabled, false);
   assert.equal(byId("project-sync-label").textContent, "Sync");
+  byId("project-sync").click();
   assert.equal(byId("project-sync-target").textContent, "agentty/main");
   assert.equal(byId("project-sync-branch").textContent, "main");
 
-  // A project without a branch names itself in the confirmation.
+  // A project without a branch names itself in the open confirmation.
   project.update(listed({ branch: undefined }));
   assert.equal(byId("project-branch").hidden, true);
   assert.equal(byId("project-branch").textContent, "");
@@ -111,6 +127,28 @@ test("a listed project shows its branch, its distance from upstream and the sync
   assert.equal(byId("project-name").textContent, "from-host");
   assert.equal(byId("project-sync").hidden, true);
   assert.equal(byId("project-sync-target").textContent, "the project");
+});
+
+test("the project lines of several Agenttys share the dialog, and only the asking one syncs", async () => {
+  // Arrange
+  const first = mountProject();
+  const second = mountProject({ document: first.document });
+  first.project.update(listed());
+  second.project.update(listed({ branch: "dev", name: "docs" }));
+
+  // Act
+  second.byId("project-sync").click();
+  const target = first.byId("project-sync-target").textContent;
+  first.project.update(listed({ behind: 3 }));
+  const targetAfterUpdate = first.byId("project-sync-target").textContent;
+  first.byId("project-sync-dialog").querySelector('button[value="confirm"]').click();
+  await settle();
+
+  // Assert
+  assert.equal(target, "docs/dev");
+  assert.equal(targetAfterUpdate, "docs/dev");
+  assert.deepEqual(first.requests, []);
+  assert.deepEqual(second.requests, [{ method: "sync_project" }]);
 });
 
 test("the sync button needs the capability and a connection", () => {

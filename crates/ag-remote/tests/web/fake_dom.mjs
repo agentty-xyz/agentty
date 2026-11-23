@@ -336,6 +336,10 @@ class FakeText extends FakeNode {
   get nodeValue() {
     return this.data;
   }
+
+  cloneNode() {
+    return new FakeText(this.ownerDocument, this.data);
+  }
 }
 
 class FakeDocumentFragment extends FakeNode {
@@ -480,6 +484,20 @@ export class FakeElement extends FakeNode {
 
   removeAttribute(name) {
     this.#attributes.delete(name.toLowerCase());
+  }
+
+  // Copies the element and its attributes, and with `deep` its children,
+  // but not its listeners or the value typed into it, as a browser does.
+  cloneNode(deep = false) {
+    const copy = new FakeElement(this.ownerDocument, this.localName, this.namespaceURI);
+    for (const [name, value] of this.#attributes) {
+      copy.setAttribute(name, value);
+    }
+    if (deep) {
+      copy.append(...this.childNodes.map((child) => child.cloneNode(true)));
+    }
+
+    return copy;
   }
 
   toggleAttribute(name, force) {

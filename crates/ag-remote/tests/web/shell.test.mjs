@@ -154,8 +154,8 @@ test("parseRoute reads home, a session, and a pairing link before a session", ()
   assert.deepEqual(routes.slice(0, 5), [
     { kind: "home" },
     { kind: "home" },
-    { kind: "session", sessionId: "session-1" },
-    { kind: "session", sessionId: "a b/c" },
+    { kind: "session", instanceId: null, sessionId: "session-1" },
+    { kind: "session", instanceId: null, sessionId: "a b/c" },
     { kind: "home" },
   ]);
   assert.equal(routes[5].kind, "pairing");
@@ -166,16 +166,28 @@ test("parseRoute reads home, a session, and a pairing link before a session", ()
 test("routeHash builds the fragment parseRoute reads back", () => {
   // Arrange
   const sessionIds = ["session-1", "a b/c&s=x", null];
+  const instanceId = "ab".repeat(32);
 
   // Act
-  const hashes = sessionIds.map(routeHash);
+  const hashes = sessionIds.map((sessionId) => routeHash(sessionId));
+  const onInstance = routeHash("session-1", instanceId);
+  const homeOnInstance = routeHash(null, instanceId);
 
   // Assert
   assert.deepEqual(hashes, ["#s=session-1", "#s=a%20b%2Fc%26s%3Dx", ""]);
   assert.deepEqual(parseRoute(hashes[1], parsePairingLink), {
     kind: "session",
+    instanceId: null,
     sessionId: "a b/c&s=x",
   });
+  // A page that shows several Agenttys names the one the session runs on.
+  assert.equal(onInstance, "#i=" + instanceId + "&s=session-1");
+  assert.deepEqual(parseRoute(onInstance, parsePairingLink), {
+    kind: "session",
+    instanceId: instanceId,
+    sessionId: "session-1",
+  });
+  assert.equal(homeOnInstance, "");
 });
 
 test("nextDrawer moves between states with the history change each needs", () => {
@@ -235,7 +247,7 @@ test("the back gesture closes the drawer without changing the route", () => {
   assert.equal(elements.main.hasAttribute("inert"), false);
   assert.equal(elements.scrim.hidden, true);
   assert.equal(window.location.hash, "#s=one");
-  assert.deepEqual(routes, [{ kind: "session", sessionId: "one" }]);
+  assert.deepEqual(routes, [{ kind: "session", instanceId: null, sessionId: "one" }]);
 });
 
 test("the close button, the scrim and Escape each close the drawer through history", () => {
@@ -353,7 +365,7 @@ test("choosing a session replaces the drawer's entry, so back returns to the las
   assert.equal(shell.isOpen(), false);
   assert.deepEqual(afterChoice, { hash: "#s=two", length: 2 });
   assert.equal(window.location.hash, "#s=one");
-  assert.deepEqual(routes, [{ kind: "session", sessionId: "one" }]);
+  assert.deepEqual(routes, [{ kind: "session", instanceId: null, sessionId: "one" }]);
 });
 
 test("choosing the open session goes back over the drawer's entry and leaves no step to the same place", () => {
@@ -369,7 +381,7 @@ test("choosing the open session goes back over the drawer's entry and leaves no 
   assert.equal(shell.isOpen(), false);
   assert.deepEqual(window.history.state, { panel: true });
   assert.equal(window.location.hash, "#s=one");
-  assert.deepEqual(routes, [{ kind: "session", sessionId: "one" }]);
+  assert.deepEqual(routes, [{ kind: "session", instanceId: null, sessionId: "one" }]);
 });
 
 test("on a wide screen a chosen session pushes a route and home drops the fragment", () => {
@@ -386,7 +398,7 @@ test("on a wide screen a chosen session pushes a route and home drops the fragme
   // Assert
   assert.equal(window.history.length, 4);
   assert.equal(window.location.hash, "#s=two");
-  assert.deepEqual(routes, [{ kind: "session", sessionId: "two" }]);
+  assert.deepEqual(routes, [{ kind: "session", instanceId: null, sessionId: "two" }]);
   window.history.forward();
   assert.equal(window.location.href, "http://127.0.0.1/");
   assert.deepEqual(routes.at(-1), { kind: "home" });
@@ -425,5 +437,5 @@ test("a pairing link in the fragment is left to the pairing flow", () => {
   window.history.forward();
 
   // Assert
-  assert.deepEqual(routes, [{ kind: "session", sessionId: "one" }]);
+  assert.deepEqual(routes, [{ kind: "session", instanceId: null, sessionId: "one" }]);
 });
