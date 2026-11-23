@@ -2113,6 +2113,97 @@ async fn watched_status_updates_resume_watching_start_follow_up_and_stop_when_me
     assert!(!app.review_watch.is_watched(&session_id));
 }
 
+/// Builds one current-generation open status event carrying `attention`
+/// whose pull request waits in the forge's merge queue.
+fn merge_queue_status_event(
+    app: &App,
+    session_id: &SessionId,
+    attention: Option<Result<ReviewRequestAttention, String>>,
+) -> AppEvent {
+    let status_summary = Some(format!(
+        "Approved, {}",
+        ReviewRequestSummary::GITHUB_MERGE_QUEUE_STATUS_COMPONENT
+    ));
+    let mut event = status_updated_event(app, session_id, ReviewRequestState::Open, attention);
+    if let AppEvent::ReviewRequestStatusUpdated {
+        result: Ok(task_result),
+        ..
+    } = &mut event
+        && let Some(summary) = &mut task_result.summary
+    {
+        summary.status_summary = status_summary;
+    }
+
+    event
+}
+
+#[tokio::test]
+async fn forge_merge_queue_entry_holds_the_session_in_queued_until_it_leaves() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+
+    // Act
+    let queued_event = merge_queue_status_event(&app, &session_id, None);
+    app.apply_app_events(queued_event).await;
+    let queued_status = handle_status(&app, &session_id);
+    let is_queued_sync_target = App::review_request_sync_targets(&app.sessions)
+        .iter()
+        .any(|target| target.session_id == session_id && !target.is_watched);
+    let dequeued_event = status_updated_event(&app, &session_id, ReviewRequestState::Open, None);
+    app.apply_app_events(dequeued_event).await;
+    let dequeued_status = handle_status(&app, &session_id);
+    let requeued_event = merge_queue_status_event(&app, &session_id, None);
+    app.apply_app_events(requeued_event).await;
+    let requeued_status = handle_status(&app, &session_id);
+    let merged_event = status_updated_event(&app, &session_id, ReviewRequestState::Merged, None);
+    app.apply_app_events(merged_event).await;
+
+    // Assert
+    assert_eq!(queued_status, Status::Queued);
+    assert!(is_queued_sync_target);
+    assert_eq!(dequeued_status, Status::Watching);
+    assert_eq!(requeued_status, Status::Queued);
+    assert_eq!(handle_status(&app, &session_id), Status::Merged);
+    assert!(!app.review_watch.is_watched(&session_id));
+}
+
+#[tokio::test]
+async fn attention_reported_with_merge_queue_entry_starts_no_follow_up() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Review, ReviewRequestState::Open).await;
+    app.enable_review_watch(&session_id).await;
+    let queued_event = merge_queue_status_event(&app, &session_id, Some(Ok(comment_attention())));
+
+    // Act
+    app.apply_app_events(queued_event).await;
+
+    // Assert
+    assert_eq!(handle_status(&app, &session_id), Status::Queued);
+    let transcript = transcript(&app, &session_id);
+    assert!(!transcript.contains("Addressing"), "{transcript}");
+}
+
+#[tokio::test]
+async fn reconciliation_leaves_sessions_in_agentty_merge_queue_alone() {
+    // Arrange
+    let (mut app, _base_dir) = new_git_test_app().await;
+    let session_id = seed_review_session(&mut app, Status::Queued, ReviewRequestState::Open).await;
+    app.merge_queue.enqueue(session_id.clone());
+
+    // Act
+    app.reconcile_review_watch_statuses().await;
+    let locally_queued_status = handle_status(&app, &session_id);
+    app.merge_queue.pop_next();
+    app.reconcile_review_watch_statuses().await;
+
+    // Assert
+    assert_eq!(locally_queued_status, Status::Queued);
+    assert_eq!(handle_status(&app, &session_id), Status::Review);
+}
+
 /// Applies one current-generation open status update carrying `attention`.
 async fn apply_open_status_update(
     app: &mut App,

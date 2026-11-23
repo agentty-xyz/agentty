@@ -550,11 +550,15 @@ impl Session {
     /// Returns whether this session can trigger a forge review request sync.
     ///
     /// Sync is available when the session has a published branch or a linked
-    /// review request and the status allows review actions.
+    /// review request and the status allows review actions. A `Queued`
+    /// session with a linked review request waits in the forge's merge queue,
+    /// so it keeps syncing until the review request merges or leaves the
+    /// queue.
     pub fn can_sync_review_request(&self) -> bool {
         let has_forge_context = self.published_upstream_ref.is_some() || self.has_review_request();
 
-        has_forge_context && self.status.allows_review_actions()
+        (has_forge_context && self.status.allows_review_actions())
+            || (self.status == Status::Queued && self.has_review_request())
     }
 
     /// Returns the review-request publish action currently available in session

@@ -464,31 +464,49 @@ impl App {
         true
     }
 
-    /// Moves idle sessions between `Review` and `Watching` to match their
-    /// watch state.
+    /// Moves idle sessions between `Review`, `Watching`, and `Queued` to
+    /// match their watch state and their review request's merge queue.
     ///
-    /// A watched session with an open review request rests in `Watching`.
-    /// Every other `Watching` session returns to `Review`. Only these two idle
-    /// states are touched, so running turns, syncs, and focused reviews
-    /// finish first.
+    /// A session whose open review request waits in the forge's merge queue
+    /// rests in `Queued`, so review watching starts no follow-up while the
+    /// forge merges it. Once the review request leaves the queue without
+    /// merging, the session returns to its idle review state. A watched
+    /// session with an open review request rests in `Watching`; every other
+    /// one rests in `Review`. Running turns, syncs, focused reviews, and
+    /// Agentty's own merge queue are left alone, so they finish first.
     pub(crate) async fn reconcile_review_watch_statuses(&mut self) {
         let transitions = self
             .sessions
             .sessions()
             .iter()
             .filter_map(|session| {
-                let should_watch = self.review_watch.is_watched(&session.id)
-                    && session
-                        .review_request
-                        .as_ref()
-                        .is_some_and(|linked| linked.summary.state == ReviewRequestState::Open);
-                let next_status = match (session.status, should_watch) {
-                    (Status::Review, true) => Status::Watching,
-                    (Status::Watching, false) => Status::Review,
+                let open_review_request = session
+                    .review_request
+                    .as_ref()
+                    .filter(|linked| linked.summary.state == ReviewRequestState::Open);
+                let is_in_merge_queue = open_review_request
+                    .is_some_and(|linked| linked.summary.is_github_pr_in_merge_queue());
+                let idle_status =
+                    if self.review_watch.is_watched(&session.id) && open_review_request.is_some() {
+                        Status::Watching
+                    } else {
+                        Status::Review
+                    };
+                let next_status = match session.status {
+                    Status::Review | Status::Watching if is_in_merge_queue => Status::Queued,
+                    Status::Review | Status::Watching => idle_status,
+                    Status::Queued
+                        if open_review_request.is_some()
+                            && !is_in_merge_queue
+                            && !self.merge_queue.is_queued_or_active(&session.id) =>
+                    {
+                        idle_status
+                    }
                     _ => return None,
                 };
 
-                Some((session.id.clone(), session.status, next_status))
+                (next_status != session.status)
+                    .then(|| (session.id.clone(), session.status, next_status))
             })
             .collect::<Vec<_>>();
         let mut changed = false;

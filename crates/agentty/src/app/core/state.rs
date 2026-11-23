@@ -256,7 +256,7 @@ pub struct App {
     pub(crate) latest_project_sync_operation_ids: HashMap<i64, u64>,
     /// Serializes local merge requests so only one merge workflow runs at a
     /// time.
-    pub(super) merge_queue: MergeQueue,
+    pub(crate) merge_queue: MergeQueue,
     /// Tracks whether the foreground runtime should render a fresh frame.
     pub(crate) needs_redraw: bool,
     /// Monotonic identifier assigned to the next explicit project sync.
