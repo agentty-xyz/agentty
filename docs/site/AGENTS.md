@@ -9,6 +9,12 @@ Applies to site configuration, templates, content, and static assets.
 - For search changes or broad documentation changes, verify rendered search by title and
   body terms in addition to the root docs-site checks.
 
+## Styles
+
+- Design values live in `design/tokens.json`. `docs/site/sass/_tokens.scss` is generated
+  from it, and `docs/site/sass/site.scss` loads it with `@use`; keep only layout sizes
+  and tokens derived from other tokens in `site.scss`.
+
 ## Search Engine Metadata
 
 - `docs/site/templates/partials/seo.html` owns titles, descriptions, canonical URLs,

@@ -1,32 +1,7 @@
-/* Tokens copied from docs/site/sass/site.scss: the green theme (default,
-   :1-40) and .theme-dark (:42-64). Only --font-mono differs: system
-   monospace fonts come before "Courier New", because this page loads no
-   fonts from the network. */
+/* Design values come from tokens.css, generated from design/tokens.json,
+   which is served ahead of this file as /app.css. The tokens below size
+   this client's layout or alias design tokens. */
 :root {
-  --color-bg: #070b08;
-  --color-surface: #0d1510;
-  --color-surface-raised: #121e16;
-  --color-surface-interactive: #17271c;
-  --color-text: #d8f7df;
-  --color-accent: #4ae477;
-  --color-accent-dim: #78b486;
-  --color-muted: #6ca579;
-  --color-dim: #5b8c67;
-  --color-border: #294b31;
-  --color-border-strong: #447a4f;
-  --color-focus: #9af4b3;
-  --color-error: #ff9f9f;
-  --color-on-accent: #061009;
-  --color-roadmap-future: #e8c45a;
-  --color-roadmap-horizon: #b7a4ff;
-  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "Share Tech Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
-  --radius-sm: 0.35rem;
-  --radius-md: 0.65rem;
-  --radius-lg: 0.9rem;
-  --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.34);
-  --transition-fast: 140ms ease;
-
   /* Layout of this client. --chat-width is the site's
      .docs-content-wrapper. */
   --sidebar-width: 17.5rem;
@@ -42,21 +17,6 @@
   --tone-failed: var(--color-error);
 
   color-scheme: dark;
-}
-
-:root.theme-dark {
-  --color-bg: #080808;
-  --color-surface: #111111;
-  --color-surface-raised: #171717;
-  --color-surface-interactive: #1e1e1e;
-  --color-text: #f0f0f0;
-  --color-accent: #f4f4f4;
-  --color-accent-dim: #c8c8c8;
-  --color-muted: #adadad;
-  --color-dim: #919191;
-  --color-border: #333333;
-  --color-border-strong: #5d5d5d;
-  --color-focus: #ffffff;
 }
 
 * {
@@ -962,7 +922,7 @@ kbd {
   position: fixed;
   inset: 0;
   z-index: 40;
-  background: rgba(0, 0, 0, 0.72);
+  background: var(--color-scrim);
   backdrop-filter: blur(8px);
 }
 
@@ -2412,7 +2372,7 @@ kbd {
 }
 
 .dialog::backdrop {
-  background: rgba(0, 0, 0, 0.72);
+  background: var(--color-scrim);
   backdrop-filter: blur(8px);
 }
 
@@ -2516,7 +2476,7 @@ kbd {
   }
 
   .sheet::backdrop {
-    background: rgba(0, 0, 0, 0.72);
+    background: var(--color-scrim);
     backdrop-filter: blur(8px);
   }
 

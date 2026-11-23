@@ -3,7 +3,7 @@
 // Run from the repository root: `node docs/site/scripts/social-card.mjs`.
 //
 // The card copies the home page hero text from `templates/index.html`, the
-// default theme colors from `sass/site.scss`, the domain from `config.toml`,
+// default theme colors from the generated `sass/_tokens.scss`, the domain from `config.toml`,
 // and the glyph art from `static/glyph-art.js`. A pinned Playwright CLI
 // captures it with `chrome-headless-shell`. The glyph font loads from Google
 // Fonts, so the capture needs network access.
@@ -161,7 +161,7 @@ export function generateSocialCard(run = spawnSync) {
   const read = (path) => readFileSync(`${SITE_ROOT}/${path}`, 'utf8');
   const html = buildCardHtml({
     hero: readHero(read('templates/index.html')),
-    colors: readThemeColors(read('sass/site.scss')),
+    colors: readThemeColors(read('sass/_tokens.scss')),
     domain: readDomain(read('config.toml')),
     glyphArtSource: read('static/glyph-art.js'),
   });

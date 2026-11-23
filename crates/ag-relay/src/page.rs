@@ -41,10 +41,15 @@ macro_rules! script {
 
 /// Files the page loads, by request path, with their content types.
 const FILES: [(&str, &str, &str); 17] = [
+    // The generated design tokens come first, as Agentty's listener serves
+    // them.
     (
         "/app.css",
         "text/css; charset=utf-8",
-        include_str!("../../ag-remote/assets/app.css"),
+        concat!(
+            include_str!("../../ag-remote/assets/tokens.css"),
+            include_str!("../../ag-remote/assets/app.css")
+        ),
     ),
     script!("app.js"),
     script!("chat.mjs"),

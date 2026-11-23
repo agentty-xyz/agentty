@@ -9,6 +9,7 @@ mod check_manifest;
 mod check_migration;
 mod check_module_router;
 mod check_standard;
+mod design_token;
 mod e2e_container;
 mod file_system;
 mod format_changed;
@@ -65,6 +66,11 @@ enum Command {
     Standards,
     /// Compares repeated CI timing artifacts with matching provenance.
     CompareTimings(timing::Options),
+    /// Generates the design token stylesheets from `design/tokens.json`; with
+    /// `--check`, fails when one is stale. Both modes fail when a
+    /// hand-written stylesheet names a raw colour or a declared colour pair
+    /// misses its contrast minimum.
+    DesignTokens(design_token::Options),
     /// Runs Agentty E2E tests in the pinned image, one local run at a time.
     E2eContainer,
     /// Formats Rust files changed since the branch fork point.
@@ -97,6 +103,7 @@ fn main() -> ExitCode {
         Some(Command::ModuleRouters) => check_module_router::run(),
         Some(Command::Standards) => check_standard::run(),
         Some(Command::CompareTimings(options)) => timing::run(&options),
+        Some(Command::DesignTokens(options)) => design_token::run(&options),
         Some(Command::E2eContainer) => e2e_container::run(),
         Some(Command::Fmt(options)) => format_changed::run(&options),
         Some(Command::ReleaseGate(options)) => release_gate::run(&options),

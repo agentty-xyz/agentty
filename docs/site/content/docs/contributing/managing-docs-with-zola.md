@@ -47,8 +47,12 @@ documentation maintainable as it grows.
 
 ## Preserve the Site Design System
 
-- Treat `sass/site.scss` as the source of truth for semantic color, typography, radius,
-  layout, and motion tokens. Extend an existing token before adding a raw visual value.
+- Treat `design/tokens.json` at the repository root as the source of truth for color,
+  typography, radius, shadow, and motion tokens.
+  `cargo run -p ag-xtask -- design-tokens` generates `sass/_tokens.scss` from it; never
+  edit that file by hand. Keep layout sizes in `sass/site.scss`. Extend an existing
+  token before adding a raw visual value: the `check-design-tokens` hook rejects raw
+  colors in stylesheets.
 - Keep the terminal identity in the ASCII mark, monospace labels, code, prompts, and
   demo frames. Use the sans-serif stack for prose and larger interface headings.
 - Use `--color-text` for primary content, `--color-muted` for supporting prose, and

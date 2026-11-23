@@ -99,6 +99,10 @@ async fn web_client_assets_carry_restrictive_headers() -> TestResult {
     // theme's background colour.
     assert!(page.contains("<meta name=\"color-scheme\" content=\"dark\""));
     assert!(page.contains("<meta name=\"theme-color\" content=\"#070b08\""));
+    // The generated design tokens come ahead of the client's own rules.
+    let tokens = stylesheet.find("--color-bg: #070b08;");
+    let rules = stylesheet.find("--tone-ready:");
+    assert!(tokens.is_some() && tokens < rules, "{stylesheet}");
     assert!(script.contains("from \"./chat.mjs\""));
     assert!(script.contains("from \"./device_key.mjs\""));
     assert!(script.contains("from \"./diff.mjs\""));
