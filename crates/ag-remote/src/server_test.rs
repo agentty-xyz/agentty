@@ -9,18 +9,7 @@ use super::{
 };
 use crate::device::{DeviceStore, DeviceStoreError};
 use crate::server::{RemoteError, RemoteHost, RemoteServerConfig, start_with_entropy};
-use crate::test_support::{
-    FailingEntropy, MemoryDeviceStore, RecordingBackend, ReplayEntropy, StateFixture,
-};
-
-/// Server state over idle doubles.
-fn state_fixture() -> StateFixture {
-    StateFixture::new(
-        MemoryDeviceStore::default(),
-        RecordingBackend::default(),
-        Arc::new(ReplayEntropy::new(vec![0])),
-    )
-}
+use crate::test_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
 
 /// Builds headers carrying only `Host: host`.
 fn host_header(host: &'static str) -> HeaderMap {
@@ -85,7 +74,7 @@ fn host_check_refuses_other_hosts_and_missing_host() {
 #[test]
 fn handshake_slots_stop_at_the_cap_per_origin_and_free_on_drop() {
     // Arrange
-    let fixture = state_fixture();
+    let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let mut slots: Vec<_> = (0..MAX_UNAUTHENTICATED_SOCKETS)
         .map(|_| fixture.state.reserve_handshake(ConnectionOrigin::Relay))
         .collect();
@@ -106,7 +95,7 @@ fn handshake_slots_stop_at_the_cap_per_origin_and_free_on_drop() {
 #[tokio::test]
 async fn pairing_requests_are_listed_until_settled_or_withdrawn() {
     // Arrange
-    let fixture = state_fixture();
+    let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let status = fixture.state.status_tx.subscribe();
 
     // Act
@@ -148,7 +137,7 @@ async fn pairing_requests_are_listed_until_settled_or_withdrawn() {
 #[test]
 fn settling_a_request_whose_socket_left_reports_no_delivery() {
     // Arrange
-    let fixture = state_fixture();
+    let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let (decision_rx, _guard) = fixture
         .state
         .request_pairing("Phone".to_string(), "ABCD".to_string());

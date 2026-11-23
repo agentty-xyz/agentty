@@ -8,7 +8,8 @@ use ag_remote::protocol::{
     RemoteGraphProposalPhase, RemoteGraphStatus, RemoteMessage, RemoteMessageKind, RemoteModeModel,
     RemoteModelOption, RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestion,
     RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest,
-    RemoteSession, RemoteSessionGraph, RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteSession, RemoteSessionGraph, RemoteSessionMode, RemoteSessionSummary, RequestedSessionId,
+    ServerFrame,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -122,7 +123,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         &mut client,
         2,
         RemoteRequest::GetSession {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -130,7 +131,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         &mut client,
         3,
         RemoteRequest::GetSession {
-            session_id: "other-project-session".to_string(),
+            session_id: "other-project-session".into(),
         },
     )
     .await?;
@@ -139,7 +140,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         4,
         RemoteRequest::SendMessage {
             message: "continue".to_string(),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -152,7 +153,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
                 question: "Which branch?".to_string(),
             }],
             graph_question_target: None,
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -218,7 +219,7 @@ async fn session_graphs_and_their_summary_reach_only_listed_sessions() -> TestRe
         graph_id: graph_id.map(str::to_string),
         known: None,
         node_id: None,
-        session_id: session_id.to_string(),
+        session_id: session_id.into(),
     };
 
     // Act
@@ -226,7 +227,7 @@ async fn session_graphs_and_their_summary_reach_only_listed_sessions() -> TestRe
         &mut client,
         1,
         RemoteRequest::GetSession {
-            session_id: "session-2".to_string(),
+            session_id: "session-2".into(),
         },
     )
     .await?;
@@ -311,7 +312,7 @@ async fn session_graphs_answer_unchanged_for_the_version_the_device_shows() -> T
         graph_id: None,
         known: known.map(str::to_string),
         node_id: None,
-        session_id: "session-2".to_string(),
+        session_id: "session-2".into(),
     };
 
     // Act
@@ -354,7 +355,7 @@ async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_it
             message: None,
             node_id: Some("inspect".to_string()),
             output_id: Some("result".to_string()),
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             snapshot: snapshot.to_string(),
         })
     };
@@ -368,7 +369,7 @@ async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_it
             graph_id: None,
             known: None,
             node_id: None,
-            session_id: "session-2".to_string(),
+            session_id: "session-2".into(),
         },
     )
     .await?;
@@ -434,7 +435,7 @@ async fn graph_proposals_reach_listed_sessions_under_an_identity_the_server_mint
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
     let propose = |session_id: &str, message: &str| RemoteRequest::GenerateGraphProposal {
         message: message.to_string(),
-        session_id: session_id.to_string(),
+        session_id: session_id.into(),
     };
 
     // Act
@@ -473,7 +474,7 @@ async fn session_diffs_reach_only_listed_sessions() -> TestResult {
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
     let diff = |session_id: &str, path: Option<&str>| RemoteRequest::GetSessionDiff {
         path: path.map(str::to_string),
-        session_id: session_id.to_string(),
+        session_id: session_id.into(),
     };
 
     // Act
@@ -510,7 +511,7 @@ async fn session_file_listings_reach_only_listed_sessions() -> TestResult {
     let server = TestServer::start().await?;
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
     let files = |session_id: &str| RemoteRequest::ListSessionFiles {
-        session_id: session_id.to_string(),
+        session_id: session_id.into(),
     };
 
     // Act
@@ -580,7 +581,7 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
         1,
         RemoteRequest::SendMessage {
             message: "busy".to_string(),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -588,7 +589,7 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
         &mut client,
         2,
         RemoteRequest::CancelSession {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -609,7 +610,7 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
 async fn send_held_message(client: &mut Client, id: u64) -> TestResult {
     let request = RemoteRequest::SendMessage {
         message: "wait".to_string(),
-        session_id: "session-1".to_string(),
+        session_id: "session-1".into(),
     };
 
     send(client, &ClientFrame::Request { id, request }).await
@@ -649,7 +650,7 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
     let server = TestServer::start().await?;
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
     let publish = RemoteRequest::PublishSession {
-        session_id: "session-1".to_string(),
+        session_id: "session-1".into(),
     };
 
     // Act
@@ -666,7 +667,7 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
         &mut client,
         3,
         RemoteRequest::PublishSession {
-            session_id: "other-project-session".to_string(),
+            session_id: "other-project-session".into(),
         },
     )
     .await?;
@@ -675,7 +676,7 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
         4,
         RemoteRequest::SendMessage {
             message: "hello".to_string(),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -683,7 +684,7 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
         &mut client,
         5,
         RemoteRequest::CancelSession {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -691,7 +692,7 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
         &mut client,
         6,
         RemoteRequest::StopTurn {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -803,7 +804,7 @@ async fn mutations_of_one_session_reach_the_host_in_arrival_order() -> TestResul
     // Act
     send_held_message(&mut client, 1).await?;
     let cancel = RemoteRequest::CancelSession {
-        session_id: "session-1".to_string(),
+        session_id: "session-1".into(),
     };
     send(
         &mut client,
@@ -856,7 +857,7 @@ async fn a_request_that_panics_gets_an_error_and_releases_its_session() -> TestR
         id,
         request: RemoteRequest::SendMessage {
             message: message.to_string(),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     };
 
@@ -912,7 +913,7 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
-    let session_id = "other-project-session".to_string();
+    let session_id = RequestedSessionId::from("other-project-session");
 
     // Act
     let sent = call(
@@ -973,7 +974,7 @@ async fn settings_reach_the_host_and_a_bad_value_never_does() -> TestResult {
         model: None,
         reasoning: Some(reasoning.to_string()),
         response_style: None,
-        session_id: "session-1".to_string(),
+        session_id: "session-1".into(),
         speed_mode: None,
     };
 
@@ -987,7 +988,12 @@ async fn settings_reach_the_host_and_a_bad_value_never_does() -> TestResult {
         refused,
         RemoteResult::Error("unknown reasoning level: huge".to_string())
     );
-    assert_eq!(server.backend.calls(), ["list", "settings:session-1:low"]);
+    // The session is checked before the values, so the refused change
+    // reaches the listing but never the settings.
+    assert_eq!(
+        server.backend.calls(),
+        ["list", "settings:session-1:low", "list"]
+    );
 
     Ok(())
 }
@@ -1003,7 +1009,7 @@ async fn sync_session_reaches_the_host_and_returns_its_refusal() -> TestResult {
         &mut client,
         1,
         RemoteRequest::SyncSession {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -1061,7 +1067,7 @@ async fn stop_turn_reaches_the_host_for_a_listed_session() -> TestResult {
         &mut client,
         1,
         RemoteRequest::StopTurn {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -1084,7 +1090,7 @@ async fn merge_reaches_the_host_only_for_listed_sessions() -> TestResult {
         &mut client,
         1,
         RemoteRequest::MergeSession {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         },
     )
     .await?;
@@ -1092,7 +1098,7 @@ async fn merge_reaches_the_host_only_for_listed_sessions() -> TestResult {
         &mut client,
         2,
         RemoteRequest::MergeSession {
-            session_id: "other-project-session".to_string(),
+            session_id: "other-project-session".into(),
         },
     )
     .await?;

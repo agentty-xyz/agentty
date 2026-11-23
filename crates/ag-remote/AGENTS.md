@@ -15,8 +15,12 @@ through `ag_session::SessionService`.
   calls to its spent budget. Any other mutation, any operation that runs a host command,
   and any read outside a listed session or the active project's status is a new security
   decision; do not extend the protocol without one.
-- Every mutation names its capability, checks that the host lists the session it
-  targets, if it targets one, and is listed under Security in
+- Every request added after the first protocol version names its capability; the three
+  original mutations, `send_message`, `answer_questions`, and `cancel_session`, are
+  always served. A request declares the operation it needs and how it queues in
+  `RequestPolicy::of` in `crates/ag-remote/src/request.rs`, and takes the session it
+  targets as a `RequestedSessionId`, which reaches the host only through `listed`, the
+  check that the host lists it. Every mutation is listed under Security in
   `docs/site/content/docs/usage/remote-control.md` and in `SECURITY.md`.
 - Keep device tokens secret: persist only their SHA-256 hash, and never log tokens,
   pairing codes, or message content.

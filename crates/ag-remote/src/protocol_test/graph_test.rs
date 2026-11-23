@@ -147,13 +147,13 @@ fn graph_requests_name_only_the_selection_they_make() {
         graph_id: None,
         known: None,
         node_id: None,
-        session_id: "s".to_string(),
+        session_id: "s".into(),
     };
     let selected = RemoteRequest::GetSessionGraphs {
         graph_id: Some("graph".to_string()),
         known: Some("v1".to_string()),
         node_id: Some("fix".to_string()),
-        session_id: "s".to_string(),
+        session_id: "s".into(),
     };
 
     // Act
@@ -815,7 +815,7 @@ fn graph_proposal_requests_carry_the_task_and_its_session() {
         request,
         RemoteRequest::GenerateGraphProposal {
             message: "Split the parser".to_string(),
-            session_id: "s".to_string(),
+            session_id: "s".into(),
         }
     );
     assert_eq!(encoded, frame);

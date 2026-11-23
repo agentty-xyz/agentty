@@ -582,4 +582,24 @@ impl StateFixture {
             state,
         }
     }
+
+    /// Builds state over `devices` with a succeeding backend that serves no
+    /// optional operation, and entropy that yields zeros.
+    pub(crate) fn with_devices(devices: MemoryDeviceStore) -> Self {
+        Self::new(
+            devices,
+            RecordingBackend::default(),
+            Arc::new(ReplayEntropy::new(vec![0])),
+        )
+    }
+
+    /// Builds state over `devices` with a succeeding backend that serves the
+    /// optional `operations`, and entropy that yields zeros.
+    pub(crate) fn supporting(devices: MemoryDeviceStore, operations: &[SessionOperation]) -> Self {
+        Self::new(
+            devices,
+            RecordingBackend::supporting(operations),
+            Arc::new(ReplayEntropy::new(vec![0])),
+        )
+    }
 }
