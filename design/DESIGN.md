@@ -71,7 +71,24 @@ There are two themes, and both are dark, so pages declare `color-scheme: dark`.
   the scrim, fonts, radii, shadows, and motion are the same in both themes.
 
 Apply a saved theme before the first paint, with a small inline script in the document
-head, so the page never flashes the other theme. Offer both themes wherever a page lets
+head, so the page never flashes the other theme. It reads the choice the theme switch
+saved, under the page's own storage key, and tolerates storage that is blocked:
+
+```html
+<script>
+  try {
+    if (localStorage.getItem("agentty-theme") === "dark") {
+      document.documentElement.classList.add("theme-dark");
+    }
+  } catch (error) {
+    // Without storage the default theme applies.
+  }
+</script>
+```
+
+A page whose content security policy forbids inline scripts serves the same lines as a
+file and loads it with a plain `<script src>` in the head, neither deferred nor a
+module, so it still runs before the first paint. Offer both themes wherever a page lets
 people choose, and test every new component in both.
 
 Code outside a stylesheet takes values from the same tokens instead of copying them. A
@@ -86,17 +103,21 @@ applies one.
 ### Status Tones
 
 Session and task states use a dot and a short label in one tone. Name the tone after the
-state, then map it to a color token:
+state, then map it to a color token; the status component's modifier applies both:
 
-| State                         | Tone token                | Dot              |
-| ----------------------------- | ------------------------- | ---------------- |
-| Working, in progress          | `--color-roadmap-future`  | Glows and pulses |
-| Asking, waiting for an answer | `--color-roadmap-horizon` | Glows            |
-| Ready for review              | `--color-accent`          | Solid            |
-| Queued, syncing, merging      | `--color-accent-dim`      | Solid            |
-| Draft, idle, unknown          | `--color-dim`             | Hollow ring      |
-| Done, merged                  | `--color-dim`             | Solid            |
-| Failed, canceled              | `--color-error`           | Solid            |
+| State                         | Modifier           | Tone token                | Dot              |
+| ----------------------------- | ------------------ | ------------------------- | ---------------- |
+| Working, in progress          | `.status--working` | `--color-roadmap-future`  | Glows and pulses |
+| Asking, waiting for an answer | `.status--asking`  | `--color-roadmap-horizon` | Glows            |
+| Ready for review              | `.status--ready`   | `--color-accent`          | Solid            |
+| Queued, syncing, merging      | `.status--queue`   | `--color-accent-dim`      | Solid            |
+| Draft, idle                   | `.status--idle`    | `--color-dim`             | Hollow ring      |
+| Done, merged                  | `.status--done`    | `--color-dim`             | Solid            |
+| Failed, canceled              | `.status--failed`  | `--color-error`           | Solid            |
+
+A status with no modifier is an unknown state, in `--color-dim` with a solid dot. Add
+`.status--live` to any tone whose work is still running, such as syncing, so its dot
+glows and pulses too.
 
 Never let color alone carry a state: always pair the dot with its label.
 
@@ -227,12 +248,13 @@ belong to one figure, such as a hero title, stay where that figure is styled.
 
 - Body text is `--font-size-body` at `--line-height-body` with
   `text-rendering: optimizeLegibility`. Lead paragraphs use `--color-muted` at
-  `--font-size-xl` and `--line-height-relaxed`, kept to 60ch.
+  `--line-height-relaxed`, kept to 60ch, growing from `--font-size-body` on a phone to
+  `--font-size-xl`.
 - Headings use the sans-serif stack at `--font-weight-heading` or `--font-weight-bold`,
   and tighten as they grow: `--tracking-snug` and `--line-height-snug` on small
   headings, down to `--tracking-tightest` and `--line-height-none` on the largest.
 - Eyebrows, the small labels above headings, use the monospace stack in `--color-accent`
-  at `--font-size-2xs` or `--font-size-xs`, uppercase, with `--tracking-widest`.
+  at `--font-size-2xs`, uppercase, with `--tracking-widest`.
 - The brand name uses the monospace stack at `--font-size-xl`, `--font-weight-semibold`,
   and `--tracking-wide`.
 
@@ -292,11 +314,11 @@ it through a translucent `--color-bg` and an 18px blur.
 
 ## Shapes
 
-| Token         | Use                                           |
-| ------------- | --------------------------------------------- |
-| `--radius-sm` | Buttons, fields, badges, menu items (0.35rem) |
-| `--radius-md` | Cards and large fields (0.65rem)              |
-| `--radius-lg` | Panels, dialogs, and composers (0.9rem)       |
+| Token         | Use                                               |
+| ------------- | ------------------------------------------------- |
+| `--radius-sm` | Buttons, segmented controls, menu items (0.35rem) |
+| `--radius-md` | Cards and fields (0.65rem)                        |
+| `--radius-lg` | Panels, dialogs, and composers (0.9rem)           |
 
 Small badges and keycaps use 0.25rem, inline code 0.3rem, and status dots and window
 dots are circles. Borders are 1px; focus rings are 2px. A layout that wants a stricter
@@ -305,10 +327,19 @@ container so every panel inside turns square.
 
 ## Components
 
-`base.css` provides these. Use its class names, and add page-specific rules after it.
+`base.css` provides these, and `gallery.html`, exported beside this guide, shows each
+one in every state it styles, in both themes. Use the class names and markup below, and
+add page rules after `base.css`. A page may place a component, with its margins,
+position, flex or grid placement, and width, but never restyle it: a page rule that
+names a component sets nothing else. Change the component here instead, so every page
+keeps the same one.
 
-- **Focus ring:** links, buttons, and inputs show a 2px `--color-focus` outline, 3px
-  out, on `:focus-visible`. Extend the same rule to any other focusable element.
+- **Foundations:** the root declares `color-scheme: dark`; the body takes the page
+  background, body text, and the sans-serif stack; `code`, `kbd`, `pre`, and `samp` take
+  the monospace stack; links are `--color-accent`.
+- **Focus ring:** links, buttons, inputs, selects, text areas, summaries, and elements
+  with a `tabindex` show a 2px `--color-focus` outline, 3px out, on `:focus-visible`.
+  Extend the same rule to any other focusable element.
 - **Visually hidden text:** `.sr-only` keeps text for screen readers only.
 - **Skip link:** `.skip-link` sits above the page and slides into view on focus. Make it
   the first element in the body and point it at the main content.
@@ -321,18 +352,65 @@ container so every panel inside turns square.
 - **Terminal window:** `.terminal-window` is a raised panel with a strong border, the
   large radius, and the panel shadow. Its `.terminal-window-bar` holds three dots in
   `.terminal-window-dots` (empty `i` elements), a title, and an optional trailing item,
-  in the monospace stack and `--color-dim`.
+  in the monospace stack and `--color-dim`. Below 560px the bar drops its title.
+- **Eyebrow and lead paragraph:** `p.eyebrow` and `.lead`, as Typography describes. A
+  `strong` inside a lead takes `--color-text`. Neither sets a margin.
+- **Fields:** `.field` on an `input`, `select`, or `textarea`: a `--color-bg` fill, a
+  1px `--color-border-strong` outline, `--radius-md`, and `--control-height-lg`, with
+  placeholders in `--color-dim`. The outline turns `--color-focus` while the field has
+  focus, `--color-error` with `aria-invalid="true"`, and a `disabled` field dims its
+  text. For search and code entry, `label.field-prompt` holds a `.field-prompt-mark`,
+  such as `>`, and a bare `input`; the label draws the field, `--control-height-xl`
+  tall, and its focus ring while the input has focus. `.field-prompt--code` sets the
+  input in the monospace stack at `--font-size-xl` for a code typed exactly.
+- **Badges:** `.badge` is a small `--color-surface` label with a `--color-border`
+  outline in the monospace stack at `--font-size-3xs`; `kbd.badge` is a keycap. A
+  `.badge--pair` holds a `.badge-label` and a `.badge-value` in `--color-accent`, such
+  as a count. Inside a hovered link, a badge's outline and label turn
+  `--color-accent-dim`. A badge may hold a status.
+- **Status:** `.status.status--<tone>` holds an `i.status-dot` and the label: a 0.45rem
+  dot and monospace label at `--font-size-2xs`, both in the tone that Status Tones
+  lists. The modifier also sets `--status-tone`, so a page's own element can take the
+  same color. The pulse stops when the system asks for reduced motion.
+- **Inline code and tables:** `code.code` is inline code: `--color-surface` with a
+  `--color-border` outline, a 0.3rem radius, and `--color-accent` monospace text at
+  0.9em. `table.table` is a data table at `--font-size-md`: a `--color-surface` header
+  row of uppercase `--color-accent` labels, `--color-muted` cells with the first column
+  in `--color-accent-dim`, a divider between rows, and a hovered row on
+  `--color-surface`. Rendered Markdown cannot carry classes, so mark its container
+  `.prose`: bare `table` elements and `code` elements without a class outside `pre`
+  inside it take the same styles.
+- **Segmented control:** `fieldset.segmented` with a `legend.sr-only` holds `button`
+  options on `--color-surface`; the option with `aria-pressed="true"` sits on
+  `--color-surface-interactive` in `--color-accent`, a hovered one turns `--color-text`,
+  and a `disabled` one dims. On a touch screen each option is `--control-height-lg`
+  tall. The theme switch is one, with a `data-theme` attribute of `green` or `dark` on
+  each option: its script toggles the `theme-dark` class on the root element, sets
+  `aria-pressed` on the options, and saves the choice for the snippet in Themes.
 
-Pages build these from the same tokens when they need them:
+### Gallery Check
 
-- **Eyebrow and lead paragraph:** see Typography.
-- **Fields:** a `--color-bg` fill, a 1px `--color-border-strong` outline, and
-  `--radius-md`, with the outline turning `--color-focus` while the field has focus.
-- **Theme switch:** a segmented control on `--color-surface` whose current option sits
-  on `--color-surface-interactive` in `--color-accent`.
-- **Status:** a 0.45rem dot and a monospace label, both in the state's tone.
-- **Inline code:** `--color-surface` with a `--color-border` outline, a 0.3rem radius,
-  and `--color-accent` monospace text slightly smaller than the surrounding text.
+`gallery-check.mjs`, exported beside this guide, checks that a page renders the
+components as `gallery.html` does. Copy the gallery beside the shared stylesheets, and
+give the script each page's whole stylesheet chain, in load order, as it reaches the
+browser:
+
+```sh
+node gallery-check.mjs gallery.html \
+  --surface site=tokens.css,fonts.css,base.css,site.css \
+  --surface app=compiled/app.css
+```
+
+For each page, it renders the gallery's markup once with the stylesheets the gallery
+links and once with the page's chain, in both themes, on a desktop and a touch phone
+viewport, at rest and with each interactive element hovered, focused, and pressed, and
+compares the computed styles of every element inside a `data-specimen` element, other
+than the placement properties a page may set. Animations and transitions are frozen, and
+scripts are off. It also fails on a page rule that names a component, or a bare element
+inside `.prose`, to set anything but placement. It reads only local files and runs on
+Node.js with a Chromium-based browser: Chrome, Chromium, or `chrome-headless-shell`,
+which `CHROME_PATH` names, or which it finds in the usual install places. Compile a Sass
+or bundled stylesheet first, and pass its output.
 
 ## Do's and Don'ts
 

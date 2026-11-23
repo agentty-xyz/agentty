@@ -16,7 +16,7 @@ test("createDocument reads the client's page with its ids, attributes and text",
   // Assert
   const transport = document.querySelector('meta[name="agentty-transport"]');
   assert.equal(transport.content, "local");
-  assert.equal(document.querySelector(".code-field span").textContent, ">");
+  assert.equal(document.querySelector(".field-prompt--code .field-prompt-mark").textContent, ">");
   assert.equal(document.getElementById("shell").hidden, true);
   assert.equal(document.getElementById("pair-code").getAttribute("maxlength"), "16");
   assert.equal(document.getElementById("message").value, "");

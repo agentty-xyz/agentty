@@ -815,7 +815,7 @@ var renderCounter = 0;
                     <div class="docs-search" role="search">
                         <label class="docs-search__label" for="docs-search-input">Search docs</label>
                         <input id="docs-search-input"
-                               class="docs-search__input"
+                               class="field"
                                type="search"
                                placeholder="Search documentation"
                                autocomplete="off"
@@ -840,8 +840,8 @@ var renderCounter = 0;
                 <span aria-current="page">{{ page.title }}</span>
             </nav>
             <h1 class="docs-page-title">{{ page.title }}</h1>
-            {% if page.description %}<p class="docs-page-lead">{{ page.description }}</p>{% endif %}
-            <div class="docs-content">{{ page.content | safe }}</div>
+            {% if page.description %}<p class="lead docs-page-lead">{{ page.description }}</p>{% endif %}
+            <div class="docs-content prose">{{ page.content | safe }}</div>
         </article>
         <aside class="docs-sidebar docs-sidebar--page"
                aria-label="Page table of contents">

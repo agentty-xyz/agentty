@@ -418,7 +418,7 @@ export function conflictLabel(document, text = MERGE_CONFLICT_LABEL) {
 export function statusLine(document, statusName) {
   const info = statusInfo(statusName);
   const node = element(document, "span", "status status--" + info.tone);
-  node.append(element(document, "i"), info.label);
+  node.append(element(document, "i", "status-dot"), info.label);
 
   return node;
 }

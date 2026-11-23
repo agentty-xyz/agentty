@@ -271,6 +271,8 @@ test("notices and question text render inline Markdown, and raw HTML stays text"
     }),
   );
   const body = byId("transcript").querySelector(".notice-body");
+  // Rendered Markdown sits in `.prose`, which styles its bare code elements.
+  assert.ok(body.classList.contains("prose"));
   assert.equal(body.querySelector("code").textContent, "wt/3f9a");
   assert.equal(body.querySelector("a").getAttribute("href"), "https://example.com/1");
   const question = byId("questions").querySelector(".question-text");
@@ -382,14 +384,15 @@ test("the transcript ends with what a working session does, and drops it when th
 
   // Assert
   assert.deepEqual(working, {
-    className: "status status-line status--working is-loading",
+    className: "status status-line status--working status--live",
     hidden: false,
     text: "Working...",
   });
   // A refresh in the same status keeps the node, so the loader animates on.
   assert.equal(keptMarker, true);
+  assert.equal(marker.className, "status-dot");
   assert.deepEqual(rebasing, {
-    className: "status status-line status--queue is-loading",
+    className: "status status-line status--queue status--live",
     text: "Rebasing...",
   });
   assert.equal(reviewHidden, true);
@@ -2244,7 +2247,10 @@ test("the header shows the title and status, and a missing session leads home", 
   chat.render(session({ status: "InProgress", title: null }));
   assert.equal(byId("heading").textContent, "No title");
   assert.equal(byId("session-status").textContent, "In progress");
-  assert.equal(byId("session-status").className, "status status-badge wide-only status--working");
+  // The header badge holds the status dot and label in the status's tone.
+  assert.equal(byId("session-status").className, "badge wide-only");
+  assert.equal(byId("session-status").querySelector(".status").className, "status status--working");
+  assert.equal(byId("session-status").querySelector("i").className, "status-dot");
   assert.equal(byId("heading-sub").textContent, "In progress");
 
   chat.render(null);

@@ -61,7 +61,13 @@ documentation maintainable as it grows.
   `static/mark.svg`, which `templates/base.html` inlines, and `static/favicon.ico`.
 - Follow `design/DESIGN.md` for color roles, typography, both themes, accessibility, and
   components. The shared foundations and components it describes live in
-  `design/base.css`, which reaches the site as the generated `sass/_base.scss`.
+  `design/base.css`, which reaches the site as the generated `sass/_base.scss`, and
+  `design/gallery.html` shows each of them in every state. Use their class names in
+  templates and mark rendered Markdown with `prose`; `sass/site.scss` may place a shared
+  component, its margins, position, and width, but not restyle it. The `design-gallery`
+  hook builds the site and fails when the compiled stylesheet renders a component
+  differently from the gallery; it needs a Chromium-based browser, found through
+  `CHROME_PATH` or the usual install paths.
 - Keep animated feature images behind the `data-motion-demo` loader so off-screen media
   remains deferred. Pair each GIF with a same-named PNG poster so
   `prefers-reduced-motion` users receive a meaningful static preview.

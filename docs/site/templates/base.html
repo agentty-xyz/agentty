@@ -19,12 +19,15 @@
         </noscript>
         {% block extra_css %}
         {% endblock extra_css %}
-        <!-- Apply saved theme before paint to avoid flash of unstyled content -->
+        <!-- Apply the saved theme before the first paint. -->
         <script>
-            (function () {
-                var theme = localStorage.getItem('agentty-theme') || 'green';
-                if (theme === 'dark') document.documentElement.classList.add('theme-dark');
-            })();
+            try {
+                if (localStorage.getItem("agentty-theme") === "dark") {
+                    document.documentElement.classList.add("theme-dark");
+                }
+            } catch (error) {
+                // Without storage the default theme applies.
+            }
         </script>
     </head>
     <body class="site-body"
@@ -77,7 +80,7 @@
                             <line x1="16" y1="16" x2="21" y2="21" />
                         </svg>
                         <span>search</span>
-                        <kbd>/</kbd>
+                        <kbd class="badge">/</kbd>
                     </button>
                     {% block extra_nav %}
                         {% set github_repo_slug = config.extra.github_repo_slug | default(value="agentty-xyz/agentty") %}
@@ -97,26 +100,21 @@
                                 </svg>
                             </span>
                             <span class="github-link-badges" aria-hidden="true">
-                                <span class="github-badge github-badge-stars">
-                                    <span class="github-badge-label">stars</span>
-                                    <span class="github-badge-value" data-github-stars>...</span>
+                                <span class="badge badge--pair github-badge-stars">
+                                    <span class="badge-label">stars</span>
+                                    <span class="badge-value" data-github-stars>...</span>
                                 </span>
-                                <span class="github-badge github-badge-release">
-                                    <span class="github-badge-label">release</span>
-                                    <span class="github-badge-value" data-github-release>latest</span>
+                                <span class="badge badge--pair github-badge-release">
+                                    <span class="badge-label">release</span>
+                                    <span class="badge-value" data-github-release>latest</span>
                                 </span>
                             </span>
                         </a>
                     {% endblock extra_nav %}
-                    <fieldset class="site-theme-switch">
+                    <fieldset class="segmented">
                         <legend class="sr-only">Color theme</legend>
-                        <button class="theme-btn site-theme-btn"
-                                data-theme="green"
-                                aria-pressed="true">green</button>
-                        <span class="site-theme-separator">/</span>
-                        <button class="theme-btn site-theme-btn"
-                                data-theme="dark"
-                                aria-pressed="false">dark</button>
+                        <button type="button" data-theme="green" aria-pressed="true">green</button>
+                        <button type="button" data-theme="dark" aria-pressed="false">dark</button>
                     </fieldset>
                 </div>
             </div>
@@ -172,7 +170,7 @@
                     aria-labelledby="search-dialog-title">
                 <div class="search-dialog-header">
                     <div>
-                        <p class="search-dialog-eyebrow">// find anything</p>
+                        <p class="eyebrow">// find anything</p>
                         <h2 class="search-dialog-title" id="search-dialog-title">Search Agentty</h2>
                     </div>
                     <button class="search-dialog-close"
@@ -180,9 +178,9 @@
                             data-search-close
                             aria-label="Close search">esc</button>
                 </div>
-                <label class="search-field">
+                <label class="field-prompt">
                     <span class="sr-only">Search documentation, features, and blog posts</span>
-                    <span class="search-field-prompt" aria-hidden="true">&gt;</span>
+                    <span class="field-prompt-mark" aria-hidden="true">&gt;</span>
                     <input type="search"
                            data-search-input
                            autocomplete="off"
@@ -196,7 +194,7 @@
     (function () {
       var STORAGE_KEY = 'agentty-theme';
       var root = document.documentElement;
-      var themeBtns = document.querySelectorAll('.theme-btn');
+      var themeBtns = document.querySelectorAll('[data-theme]');
       var githubLink = document.querySelector('.github-link-rich');
       var githubStars = document.querySelector('[data-github-stars]');
       var githubRelease = document.querySelector('[data-github-release]');
@@ -219,10 +217,7 @@
       function applyTheme(theme) {
         root.classList.toggle('theme-dark', theme === 'dark');
         themeBtns.forEach(function (btn) {
-          var active = btn.dataset.theme === theme;
-          btn.classList.toggle('text-accent', active);
-          btn.classList.toggle('text-muted', !active);
-          btn.setAttribute('aria-pressed', String(active));
+          btn.setAttribute('aria-pressed', String(btn.dataset.theme === theme));
         });
         localStorage.setItem(STORAGE_KEY, theme);
         globalThis.dispatchEvent(new CustomEvent('agentty-themechange', {

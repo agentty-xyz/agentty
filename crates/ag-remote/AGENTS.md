@@ -57,9 +57,14 @@ through `ag_session::SessionService`.
   security policy allows with `font-src data:` and nothing else. Keep only the client's
   own layout sizes, the `--tone-*` aliases, and its own rules in `app.css`, with type,
   spacing, widths, and control heights from the token scales; every rule in `base.css`
-  also applies to the client. The generator also writes the `theme-color` value in
-  `crates/ag-remote/assets/index.html`; scripts read colors from the custom properties
-  at runtime.
+  also applies to the client. Build eyebrows, fields, badges, status dots, inline code,
+  tables, and segmented controls from the shared components' classes, in markup and in
+  the modules that build DOM, and mark rendered Markdown with `prose`. `app.css` may
+  place a shared component but not restyle it; the `design-gallery` hook compares
+  `/app.css` with `design/gallery.html` and names any rule that does. If the order in
+  which the server and `ag-relay` serve `/app.css` changes, change the hook's too. The
+  generator also writes the `theme-color` value in `crates/ag-remote/assets/index.html`;
+  scripts read colors from the custom properties at runtime.
 
 ## Documentation
 

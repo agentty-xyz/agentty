@@ -89,22 +89,22 @@
                 <svg class="icon" aria-hidden="true">
                     <use href="#i-prompt" />
                 </svg>
-                agentty <span class="brand-tag">remote</span>
+                agentty <span class="badge">remote</span>
             </span>
             <form id="pair-form" class="pair" autocomplete="off">
                 <p class="eyebrow">Remote control</p>
                 <h1>Pair this device</h1>
                 <p id="pair-hint-local">
-                    Start remote control in Agentty's <code>Remote</code> tab and enter the code it shows.
+                    Start remote control in Agentty's <code class="code">Remote</code> tab and enter the code it shows.
                 </p>
                 <p id="pair-hint-relay" hidden>
-                    Open the pairing link or scan the QR code that Agentty's <code>Remote</code> tab shows.
+                    Open the pairing link or scan the QR code that Agentty's <code class="code">Remote</code> tab shows.
                 </p>
                 <div id="pair-fields" class="pair-fields">
                     <label>
                         Pairing code
-                        <span class="code-field">
-                            <span aria-hidden="true">&gt;</span>
+                        <span class="field-prompt field-prompt--code">
+                            <span class="field-prompt-mark" aria-hidden="true">&gt;</span>
                             <input id="pair-code"
                                    name="code"
                                    inputmode="text"
@@ -121,10 +121,10 @@
                     </label>
                 </div>
                 <div id="pair-confirm" class="confirm" hidden>
-                    <span class="status status--working"><i></i><span id="pair-wait-label">Waiting for approval in Agentty</span></span>
+                    <span class="status status--working"><i class="status-dot"></i><span id="pair-wait-label">Waiting for approval in Agentty</span></span>
                     <span id="pair-confirmation" class="confirm-code"></span>
                     <p id="pair-wait-hint">
-                        Press <code>y</code> in the terminal only when it shows the same code.
+                        Press <code class="code">y</code> in the terminal only when it shows the same code.
                     </p>
                 </div>
                 <p id="pair-error" class="error" role="alert"></p>
@@ -140,7 +140,7 @@
                         <svg class="icon" aria-hidden="true">
                             <use href="#i-prompt" />
                         </svg>
-                        agentty <span class="brand-tag">remote</span>
+                        agentty <span class="badge">remote</span>
                     </span>
                     <button id="sidebar-hide"
                             class="icon-btn wide-only"
@@ -192,7 +192,7 @@
                                aria-label="Filter sessions"
                                autocomplete="off"
                                spellcheck="false">
-                        <kbd id="filter-key" class="wide-only" aria-hidden="true">/</kbd>
+                        <kbd id="filter-key" class="badge wide-only" aria-hidden="true">/</kbd>
                     </label>
                     <fieldset id="chips" class="segmented chips" aria-label="Show">
                     </fieldset>
@@ -252,7 +252,7 @@
                         <h1 id="heading" class="chat-title">agentty</h1>
                         <p id="heading-sub" class="chat-sub"></p>
                     </div>
-                    <span id="session-status" class="status status-badge wide-only" hidden></span>
+                    <span id="session-status" class="badge wide-only" hidden></span>
                     <div class="chat-actions">
                         <button id="diff"
                                 type="button"
@@ -330,7 +330,7 @@
                     <p id="home-error" class="error" role="alert"></p>
                     <p id="home-pick">Choose a session from the list to read it and reply.</p>
                     <p id="home-none" hidden>
-                        Press <code>a</code> on the Sessions tab in Agentty to start one.
+                        Press <code class="code">a</code> on the Sessions tab in Agentty to start one.
                     </p>
                     <button id="home-sessions" type="button" class="btn btn--lg narrow-only">
                         <svg class="icon icon--sm" aria-hidden="true">
@@ -473,7 +473,7 @@
                 <form method="dialog">
                     <h2 id="merge-dialog-title">Merge this session?</h2>
                     <p>
-                        Agentty queues a squash merge of the session's changes<span id="merge-lines"></span> into <code id="merge-target">its base branch</code> in the project's checkout, as <code>m</code> does in the terminal. A failed merge returns the session to review.
+                        Agentty queues a squash merge of the session's changes<span id="merge-lines"></span> into <code id="merge-target" class="code">its base branch</code> in the project's checkout, as <code class="code">m</code> does in the terminal. A failed merge returns the session to review.
                     </p>
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Not now</button>
@@ -487,7 +487,7 @@
                 <form method="dialog">
                     <h2 id="publish-dialog-title">Publish this session?</h2>
                     <p>
-                        Agentty pushes the session's commits to <code id="publish-branch">the session branch</code> on the remote and <span id="publish-review">opens a pull request</span>, with your Git and forge credentials, as <code>p</code> does in the terminal.
+                        Agentty pushes the session's commits to <code id="publish-branch" class="code">the session branch</code> on the remote and <span id="publish-review">opens a pull request</span>, with your Git and forge credentials, as <code class="code">p</code> does in the terminal.
                     </p>
                     <p id="publish-wait" hidden>The session is working, so this waits and publishes after the current turn.</p>
                     <div class="dialog-actions">
@@ -500,7 +500,7 @@
                 <form method="dialog">
                     <h2 id="sync-dialog-title">Sync this session?</h2>
                     <p>
-                        Agentty rebases the session branch onto <code id="sync-target">its base branch</code>, after the running turn if there is one. A conflict starts a turn that resolves it.
+                        Agentty rebases the session branch onto <code id="sync-target" class="code">its base branch</code>, after the running turn if there is one. A conflict starts a turn that resolves it.
                     </p>
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Not now</button>
@@ -516,7 +516,7 @@
                         Sync <span id="project-sync-target">the project</span>?
                     </h2>
                     <p>
-                        Agentty pulls <code id="project-sync-branch">its branch</code> from its remote, rebases your local commits onto it, and pushes them, with your Git credentials, as <code>s</code> does in the terminal. A conflict starts an agent that resolves it.
+                        Agentty pulls <code id="project-sync-branch" class="code">its branch</code> from its remote, rebases your local commits onto it, and pushes them, with your Git credentials, as <code class="code">s</code> does in the terminal. A conflict starts an agent that resolves it.
                     </p>
                     <div class="dialog-actions">
                         <button value="keep" class="btn btn--lg" autofocus>Not now</button>

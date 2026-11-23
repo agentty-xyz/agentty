@@ -50,7 +50,7 @@
             {% if page.date %}
                 <p class="docs-section-intro">{{ page.date | date(format="%B %d, %Y") }}</p>
             {% endif %}
-            <div class="docs-content">{{ page.content | safe }}</div>
+            <div class="docs-content prose">{{ page.content | safe }}</div>
         </article>
         <aside class="docs-sidebar docs-sidebar--page"
                aria-label="Post table of contents">
