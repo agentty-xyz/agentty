@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use tracing::info;
 
+use crate::design_token::font_face::{self, Embedded};
 use crate::design_token::stylesheet::RawColor;
 use crate::design_token::token::TokenSet;
 use crate::design_token::{contrast, script, stylesheet, template};
@@ -44,16 +45,25 @@ const PAGE_DIRECTORIES: [(&str, &str); 3] = [
     ("docs/site/templates", "docs-site"),
 ];
 
-/// Generated files. The shared stylesheet names no workspace path, so
-/// another workspace can copy it unchanged; the brand assets are copied
-/// byte for byte.
-const OUTPUTS: [Output; 7] = [
+/// Header of the shared stylesheets, which name no workspace path so another
+/// workspace can copy them unchanged.
+const SHARED_HEADER: &str = "/* Generated from tokens.json. Do not edit. */";
+
+/// Generated files, each surface's stylesheets in the order it loads them.
+/// The brand assets are copied byte for byte.
+const OUTPUTS: [Output; 10] = [
     Output {
         content: Content::Tokens {
-            header: "/* Generated from tokens.json. Do not edit. */",
+            header: SHARED_HEADER,
             surface: None,
         },
         path: "design/tokens.css",
+    },
+    Output {
+        content: Content::Fonts {
+            header: SHARED_HEADER,
+        },
+        path: "design/fonts.css",
     },
     Output {
         content: Content::Tokens {
@@ -61,6 +71,12 @@ const OUTPUTS: [Output; 7] = [
             surface: Some("docs-site"),
         },
         path: "docs/site/sass/_tokens.scss",
+    },
+    Output {
+        content: Content::Fonts {
+            header: SURFACE_HEADER,
+        },
+        path: "docs/site/sass/_fonts.scss",
     },
     Output {
         content: Content::Copy {
@@ -89,6 +105,12 @@ const OUTPUTS: [Output; 7] = [
             surface: Some("remote-client"),
         },
         path: "crates/ag-remote/assets/tokens.css",
+    },
+    Output {
+        content: Content::Fonts {
+            header: SURFACE_HEADER,
+        },
+        path: "crates/ag-remote/assets/fonts.css",
     },
     Output {
         content: Content::Copy {
@@ -148,6 +170,8 @@ enum Content {
         header: Option<&'static str>,
         source: &'static str,
     },
+    /// The self-hosted font faces, each embedded after its notice.
+    Fonts { header: &'static str },
     /// The shared tokens, with a surface's own tokens when it names one.
     Tokens {
         header: &'static str,
@@ -185,8 +209,9 @@ impl DesignTokens<'_> {
                 ));
             }
         }
+        let faces = self.embed_font_faces(root, &set, &mut errors)?;
         for output in &OUTPUTS {
-            self.generate(root, &set, output, check, &mut errors)?;
+            self.generate(root, &set, &faces, output, check, &mut errors)?;
         }
         contrast::check(&set, &mut errors);
         let sources = self.check_sources(root, &set, check, &mut errors)?;
@@ -196,21 +221,72 @@ impl DesignTokens<'_> {
         let verb = if check { "are current" } else { "generated" };
 
         Ok(format!(
-            "Design token stylesheets {verb} ({} tokens; {sources} hand-written stylesheets, \
-             scripts, and templates use no raw colour).",
-            set.tokens.len()
+            "Design token stylesheets {verb} (tokens: {}, font faces: {}; {sources} hand-written \
+             stylesheets, scripts, and templates use no raw colour).",
+            set.tokens.len(),
+            faces.len()
         ))
+    }
+
+    /// Reads and checks the files each font face names, relative to the
+    /// token file, and returns the faces that can be embedded.
+    fn embed_font_faces<'set>(
+        &self,
+        root: &Path,
+        set: &'set TokenSet,
+        errors: &mut Vec<String>,
+    ) -> Result<Vec<Embedded<'set>>, String> {
+        let directory = root.join(Path::new(SOURCE).parent().unwrap_or(Path::new("")));
+        let mut faces = Vec::new();
+        for face in &set.font_faces {
+            let escaping: Vec<&String> = [&face.source, &face.license]
+                .into_iter()
+                .filter(|path| !font_face::is_relative_inside(path))
+                .collect();
+            if !escaping.is_empty() {
+                for path in escaping {
+                    errors.push(format!(
+                        "{SOURCE}: font face {}: {path} must be a relative path inside the token \
+                         file's directory",
+                        face.family
+                    ));
+                }
+                continue;
+            }
+            let font_path = directory.join(&face.source);
+            let font = self
+                .host
+                .read_bytes(&font_path)
+                .map_err(|error| format!("Failed to read {}: {error}", font_path.display()))?;
+            let license_path = directory.join(&face.license);
+            let license = self
+                .host
+                .read(&license_path)
+                .map_err(|error| format!("Failed to read {}: {error}", license_path.display()))?;
+            match Embedded::new(face, font, &license) {
+                Ok(embedded) => faces.push(embedded),
+                Err(face_errors) => errors.extend(
+                    face_errors
+                        .into_iter()
+                        .map(|error| format!("{SOURCE}: {error}")),
+                ),
+            }
+        }
+
+        Ok(faces)
     }
 
     fn generate(
         &self,
         root: &Path,
         set: &TokenSet,
+        faces: &[Embedded<'_>],
         output: &Output,
         check: bool,
         errors: &mut Vec<String>,
     ) -> Result<(), String> {
         let contents = match output.content {
+            Content::Fonts { header } => font_face::stylesheet(header, faces).into_bytes(),
             Content::Copy { header, source } => {
                 let source = root.join(source);
                 let bytes = self

@@ -85,11 +85,11 @@ four keys:
 
 - `guide`: the design guide, `design/DESIGN.md`.
 - `files`: the stylesheets a web page copies beside it, in load order:
-  `design/tokens.css`, then `design/base.css`.
+  `design/tokens.css`, `design/fonts.css`, then `design/base.css`.
 - `tokens`: the machine-readable token source, `design/tokens.json`, in the W3C Design
   Tokens format, for consumers that need a value outside CSS.
-- `assets`: other files copied byte for byte, text or binary, such as the brand mark and
-  favicon.
+- `assets`: other files copied byte for byte, text or binary, such as the brand mark,
+  the favicon, and the monospace font with its licence, which the token source names.
 
 The manifest's `version` is 3 since `tokens` and `assets` were added; a reader of an
 older version rejects it, and every table rejects keys it does not know.

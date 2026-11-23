@@ -12,10 +12,11 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
-/// Content security policy for every file of the web client.
+/// Content security policy for every file of the web client. Fonts may only
+/// be the `data:` URIs the stylesheet embeds.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
-                                       connect-src 'self'; img-src 'self'; base-uri 'none'; \
-                                       form-action 'none'; frame-ancestors 'none'";
+                                       font-src data:; connect-src 'self'; img-src 'self'; \
+                                       base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 /// Marker in the page that tells the client which transport to use.
 const LOCAL_TRANSPORT: &str = r#"<meta name="agentty-transport" content="local">"#;
 /// Marker that selects the relay transport.
@@ -41,13 +42,14 @@ macro_rules! script {
 
 /// Files the page loads, by request path, with their content types.
 const FILES: [(&str, &str, &str); 18] = [
-    // The generated design tokens and shared base styles come first, as
-    // Agentty's listener serves them.
+    // The generated design tokens, font faces, and shared base styles come
+    // first, as Agentty's listener serves them.
     (
         "/app.css",
         "text/css; charset=utf-8",
         concat!(
             include_str!("../../ag-remote/assets/tokens.css"),
+            include_str!("../../ag-remote/assets/fonts.css"),
             include_str!("../../ag-remote/assets/base.css"),
             include_str!("../../ag-remote/assets/app.css")
         ),

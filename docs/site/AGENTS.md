@@ -11,13 +11,15 @@ Applies to site configuration, templates, content, and static assets.
 
 ## Styles
 
-- Design values live in `design/tokens.json`. `docs/site/sass/_tokens.scss` is generated
-  from it, and `docs/site/sass/site.scss` loads it with `@use`; keep only layout sizes
-  and tokens derived from other tokens in `site.scss`.
+- Design values and the self-hosted monospace face live in `design/tokens.json`.
+  `docs/site/sass/_tokens.scss` and `docs/site/sass/_fonts.scss` are generated from it,
+  and `docs/site/sass/site.scss` loads them with `@use`; keep only layout sizes and
+  tokens derived from other tokens in `site.scss`. Load no font from another origin
+  except the home page's display face.
 - Shared foundations and components live in `design/base.css`, which
-  `docs/site/sass/_base.scss` copies for `site.scss` to `@use` after the tokens. Change
-  a rule there when the remote-control client or another workspace shares it, and keep
-  site-only rules in `site.scss`.
+  `docs/site/sass/_base.scss` copies for `site.scss` to `@use` after the tokens and
+  fonts. Change a rule there when the remote-control client or another workspace shares
+  it, and keep site-only rules in `site.scss`.
 - `docs/site/static/mark.svg`, `docs/site/static/favicon.ico`, and the `theme-color`
   value in `docs/site/templates/partials/seo.html` are generated from `design/`; change
   them there. Scripts and templates read colors and fonts from the custom properties at

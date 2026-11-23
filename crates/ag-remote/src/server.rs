@@ -30,10 +30,11 @@ pub(crate) const MAX_UNAUTHENTICATED_SOCKETS: usize = 8;
 /// Host names every listener answers, regardless of the configured
 /// allowlist.
 const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
-/// Content security policy for every embedded asset.
+/// Content security policy for every embedded asset. Fonts may only be the
+/// `data:` URIs the stylesheet embeds.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
-                                       connect-src 'self'; img-src 'self'; base-uri 'none'; \
-                                       form-action 'none'; frame-ancestors 'none'";
+                                       font-src data:; connect-src 'self'; img-src 'self'; \
+                                       base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// Content type of the web client's scripts.
 const SCRIPT: &str = "text/javascript; charset=utf-8";
@@ -58,13 +59,14 @@ const WEB_ASSETS: [(&str, &str, &str); 19] = [
         "text/html; charset=utf-8",
         include_str!("../assets/index.html"),
     ),
-    // The generated design tokens and shared base styles come first, so the
-    // page loads one stylesheet.
+    // The generated design tokens, font faces, and shared base styles come
+    // first, so the page loads one stylesheet.
     (
         "/app.css",
         "text/css; charset=utf-8",
         concat!(
             include_str!("../assets/tokens.css"),
+            include_str!("../assets/fonts.css"),
             include_str!("../assets/base.css"),
             include_str!("../assets/app.css")
         ),

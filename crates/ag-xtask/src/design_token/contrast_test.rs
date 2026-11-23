@@ -1,4 +1,4 @@
-//! Contrast ratio and shortfall record unit tests.
+//! Contrast ratio and minimum unit tests.
 
 use serde_json::{Value as Json, json};
 
@@ -59,18 +59,30 @@ fn ratio_matches_wcag_reference_values() {
 }
 
 #[test]
-fn pairs_that_reach_the_minimum_or_record_their_shortfall_pass() {
+fn pairs_that_reach_the_minimum_in_every_theme_pass() {
     // Arrange
     let contrast = json!([{
         "use": "Text",
         "minimum": 4.5,
+        "foregrounds": ["{color.white}"],
+        "backgrounds": ["{color.black}"]
+    }]);
+
+    // Act
+    let errors = errors(&contrast);
+
+    // Assert
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+#[test]
+fn every_pair_below_the_minimum_fails_in_each_theme() {
+    // Arrange
+    let contrast = json!([{
+        "use": "Outlines",
+        "minimum": 4.6,
         "foregrounds": ["{color.grey}"],
-        "backgrounds": ["{color.white}", "{color.black}"],
-        "shortfalls": [
-            { "theme": "dark", "foreground": "{color.grey}", "background": "{color.black}", "ratio": 1.66, "reason": "Fixture." },
-            { "theme": "dark", "foreground": "{color.grey}", "background": "{color.white}", "ratio": 12.63, "reason": "Fixture." },
-            { "theme": "green", "foreground": "{color.grey}", "background": "{color.black}", "ratio": 4.62, "reason": "Fixture." }
-        ]
+        "backgrounds": ["{color.white}", "{color.black}"]
     }]);
 
     // Act
@@ -80,42 +92,37 @@ fn pairs_that_reach_the_minimum_or_record_their_shortfall_pass() {
     assert_eq!(
         errors,
         [
-            "dark: {color.grey} on {color.white} (Text) now reaches 12.63:1; remove its shortfall",
-            "green: {color.grey} on {color.black} (Text) now reaches 4.62:1; remove its shortfall",
+            "green: {color.grey} on {color.white} (Outlines) is 4.54:1, below 4.6:1; change a \
+             colour",
+            "dark: {color.grey} on {color.black} (Outlines) is 1.66:1, below 4.6:1; change a \
+             colour",
         ]
     );
 }
 
 #[test]
-fn pairs_below_the_minimum_need_an_exact_shortfall_record() {
+fn a_shortfall_record_is_rejected_as_an_unknown_field() {
     // Arrange
-    let contrast = json!([{
-        "use": "Outlines",
-        "minimum": 7,
-        "foregrounds": ["{color.grey}"],
-        "backgrounds": ["{color.white}", "{color.black}"],
-        "shortfalls": [
-            { "theme": "green", "foreground": "{color.grey}", "background": "{color.black}", "ratio": 4.6, "reason": "Fixture." },
-            { "theme": "dark", "foreground": "{color.grey}", "background": "{color.black}", "ratio": 1.66, "reason": " " },
-            { "theme": "dark", "foreground": "{color.white}", "background": "{color.black}", "ratio": 21, "reason": "Fixture." }
-        ]
-    }]);
+    let source = json!({
+        "color": { "$type": "color", "white": { "$value": color("#ffffff", [1.0, 1.0, 1.0]) } },
+        "$extensions": { "xyz.agentty.contrast": [{
+            "use": "Text",
+            "minimum": 4.5,
+            "foregrounds": ["{color.white}"],
+            "backgrounds": ["{color.white}"],
+            "shortfalls": []
+        }] }
+    });
 
     // Act
-    let errors = errors(&contrast);
+    let parsed = TokenSet::parse(&source.to_string());
 
     // Assert
-    assert_eq!(
-        errors,
-        [
-            "green: {color.grey} on {color.white} (Outlines) is 4.54:1, below 7:1; change a \
-             colour or record a shortfall with its reason",
-            "green: {color.grey} on {color.black} (Outlines) is 4.62:1, but its shortfall records \
-             4.60; update the record",
-            "dark: shortfall {color.grey} on {color.black} (Outlines) needs a reason",
-            "dark: shortfall {color.white} on {color.black} (Outlines) matches no pair of the \
-             group",
-        ]
+    let errors = parsed.err().expect("a shortfall record fails");
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].starts_with("xyz.agentty.contrast: unknown field `shortfalls`"),
+        "{errors:?}"
     );
 }
 

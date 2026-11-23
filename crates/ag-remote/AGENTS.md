@@ -49,14 +49,16 @@ through `ag_session::SessionService`.
   loses a field.
 - Update the web client and `crates/ag-remote/tests/server/` together with
   `crates/ag-remote/src/protocol.rs`.
-- Design values live in `design/tokens.json` and shared foundations in
-  `design/base.css`. `crates/ag-remote/assets/tokens.css` and
-  `crates/ag-remote/assets/base.css` are generated from them, and this crate and
-  `ag-relay` serve both, in that order, ahead of `app.css` as `/app.css`. Keep only
-  layout sizes, the `--tone-*` aliases, and the client's own rules in `app.css`; every
-  rule in `base.css` also applies to the client. The generator also writes the
-  `theme-color` value in `crates/ag-remote/assets/index.html`; scripts read colors from
-  the custom properties at runtime.
+- Design values and the self-hosted monospace face live in `design/tokens.json` and
+  shared foundations in `design/base.css`. `crates/ag-remote/assets/tokens.css`,
+  `crates/ag-remote/assets/fonts.css`, and `crates/ag-remote/assets/base.css` are
+  generated from them, and this crate and `ag-relay` serve all three, in that order,
+  ahead of `app.css` as `/app.css`. The font is a `data:` URI, which the content
+  security policy allows with `font-src data:` and nothing else. Keep only layout sizes,
+  the `--tone-*` aliases, and the client's own rules in `app.css`; every rule in
+  `base.css` also applies to the client. The generator also writes the `theme-color`
+  value in `crates/ag-remote/assets/index.html`; scripts read colors from the custom
+  properties at runtime.
 
 ## Documentation
 
