@@ -364,7 +364,9 @@ async function readForced(page, nodes, element, state, layout) {
 
 // Returns, under `prefix`, only what a forced state changes from `rest`, so
 // a difference at rest is reported once rather than again in every state.
-function stateChanges(rest, forced, prefix) {
+// A pseudo-element that only a state gives content, such as a hovered
+// `::after`, has no styles at rest, so all of its styles count.
+export function stateChanges(rest, forced, prefix) {
   const changes = {};
   for (const [key, values] of Object.entries(forced)) {
     const before = rest[key] ?? {};

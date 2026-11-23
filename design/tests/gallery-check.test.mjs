@@ -26,6 +26,7 @@ import {
   parseArguments,
   readMarkup,
   selectorParts,
+  stateChanges,
 } from "../gallery-check.mjs";
 import { FakeElement, FakePage, fakeBrowser, fakeProcess, fakeSheet, fakeWindow, styleRule } from "./support.mjs";
 
@@ -166,6 +167,18 @@ test("findChrome prefers CHROME_PATH and otherwise the newest headless shell or 
 test("galleryStylesheets lists the linked stylesheets in order and requires one", () => {
   assert.deepEqual(galleryStylesheets(GALLERY), ["tokens.css", "base.css"]);
   assert.throws(() => galleryStylesheets('<link rel="stylesheet"><link rel="icon" href="x">'), /links no stylesheet/);
+  assert.throws(() => galleryStylesheets("<p>No links at all.</p>"), /links no stylesheet/);
+});
+
+test("stateChanges keeps what a state changes, and every style of an element only the state shows", () => {
+  const rest = { a: { color: "red", width: "1px" } };
+  const forced = { a: { color: "blue", width: "1px" }, "a::after": { content: '"!"' } };
+
+  assert.deepEqual(stateChanges(rest, forced, "hover a | "), {
+    "hover a | a": { color: "blue" },
+    "hover a | a::after": { content: '"!"' },
+  });
+  assert.deepEqual(stateChanges(rest, { a: rest.a }, "hover a | "), {});
 });
 
 test("galleryPage inlines the stylesheet chain and sets the theme on the root element", () => {
@@ -271,6 +284,13 @@ test("selectorParts finds each subject's classes and types, and the classes befo
     { context: [], subject: { classes: ["a"], root: false, types: [] } },
     { context: [], subject: { classes: ["a", "c"], root: false, types: [] } },
   ]);
+  // An empty selector after a trailing comma names nothing, and a
+  // parenthesis without a pseudo-class name opens no argument by name.
+  assert.deepEqual(selectorParts(".a,"), [
+    { context: [], subject: { classes: ["a"], root: false, types: [] } },
+    { context: [], subject: { classes: [], root: false, types: [] } },
+  ]);
+  assert.deepEqual(selectorParts("(.b)"), [{ context: [], subject: { classes: [], root: false, types: [] } }]);
 });
 
 test("auditRules reports a surface's own rules that restyle a shared component", () => {
