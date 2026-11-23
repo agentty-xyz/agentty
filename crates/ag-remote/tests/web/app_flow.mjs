@@ -228,9 +228,12 @@ async function sessionFlow() {
     // The listing's figures reach the header and the row beside the
     // snapshot's settings and branches.
     header: [...byId("heading-sub").children]
-      .filter((node) => !node.classList.contains("timer"))
+      .filter((node) => !node.classList.contains("timer") && !node.classList.contains("started"))
       .map((node) => node.textContent),
-    isTimerShown: /^Timer \d/.test(byId("heading-sub").querySelector(".timer")?.textContent ?? ""),
+    // The timer and the session's age follow the clock, so only their
+    // form is compared.
+    isStartedShown: /^Started \d/.test(byId("heading-sub").querySelector(".started")?.textContent ?? ""),
+    isTimerShown: /^Timer: \d/.test(byId("heading-sub").querySelector(".timer")?.textContent ?? ""),
     // The server lists `settings` and `host`, so the line is a button.
     meta: byId("composer-settings").hidden ? null : byId("composer-settings").textContent,
     notice: {

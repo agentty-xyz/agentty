@@ -7,7 +7,7 @@
 // Functions take `document` and `window` as parameters, so the Node tests
 // in crates/ag-remote/tests/web/chat.test.mjs pass the fake DOM.
 
-import { createComposer, modelNode } from "./composer.mjs";
+import { createComposer, modelNode, promptHistory } from "./composer.mjs";
 import {
   activeSeconds,
   formatTimer,
@@ -16,11 +16,14 @@ import {
   reviewLabel,
   sessionFigures,
   settingsParts,
+  startedLabel,
   statusInfo,
   statusLine,
 } from "./format.mjs";
 import { parseInlineMarkdown, parseMarkdown, renderMarkdown, safeLink } from "./markdown.mjs";
+import { createMentions } from "./mention.mjs";
 import { conflictLabel, lineCounts } from "./session_list.mjs";
+import { createSuggestions } from "./suggest.mjs";
 
 // Shortest time between two refreshes.
 export const REFRESH_INTERVAL_MS = 1000;
@@ -39,6 +42,10 @@ const READ_ONLY_LABELS = { Queued: "Queued to merge" };
 // header button's tooltip, and the short note that fits the phone sheet.
 const MERGE_OFF_TITLE = "Merge is off: merge the session's pull request instead";
 const MERGE_OFF_NOTE = "has a pull request";
+// What Publish says while a turn runs, as the terminal's `p` does.
+const PUBLISH_WAIT_HINT = "Publishes after the current turn";
+// The classes of the timing parts that end the header's details, in order.
+const TIMING_PARTS = ["timer", "started"];
 
 // The kind a message renders as. A kind this client does not know, from a
 // newer Agentty, renders as a notice.
@@ -129,9 +136,12 @@ export function collectAnswers(questions, picks, typed) {
 // and Sync only with its capability in a status that allows it. A session
 // with a linked review request merges on the forge, so the host refuses
 // to merge it and `hasReviewRequest` disables Merge, as the terminal
-// hides `m`.
+// hides `m`. As `p` in the terminal, Publish also works while a turn or a
+// sync runs, and `publishWaits` says that the host then publishes after
+// it.
 export function sessionActions(statusName, capabilities = [], hasReviewRequest = false) {
   const info = statusInfo(statusName);
+  const publishWaits = QUEUEING_STATUSES.has(statusName);
 
   return {
     cancel: info.cancel,
@@ -140,7 +150,8 @@ export function sessionActions(statusName, capabilities = [], hasReviewRequest =
     merge: capabilities.includes("merge"),
     mergeEnabled: capabilities.includes("merge") && info.review && !hasReviewRequest,
     publish: capabilities.includes("publish"),
-    publishEnabled: capabilities.includes("publish") && info.review,
+    publishEnabled: capabilities.includes("publish") && (info.review || publishWaits),
+    publishWaits: publishWaits,
     sync: capabilities.includes("sync") && info.sync,
   };
 }
@@ -261,6 +272,8 @@ export function createChat({
     // Requests in flight, as `actionKey(method, sessionId)`, so an action
     // on one session never blocks or answers for another.
     acting: new Set(),
+    // The `@` file lookups of the answer fields on screen.
+    answerLookups: [],
     // Seconds this device's clock is known to run behind the host's.
     clockSkew: 0,
     // Where the transcript was when the diff replaced it.
@@ -300,6 +313,7 @@ export function createChat({
       send: elements.send,
       settingsButton: elements.composerSettings,
     },
+    history: () => promptHistory(state.session),
     onSend: () => void sendMessage(),
     request: request,
     settings: settings,
@@ -338,20 +352,31 @@ export function createChat({
     renderActions();
   }
 
-  // Shows how long the session has worked while it runs.
+  // Ends the header's details as the terminal's composer border does:
+  // `Timer: 4m 12s`, counting while a turn runs and still between turns,
+  // then `Started 3h 5m ago`. Each goes when the host does not say.
   function renderTimer() {
-    const timer = elements.sub.querySelector(".timer");
-    const seconds = activeSeconds(state.summary, now() + state.clockSkew);
-    if (seconds === null) {
-      timer?.remove();
+    const time = now() + state.clockSkew;
+    const seconds = activeSeconds(state.summary, time);
+    const labels = {
+      started: startedLabel(state.session?.created_at, time),
+      timer: seconds === null ? null : "Timer: " + formatTimer(seconds),
+    };
+    const parts = TIMING_PARTS.filter((part) => labels[part] !== null);
+    const nodes = TIMING_PARTS.map((part) => elements.sub.querySelector("." + part)).filter(Boolean);
+    // The same parts update in place, so the timer keeps its node.
+    if (nodes.map((node) => node.className).join() !== parts.join()) {
+      for (const node of nodes) {
+        node.remove();
+      }
+      elements.sub.append(...parts.map((part) => element(document, "span", part, labels[part])));
 
       return;
     }
-    const label = "Timer " + formatTimer(seconds);
-    if (timer) {
-      timer.textContent = label;
-    } else {
-      elements.sub.append(element(document, "span", "timer", label));
+    for (const node of nodes) {
+      if (node.textContent !== labels[node.className]) {
+        node.textContent = labels[node.className];
+      }
     }
   }
 
@@ -401,23 +426,35 @@ export function createChat({
 
   // Publish sits in the header on wide screens and in the sheet on
   // phones. While the open session's publish runs, both say so and stay
-  // disabled, even after switching away and back.
+  // disabled, even after switching away and back. A publish asked for
+  // during a turn waits for it: the host answers only once it ran, so
+  // until the turn ends both say it is queued.
   function renderPublish(actions) {
     const isPublishing = state.publishing.has(state.sessionId);
     elements.publish.hidden = !actions.publish;
     elements.publish.disabled = !actions.publishEnabled || isPublishing || !state.isConnected;
     elements.publish.setAttribute("aria-busy", String(isPublishing));
-    elements.publishLabel.textContent = isPublishing ? "Publishing…" : "Publish";
-    elements.sheetPublish.hidden = !actions.publish;
-    elements.sheetPublish.disabled = elements.publish.disabled;
+    elements.publish.title = actions.publishWaits && !isPublishing ? PUBLISH_WAIT_HINT : "";
+    let label = "Publish";
     // `reviewLabel` checks that the host names the review request.
     const review = state.session?.review_request;
     const reviewId = reviewLabel(review) ? review.display_id : null;
     let note = reviewId ? "refreshes " + reviewId : "opens a pull request";
-    if (isPublishing) {
+    // The sheet's notes stay short enough for a phone's width.
+    if (isPublishing && actions.publishWaits) {
+      label = "Publish queued";
+      note = "queued";
+    } else if (isPublishing) {
+      label = "Publishing…";
       note = "publishing…";
+    } else if (actions.publishWaits) {
+      note = "after this turn";
     }
+    elements.publishLabel.textContent = label;
+    elements.sheetPublish.hidden = !actions.publish;
+    elements.sheetPublish.disabled = elements.publish.disabled;
     elements.sheetPublishNote.textContent = note;
+    elements.publishWait.hidden = !actions.publishWaits;
     elements.publishBranch.textContent = publishBranch(state.session) || "the session branch";
     elements.publishReview.textContent = reviewId
       ? "refreshes its pull request " + reviewId
@@ -677,6 +714,7 @@ export function createChat({
     state.questionsKey = key;
     state.questions = questions;
     state.picks = questions.map(() => null);
+    forgetAnswerLookups();
     elements.answerError.textContent = "";
     elements.questions.hidden = questions.length === 0;
     elements.questions.replaceChildren(
@@ -684,6 +722,15 @@ export function createChat({
     );
 
     return true;
+  }
+
+  // Ends the file lookups of answer fields that are going, so a file load
+  // still on its way shows nothing.
+  function forgetAnswerLookups() {
+    for (const lookup of state.answerLookups) {
+      lookup.reset();
+    }
+    state.answerLookups = [];
   }
 
   function renderQuestion(question, index, total) {
@@ -718,10 +765,55 @@ export function createChat({
     const input = element(document, "input", "field");
     input.placeholder = options.length > 0 ? "Or type an answer" : "Your answer";
     input.setAttribute("aria-label", "Answer " + (index + 1));
-    input.addEventListener("input", renderAnswerBar);
-    group.append(input);
+    const field = element(document, "div", "answer-field");
+    field.append(input);
+    group.append(field);
+    lookUpFiles(input, field, index);
 
     return group;
+  }
+
+  // Wires the `@` file lookup of the composer to answer `input`, with its
+  // list in `field`. An open list takes `Enter`, so picking a file does
+  // not send the answers.
+  function lookUpFiles(input, field, index) {
+    const suggestions = createSuggestions({
+      container: field,
+      document: document,
+      id: "answer-suggestions-" + index,
+      input: input,
+      label: "Files",
+    });
+    const mentions = createMentions({
+      context: () => ({
+        capabilities: state.capabilities,
+        isConnected: state.isConnected,
+        session: state.session,
+      }),
+      input: input,
+      request: request,
+      setText: (text, caret) => {
+        input.value = text;
+        input.setSelectionRange(caret, caret);
+        renderAnswerBar();
+      },
+      showError: (message) => {
+        elements.answerError.textContent = message;
+      },
+      suggestions: suggestions,
+    });
+    state.answerLookups.push(mentions);
+    input.addEventListener("input", () => {
+      renderAnswerBar();
+      mentions.update();
+    });
+    input.addEventListener("keydown", (event) => {
+      suggestions.handleKey(event);
+    });
+    for (const type of ["click", "focus", "keyup"]) {
+      input.addEventListener(type, () => mentions.update());
+    }
+    input.addEventListener("blur", () => mentions.close());
   }
 
   function typedAnswers() {
@@ -775,6 +867,9 @@ export function createChat({
     elements.answerBar.hidden = dock.mode !== "answer";
     elements.readonly.hidden = dock.mode !== "readonly";
     composer.refresh();
+    for (const lookup of state.answerLookups) {
+      lookup.refresh();
+    }
     if (dock.mode === "readonly") {
       elements.readonly.textContent = dock.text;
     }
@@ -801,6 +896,7 @@ export function createChat({
     state.questions = [];
     state.questionsKey = null;
     state.picks = [];
+    forgetAnswerLookups();
     elements.transcript.replaceChildren();
     renderStatusLine(null);
     elements.queued.replaceChildren();
@@ -1209,9 +1305,12 @@ export function clockSkew(summary, nowSeconds) {
 
 // Makes `container`'s children match `nodes`, leaving each child whose
 // class, text, link and title did not change in place, so it keeps focus.
-// A `.timer` child goes, and `renderTimer` adds it again last.
+// The `.timer` and `.started` children go, and `renderTimer` adds them
+// again last.
 function updateChildren(container, nodes) {
-  container.querySelector(".timer")?.remove();
+  for (const part of TIMING_PARTS) {
+    container.querySelector("." + part)?.remove();
+  }
   const current = [...container.children];
   nodes.forEach((node, index) => {
     const old = current[index];

@@ -56,12 +56,55 @@ export function slashQuery(text, selectionStart = text.length, selectionEnd = se
   return text.slice(1).toLowerCase();
 }
 
-// The commands whose name starts with `query`. `/fast` is listed only when
-// `canFast`: the session's model can run fast.
+// The commands whose name matches `query` fuzzily, best match first, as
+// `prompt_slash_commands` in crates/agentty/src/domain/composer.rs ranks
+// them; see `slashScore`. `/fast` is listed only when `canFast`: the
+// session's model can run fast.
 export function slashCommands(query, { canFast = false } = {}) {
-  return SLASH_COMMANDS.filter(
-    (command) => (command.name !== "/fast" || canFast) && command.name.slice(1).startsWith(query),
-  );
+  return SLASH_COMMANDS.filter((command) => command.name !== "/fast" || canFast)
+    .map((command) => ({ command: command, score: slashScore(command.name, query) }))
+    .filter((entry) => entry.score !== null)
+    .sort((first, second) => first.score - second.score)
+    .map((entry) => entry.command);
+}
+
+// How well command `name` matches lowercase `query`, lower being better,
+// or `null` when it does not: the whole name or no query, then a prefix,
+// then the query anywhere in the name, earlier first, then its characters
+// in order, earlier and closer together first. `slash_command_fuzzy_score`
+// in crates/agentty/src/domain/composer.rs owns the same rule.
+export function slashScore(name, query) {
+  const command = name.replace(/^\/+/, "");
+  const wanted = query.replace(/^\/+/, "");
+  if (wanted === "" || command === wanted) {
+    return 0;
+  }
+  if (command.startsWith(wanted)) {
+    return 1;
+  }
+  const at = command.indexOf(wanted);
+  if (at !== -1) {
+    return 100 + at;
+  }
+  let next = 0;
+  let first = -1;
+  let last = -1;
+  let gaps = 0;
+  for (let index = 0; index < command.length && next < wanted.length; index += 1) {
+    if (command[index] !== wanted[next]) {
+      continue;
+    }
+    if (last !== -1) {
+      gaps += index - last - 1;
+    }
+    if (first === -1) {
+      first = index;
+    }
+    last = index;
+    next += 1;
+  }
+
+  return next < wanted.length ? null : 200 + first * 2 + gaps;
 }
 
 // The speed `/fast` switches `session` to.

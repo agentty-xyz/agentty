@@ -325,6 +325,18 @@ test("blank text, a second send and an offline page create nothing", async () =>
   assert.deepEqual(page.requests, [{ method: "get_host" }]);
 });
 
+test("home's composer has no earlier prompts, so Up and Down stay the browser's", async () => {
+  const page = mountHome();
+  await page.home.setCapabilities(CAPABILITIES);
+  type(page, "Fix the relay");
+  for (const key of ["ArrowUp", "ArrowDown"]) {
+    const event = new FakeEvent("keydown", { key: key });
+    page.byId("home-message").dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false, key);
+  }
+  assert.equal(page.byId("home-message").value, "Fix the relay");
+});
+
 test("the unsent first message survives a reload of the tab", () => {
   const sessionStorage = new MemoryStorage();
   sessionStorage.setItem(DRAFT_KEY_PREFIX + HOME_DRAFT_ID, "one\ntwo\nthree\nfour");

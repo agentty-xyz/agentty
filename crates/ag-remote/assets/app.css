@@ -991,13 +991,20 @@ kbd {
   font-weight: 400;
 }
 
-/* The model and the review request give way when the line is full. */
+/* The model and the review request give way when the line is full. The
+   session's age gives way before them, as the terminal drops it first,
+   and a phone leaves it out. */
 .chat-sub .model,
-.chat-sub .review {
+.chat-sub .review,
+.chat-sub .started {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-sub .started {
+  flex-shrink: 1000;
 }
 
 .chat-sub a {
@@ -2016,6 +2023,12 @@ kbd {
   white-space: nowrap;
 }
 
+/* An answer field holds its `@` file list, which opens above it. */
+.answer-field {
+  position: relative;
+  display: grid;
+}
+
 /* ---- Dock: queued messages, composer, answer bar ------------------ */
 .dock {
   position: relative;
@@ -2511,7 +2524,8 @@ kbd {
     display: inline-flex;
   }
 
-  .wide-only {
+  .wide-only,
+  .chat-sub .started {
     display: none;
   }
 
