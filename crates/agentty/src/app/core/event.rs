@@ -2651,6 +2651,10 @@ impl App {
                 self.cancel_externally_closed_session(&session_id).await;
             }
             crate::app::session::SyncReviewRequestOutcome::Open { .. } => {
+                // A pull request that just entered the forge's merge queue
+                // moves its session to `Queued` first, so the attention
+                // fetched with it starts no follow-up during the merge.
+                self.reconcile_review_watch_statuses().await;
                 match task_result.attention {
                     Some(Ok(attention)) => {
                         self.apply_review_request_attention(&session_id, attention)
