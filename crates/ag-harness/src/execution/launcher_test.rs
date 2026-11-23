@@ -211,7 +211,11 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
     // The protected entries and the directories holding them; no linked
     // worktree administration to protect.
     assert_eq!(profile.matches("(regex #\"^").count(), 2, "{profile}");
-    assert!(profile.contains("(regex #\"^/workspace/[.]git(/worktrees(/[^/]+)?)?$\")"));
+    assert!(
+        profile.contains(
+            "(regex #\"^/workspace/[.]git(/(worktrees(/[^/]+)?|refs|objects(/info)?))?$\")"
+        )
+    );
     assert!(profile.contains("(allow network-outbound (remote ip))"));
     assert!(profile.contains("\"/private/var/run/mDNSResponder\""));
     assert!(profile.contains("(global-name \"com.apple.TrustEvaluationAgent\")"));

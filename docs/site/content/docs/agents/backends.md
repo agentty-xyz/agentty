@@ -261,8 +261,9 @@ a key or sign-in is never chosen as the default.
   disk but write only the session worktree, its Git metadata, and the session's own
   temporary directory. Credential stores such as `~/.ssh`, `~/.aws`, `~/.config/gh`, the
   keychains, and browser profiles stay hidden, and so do Agentty's database, pasted
-  images, harness history, and ChatGPT sign-in. Agentty never reruns a blocked command
-  outside the sandbox; it shows a `[Sandbox]` hint when a command may have been blocked.
+  images, harness history, stored API keys, and ChatGPT sign-in. Agentty never reruns a
+  blocked command outside the sandbox; it shows a `[Sandbox]` hint when a command may
+  have been blocked.
 - Commands keep network access, including to services listening on `localhost` such as
   local databases or a Docker TCP socket, but cannot reach Unix sockets: not Docker's,
   and not the SSH agent's, so Git over SSH with agent keys fails inside a session.

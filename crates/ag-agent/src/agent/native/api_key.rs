@@ -6,14 +6,12 @@
 //! provider; afterwards the variable is ignored.
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt as _;
+use std::io::{self, Write as _};
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::{io, process};
 
 use ag_harness::provider::ModelProvider;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt as _;
 
 use super::config::agentty_home;
 
@@ -24,9 +22,6 @@ const FILE_VERSION: u32 = 1;
 /// Failure when no variable locates Agentty's data directory.
 const UNLOCATED_API_KEY_FILE: &str =
     "Set AGENTTY_ROOT or HOME to locate Agentty's API key file, then retry.";
-
-/// Distinguishes temporary files written concurrently by one process.
-static NEXT_TEMPORARY_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// Returns `environment` with each provider API key variable holding the key
 /// stored for that provider, or removed when none is stored.
@@ -193,41 +188,31 @@ impl StoredApiKeys {
     /// # Errors
     /// Returns an error when the directory or file cannot be written.
     async fn save(&self, path: &Path) -> io::Result<()> {
-        // `path` always names a file inside the data directory.
-        let directory = path.parent().unwrap_or(Path::new("."));
-        tokio::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(directory)
-            .await?;
-        let temporary = path.with_extension(format!(
-            "json.{}-{}.tmp",
-            process::id(),
-            NEXT_TEMPORARY_FILE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let result =
-            Self::write_then_rename(&serde_json::to_vec_pretty(self)?, &temporary, path).await;
-        if result.is_err() {
-            let _ = tokio::fs::remove_file(&temporary).await;
-        }
+        let contents = serde_json::to_vec_pretty(self)?;
+        let path = path.to_path_buf();
 
-        result
+        tokio::task::spawn_blocking(move || Self::write_private(&contents, &path))
+            .await
+            .map_err(io::Error::other)
+            .flatten()
     }
 
-    /// Writes `contents` to the new owner-only file `temporary`, then moves
-    /// it over `path`.
-    async fn write_then_rename(contents: &[u8], temporary: &Path, path: &Path) -> io::Result<()> {
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .mode(0o600)
-            .write(true)
-            .open(temporary)
-            .await?;
-        file.write_all(contents).await?;
-        file.sync_all().await?;
-        drop(file);
+    /// Writes `contents` to an owner-only temporary file beside `path`, then
+    /// moves it over `path`; the temporary file is removed on failure.
+    fn write_private(contents: &[u8], path: &Path) -> io::Result<()> {
+        // `path` always names a file inside the data directory.
+        let directory = path.parent().unwrap_or(Path::new("."));
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)?;
+        // `tempfile` creates the file readable only by its owner.
+        let mut file = tempfile::NamedTempFile::new_in(directory)?;
+        file.write_all(contents)?;
+        file.as_file().sync_all()?;
+        file.persist(path)?;
 
-        tokio::fs::rename(temporary, path).await
+        Ok(())
     }
 }
 

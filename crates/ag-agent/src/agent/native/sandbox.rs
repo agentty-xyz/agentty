@@ -54,18 +54,19 @@ const CACHE_ENVIRONMENT: [(&str, &str); 6] = [
     ("XDG_CACHE_HOME", "cache"),
     ("npm_config_cache", "npm"),
 ];
-/// Directories of Agentty's data directory hidden from commands: the
-/// application database, with every session's transcript and the
-/// remote-control identity, and the pasted images of every session.
-const AGENTTY_PRIVATE_DIRECTORIES: [&str; 2] = ["db", "tmp"];
+/// Directories of Agentty's data directory hidden from commands: the stored
+/// provider API keys and sign-ins, the application database, with every
+/// session's transcript and the remote-control identity, and the pasted
+/// images of every session.
+const AGENTTY_PRIVATE_DIRECTORIES: [&str; 3] = ["auth", "db", "tmp"];
 /// Name the harness's user-facing remedies use for the host application.
 const APPLICATION: &str = "the application";
 
 /// The places one run's commands may write and the Agentty files they may
 /// not read.
 pub(crate) struct CommandSandbox {
-    /// Paths hidden from commands: the harness histories and the `ChatGPT`
-    /// sign-in.
+    /// Paths hidden from commands: the harness histories, the `ChatGPT`
+    /// sign-in, and Agentty's private directories.
     hidden: Vec<PathBuf>,
     /// The session's own temporary directory, inside the hidden data root:
     /// `TMPDIR` and the tool caches.
@@ -103,9 +104,9 @@ impl CommandSandbox {
 
     /// Describes commands that write `temporary_directory` and cannot read
     /// `data_root`, other than that directory, the `ChatGPT` sign-in
-    /// `environment` names, or Agentty's application database and pasted
-    /// images, which hold every session's transcript and the remote-control
-    /// identity.
+    /// `environment` names, or Agentty's stored API keys, application
+    /// database and pasted images, which hold every provider key, every
+    /// session's transcript and the remote-control identity.
     pub(crate) fn new(
         data_root: &Path,
         temporary_directory: PathBuf,
