@@ -7,15 +7,17 @@
 // The gallery loads the shared stylesheets by relative path. For each
 // surface, this script renders the gallery's markup once with those
 // stylesheets alone and once with the surface's whole stylesheet chain in
-// their place, in both themes, on a desktop and a touch phone viewport,
-// at rest and with each interactive element hovered, focused, and pressed.
-// It fails when any computed style of an element inside a `data-specimen`
-// element differs, other than the properties that place or size a
-// component in its page, and when a surface rule names a shared component
-// to set any other property. With `--markup`, the surface's templates and
-// scripts, a rule on a class the markup sets beside a shared class counts
-// as naming that component too. It reads only local files and needs a
-// Chromium-based browser: set CHROME_PATH, or it looks in the usual places.
+// their place, in both themes, on a desktop and a touch phone viewport and
+// on a desktop with reduced motion, at rest and with each interactive
+// element hovered, focused, and pressed. It fails when any computed style of
+// an element inside a `data-specimen` element differs, other than the
+// properties that place or size a component in its page, and when a surface
+// rule names a shared component to set any other property. With `--markup`,
+// the surface's templates and scripts, a rule on a class the markup sets
+// beside a shared class counts as naming that component too. It reads only
+// local files: the browser refuses every request but a `data:` URI, and the
+// check fails on any it refused. It needs a Chromium-based browser: set
+// CHROME_PATH, or it looks in the usual places.
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -79,10 +81,12 @@ export const THEMES = [
   { className: "theme-dark", name: "dark" },
 ];
 
-// Viewports: a desktop with a mouse, and a phone with touch.
+// Viewports: a desktop with a mouse, a phone with touch, and a desktop
+// whose reader asks for reduced motion, where live statuses stop pulsing.
 export const VIEWPORTS = [
-  { height: 900, mobile: false, name: "desktop", width: 1280 },
-  { height: 844, mobile: true, name: "phone", width: 390 },
+  { height: 900, mobile: false, name: "desktop", reducedMotion: false, width: 1280 },
+  { height: 844, mobile: true, name: "phone", reducedMotion: false, width: 390 },
+  { height: 900, mobile: false, name: "desktop, reduced motion", reducedMotion: true, width: 1280 },
 ];
 
 // Forced states and the pseudo-classes each forces on the element and on
@@ -290,6 +294,8 @@ export async function check(browser, input) {
   const page = await browser.newPage();
   const surfaces = input.surfaces.map((surface) => ({ differences: [], findings: [], name: surface.name }));
   const variants = THEMES.flatMap((theme) => VIEWPORTS.map((viewport) => ({ theme: theme, viewport: viewport })));
+  // What any render tried to load from outside the page, by who loaded it.
+  const loads = new Set();
   let captures = 0;
   let specimens = 0;
   await inSequence(variants, async ({ theme, viewport }) => {
@@ -298,11 +304,13 @@ export async function check(browser, input) {
     if (reference.specimens === 0) {
       throw new Error("the gallery marks no element with data-specimen");
     }
+    reference.external.forEach((url) => loads.add("the gallery: " + url));
     specimens = reference.specimens;
     captures += 1;
     const pairs = input.surfaces.map((surface, index) => ({ result: surfaces[index], surface: surface }));
     await inSequence(pairs, async ({ result, surface }) => {
       const rendered = await capture(page, galleryPage(input.gallery, surface.css, theme.className), viewport);
+      rendered.external.forEach((url) => loads.add(surface.name + ": " + url));
       captures += 1;
       result.differences.push(...compareStyles(reference.styles, rendered.styles, variant));
       if (theme === THEMES[0] && viewport === VIEWPORTS[0]) {
@@ -313,7 +321,10 @@ export async function check(browser, input) {
 
   return {
     captures: captures,
-    passed: surfaces.every((surface) => surface.differences.length === 0 && surface.findings.length === 0),
+    loads: [...loads],
+    passed:
+      loads.size === 0 &&
+      surfaces.every((surface) => surface.differences.length === 0 && surface.findings.length === 0),
     specimens: specimens,
     surfaces: surfaces,
   };
@@ -348,7 +359,12 @@ export async function capture(page, html, viewport) {
     Object.assign(styles, stateChanges(styles, forced, state.name + " " + element.key + " | "));
   });
 
-  return { rules: rules, specimens: elements.filter((element) => element.root).length, styles: styles };
+  return {
+    external: [...page.external],
+    rules: rules,
+    specimens: elements.filter((element) => element.root).length,
+    styles: styles,
+  };
 }
 
 // Forces `state` on `element` and its ancestors inside the specimen, reads
@@ -761,7 +777,8 @@ function compoundNames(compound) {
 }
 
 // Returns the report's lines: a summary when every surface matches, and
-// otherwise each difference and finding, a bounded number of them.
+// otherwise each blocked load, finding, and difference, a bounded number of
+// them.
 export function formatReport(result) {
   if (result.passed) {
     return [
@@ -774,7 +791,9 @@ export function formatReport(result) {
         " renders).",
     ];
   }
-  const lines = [];
+  const lines = result.loads.map(
+    (load) => load + " was blocked; the check loads nothing from the network, so inline it as a data: URI or drop it",
+  );
   for (const surface of result.surfaces) {
     for (const finding of surface.findings) {
       lines.push(
@@ -810,7 +829,7 @@ export function formatReport(result) {
   const total = lines.length;
 
   return [
-    "Gallery check: a surface renders a shared component differently from the gallery.",
+    "Gallery check: a surface loads from the network or renders a shared component differently from the gallery.",
     ...lines.slice(0, REPORT_LIMIT),
     ...(total > REPORT_LIMIT ? ["... and " + (total - REPORT_LIMIT) + " more"] : []),
   ];
@@ -822,6 +841,8 @@ export class Browser {
   buffer = "";
   nextId = 1;
   pending = new Map();
+  // Event handlers by session.
+  listeners = new Map();
 
   constructor(child, input, output, profile, timeout = COMMAND_TIMEOUT_MS) {
     this.child = child;
@@ -877,6 +898,9 @@ export class Browser {
         } else {
           waiting.resolve(message.result);
         }
+      } else {
+        // An event, for the page whose session it names.
+        this.listeners.get(message.sessionId)?.(message);
       }
       end = this.buffer.indexOf("\0");
     }
@@ -904,11 +928,13 @@ export class Browser {
     });
   }
 
-  // Opens a page with scripts disabled.
+  // Opens a page with scripts disabled and every network request paused,
+  // so the page can refuse it before anything loads.
   async newPage() {
     const { targetId } = await this.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await this.send("Target.attachToTarget", { flatten: true, targetId: targetId });
     const page = new Page(this, sessionId);
+    await page.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
     await inSequence(["Page.enable", "DOM.enable", "CSS.enable"], (method) => page.send(method));
     await page.send("Emulation.setScriptExecutionDisabled", { value: true });
 
@@ -928,13 +954,36 @@ export class Browser {
 
 // One page of the browser.
 export class Page {
+  // What the page tried to load from outside itself since its last load.
+  external = [];
+
   constructor(browser, sessionId) {
     this.browser = browser;
     this.sessionId = sessionId;
+    browser.listeners.set(sessionId, (message) => this.handle(message));
   }
 
   send(method, params = {}) {
     return this.browser.send(method, params, this.sessionId);
+  }
+
+  // Lets a `data:` URI through and refuses every other request, noting it,
+  // so the check reads only the files it was given and nothing leaves the
+  // machine. A reply that fails means the browser is gone, which the
+  // command waiting on it reports.
+  handle(message) {
+    if (message.method !== "Fetch.requestPaused") {
+      return;
+    }
+    const { request, requestId } = message.params;
+    const isData = request.url.startsWith("data:");
+    if (!isData) {
+      this.external.push(request.url);
+    }
+    const reply = isData
+      ? this.send("Fetch.continueRequest", { requestId: requestId })
+      : this.send("Fetch.failRequest", { errorReason: "BlockedByClient", requestId: requestId });
+    reply.catch(() => undefined);
   }
 
   // Shows `html` in `viewport` and waits for its fonts.
@@ -946,7 +995,10 @@ export class Page {
       width: viewport.width,
     });
     await this.send("Emulation.setTouchEmulationEnabled", { enabled: viewport.mobile, maxTouchPoints: 1 });
-    await this.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "" }] });
+    await this.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: viewport.reducedMotion ? "reduce" : "no-preference" }],
+    });
+    this.external = [];
     const { frameTree } = await this.send("Page.getFrameTree");
     await this.send("Page.setDocumentContent", { frameId: frameTree.frame.id, html: html });
     await this.send("Runtime.evaluate", { awaitPromise: true, expression: "document.fonts.ready.then(() => true)" });

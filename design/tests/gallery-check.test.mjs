@@ -372,6 +372,7 @@ test("formatReport summarizes a pass and lists a bounded number of failures", ()
   const difference = { actual: "red", expected: "green", key: "badge > span:0", property: "color", variant: "dark, phone" };
   const failing = {
     captures: 8,
+    loads: ["site: https://example.com/x.png"],
     passed: false,
     specimens: 3,
     surfaces: [
@@ -390,7 +391,9 @@ test("formatReport summarizes a pass and lists a bounded number of failures", ()
     ],
   };
   assert.deepEqual(formatReport(failing), [
-    "Gallery check: a surface renders a shared component differently from the gallery.",
+    "Gallery check: a surface loads from the network or renders a shared component differently from the gallery.",
+    "site: https://example.com/x.png was blocked; the check loads nothing from the network, so inline it as a " +
+      "data: URI or drop it",
     "site: .site .badge restyles .badge with color",
     "site: @media (max-width: 560px) .docs td restyles td with padding-top, color",
     "site [dark, phone] badge > span:0: color is red, gallery green",
@@ -400,7 +403,7 @@ test("formatReport summarizes a pass and lists a bounded number of failures", ()
   failing.surfaces[0].differences = Array.from({ length: 205 }, () => difference);
   const lines = formatReport(failing);
   assert.equal(lines.length, 202);
-  assert.equal(lines.at(-1), "... and 7 more");
+  assert.equal(lines.at(-1), "... and 8 more");
 });
 
 test("check renders the reference and each surface in every theme and viewport, at rest and in each state", async () => {
@@ -409,7 +412,8 @@ test("check renders the reference and each surface in every theme and viewport, 
   const result = await check(fakeBrowser(page), { gallery: GALLERY, reference: "", surfaces: [{ css: "", name: "site" }] });
 
   assert.deepEqual(result, {
-    captures: 8,
+    captures: 12,
+    loads: [],
     passed: true,
     specimens: 1,
     surfaces: [{ differences: [], findings: [], name: "site" }],
@@ -421,10 +425,14 @@ test("check renders the reference and each surface in every theme and viewport, 
       [false, "desktop"],
       [false, "phone"],
       [false, "phone"],
+      [false, "desktop, reduced motion"],
+      [false, "desktop, reduced motion"],
       [true, "desktop"],
       [true, "desktop"],
       [true, "phone"],
       [true, "phone"],
+      [true, "desktop, reduced motion"],
+      [true, "desktop, reduced motion"],
     ],
   );
   // The link is hovered with no specimen ancestors to force; the badge in
@@ -435,6 +443,30 @@ test("check renders the reference and each surface in every theme and viewport, 
     [103, ["hover"]],
     [103, []],
   ]);
+});
+
+test("check fails when a render tries to load from the network, naming who loaded what once", async () => {
+  // Arrange: stylesheets that hold REMOTE make the page try to load a file.
+  const page = new FakePage((html) => {
+    const window = fakeWindow(specimenBody());
+    window.external = html.includes("REMOTE") ? ["https://example.com/a.css"] : [];
+
+    return window;
+  });
+
+  // Act
+  const result = await check(fakeBrowser(page), {
+    gallery: GALLERY,
+    reference: "REMOTE",
+    surfaces: [
+      { css: "REMOTE", name: "site" },
+      { css: "", name: "app" },
+    ],
+  });
+
+  // Assert
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.loads, ["the gallery: https://example.com/a.css", "site: https://example.com/a.css"]);
 });
 
 test("check reports a surface's differences in each state and its own rules once", async () => {
@@ -551,11 +583,14 @@ test("main checks the surfaces against the gallery and exits with the result", a
 
     const same = [gallery, "--surface", "same=" + join(directory, "base.css"), "--markup", "same=" + directory];
     assert.equal(await main(same, environment, io, launch), 0);
-    assert.deepEqual(output.log, ["Gallery check: same render all 1 specimens as the gallery does (8 renders)."]);
+    assert.deepEqual(output.log, ["Gallery check: same render all 1 specimens as the gallery does (12 renders)."]);
     assert.equal(browser.closed, true);
     assert.deepEqual(launches, [[SCRIPT, { linux: process.platform === "linux" }]]);
     assert.equal(await main([gallery, "--surface", "site=" + join(directory, "site.css")], environment, io, launch), 1);
-    assert.equal(output.error[0], "Gallery check: a surface renders a shared component differently from the gallery.");
+    assert.equal(
+      output.error[0],
+      "Gallery check: a surface loads from the network or renders a shared component differently from the gallery.",
+    );
     assert.equal(await main([gallery], environment, io, launch), 2);
     assert.equal(output.error.at(-1), "name at least one --surface to compare with the gallery");
     assert.equal(await main([gallery, "--surface", "a=b.css"], { CHROME_PATH: join(directory, "none") }, io, launch), 2);
@@ -616,18 +651,20 @@ test("a page loads markup in a viewport, runs collectors, lists nodes, and force
   const browser = new Browser(child, child.stdio[3], child.stdio[4], directory);
 
   const page = await browser.newPage();
-  await page.load("<p>", { height: 844, mobile: true, name: "phone", width: 390 });
+  await page.load("<p>", { height: 844, mobile: true, name: "phone", reducedMotion: false, width: 390 });
   const list = await page.evaluate(collectPage, { focus: SELECTORS.focus, hover: SELECTORS.hover, mode: "list", selector: SELECTORS.specimens });
   const nodes = await page.nodes(SELECTORS.specimens);
   await page.force(7, ["hover"]);
+  await page.load("<p>", { height: 900, mobile: false, name: "desktop, reduced motion", reducedMotion: true, width: 1280 });
 
   assert.equal(list.length, 4);
   assert.deepEqual(nodes, [7, 8]);
   assert.deepEqual(
-    child.received.map((message) => [message.method, message.sessionId]),
+    child.received.slice(0, 17).map((message) => [message.method, message.sessionId]),
     [
       ["Target.createTarget", undefined],
       ["Target.attachToTarget", undefined],
+      ["Fetch.enable", "session"],
       ["Page.enable", "session"],
       ["DOM.enable", "session"],
       ["CSS.enable", "session"],
@@ -644,10 +681,50 @@ test("a page loads markup in a viewport, runs collectors, lists nodes, and force
       ["CSS.forcePseudoState", "session"],
     ],
   );
-  assert.deepEqual(child.received[7].params, { enabled: true, maxTouchPoints: 1 });
-  assert.deepEqual(child.received[15].params, { forcedPseudoClasses: ["hover"], nodeId: 7 });
+  // Every request pauses, so the page can refuse it before it leaves.
+  assert.deepEqual(child.received[2].params, { patterns: [{ urlPattern: "*" }] });
+  assert.deepEqual(child.received[8].params, { enabled: true, maxTouchPoints: 1 });
+  const media = child.received.filter((message) => message.method === "Emulation.setEmulatedMedia");
+  assert.deepEqual(
+    media.map((message) => message.params.features),
+    [[{ name: "prefers-reduced-motion", value: "no-preference" }], [{ name: "prefers-reduced-motion", value: "reduce" }]],
+  );
+  assert.deepEqual(child.received[16].params, { forcedPseudoClasses: ["hover"], nodeId: 7 });
   setImmediate(() => child.emit("exit", 0));
   await browser.close();
+});
+
+test("a page lets data: URIs through and refuses and notes every other request", async () => {
+  // Arrange: the browser pauses two requests and sends an unrelated event.
+  const child = fakeProcess((message) => {
+    if (message.method === "Fetch.failRequest" && message.params.requestId === "late") {
+      return { error: { message: "the browser is closing" } };
+    }
+
+    return { result: {} };
+  });
+  const browser = new Browser(child, child.stdio[3], child.stdio[4], "/unused");
+  const page = new Page(browser, "session");
+  const event = (method, params, sessionId = "session") =>
+    child.stdio[4].write(JSON.stringify({ method: method, params: params, sessionId: sessionId }) + "\0");
+  const replies = () => child.received.map((message) => [message.method, message.params]);
+
+  // Act
+  event("Fetch.requestPaused", { request: { url: "data:font/woff2;base64,AA" }, requestId: "font" });
+  event("Fetch.requestPaused", { request: { url: "https://example.com/x.css" }, requestId: "sheet" });
+  event("Fetch.requestPaused", { request: { url: "https://example.com/y.png" }, requestId: "late" });
+  event("Page.loadEventFired", {});
+  event("Fetch.requestPaused", { request: { url: "https://example.com/other" }, requestId: "x" }, "elsewhere");
+  await new Promise((resolve) => setImmediate(resolve));
+  await page.send("Page.enable");
+
+  // Assert
+  assert.deepEqual(page.external, ["https://example.com/x.css", "https://example.com/y.png"]);
+  assert.deepEqual(replies().slice(0, 3), [
+    ["Fetch.continueRequest", { requestId: "font" }],
+    ["Fetch.failRequest", { errorReason: "BlockedByClient", requestId: "sheet" }],
+    ["Fetch.failRequest", { errorReason: "BlockedByClient", requestId: "late" }],
+  ]);
 });
 
 test("a page reports a collector that throws in the page", async () => {

@@ -408,20 +408,23 @@ node gallery-check.mjs gallery.html \
 
 For each page, it renders the gallery's markup once with the stylesheets the gallery
 links and once with the page's chain, in both themes, on a desktop and a touch phone
-viewport, at rest and with each interactive element hovered, focused, and pressed, and
-compares the computed styles of every element inside a `data-specimen` element, other
-than the placement properties a page may set. A forced state compares the whole
-specimen, so a field that shows its input's focus with `:focus-within` counts.
-Animations and transitions are frozen, and scripts are off. It also fails on a page rule
-that names a component, or a bare element inside `.prose`, to set anything but
-placement; hiding with `display: none` counts as placement. The optional `--markup`
-files and directories are the page's templates and scripts: a class that shares a quoted
-string with a component's class there, as in `class="status status-line"` or a script's
+viewport and on a desktop that asks for reduced motion, at rest and with each
+interactive element hovered, focused, and pressed, and compares the computed styles of
+every element inside a `data-specimen` element, other than the placement properties a
+page may set. A forced state compares the whole specimen, so a field that shows its
+input's focus with `:focus-within` counts. Animations and transitions are read, then
+frozen for the rest, and scripts are off. The browser refuses every request but a
+`data:` URI, so nothing leaves the machine, and the check fails on, and names, any
+stylesheet, font, or image a page tried to load. It also fails on a page rule that names
+a component, or a bare element inside `.prose`, to set anything but placement; hiding
+with `display: none` counts as placement. The optional `--markup` files and directories
+are the page's templates and scripts: a class that shares a quoted string with a
+component's class there, as in `class="status status-line"` or a script's
 `"status status-line"`, sits on the component's element, so a rule on it may only place
-it too. It reads only local files and runs on Node.js with a Chromium-based browser:
-Chrome, Chromium, or `chrome-headless-shell`, which `CHROME_PATH` names, or which it
-finds in the usual install places. Compile a Sass or bundled stylesheet first, and pass
-its output.
+it too. It reads only the files it is given and runs on Node.js with a Chromium-based
+browser: Chrome, Chromium, or `chrome-headless-shell`, which `CHROME_PATH` names, or
+which it finds in the usual install places. Compile a Sass or bundled stylesheet first,
+and pass its output.
 
 The check does not see a page's own markup around a component, so keep these by hand:
 

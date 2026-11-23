@@ -129,8 +129,10 @@ export function styleRule(selector, declarations, values = {}) {
 }
 
 // A page whose documents `build(html, viewport)` creates, and which runs
-// collectors against them as the browser would, by value.
+// collectors against them as the browser would, by value. A built window's
+// `external` lists what the document tried to load from the network.
 export class FakePage {
+  external = [];
   forcedCalls = [];
   loads = [];
 
@@ -141,6 +143,7 @@ export class FakePage {
   async load(html, viewport) {
     this.loads.push({ html: html, viewport: viewport });
     this.window = this.build(html, viewport);
+    this.external = this.window.external ?? [];
     this.elements = this.window.document.querySelectorAll(SELECTORS.specimens);
   }
 
