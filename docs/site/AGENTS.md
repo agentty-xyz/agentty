@@ -14,6 +14,10 @@ Applies to site configuration, templates, content, and static assets.
 - Design values live in `design/tokens.json`. `docs/site/sass/_tokens.scss` is generated
   from it, and `docs/site/sass/site.scss` loads it with `@use`; keep only layout sizes
   and tokens derived from other tokens in `site.scss`.
+- Shared foundations and components live in `design/base.css`, which
+  `docs/site/sass/_base.scss` copies for `site.scss` to `@use` after the tokens. Change
+  a rule there when the remote-control client or another workspace shares it, and keep
+  site-only rules in `site.scss`.
 
 ## Search Engine Metadata
 

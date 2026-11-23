@@ -1,6 +1,7 @@
-# Coding standards that another workspace can reuse. Paths are relative to the repository root.
+# Coding and design standards that another workspace can reuse. Paths are relative to the repository root.
 # The `check-standards` hook keeps every export present and portable.
-version = 1
+# Version 2 added the required `[design]` table.
+version = 2
 
 # Copied byte-for-byte to the same path.
 files = [".rustfmt.toml", "clippy.toml"]
@@ -29,3 +30,9 @@ sections = ["Shared Gates", "Writing Instructions"]
 [[instructions]]
 file = "crates/AGENTS.md"
 sections = ["Workspace and Modules", "Readability", "Tests and Boundaries", "Tokio"]
+
+# The design guide, and the plain CSS files a web page copies beside it: the generated design tokens, then the shared
+# foundations and components. Each stylesheet stands alone; it uses no Sass and loads nothing from a path or the network.
+[design]
+guide = "design/DESIGN.md"
+files = ["design/tokens.css", "design/base.css"]

@@ -11,7 +11,8 @@ use std::{env, fs, io};
 use tempfile::{TempDir, tempdir};
 
 /// Repository files the fixture writes and its stub `git ls-files` lists.
-const FILES: [(&str, &str); 3] = [
+const FILES: [(&str, &str); 4] = [
+    ("design/base.css", "body { color: var(--color-bg); }\n"),
     (
         "design/tokens.json",
         r##"{
@@ -113,7 +114,7 @@ fn cli_generates_stylesheets_that_the_check_accepts_until_one_goes_stale() {
     assert!(current.status.success(), "{current:?}");
     assert!(
         String::from_utf8_lossy(&current.stdout).contains(
-            "Design token stylesheets are current (1 tokens; 2 hand-written stylesheets use no \
+            "Design token stylesheets are current (1 tokens; 3 hand-written stylesheets use no \
              raw colour)."
         ),
         "{current:?}"

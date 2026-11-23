@@ -11,6 +11,9 @@ use super::{DesignTokens, Host, MockHost, OUTPUTS, Options, RealHost, run};
 
 const ROOT: &str = "repo";
 
+/// Hand-written base stylesheet that each surface receives a copy of.
+const BASE: &str = "a {\n  color: var(--color-text);\n}\n";
+
 /// Token file with one shared colour, one value for each generated surface,
 /// and a contrast pair that passes.
 fn tokens() -> String {
@@ -58,6 +61,7 @@ impl Fixture {
             write_error: false,
         };
         fixture.write("design/tokens.json", &tokens());
+        fixture.write("design/base.css", BASE);
         fixture.write(
             "docs/site/sass/site.scss",
             "a { color: var(--color-text); }\n",
@@ -155,17 +159,26 @@ fn generation_writes_every_stylesheet_and_a_check_then_passes() {
     assert_eq!(
         generated.as_deref(),
         Ok(
-            "Design token stylesheets generated (4 tokens; 2 hand-written stylesheets use no raw \
+            "Design token stylesheets generated (4 tokens; 3 hand-written stylesheets use no raw \
              colour)."
         )
     );
     assert_eq!(
         checked.as_deref(),
         Ok(
-            "Design token stylesheets are current (4 tokens; 2 hand-written stylesheets use no \
+            "Design token stylesheets are current (4 tokens; 3 hand-written stylesheets use no \
              raw colour)."
         )
     );
+    let copy = format!(
+        "/* Generated from design/base.css by `cargo run -p ag-xtask -- design-tokens`. Do not \
+         edit. */\n{BASE}"
+    );
+    assert_eq!(
+        fixture.file("docs/site/sass/_base.scss"),
+        Some(copy.clone())
+    );
+    assert_eq!(fixture.file("crates/ag-remote/assets/base.css"), Some(copy));
     assert_eq!(
         fixture.file("design/tokens.css").as_deref(),
         Some(
@@ -196,6 +209,7 @@ fn check_reports_stale_and_missing_stylesheets() {
         .lock()
         .expect("files")
         .remove(Path::new("docs/site/sass/_tokens.scss"));
+    fixture.write("design/base.css", "b {\n  color: var(--color-bg);\n}\n");
 
     // Act
     let errors = fixture.errors(true);
@@ -206,6 +220,9 @@ fn check_reports_stale_and_missing_stylesheets() {
         [
             "design/tokens.css is stale; run `cargo run -p ag-xtask -- design-tokens`",
             "docs/site/sass/_tokens.scss is missing; run `cargo run -p ag-xtask -- design-tokens`",
+            "docs/site/sass/_base.scss is stale; run `cargo run -p ag-xtask -- design-tokens`",
+            "crates/ag-remote/assets/base.css is stale; run `cargo run -p ag-xtask -- \
+             design-tokens`",
         ]
     );
 }
@@ -287,6 +304,11 @@ fn host_failures_stop_generation_and_checks() {
     );
     let mut no_inventory = Fixture::new();
     no_inventory.inventory_error = true;
+    let mut unreadable_base = Fixture::new();
+    unreadable_base.failures.insert(
+        PathBuf::from("design/base.css"),
+        io::ErrorKind::PermissionDenied,
+    );
 
     // Act
     let results = [
@@ -294,6 +316,7 @@ fn host_failures_stop_generation_and_checks() {
         unreadable_output.run(true),
         unreadable_stylesheet.run(false),
         no_inventory.run(false),
+        unreadable_base.run(false),
     ];
 
     // Assert
@@ -304,6 +327,7 @@ fn host_failures_stop_generation_and_checks() {
             Some("Failed to read repo/design/tokens.css: denied".to_owned()),
             Some("Failed to read repo/crates/ag-remote/assets/app.css: denied".to_owned()),
             Some("inventory failed".to_owned()),
+            Some("Failed to read repo/design/base.css: denied".to_owned()),
         ]
     );
 }

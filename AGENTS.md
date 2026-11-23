@@ -20,6 +20,7 @@ Agentty is a Rust workspace for an agent-management TUI and reusable support cra
   repository hooks.
 - Follow `crates/AGENTS.md` for Rust conventions, including workspace dependency rules
   when editing the root `Cargo.toml`.
+- Read `design/DESIGN.md` before changing how a web page or the terminal palette looks.
 - Edit files with the harness's edit or patch tool. Do not write ad hoc scripts, such as
   Python heredocs, to edit sources or inspect processes.
 
