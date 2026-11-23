@@ -200,6 +200,8 @@ fn relay_origin_accepts_websocket_addresses_only() {
         "wss://[::1",
         "wss://[::1]8443",
         "wss://[]:8443",
+        "wss://[relay.example]",
+        "wss://relay_host.example",
     ];
 
     // Act

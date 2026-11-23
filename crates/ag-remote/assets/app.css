@@ -331,8 +331,10 @@ body {
   transition: background-color var(--transition-fast), color var(--transition-fast);
 }
 
-/* The prompt is decoration, so it has no text for screen readers. */
+/* The prompt is decoration, so it has no text for screen readers where
+   the browser supports alternative text; older ones keep the plain glyph. */
 .sections a::before {
+  content: ">";
   content: ">" / "";
   color: var(--color-border-strong);
 }

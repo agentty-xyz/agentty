@@ -464,7 +464,9 @@ function isOwnRelay(link) {
     }
   };
 
-  return !configuredRelay || (normal(link.relayUrl) !== null && normal(link.relayUrl) === normal(configuredRelay));
+  const relay = normal(link.relayUrl);
+
+  return !configuredRelay || (relay !== null && relay === normal(configuredRelay));
 }
 
 // Builds the Agentty with `id`; `pairing` holds its relay pairing.
@@ -681,11 +683,10 @@ function showPairing() {
   setPairingWait(null);
   if (usesRelay) {
     const link = state.pairingLink;
-    const takesPaste = Boolean(configuredRelay) && !link;
+    const takesPaste = Boolean(configuredRelay);
     elements["pair-hint-local"].hidden = true;
     elements["pair-hint-relay"].hidden = Boolean(link) || takesPaste;
-    elements["pair-hint-paste"].hidden = !takesPaste;
-    elements["pair-link-field"].hidden = !takesPaste;
+    elements["pair-hint-paste"].hidden = Boolean(link) || !takesPaste;
     elements["pair-fields"].hidden = !link;
     elements["pair-submit"].hidden = !link;
     elements["pair-foot"].hidden = false;
@@ -713,10 +714,12 @@ function setPairingWait(confirmation) {
 // Shows the pairing form in `phase`: `idle` offers Pair, and Back to
 // sessions when other Agenttys are paired; `connecting` and `waiting`
 // offer Cancel instead, and `waiting` adds the confirmation code Agentty
-// shows.
+// shows. A page that names its relay takes a pasted link whenever no
+// pairing runs, so a link whose code did not work gives way to a new one.
 function setPairingPhase(phase, confirmation = null) {
   const isBusy = phase !== "idle";
   const isWaiting = phase === "waiting";
+  elements["pair-link-field"].hidden = isBusy || !(usesRelay && configuredRelay);
   elements["pair-confirm"].hidden = !isBusy;
   elements["pair-wait-label"].textContent = isWaiting
     ? "Waiting for approval in Agentty"
@@ -1570,6 +1573,10 @@ elements["pair-link"].addEventListener("input", () => {
   elements["pair-link"].value = "";
   takeLink(link);
   showPairing();
+  // The code is filled in, so the device name comes next.
+  if (state.pairingLink) {
+    elements["pair-name"].focus();
+  }
 });
 
 // A page that names its relay offers pairing another Agentty from the

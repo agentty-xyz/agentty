@@ -901,11 +901,13 @@ async fn web_client_app_keeps_pairing_another_agentty_while_one_revokes_it_throu
     Ok(())
 }
 
-/// Starts a web application that serves `page` at `/sessions/` and an
-/// instance directory at `/api/instances`, which lists `instances` while
-/// `signed_in` holds and answers `401` after. Returns its address.
+/// Starts a web application that serves `page` at `/sessions/` with the
+/// client's files beside it, every response with the headers the page
+/// names, and an instance directory at `/api/instances`, which lists
+/// `instances` while `signed_in` holds and answers `401` after. Returns
+/// its address.
 async fn start_embedder(
-    page: String,
+    page: &WebClientPage,
     instances: Value,
     signed_in: Arc<AtomicBool>,
 ) -> TestResult<SocketAddr> {
@@ -923,16 +925,36 @@ async fn start_embedder(
             ([(header::CONTENT_TYPE, "application/json")], body).into_response()
         }
     };
-    let router = Router::new()
-        .route(
-            "/sessions/",
-            get(move || {
-                let page = page.clone();
+    let html = page.html().to_string();
+    let page_headers: Vec<(String, String)> = page
+        .headers()
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    let mut router = Router::new().route(
+        "/sessions/",
+        get({
+            let page_headers = page_headers.clone();
 
-                async move { page_response(page) }
+            move || {
+                let response = served("text/html; charset=utf-8", html.clone(), &page_headers);
+
+                async move { response }
+            }
+        }),
+    );
+    for file in ag_relay::web_client_files() {
+        let page_headers = page_headers.clone();
+        router = router.route(
+            &format!("/sessions/{}", file.path),
+            get(move || {
+                let response = served(file.content_type, file.body.to_string(), &page_headers);
+
+                async move { response }
             }),
-        )
-        .route("/api/instances", get(directory));
+        );
+    }
+    let router = router.route("/api/instances", get(directory));
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
@@ -940,9 +962,47 @@ async fn start_embedder(
     Ok(address)
 }
 
-/// The page with its content type.
-fn page_response(page: String) -> Response {
-    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response()
+/// `body` with its content type and the page's headers.
+fn served(content_type: &str, body: String, page_headers: &[(String, String)]) -> Response {
+    let mut response = ([(header::CONTENT_TYPE, content_type.to_string())], body).into_response();
+    for (name, value) in page_headers {
+        if let (Ok(name), Ok(value)) = (
+            axum::http::HeaderName::try_from(name.as_str()),
+            axum::http::HeaderValue::try_from(value.as_str()),
+        ) {
+            response.headers_mut().insert(name, value);
+        }
+    }
+
+    response
+}
+
+/// Checks that the page another web application serves loads every file
+/// the client needs with a policy that reaches `relay`, and that a first
+/// link whose code does not work leaves the card ready for another link.
+fn assert_page_served_and_first_link_refused(
+    served: &Value,
+    wrong_code: &Value,
+    relay: &ag_relay::RelayHandle,
+) {
+    assert_eq!(
+        served,
+        &json!({
+            "step": "served",
+            "connect": format!("connect-src 'self' ws://{}", relay.local_addr()),
+            "failures": [],
+            "fetched": ag_relay::web_client_files().len(),
+        })
+    );
+    assert_eq!(
+        wrong_code,
+        &json!({
+            "step": "wrongCode",
+            "card": {"hintHidden": false, "linkHidden": false, "submitHidden": true},
+            "error": "Invalid or expired pairing code",
+            "linkHidden": false,
+        })
+    );
 }
 
 /// The directory's answer naming `first` `laptop` and `second` `server`,
@@ -1004,8 +1064,7 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
     let page = WebClientPage::new(&embedder_options(&relay))?;
     let signed_in = Arc::new(AtomicBool::new(true));
     let instances = directory_listing(&first_key, &second_key);
-    let embedder =
-        start_embedder(page.html().to_string(), instances, Arc::clone(&signed_in)).await?;
+    let embedder = start_embedder(&page, instances, Arc::clone(&signed_in)).await?;
     let page_url = format!("http://{embedder}/sessions/");
 
     // Act
@@ -1013,6 +1072,8 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
         RELAY_APP_SCRIPT,
         &["embed", &first_link, &second_link, &page_url],
     )?;
+    let served = app.next_step().await?;
+    let wrong_code = app.next_step().await?;
     let awaiting = app.next_step().await?;
     approve_first_request(&first).await?;
     let paired = app.next_step().await?;
@@ -1026,6 +1087,7 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
     let succeeded = app.succeeded().await?;
 
     // Assert
+    assert_page_served_and_first_link_refused(&served, &wrong_code, &relay);
     assert_eq!(
         awaiting,
         json!({
@@ -1062,6 +1124,7 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
             "card": {"hintHidden": false, "linkHidden": false, "view": "pair-view"},
             "error": "This pairing link is for another relay. Open it from the address it names.",
             "fieldsHidden": true,
+            "linkHidden": false,
             "notLink": "Paste the whole pairing link from the Remote tab.",
             "submitHidden": true,
         })

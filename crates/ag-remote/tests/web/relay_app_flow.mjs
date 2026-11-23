@@ -19,6 +19,13 @@
 // `awaitingB` the Rust test revokes this device on A, then approves B
 // after `revokedA`. B's pairing card stays as it was meanwhile.
 //
+// In `embed` mode the page is the one a web application serves at the
+// page address: the script first loads its files as a browser would, then
+// pastes A's link with a wrong code and then its real one; after
+// `awaiting` the Rust test approves. B's link opens at the page's address
+// without its relay; after `awaitingB` the Rust test signs the page out
+// of the directory and approves B.
+//
 // In `migrate` mode the script pairs a device key with A through the
 // relay modules and saves the pairing as an earlier version of the page
 // did, then loads the page, which moves the pairing over and connects.
@@ -70,10 +77,10 @@ function withoutRelay(link) {
 }
 
 // In `embed` mode the page is the one another web application serves, at
-// its own address.
+// its own address with no link in it.
 async function startUrl() {
   if (mode === "embed") {
-    return [await (await fetch(embedderPage)).text(), embedderPage + withoutRelay(firstLink)];
+    return [await (await fetch(embedderPage)).text(), embedderPage];
   }
 
   return [PAGE, mode === "migrate" ? new URL(firstLink).origin + "/" : firstLink];
@@ -310,12 +317,79 @@ function texts(root, selector) {
   return Array.from(root.querySelectorAll(selector), (node) => node.textContent);
 }
 
+// Puts `text` in the pairing card's link field, as a paste does.
+function paste(text) {
+  byId("pair-link").value = text;
+  byId("pair-link").dispatchEvent(new FakeEvent("input"));
+}
+
+// `link` with `parameter` set to `value` in its fragment.
+function withParameter(link, parameter, value) {
+  const url = new URL(link);
+  const parameters = new URLSearchParams(url.hash.slice(1));
+  parameters.set(parameter, value);
+  url.hash = parameters.toString();
+
+  return url.href;
+}
+
+// Fetches the page and every file it and its scripts name, as a browser
+// would, and reports the policy's `connect-src` and what did not load
+// with the page's headers.
+async function servedFiles() {
+  const page = await fetch(embedderPage);
+  const policy = page.headers.get("content-security-policy") ?? "";
+  const queue = [...(await page.text()).matchAll(/(?:src|href)="([a-z][^"/:]*\.(?:css|js|mjs))"/g)].map(
+    (match) => match[1],
+  );
+  const fetched = new Set();
+  const failures = [];
+  while (queue.length > 0) {
+    const path = queue.shift();
+    if (fetched.has(path)) {
+      continue;
+    }
+    fetched.add(path);
+    const response = await fetch(new URL(path, embedderPage));
+    const body = await response.text();
+    if (!response.ok || response.headers.get("content-security-policy") !== policy) {
+      failures.push(path);
+    }
+    queue.push(...Array.from(body.matchAll(/from "\.\/([^"]+)"/g), (match) => match[1]));
+  }
+
+  return {
+    connect: policy.split("; ").find((directive) => directive.startsWith("connect-src")),
+    failures: failures,
+    fetched: fetched.size,
+  };
+}
+
 // The page another web application serves on its own origin: the relay is
-// another origin, the links leave it out, and the directory names the
+// another origin, the page takes pasted links, and the directory names the
 // account's Agenttys. After `awaiting` and `awaitingB` the Rust test
 // approves; after `pairedB` it signs the page out of the directory.
 async function embedFlow() {
+  report({ step: "served", ...(await servedFiles()) });
+
+  // A link whose code does not work leaves the card ready for another.
   await waitFor("the directory on the pairing card", () => !byId("pair-directory").hidden);
+  const firstCard = {
+    hintHidden: byId("pair-hint-paste").hidden,
+    linkHidden: byId("pair-link-field").hidden,
+    submitHidden: byId("pair-submit").hidden,
+  };
+  paste(withParameter(firstLink, "code", "WRONG-CODE"));
+  byId("pair-submit").click();
+  await waitFor("the refusal", () => byId("pair-error").textContent !== "" && byId("pair-cancel").hidden);
+  report({
+    step: "wrongCode",
+    card: firstCard,
+    error: byId("pair-error").textContent,
+    linkHidden: byId("pair-link-field").hidden,
+  });
+
+  paste(firstLink);
   await pairThroughPage();
   const card = byId("pair-view");
   report({
@@ -350,10 +424,6 @@ async function embedFlow() {
   // another relay, are refused: this page pairs only through its own.
   byId("device-more").click();
   byId("pair-another").click();
-  const paste = (text) => {
-    byId("pair-link").value = text;
-    byId("pair-link").dispatchEvent(new FakeEvent("input"));
-  };
   const pairCard = {
     hintHidden: byId("pair-hint-paste").hidden,
     linkHidden: byId("pair-link-field").hidden,
@@ -361,21 +431,19 @@ async function embedFlow() {
   };
   paste("ABCD-EFGH");
   const notLink = byId("pair-error").textContent;
-  const other = new URL(secondLink);
-  const parameters = new URLSearchParams(other.hash.slice(1));
-  parameters.set("relay", "ws://127.0.0.1:9");
-  other.hash = parameters.toString();
-  paste(other.href);
+  paste(withParameter(secondLink, "relay", "ws://127.0.0.1:9"));
   report({
     step: "otherRelay",
     card: pairCard,
     error: byId("pair-error").textContent,
     fieldsHidden: byId("pair-fields").hidden,
+    linkHidden: byId("pair-link-field").hidden,
     notLink: notLink,
     submitHidden: byId("pair-submit").hidden,
   });
 
-  paste(secondLink);
+  // A link to this page itself may leave the relay out.
+  window.location.hash = withoutRelay(secondLink);
   await pairThroughPage();
   report({ step: "awaitingB", linkHidden: byId("pair-link-field").hidden, pasted: byId("pair-link").value });
 

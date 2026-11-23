@@ -335,18 +335,23 @@ fn relay_origin(relay_url: &str) -> Result<String, WebClientError> {
 /// an optional port of digits.
 fn is_authority(authority: &str) -> bool {
     // `port` is empty or `:` and the port.
-    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+    let (is_host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
         let Some((address, rest)) = bracketed.split_once(']') else {
             return false;
         };
-        (address, rest)
+        let is_address = address.contains(':')
+            && address
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() || matches!(byte, b':' | b'.'));
+        (is_address, rest)
     } else {
-        authority.split_at(authority.find(':').unwrap_or(authority.len()))
+        let (name, rest) = authority.split_at(authority.find(':').unwrap_or(authority.len()));
+        let is_name = !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'));
+        (is_name, rest)
     };
-    let is_host = !host.is_empty()
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':'));
     let is_port = port.is_empty()
         || port.strip_prefix(':').is_some_and(|digits| {
             !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
