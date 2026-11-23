@@ -3,10 +3,8 @@
    are served ahead of this file as /app.css. The tokens below size this
    client's layout or alias design tokens. */
 :root {
-  /* Layout of this client. --chat-width is the site's
-     .docs-content-wrapper. */
+  /* Layout of this client. */
   --sidebar-width: 17.5rem;
-  --chat-width: 760px;
   --gutter: 1rem;
 
   /* Status tones: aliases of site tokens, no new colours. */
@@ -43,7 +41,7 @@ body {
 }
 
 code {
-  padding: 0 0.35rem;
+  padding: 0 var(--space-xs);
   border: 1px solid var(--color-border);
   border-radius: 0.3rem;
   background: var(--color-surface);
@@ -65,7 +63,7 @@ code {
 .error {
   margin: 0;
   color: var(--color-error);
-  font-size: 0.86rem;
+  font-size: var(--font-size-md);
 }
 
 .error:empty {
@@ -100,13 +98,13 @@ code {
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   min-width: 0;
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 1.1rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wide);
 }
 
 .brand .icon {
@@ -118,13 +116,13 @@ code {
 
 /* .github-badge */
 .brand-tag {
-  padding: 0.05rem 0.35rem;
+  padding: 0.05rem var(--space-xs);
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   background: var(--color-bg);
   color: var(--color-dim);
-  font-size: 0.66rem;
-  font-weight: 400;
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-regular);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -133,8 +131,8 @@ code {
   margin: 0;
   color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
+  font-size: var(--font-size-2xs);
+  letter-spacing: var(--tracking-widest);
   text-transform: uppercase;
 }
 
@@ -145,7 +143,7 @@ code {
   align-items: center;
   justify-content: center;
   width: 2.15rem;
-  height: 2.15rem;
+  height: var(--control-height-md);
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -165,16 +163,16 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  min-height: 2.15rem;
-  padding: 0.3rem 0.7rem;
+  gap: var(--space-xs);
+  min-height: var(--control-height-md);
+  padding: var(--space-xs) var(--space-md);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-surface-raised);
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -198,9 +196,9 @@ code {
 }
 
 .btn--lg {
-  min-height: 2.75rem;
-  padding: 0.65rem 1rem;
-  font-size: 0.86rem;
+  min-height: var(--control-height-lg);
+  padding: 0.65rem var(--space-lg);
+  font-size: var(--font-size-md);
 }
 
 .btn:disabled {
@@ -212,10 +210,10 @@ code {
 .segmented {
   display: flex;
   align-items: center;
-  gap: 0.15rem;
+  gap: var(--space-3xs);
   min-width: 0;
   margin: 0;
-  padding: 0.18rem;
+  padding: var(--space-3xs);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-bg);
@@ -223,8 +221,8 @@ code {
 
 .segmented button {
   flex: 1;
-  min-height: 1.75rem;
-  padding: 0.15rem 0.4rem;
+  min-height: var(--control-height-xs);
+  padding: var(--space-3xs) var(--space-xs);
   border: 0;
   border-radius: 0.25rem;
   background: transparent;
@@ -244,10 +242,10 @@ code {
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-xs);
   color: var(--tone, var(--color-dim));
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   white-space: nowrap;
 }
 
@@ -304,7 +302,7 @@ code {
 /* Header badge: .github-badge */
 .status-badge {
   min-height: 1.5rem;
-  padding: 0 0.5rem;
+  padding: 0 var(--space-sm);
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   background: var(--color-surface);
@@ -323,8 +321,8 @@ code {
   overflow-y: auto;
   align-content: center;
   justify-items: center;
-  gap: 1.25rem;
-  padding: calc(1.5rem + env(safe-area-inset-top)) var(--gutter) calc(1.5rem + env(safe-area-inset-bottom));
+  gap: var(--space-xl);
+  padding: calc(var(--space-2xl) + env(safe-area-inset-top)) var(--gutter) calc(var(--space-2xl) + env(safe-area-inset-bottom));
 }
 
 /* .search-dialog-panel */
@@ -342,16 +340,16 @@ code {
 .pair h1 {
   margin: 0;
   color: var(--color-text);
-  font-size: 1.35rem;
-  letter-spacing: -0.025em;
-  line-height: 1.25;
+  font-size: var(--font-size-2xl);
+  letter-spacing: var(--tracking-snug);
+  line-height: var(--line-height-snug);
 }
 
 .pair p {
   margin: 0;
   color: var(--color-muted);
-  font-size: 0.92rem;
-  line-height: 1.55;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-body);
 }
 
 .pair .error {
@@ -361,7 +359,7 @@ code {
 .pair .eyebrow,
 .empty .eyebrow {
   color: var(--color-accent);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 .pair-fields {
@@ -371,9 +369,9 @@ code {
 
 .pair label {
   display: grid;
-  gap: 0.3rem;
+  gap: var(--space-xs);
   color: var(--color-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-sm);
 }
 
 /* .search-field with its prompt */
@@ -381,7 +379,7 @@ code {
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  min-height: 3.25rem;
+  min-height: var(--control-height-xl);
   padding: 0 0.9rem;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -395,7 +393,7 @@ code {
 .code-field span {
   color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 1.1rem;
+  font-size: var(--font-size-xl);
 }
 
 .code-field input {
@@ -407,7 +405,7 @@ code {
   background: transparent;
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 1.1rem;
+  font-size: var(--font-size-xl);
   letter-spacing: 0.12em;
 }
 
@@ -417,18 +415,18 @@ code {
 
 .field {
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.8rem;
+  min-height: var(--control-height-lg);
+  padding: var(--space-sm) var(--space-md);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-bg);
   color: var(--color-text);
-  font-size: 1rem;
+  font-size: var(--font-size-body);
 }
 
 .confirm {
   display: grid;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   justify-items: center;
   padding: 0.9rem;
   border: 1px dashed var(--color-border-strong);
@@ -438,16 +436,16 @@ code {
 }
 
 .confirm .status {
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .confirm-code {
   color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 2rem;
-  font-weight: 600;
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.3em;
-  line-height: 1.2;
+  line-height: var(--line-height-snug);
   text-indent: 0.3em;
 }
 
@@ -455,7 +453,7 @@ code {
   margin: 0;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   text-align: center;
 }
 
@@ -492,14 +490,14 @@ code {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.8rem 0.75rem 0.55rem 1rem;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-md) var(--space-sm) var(--space-lg);
 }
 
 .sidebar-actions {
   display: grid;
-  gap: 0.5rem;
-  padding: 0.25rem 0.75rem 0.6rem;
+  gap: var(--space-sm);
+  padding: var(--space-2xs) var(--space-md) 0.6rem;
 }
 
 /* .button.button-secondary, left aligned */
@@ -508,15 +506,15 @@ code {
   align-items: center;
   gap: 0.6rem;
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.8rem;
+  min-height: var(--control-height-lg);
+  padding: var(--space-sm) var(--space-md);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-surface-raised);
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.86rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   text-align: left;
   cursor: pointer;
 }
@@ -527,13 +525,13 @@ code {
 
 kbd {
   min-width: 1.25rem;
-  padding: 0.05rem 0.3rem;
+  padding: 0.05rem var(--space-xs);
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   background: var(--color-bg);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--font-size-3xs);
   text-align: center;
 }
 
@@ -541,7 +539,7 @@ kbd {
 .filter {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   min-height: 2.4rem;
   padding: 0 0.6rem;
   border: 1px solid var(--color-border-strong);
@@ -557,13 +555,13 @@ kbd {
 .filter input {
   width: 100%;
   min-width: 0;
-  padding: 0.4rem 0;
+  padding: var(--space-xs) 0;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--color-accent);
   font: inherit;
-  font-size: 1rem;
+  font-size: var(--font-size-body);
   appearance: none;
 }
 
@@ -584,32 +582,32 @@ kbd {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 0 0.5rem 0.75rem 0.75rem;
+  padding: 0 var(--space-sm) var(--space-md) var(--space-md);
 }
 
 /* .docs-nav-heading */
 .group-label {
   display: flex;
   align-items: baseline;
-  margin: 1rem 0 0.35rem;
-  padding-right: 0.35rem;
+  margin: var(--space-lg) 0 var(--space-xs);
+  padding-right: var(--space-xs);
   color: var(--color-accent-dim);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  line-height: 1.25;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-wider);
+  line-height: var(--line-height-snug);
   text-transform: uppercase;
 }
 
 .session-group:first-child .group-label {
-  margin-top: 0.35rem;
+  margin-top: var(--space-xs);
 }
 
 .group-label .count {
   margin-left: auto;
   color: var(--color-dim);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 /* The archive label opens and closes its group, with the site's mobile
@@ -618,7 +616,7 @@ kbd {
   display: flex;
   flex: 1;
   align-items: baseline;
-  min-height: 2rem;
+  min-height: var(--control-height-sm);
   margin: -0.4rem 0;
   padding: 0;
   border: 0;
@@ -633,13 +631,13 @@ kbd {
 
 .group-toggle .marker {
   width: 1ch;
-  margin-right: 0.45rem;
+  margin-right: var(--space-sm);
   color: var(--color-accent);
 }
 
 .rows {
   display: grid;
-  gap: 0.1rem;
+  gap: var(--space-3xs);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -651,13 +649,13 @@ kbd {
 .row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.1rem 0.5rem;
+  gap: var(--space-3xs) var(--space-sm);
   align-items: center;
   width: 100%;
   min-width: 0;
   min-height: 3.1rem;
   margin-left: -0.25rem;
-  padding: 0.4rem 0.5rem 0.4rem 0.55rem;
+  padding: var(--space-xs) var(--space-sm) var(--space-xs) var(--space-sm);
   border: 0;
   border-left: 2px solid transparent;
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -679,7 +677,7 @@ kbd {
 
 .row.is-unread .row-title {
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .row[aria-current="page"] {
@@ -689,13 +687,13 @@ kbd {
 }
 
 .row[aria-current="page"] .row-title {
-  font-weight: 650;
+  font-weight: var(--font-weight-heading);
 }
 
 .row-title {
   overflow: hidden;
-  font-size: 0.88rem;
-  line-height: 1.3;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -704,13 +702,13 @@ kbd {
   display: flex;
   grid-column: 1;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   min-width: 0;
   overflow: hidden;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  line-height: 1.3;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-snug);
   white-space: nowrap;
 }
 
@@ -720,7 +718,7 @@ kbd {
 
 .row-meta .time {
   margin-left: auto;
-  padding-left: 0.4rem;
+  padding-left: var(--space-xs);
 }
 
 /* The model name, or `PR ready` beside a conflict, gives way first in a
@@ -748,8 +746,8 @@ kbd {
 .size {
   color: var(--color-accent-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 400;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-regular);
 }
 
 .lines .add {
@@ -810,28 +808,28 @@ kbd {
 
 .list-summary {
   display: block;
-  margin: 0.75rem 0.5rem 0;
+  margin: var(--space-md) var(--space-sm) 0;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   text-align: center;
 }
 
 .list-empty {
-  margin: 1.5rem 0.5rem;
+  margin: var(--space-2xl) var(--space-sm);
   color: var(--color-dim);
-  font-size: 0.84rem;
+  font-size: var(--font-size-md);
   text-align: center;
 }
 
 .session-list .error {
-  margin: 1rem 0.5rem;
+  margin: var(--space-lg) var(--space-sm);
 }
 
 .sidebar-foot {
   display: grid;
   gap: 0.6rem;
-  padding: 0.7rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom));
+  padding: 0.7rem var(--space-md) calc(var(--space-md) + env(safe-area-inset-bottom));
   border-top: 1px solid var(--color-border);
 }
 
@@ -872,8 +870,8 @@ kbd {
   grid-area: name;
   overflow: hidden;
   color: var(--color-text);
-  font-size: 0.86rem;
-  line-height: 1.25;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -882,12 +880,12 @@ kbd {
   display: flex;
   grid-area: state;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-xs);
   overflow: hidden;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  line-height: 1.3;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-snug);
   white-space: nowrap;
 }
 
@@ -919,7 +917,7 @@ kbd {
   z-index: 30;
   display: grid;
   min-width: 13rem;
-  padding: 0.3rem;
+  padding: var(--space-xs);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
@@ -928,12 +926,12 @@ kbd {
 
 .menu-item {
   min-height: 2.5rem;
-  padding: 0.4rem 0.7rem;
+  padding: var(--space-xs) var(--space-md);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text);
-  font-size: 0.88rem;
+  font-size: var(--font-size-md);
   text-align: left;
   cursor: pointer;
 }
@@ -967,9 +965,9 @@ kbd {
 .chat-head {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-md);
   min-height: 3.5rem;
-  padding: calc(0.5rem + env(safe-area-inset-top)) calc(var(--gutter) + env(safe-area-inset-right)) 0.5rem var(--gutter);
+  padding: calc(var(--space-sm) + env(safe-area-inset-top)) calc(var(--gutter) + env(safe-area-inset-right)) var(--space-sm) var(--gutter);
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-bg) 88%, transparent);
   backdrop-filter: blur(18px);
@@ -992,10 +990,10 @@ kbd {
   margin: 0;
   overflow: hidden;
   color: var(--color-text);
-  font-size: 0.98rem;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-  line-height: 1.3;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-heading);
+  letter-spacing: var(--tracking-snug);
+  line-height: var(--line-height-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1009,7 +1007,7 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0 0.5rem;
+  gap: 0 var(--space-sm);
   height: 1.4em;
   margin: 0;
   /* `clip`, unlike `hidden`, makes no scroll container, so nothing can
@@ -1019,8 +1017,8 @@ kbd {
   overflow: clip;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  line-height: 1.4;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-compact);
   white-space: nowrap;
 }
 
@@ -1085,7 +1083,7 @@ kbd {
 }
 
 .chat-sub b {
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
 }
 
 .chat-sub a {
@@ -1097,7 +1095,7 @@ kbd {
 .chat-actions {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-xs);
 }
 
 .banner {
@@ -1105,12 +1103,12 @@ kbd {
   align-items: center;
   gap: 0.6rem;
   min-height: 2.75rem;
-  padding: 0.35rem var(--gutter);
+  padding: var(--space-xs) var(--gutter);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-raised);
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: var(--font-size-xs);
 }
 
 .banner i {
@@ -1130,7 +1128,7 @@ kbd {
 
 .banner .btn {
   min-height: 1.9rem;
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 .banner.is-error {
@@ -1151,7 +1149,7 @@ kbd {
   align-content: center;
   justify-items: center;
   gap: 0.6rem;
-  padding: 2rem var(--gutter);
+  padding: var(--space-3xl) var(--gutter);
   text-align: center;
 }
 
@@ -1159,34 +1157,34 @@ kbd {
   margin: 0;
   color: var(--color-text);
   font-size: 1.15rem;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-weight: var(--font-weight-heading);
+  letter-spacing: var(--tracking-snug);
 }
 
 .empty p {
   max-width: 22rem;
   margin: 0;
   color: var(--color-muted);
-  font-size: 0.92rem;
+  font-size: var(--font-size-lg);
 }
 
 .empty .btn {
-  margin-top: 0.4rem;
+  margin-top: var(--space-xs);
 }
 
 /* The home composer, for a new session's first message. */
 .home.is-composing h2 {
   max-width: 44rem;
   font-size: clamp(1.65rem, 4vw, 2.4rem);
-  letter-spacing: -0.035em;
-  line-height: 1.12;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--line-height-tight);
   text-wrap: balance;
 }
 
 /* The session's composer, as wide as the session's chat column. */
 .composer.home-composer {
   width: min(100%, 44rem);
-  margin-top: 0.5rem;
+  margin-top: var(--space-sm);
   text-align: left;
 }
 
@@ -1209,17 +1207,17 @@ kbd {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.2rem 0.5rem;
-  margin: 0 0 0.1rem;
+  gap: var(--space-2xs) var(--space-sm);
+  margin: 0 0 var(--space-3xs);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 .project-line {
   display: flex;
   align-items: baseline;
-  gap: 0.45rem;
+  gap: var(--space-sm);
   min-width: 0;
   margin: 0;
   white-space: nowrap;
@@ -1236,7 +1234,7 @@ kbd {
 .project b {
   flex: 0 1 auto;
   color: var(--color-text);
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
 }
 
 .project-branch {
@@ -1251,15 +1249,15 @@ kbd {
 .project-sync {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--space-xs);
   min-height: 1.9rem;
-  padding: 0.1rem 0.55rem;
+  padding: var(--space-3xs) var(--space-sm);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   cursor: pointer;
   transition: border-color var(--transition-fast), color var(--transition-fast);
 }
@@ -1291,21 +1289,21 @@ kbd {
 
 .project-status {
   color: var(--tone, var(--color-dim));
-  line-height: 1.4;
+  line-height: var(--line-height-compact);
   overflow-wrap: anywhere;
 }
 
 .project .error {
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   overflow-wrap: anywhere;
 }
 
 /* Sessions waiting for the user, as .feature-card tiles. */
 .waiting {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   width: min(100%, 44rem);
-  margin-top: 1.25rem;
+  margin-top: var(--space-xl);
   text-align: left;
 }
 
@@ -1313,9 +1311,9 @@ kbd {
   margin: 0;
   color: var(--color-accent-dim);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  font-weight: 400;
-  letter-spacing: 0.04em;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-wider);
   text-transform: uppercase;
 }
 
@@ -1330,18 +1328,18 @@ kbd {
 
 .card {
   display: grid;
-  gap: 0.35rem;
+  gap: var(--space-xs);
   width: 100%;
   min-width: 0;
   min-height: 2.75rem;
-  padding: 0.8rem 0.9rem;
+  padding: var(--space-md) 0.9rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: linear-gradient(145deg, var(--color-surface-raised), var(--color-surface));
   color: var(--color-muted);
   font: inherit;
-  font-size: 0.86rem;
-  line-height: 1.4;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-compact);
   text-align: left;
   cursor: pointer;
 }
@@ -1353,11 +1351,11 @@ kbd {
 .card-meta {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   min-width: 0;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 .card-meta .time::before {
@@ -1367,7 +1365,7 @@ kbd {
 .card-title {
   overflow: hidden;
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1375,12 +1373,12 @@ kbd {
 .card-figures {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-xs);
   min-width: 0;
   overflow: hidden;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   white-space: nowrap;
 }
 
@@ -1404,7 +1402,7 @@ kbd {
   border-bottom: 1px solid color-mix(in srgb, var(--color-error) 40%, var(--color-border));
   background: var(--color-surface-raised);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: var(--font-size-xs);
 }
 
 .action-note {
@@ -1415,7 +1413,7 @@ kbd {
   background: var(--color-surface-raised);
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: var(--font-size-xs);
 }
 
 .action-note:empty {
@@ -1437,11 +1435,11 @@ kbd {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 1.5rem var(--gutter) 1rem;
+  padding: var(--space-2xl) var(--gutter) var(--space-lg);
 }
 
 .chat-column {
-  width: min(100%, var(--chat-width));
+  width: min(100%, var(--width-reading));
   margin: 0 auto;
 }
 
@@ -1456,14 +1454,14 @@ kbd {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 1.5rem var(--gutter) 2rem;
+  padding: var(--space-2xl) var(--gutter) var(--space-3xl);
 }
 
 .diff-summary {
-  margin: 0 0 0.8rem;
+  margin: 0 0 var(--space-md);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 /* One column that never grows past the screen; a long patch line scrolls
@@ -1471,7 +1469,7 @@ kbd {
 .diff-files {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0.5rem;
+  gap: var(--space-sm);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1488,10 +1486,10 @@ kbd {
   align-items: center;
   gap: 0.6rem;
   min-height: 2.5rem;
-  padding: 0.35rem 0.75rem;
+  padding: var(--space-xs) var(--space-md);
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -1499,7 +1497,7 @@ kbd {
   flex: none;
   width: 1.1rem;
   color: var(--color-accent-dim);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   text-align: center;
 }
 
@@ -1521,7 +1519,7 @@ kbd {
 
 .diff-file .lines {
   flex: none;
-  font-size: 0.74rem;
+  font-size: var(--font-size-2xs);
 }
 
 .diff-body {
@@ -1530,31 +1528,31 @@ kbd {
 
 .diff-note {
   margin: 0;
-  padding: 0.6rem 0.75rem;
+  padding: 0.6rem var(--space-md);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: var(--font-size-2xs);
 }
 
 .diff-body .error {
-  padding: 0.6rem 0.75rem;
+  padding: 0.6rem var(--space-md);
 }
 
 .patch {
   max-height: 32rem;
   margin: 0;
-  padding: 0.4rem 0;
+  padding: var(--space-xs) 0;
   overflow: auto;
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
-  line-height: 1.55;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-body);
 }
 
 .patch-line {
   display: block;
   min-width: max-content;
-  padding: 0 0.75rem;
+  padding: 0 var(--space-md);
   white-space: pre;
 }
 
@@ -1596,7 +1594,7 @@ kbd {
 .draft-note {
   margin: 0;
   color: var(--color-muted);
-  font-size: 0.86rem;
+  font-size: var(--font-size-md);
 }
 
 /* What the session is doing, after the last message, as in the terminal */
@@ -1604,8 +1602,8 @@ kbd {
   display: flex;
   align-items: flex-start;
   margin: 1.1rem 0 0;
-  font-size: 0.8rem;
-  line-height: 1.4;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-compact);
   white-space: normal;
 }
 
@@ -1617,7 +1615,7 @@ kbd {
 .status-line-body {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: var(--space-3xs);
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1650,7 +1648,7 @@ kbd {
 
 .msg--assistant {
   color: var(--color-text);
-  line-height: 1.7;
+  line-height: var(--line-height-relaxed);
 }
 
 /* The source of an answer, and an answer too large to parse. */
@@ -1662,25 +1660,25 @@ kbd {
 .md-source {
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.84rem;
-  line-height: 1.6;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-body);
 }
 
 .msg-tools {
   display: flex;
   justify-content: flex-end;
-  margin-top: 0.35rem;
+  margin-top: var(--space-xs);
 }
 
 .source-toggle {
-  min-height: 1.75rem;
-  padding: 0.15rem 0.45rem;
+  min-height: var(--control-height-xs);
+  padding: var(--space-3xs) var(--space-sm);
   border: 1px solid transparent;
   border-radius: 0.25rem;
   background: transparent;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
   cursor: pointer;
 }
 
@@ -1702,7 +1700,7 @@ kbd {
 .md p,
 .md ul,
 .md ol {
-  margin: 0.5rem 0 0.9rem;
+  margin: var(--space-sm) 0 0.9rem;
 }
 
 .md ul,
@@ -1711,12 +1709,12 @@ kbd {
 }
 
 .md li + li {
-  margin-top: 0.28rem;
+  margin-top: var(--space-2xs);
 }
 
 .md li > ul,
 .md li > ol {
-  margin: 0.28rem 0 0;
+  margin: var(--space-2xs) 0 0;
 }
 
 .md .md-task-item {
@@ -1732,11 +1730,11 @@ kbd {
 .md h1,
 .md h2,
 .md h3 {
-  margin: 1.4rem 0 0.5rem;
+  margin: 1.4rem 0 var(--space-sm);
   color: var(--color-text);
-  font-weight: 650;
-  letter-spacing: -0.025em;
-  line-height: 1.3;
+  font-weight: var(--font-weight-heading);
+  letter-spacing: var(--tracking-snug);
+  line-height: var(--line-height-snug);
 }
 
 .md h1 {
@@ -1748,13 +1746,13 @@ kbd {
 }
 
 .md h3 {
-  font-size: 1.02rem;
+  font-size: var(--font-size-body);
 }
 
 .md strong,
 .md-inline strong {
   color: var(--color-text);
-  font-weight: 650;
+  font-weight: var(--font-weight-heading);
 }
 
 .md a,
@@ -1773,19 +1771,19 @@ kbd {
 /* Inline code takes the page's `code` style. */
 .md :not(pre) > code,
 .md-inline code {
-  line-height: 1.4;
+  line-height: var(--line-height-compact);
   overflow-wrap: anywhere;
 }
 
 .md blockquote {
-  margin: 0.8rem 0;
-  padding: 0.1rem 0 0.1rem 0.85rem;
+  margin: var(--space-md) 0;
+  padding: var(--space-3xs) 0 var(--space-3xs) 0.85rem;
   border-left: 2px solid var(--color-border-strong);
   color: var(--color-muted);
 }
 
 .md hr {
-  margin: 1.2rem 0;
+  margin: var(--space-xl) 0;
   border: 0;
   border-top: 1px solid var(--color-border);
 }
@@ -1803,24 +1801,24 @@ kbd {
   align-items: center;
   justify-content: space-between;
   min-height: 2rem;
-  padding: 0.3rem 0.5rem 0.3rem 0.85rem;
+  padding: var(--space-xs) var(--space-sm) var(--space-xs) 0.85rem;
   border-bottom: 1px solid var(--color-border);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
 }
 
 /* .docs-copy-btn */
 .copy-btn {
-  padding: 0.15rem 0.45rem;
+  padding: var(--space-3xs) var(--space-sm);
   border: 1px solid var(--color-border);
   border-radius: 0.25rem;
   background: transparent;
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 600;
-  line-height: 1.5;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-normal);
   cursor: pointer;
 }
 
@@ -1831,12 +1829,12 @@ kbd {
 
 .code-block pre {
   margin: 0;
-  padding: 0.8rem 0.95rem;
+  padding: var(--space-md) var(--space-lg);
   overflow-x: auto;
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.82rem;
-  line-height: 1.6;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
   overflow-wrap: normal;
   white-space: pre;
 }
@@ -1859,8 +1857,8 @@ kbd {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 0.88rem;
-  line-height: 1.5;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
   overflow-wrap: normal;
 }
 
@@ -1869,18 +1867,18 @@ kbd {
 }
 
 .md th {
-  padding: 0.55rem 0.8rem;
+  padding: var(--space-sm) var(--space-md);
   border-bottom: 1px solid var(--color-border);
   color: var(--color-accent);
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-wider);
   text-align: left;
   text-transform: uppercase;
 }
 
 .md td {
-  padding: 0.5rem 0.8rem;
+  padding: var(--space-sm) var(--space-md);
   border-bottom: 1px solid var(--color-border);
   color: var(--color-muted);
   vertical-align: top;
@@ -1892,7 +1890,7 @@ kbd {
 
 .md td:first-child {
   color: var(--color-accent-dim);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 
 .md .align-center {
@@ -1909,16 +1907,16 @@ kbd {
   background: var(--color-surface);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
-  line-height: 1.55;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-body);
 }
 
 .msg--activity summary {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  min-height: 2.15rem;
-  padding: 0.4rem 0.7rem;
+  gap: var(--space-sm);
+  min-height: var(--control-height-md);
+  padding: var(--space-xs) var(--space-md);
   color: var(--color-muted);
   cursor: pointer;
   list-style: none;
@@ -1944,7 +1942,7 @@ kbd {
 
 .activity-lines {
   margin: 0;
-  padding: 0.1rem 0.7rem 0.55rem 1.55rem;
+  padding: var(--space-3xs) var(--space-md) var(--space-sm) var(--space-2xl);
   list-style: none;
 }
 
@@ -1971,20 +1969,20 @@ kbd {
 .msg--notice {
   display: flex;
   align-items: baseline;
-  gap: 0.55rem;
-  padding: 0.1rem 0 0.1rem 0.7rem;
+  gap: var(--space-sm);
+  padding: var(--space-3xs) 0 var(--space-3xs) var(--space-md);
   border-left: 2px solid var(--color-border-strong);
   color: var(--color-muted);
-  font-size: 0.86rem;
-  line-height: 1.5;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
 }
 
 .notice-label {
   flex: none;
   color: var(--color-accent-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
+  font-size: var(--font-size-2xs);
+  letter-spacing: var(--tracking-wider);
   text-transform: uppercase;
 }
 
@@ -2017,16 +2015,16 @@ kbd {
   z-index: 5;
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  min-height: 2.15rem;
-  padding: 0.3rem 0.85rem;
+  gap: var(--space-xs);
+  min-height: var(--control-height-md);
+  padding: var(--space-xs) 0.85rem;
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
   background: var(--color-surface-raised);
   box-shadow: var(--shadow-panel);
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transform: translateX(-50%);
 }
@@ -2034,9 +2032,9 @@ kbd {
 /* ---- Questions ---------------------------------------------------- */
 .questions {
   display: grid;
-  gap: 1rem;
+  gap: var(--space-lg);
   margin-top: 1.1rem;
-  padding: 0.95rem;
+  padding: var(--space-lg);
   border: 1px solid color-mix(in srgb, var(--tone-asking) 55%, var(--color-border));
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
@@ -2044,12 +2042,12 @@ kbd {
 
 .question {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   min-width: 0;
 }
 
 .question + .question {
-  padding-top: 1rem;
+  padding-top: var(--space-lg);
   border-top: 1px solid var(--color-border);
 }
 
@@ -2060,15 +2058,15 @@ kbd {
 .question-text {
   margin: 0;
   color: var(--color-text);
-  font-size: 0.98rem;
-  line-height: 1.5;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-normal);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .options {
   display: grid;
-  gap: 0.4rem;
+  gap: var(--space-xs);
 }
 
 .option {
@@ -2076,14 +2074,14 @@ kbd {
   align-items: center;
   gap: 0.6rem;
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0.45rem 0.75rem;
+  min-height: var(--control-height-lg);
+  padding: var(--space-sm) var(--space-md);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-muted);
-  font-size: 0.9rem;
-  line-height: 1.35;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-compact);
   overflow-wrap: anywhere;
   text-align: left;
   cursor: pointer;
@@ -2114,7 +2112,7 @@ kbd {
   margin-left: auto;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--font-size-3xs);
   white-space: nowrap;
 }
 
@@ -2135,23 +2133,23 @@ kbd {
 .dock .chat-column {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0.5rem;
+  gap: var(--space-sm);
   min-width: 0;
 }
 
 .queued-label {
-  margin: 0 0 0.3rem;
+  margin: 0 0 var(--space-xs);
   color: var(--color-accent-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.05em;
+  font-size: var(--font-size-2xs);
+  letter-spacing: var(--tracking-wider);
   text-transform: uppercase;
 }
 
 .queued {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0.3rem;
+  gap: var(--space-xs);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -2161,11 +2159,11 @@ kbd {
   display: flex;
   align-items: center;
   min-height: 2rem;
-  padding: 0.35rem 0.7rem;
+  padding: var(--space-xs) var(--space-md);
   border: 1px dashed var(--color-border-strong);
   border-radius: var(--radius-sm);
   color: var(--color-muted);
-  font-size: 0.86rem;
+  font-size: var(--font-size-md);
 }
 
 .queued li span {
@@ -2178,20 +2176,20 @@ kbd {
 
 /* A workflow action, such as a sync, waiting with the messages. */
 .queued .queued-action {
-  gap: 0.5rem;
+  gap: var(--space-sm);
   border-style: solid;
   border-color: var(--color-border);
   background: var(--color-surface);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .queued-tag {
   flex: none;
   color: var(--color-accent-dim);
-  font-size: 0.68rem;
-  font-weight: 400;
-  letter-spacing: 0.05em;
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-wider);
   text-transform: uppercase;
 }
 
@@ -2199,8 +2197,8 @@ kbd {
 .composer {
   position: relative;
   display: grid;
-  gap: 0.35rem;
-  padding: 0.7rem 0.6rem 0.55rem 0.95rem;
+  gap: var(--space-xs);
+  padding: var(--space-md) 0.6rem var(--space-sm) var(--space-lg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
@@ -2225,8 +2223,8 @@ kbd {
   background: transparent;
   color: var(--color-text);
   field-sizing: content;
-  font-size: 1rem;
-  line-height: 1.6;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
   resize: none;
 }
 
@@ -2237,7 +2235,7 @@ kbd {
 .composer-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   min-width: 0;
 }
 
@@ -2248,18 +2246,18 @@ kbd {
   overflow: hidden;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .composer-meta b {
   color: var(--color-muted);
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
 }
 
 .composer-meta .sep {
-  margin: 0 0.45rem;
+  margin: 0 var(--space-sm);
   opacity: 0.6;
 }
 
@@ -2267,8 +2265,8 @@ kbd {
    be pressed by its underline on hover and its focus ring. */
 .composer-settings {
   flex: 0 1 auto;
-  min-height: 1.75rem;
-  padding: 0 0.35rem;
+  min-height: var(--control-height-xs);
+  padding: 0 var(--space-xs);
   margin: 0 auto 0 -0.35rem;
   border: 0;
   border-radius: var(--radius-sm);
@@ -2294,8 +2292,8 @@ kbd {
   inset: auto 0 calc(100% + 0.4rem);
   z-index: 20;
   display: grid;
-  gap: 0.2rem;
-  padding: 0.4rem;
+  gap: var(--space-2xs);
+  padding: var(--space-xs);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
@@ -2308,17 +2306,17 @@ kbd {
 
 .suggest-title {
   margin: 0;
-  padding: 0.1rem 0.45rem 0.2rem;
+  padding: var(--space-3xs) var(--space-sm) var(--space-2xs);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
+  font-size: var(--font-size-2xs);
+  letter-spacing: var(--tracking-widest);
   text-transform: uppercase;
 }
 
 .suggest-list {
   display: grid;
-  gap: 0.15rem;
+  gap: var(--space-3xs);
   max-height: min(16rem, 40dvh);
   margin: 0;
   padding: 0;
@@ -2333,7 +2331,7 @@ kbd {
   align-items: baseline;
   column-gap: 0.6rem;
   min-height: 2.4rem;
-  padding: 0.4rem 0.55rem;
+  padding: var(--space-xs) var(--space-sm);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--color-text);
@@ -2354,7 +2352,7 @@ kbd {
   min-width: 0;
   color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 0.9rem;
+  font-size: var(--font-size-lg);
   /* Long file paths wrap instead of widening the page. */
   overflow-wrap: anywhere;
 }
@@ -2362,47 +2360,47 @@ kbd {
 .suggest-current {
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
 }
 
 .suggest-detail {
   flex: 1 1 12rem;
   min-width: 0;
   color: var(--color-muted);
-  font-size: 0.82rem;
-  line-height: 1.4;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-compact);
 }
 
 /* ---- Settings sheet ----------------------------------------------- */
 .settings-row {
   display: grid;
-  gap: 0.35rem;
+  gap: var(--space-xs);
 }
 
 .settings-label {
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-widest);
 }
 
 .settings-row select.field {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
+  font-size: var(--font-size-lg);
 }
 
 .dialog .settings-note {
   color: var(--tone-working);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .dock-hint {
-  margin: 0.4rem 0 0;
+  margin: var(--space-xs) 0 0;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--font-size-3xs);
   text-align: center;
 }
 
@@ -2436,14 +2434,14 @@ kbd {
 
 .send.stop {
   width: auto;
-  gap: 0.4rem;
-  padding: 0 0.7rem;
+  gap: var(--space-xs);
+  padding: 0 var(--space-md);
   border-color: color-mix(in srgb, var(--color-error) 60%, transparent);
   background: transparent;
   color: var(--color-error);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
 }
 
 .send.stop .icon {
@@ -2453,8 +2451,8 @@ kbd {
 .answer-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.6rem 0.6rem 0.6rem 0.95rem;
+  gap: var(--space-md);
+  padding: 0.6rem 0.6rem 0.6rem var(--space-lg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
@@ -2466,18 +2464,18 @@ kbd {
   margin: 0;
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
 }
 
 .read-only {
   margin: 0;
-  padding: 0.75rem 0.95rem;
+  padding: var(--space-md) var(--space-lg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--font-size-xs);
   text-align: center;
 }
 
@@ -2502,8 +2500,8 @@ kbd {
 
 .sheet form {
   display: grid;
-  gap: 0.4rem;
-  padding: 0.75rem;
+  gap: var(--space-xs);
+  padding: var(--space-md);
 }
 
 .sheet h2 {
@@ -2511,33 +2509,33 @@ kbd {
   overflow: hidden;
   color: var(--color-text);
   font-size: 0.95rem;
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sheet-sub {
-  margin: 0 0 0.3rem;
+  margin: 0 0 var(--space-xs);
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--font-size-2xs);
 }
 
 /* The session's details in full, for what the header line has no room
    for. Long names wrap. */
 .sheet-details {
   display: grid;
-  gap: 0.2rem;
-  margin: 0 0 0.4rem;
+  gap: var(--space-2xs);
+  margin: 0 0 var(--space-xs);
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  line-height: 1.4;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-compact);
 }
 
 .sheet-detail {
   display: grid;
   grid-template-columns: 6.5rem minmax(0, 1fr);
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 /* The sheet is a raised panel, where only `--color-muted` reads well
@@ -2559,22 +2557,22 @@ kbd {
 }
 
 .sheet-detail b {
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
 }
 
 .sheet-item {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
+  gap: var(--space-md);
   width: 100%;
   min-height: 2.6rem;
-  padding: 0.4rem 0.75rem;
+  padding: var(--space-xs) var(--space-md);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: 0.9rem;
+  font-size: var(--font-size-lg);
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -2589,7 +2587,7 @@ kbd {
   margin-left: auto;
   color: var(--color-dim);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--font-size-2xs);
 }
 
 .sheet-item .icon {
@@ -2619,27 +2617,27 @@ kbd {
 
 .dialog form {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-md);
 }
 
 .dialog h2 {
   margin: 0;
   font-size: 1.15rem;
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-snug);
 }
 
 .dialog p {
   margin: 0;
   color: var(--color-muted);
-  font-size: 0.92rem;
-  line-height: 1.55;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-body);
 }
 
 .dialog-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 .narrow-only {
@@ -2684,22 +2682,22 @@ kbd {
 
   .icon-btn {
     width: 2.75rem;
-    height: 2.75rem;
+    height: var(--control-height-lg);
   }
 
   .project-sync {
-    min-height: 2.75rem;
-    padding: 0.1rem 0.8rem;
+    min-height: var(--control-height-lg);
+    padding: var(--space-3xs) var(--space-md);
   }
 
   .chat-head {
-    gap: 0.35rem;
+    gap: var(--space-xs);
     min-height: 3.25rem;
-    padding: calc(0.25rem + env(safe-area-inset-top)) calc(0.35rem + env(safe-area-inset-right)) 0.25rem 0.25rem;
+    padding: calc(var(--space-2xs) + env(safe-area-inset-top)) calc(var(--space-xs) + env(safe-area-inset-right)) var(--space-2xs) var(--space-2xs);
   }
 
   .chat-scroll {
-    padding-top: 1rem;
+    padding-top: var(--space-lg);
   }
 
   .msg--user {
@@ -2719,7 +2717,7 @@ kbd {
   }
 
   .sheet form {
-    padding: 1rem calc(var(--gutter) + env(safe-area-inset-right)) calc(1rem + env(safe-area-inset-bottom)) calc(var(--gutter) + env(safe-area-inset-left));
+    padding: var(--space-lg) calc(var(--gutter) + env(safe-area-inset-right)) calc(var(--space-lg) + env(safe-area-inset-bottom)) calc(var(--gutter) + env(safe-area-inset-left));
   }
 
   .sheet::backdrop {
@@ -2736,11 +2734,11 @@ kbd {
   }
 
   .suggest-item {
-    min-height: 2.75rem;
+    min-height: var(--control-height-lg);
   }
 
   .btn {
-    min-height: 2.75rem;
+    min-height: var(--control-height-lg);
   }
 
   .row {
@@ -2748,12 +2746,12 @@ kbd {
   }
 
   .group-toggle {
-    min-height: 2.75rem;
+    min-height: var(--control-height-lg);
     margin: -0.75rem 0;
   }
 
   .menu-item {
-    min-height: 2.75rem;
+    min-height: var(--control-height-lg);
   }
 
   .segmented button {
@@ -2764,7 +2762,7 @@ kbd {
 @media (max-width: 560px) {
   .md th,
   .md td {
-    padding: 0.45rem 0.55rem;
+    padding: var(--space-sm);
   }
 
   .dialog-actions .btn {

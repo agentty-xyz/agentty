@@ -131,6 +131,52 @@ fn stylesheet_without_dark_values_sets_only_the_default_theme() {
 }
 
 #[test]
+fn number_tokens_render_in_the_unit_their_extension_names() {
+    // Arrange
+    let unit = |unit: Json| json!({ "xyz.agentty.unit": unit });
+    let source = json!({
+        "tracking": {
+            "$type": "number",
+            "wide": { "$value": 0.04, "$extensions": unit(json!("em")) },
+            "themed": {
+                "$value": 0.01,
+                "$extensions": { "xyz.agentty.unit": "em", "xyz.agentty.theme": { "dark": 0.02 } }
+            }
+        },
+        "line-height": { "body": { "$type": "number", "$value": 1.6 } }
+    })
+    .to_string();
+    let invalid = json!({
+        "tracking": {
+            "$type": "number",
+            "px": { "$value": 1, "$extensions": unit(json!("px")) },
+            "list": { "$value": 1, "$extensions": unit(json!(["em"])) }
+        },
+        "radius": { "sm": { "$type": "dimension", "$value": { "value": 1, "unit": "px" }, "$extensions": unit(json!("em")) } }
+    })
+    .to_string();
+
+    // Act
+    let set = TokenSet::parse(&source).expect("valid tokens");
+    let report = errors(&invalid);
+
+    // Assert
+    assert_eq!(
+        set.stylesheet("/* Header. */", None),
+        "/* Header. */\n:root {\n  --tracking-wide: 0.04em;\n  --tracking-themed: 0.01em;\n  \
+         --line-height-body: 1.6;\n}\n\n:root.theme-dark {\n  --tracking-themed: 0.02em;\n}\n"
+    );
+    assert_eq!(
+        report,
+        [
+            "tracking.px: the unit extension gives a number token one of the units em",
+            "tracking.list: the unit extension gives a number token one of the units em",
+            "radius.sm: the unit extension gives a number token one of the units em",
+        ]
+    );
+}
+
+#[test]
 fn value_in_returns_the_dark_value_only_in_the_dark_theme() {
     // Arrange
     let source = json!({
@@ -182,6 +228,10 @@ fn values_render_as_css_text() {
             "0.35rem",
         ),
         ("fontFamily", json!("Inter"), "Inter"),
+        ("fontWeight", json!(650), "650"),
+        ("fontWeight", json!("semi-bold"), "600"),
+        ("number", json!(1.25), "1.25"),
+        ("number", json!(-0.025), "-0.025"),
         (
             "fontFamily",
             json!(["Segoe UI", "SFMono-Regular", "-apple-system"]),
@@ -256,7 +306,7 @@ fn parse_errors(cases: &[(&str, Json, &str)]) -> Vec<Option<String>> {
 fn invalid_colours_name_what_is_expected() {
     // Arrange
     let cases = [
-        ("number", json!(1), "unsupported $type number"),
+        ("typography", json!(1), "unsupported $type typography"),
         (
             "color",
             json!({ "colorSpace": "hsl", "components": [0, 0, 0], "hex": "#000000" }),
@@ -344,6 +394,22 @@ fn invalid_values_name_what_is_expected() {
             json!(["Inter", 1]),
             "expected a font name or a list of font names",
         ),
+        (
+            "fontWeight",
+            json!(1001),
+            "expected a weight from 1 to 1000 or a weight alias",
+        ),
+        (
+            "fontWeight",
+            json!("Bold"),
+            "expected a weight from 1 to 1000 or a weight alias",
+        ),
+        (
+            "fontWeight",
+            json!([400]),
+            "expected a weight from 1 to 1000 or a weight alias",
+        ),
+        ("number", json!("1.5"), "expected a number"),
         (
             "shadow",
             shadow("color", json!("#000000")),
