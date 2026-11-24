@@ -286,9 +286,20 @@ async fn initialized_submodules_stay_stageable() {
     );
     run_git_command(&root, &["commit", "-q", "-m", "Add library"]);
     let submodule = root.join("vendor/library");
+    // The clone has no identity of its own.
     run_git_command(
         &submodule,
-        &["commit", "-q", "--allow-empty", "-m", "Move library"],
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Move library",
+        ],
     );
     let moved = git_command_stdout(&submodule, &["rev-parse", "HEAD"]);
 
