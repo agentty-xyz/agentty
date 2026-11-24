@@ -1,8 +1,8 @@
 //! Task agent response persistence tests for idempotency, conflicts, usage,
 //! and per-task history.
 
-use ag_contracts::TurnUsage;
 use ag_contracts::test_support::token_usage;
+use ag_contracts::{TurnUsage, UsageCheckpoint};
 use ag_session::{SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus};
 
 use crate::test_support::{agent_task_request, task_database_fixture};
@@ -59,7 +59,10 @@ async fn task_response_preserves_ordinary_conversation_and_uses_captured_model()
             .get_session_usage_checkpoint("session")
             .await
             .expect("checkpoint"),
-        metadata.usage.checkpoint
+        metadata
+            .usage
+            .checkpoint
+            .map(|checkpoint| checkpoint.totals)
     );
     assert_eq!(history.turns.len(), 1);
     assert_eq!(history.turns[0].attempt_id, "first");
@@ -514,7 +517,10 @@ fn metadata(label: &str) -> TaskAgentTurnMetadata {
         instruction_conversation_id: Some(format!("bootstrap-{label}")),
         provider_conversation_id: Some(format!("thread-{label}")),
         usage: TurnUsage {
-            checkpoint: Some(format!("checkpoint-{label}")),
+            checkpoint: Some(UsageCheckpoint::new(
+                "/worktree",
+                format!("checkpoint-{label}"),
+            )),
             ..token_usage("gpt-6.1-sol", 7, 3)
         },
     }

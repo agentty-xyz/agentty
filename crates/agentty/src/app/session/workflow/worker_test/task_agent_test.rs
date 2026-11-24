@@ -8,7 +8,8 @@ use std::time::{Duration, SystemTime};
 
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, ContextCompaction,
-    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest, TurnUsage, UsagePurpose,
+    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest, TurnUsage, UsageCheckpoint,
+    UsagePurpose,
 };
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem};
@@ -207,7 +208,8 @@ async fn assert_planner_attempt(
                 let mut result = successful_turn_result("A plan");
                 result.assistant_message.questions = vec![QuestionItem::new("Task question?")];
                 result.provider_conversation_id = Some("task-provider".to_string());
-                result.usage.checkpoint = Some("task-checkpoint".to_string());
+                result.usage.checkpoint =
+                    Some(UsageCheckpoint::new("/worktree", "task-checkpoint"));
                 Ok(result)
             })
         });
@@ -324,7 +326,7 @@ async fn interleave_chat_turn_checkpoint(app: &App, session_id: &SessionId) {
             session_id,
             UsagePurpose::Turn,
             &TurnUsage {
-                checkpoint: Some("chat-checkpoint".to_string()),
+                checkpoint: Some(UsageCheckpoint::new("/worktree", "chat-checkpoint")),
                 ..TurnUsage::default()
             },
         )

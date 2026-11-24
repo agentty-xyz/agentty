@@ -19,8 +19,11 @@
 //! the turn result switches to Claude Code's own per-model figures.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
-use ag_contracts::{AgentRequestKind, ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage};
+use ag_contracts::{
+    AgentRequestKind, ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsageCheckpoint,
+};
 use ag_harness::provider::ModelProvider;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -305,12 +308,13 @@ pub(crate) struct ClaudeRun<'a> {
 /// went down, is charged its main-loop usage at list price instead.
 ///
 /// Claude Code continues the most recent conversation in the directory, so
-/// every process, whatever its request kind, leaves the checkpoint the next
-/// continued turn there needs: its totals, or [`UNKNOWN_CHECKPOINT`] when it
-/// reported none.
+/// every process, whatever its request kind, leaves the checkpoint of
+/// `folder` the next continued turn there needs: its totals, or
+/// [`UNKNOWN_CHECKPOINT`] when it reported none.
 pub(crate) fn turn_usage<'a>(
     model: &str,
     request_kind: &AgentRequestKind,
+    folder: &Path,
     checkpoint: Option<&str>,
     runs: impl IntoIterator<Item = ClaudeRun<'a>>,
 ) -> TurnUsage {
@@ -343,12 +347,13 @@ pub(crate) fn turn_usage<'a>(
             usage.record(&model_usage);
         }
         previous = run.totals.map(|totals| totals.models.clone());
-        usage.checkpoint = Some(
+        usage.checkpoint = Some(UsageCheckpoint::new(
+            folder,
             previous
                 .as_ref()
                 .and_then(|models| serde_json::to_string(models).ok())
                 .unwrap_or_else(|| UNKNOWN_CHECKPOINT.to_string()),
-        );
+        ));
     }
 
     usage

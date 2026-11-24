@@ -2,7 +2,7 @@
 //! merged commits, and turn metadata.
 
 use ag_contracts::test_support::token_usage;
-use ag_contracts::{TurnUsage, UsagePurpose};
+use ag_contracts::{TurnUsage, UsageCheckpoint, UsagePurpose};
 use ag_session::test_support as model_fixture;
 
 use super::support::insert_session_fixture;
@@ -369,7 +369,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
                 review_comment_resolutions: Vec::new(),
                 usage: TurnUsage {
-                    checkpoint: Some("checkpoint".to_string()),
+                    checkpoint: Some(UsageCheckpoint::new("/worktree", "checkpoint")),
                     ..token_usage(model_fixture::CODEX_MODEL.as_str(), 3, 5)
                 },
             },
@@ -407,9 +407,11 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
     assert_eq!(usage_checkpoint, None);
 }
 
-/// Verifies the session keeps one usage checkpoint that every recorded
-/// invocation reporting one replaces, chat turns and utility prompts alike,
-/// an invocation without one keeps it, and a missing session reads none.
+/// Verifies the session keeps one usage checkpoint: every session turn's
+/// replaces it, a utility prompt's replaces it only when reported in the
+/// turns' folder or before any turn, so a title finishing after the first
+/// turn in the project folder leaves it, an invocation without one keeps it,
+/// and a missing session reads none.
 #[tokio::test]
 async fn test_recorded_usage_replaces_the_single_session_checkpoint() {
     // Arrange
@@ -434,17 +436,21 @@ async fn test_recorded_usage_replaces_the_single_session_checkpoint() {
     let mut checkpoints = Vec::new();
 
     // Act
-    for (is_turn, checkpoint) in [
-        (true, Some("first")),
-        (false, Some("utility")),
-        (true, None),
-        (false, None),
+    for (purpose, checkpoint) in [
+        // A draft title generated before the worktree exists.
+        (UsagePurpose::Title, Some(("/project", "draft-title"))),
+        (UsagePurpose::Turn, Some(("/worktree", "first"))),
+        // A title finishing after the first turn, in the project folder.
+        (UsagePurpose::Title, Some(("/project", "late-title"))),
+        (UsagePurpose::CommitAssist, Some(("/worktree", "utility"))),
+        (UsagePurpose::Turn, None),
+        (UsagePurpose::CommitAssist, None),
     ] {
         let usage = TurnUsage {
-            checkpoint: checkpoint.map(str::to_string),
+            checkpoint: checkpoint.map(|(folder, totals)| UsageCheckpoint::new(folder, totals)),
             ..TurnUsage::default()
         };
-        if is_turn {
+        if purpose == UsagePurpose::Turn {
             database
                 .sessions()
                 .persist_session_turn_metadata(
@@ -464,7 +470,7 @@ async fn test_recorded_usage_replaces_the_single_session_checkpoint() {
         } else {
             database
                 .usage()
-                .upsert_session_usage("session-a", UsagePurpose::CommitAssist, &usage)
+                .upsert_session_usage("session-a", purpose, &usage)
                 .await
                 .expect("failed to record utility usage");
         }
@@ -487,6 +493,8 @@ async fn test_recorded_usage_replaces_the_single_session_checkpoint() {
     assert_eq!(
         checkpoints,
         [
+            Some("draft-title"),
+            Some("first"),
             Some("first"),
             Some("utility"),
             Some("utility"),

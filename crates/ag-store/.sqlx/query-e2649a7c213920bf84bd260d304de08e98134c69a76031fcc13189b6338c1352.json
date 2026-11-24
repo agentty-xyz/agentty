@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET usage_checkpoint = ?,\n    usage_checkpoint_folder = ?\nWHERE id = ?\n    AND (? OR usage_checkpoint_folder IS NULL OR usage_checkpoint_folder = ?)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "e2649a7c213920bf84bd260d304de08e98134c69a76031fcc13189b6338c1352"
+}

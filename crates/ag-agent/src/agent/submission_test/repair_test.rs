@@ -330,8 +330,9 @@ async fn claude_repair_folds_both_attempts_into_the_usage() {
         submission
             .usage
             .checkpoint
-            .as_deref()
-            .is_some_and(|checkpoint| checkpoint.contains("\"input\":3")),
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.folder == temp_directory.path()
+                && checkpoint.totals.contains("\"input\":3")),
         "{:?}",
         submission.usage.checkpoint
     );

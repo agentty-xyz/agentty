@@ -2,7 +2,11 @@
 //! deduplication, subagent exclusion, context windows, and each turn's share
 //! of the per-model `modelUsage` totals.
 
-use ag_contracts::{AgentRequestKind, ContextFill, CostBasis, ModelUsage, TurnUsage};
+use std::path::Path;
+
+use ag_contracts::{
+    AgentRequestKind, ContextFill, CostBasis, ModelUsage, TurnUsage, UsageCheckpoint,
+};
 use semver::Version;
 use serde_json::{Value, json};
 
@@ -13,6 +17,8 @@ use crate::agent::claude_usage::{AgentTotals, ClaudeRun, ClaudeUsageMeter, turn_
 const REQUESTED: &str = "claude-sonnet-5-5";
 /// Model of every main-loop response [`claude_run`] observes.
 const CONTEXT_MODEL: &str = "claude-opus-5-5";
+/// Working directory every scenario's processes run in.
+const WORKTREE: &str = "/worktree";
 /// Claude Code release that restores a resumed session's earlier totals.
 const CUMULATIVE: &str = "2.1.277";
 
@@ -138,19 +144,23 @@ fn assert_turn_case(case: &TurnCase) {
         .iter()
         .map(|(version, model_usage)| claude_run(*version, model_usage.clone()))
         .collect::<Vec<_>>();
-    let expected_checkpoint = Some(case.checkpoint_run.map_or_else(
-        || UNKNOWN_CHECKPOINT.to_string(),
-        |index| {
-            let totals = runs[index].1.as_ref().expect("the run reports totals");
+    let expected_checkpoint = Some(UsageCheckpoint::new(
+        WORKTREE,
+        case.checkpoint_run.map_or_else(
+            || UNKNOWN_CHECKPOINT.to_string(),
+            |index| {
+                let totals = runs[index].1.as_ref().expect("the run reports totals");
 
-            serde_json::to_string(&totals.models).expect("totals serialize")
-        },
+                serde_json::to_string(&totals.models).expect("totals serialize")
+            },
+        ),
     ));
 
     // Act
     let usage = turn_usage(
         REQUESTED,
         &case.request_kind,
+        Path::new(WORKTREE),
         case.checkpoint.as_deref(),
         runs.iter().map(|(main_loop, totals)| ClaudeRun {
             main_loop,

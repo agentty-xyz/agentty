@@ -171,11 +171,12 @@ messages), the runtime sends `TurnEvent::UsageUpdated` with the turn's cumulativ
 the final `TurnResult.usage` supersedes it. Post-turn handling persists the final usage
 per model under the session-turn purpose and records the latest context fill on the
 session. An agent whose usage totals run across a resumed session, such as Claude Code,
-also returns an opaque checkpoint. Chat turns, task turns, and utility runs share the
-session's worktree, whose most recent conversation the next resumed turn continues, so
-the session keeps one checkpoint that every recorded run replaces and passes it back
-with the next continuation of either kind. Utility runs record their usage through the
-Run Worker: a `RunScope` names the session and the purpose (title, commit assistance,
+also returns an opaque checkpoint with the folder it ran in. Chat turns, task turns, and
+utility runs share the session's worktree, whose most recent conversation the next
+resumed turn continues, so the session keeps one checkpoint and passes it back with the
+next continuation of either kind. Every session turn replaces it; a utility run replaces
+it only when it ran in that same folder. Utility runs record their usage through the Run
+Worker: a `RunScope` names the session and the purpose (title, commit assistance,
 review, rebase assistance, or other), and the worker's run repository records each
 successful run under it. No model call is added: usage is a consequence of the turns
 that run.

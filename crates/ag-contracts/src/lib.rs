@@ -42,4 +42,6 @@ pub use permission::PermissionMode;
 pub use provider_call_budget::{ProviderCallBudget, ProviderCallLedger};
 pub use reasoning::ReasoningLevel;
 pub use session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
-pub use usage::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsagePurpose};
+pub use usage::{
+    ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsageCheckpoint, UsagePurpose,
+};

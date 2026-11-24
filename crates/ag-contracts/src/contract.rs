@@ -167,8 +167,9 @@ impl TurnContinuation {
         }
     }
 
-    /// Carries the [`crate::TurnUsage::checkpoint`] of the session's previous
-    /// continued turn, from which the agent derives this turn's own usage.
+    /// Carries the totals of the [`crate::TurnUsage::checkpoint`] the
+    /// conversation this turn continues left, from which the agent derives
+    /// this turn's own usage.
     #[must_use]
     pub fn with_usage_checkpoint(mut self, usage_checkpoint: Option<String>) -> Self {
         self.usage_checkpoint = usage_checkpoint;
@@ -176,8 +177,8 @@ impl TurnContinuation {
         self
     }
 
-    /// Returns the usage checkpoint of the session's previous continued
-    /// turn, when the host stored one.
+    /// Returns the usage checkpoint totals of the conversation this turn
+    /// continues, when the host stored one.
     #[must_use]
     pub fn usage_checkpoint(&self) -> Option<&str> {
         self.usage_checkpoint.as_deref()

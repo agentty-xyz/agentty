@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentDefinitionPrompt, AgentError,
     AgentRequestKind, MockAgentChannel, TurnEvent, TurnNotice, TurnResult, TurnUsage,
+    UsageCheckpoint,
 };
 use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_protocol::AgentResponse;
@@ -105,7 +106,7 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
                 questions_json: "[]".into(),
                 review_comment_resolutions: Vec::new(),
                 usage: TurnUsage {
-                    checkpoint: Some("cumulative-totals".into()),
+                    checkpoint: Some(UsageCheckpoint::new("/worktree", "cumulative-totals")),
                     ..TurnUsage::default()
                 },
             },

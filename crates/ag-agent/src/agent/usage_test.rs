@@ -1,5 +1,7 @@
 //! Tests for harness cost conversion and list-price estimates.
 
+use std::path::Path;
+
 use ag_contracts::{AgentRequestKind, CostBasis, CostEstimate, ModelUsage, TurnUsage};
 use ag_harness::catalog::{Pricing, PricingSource};
 use ag_harness::provider::ModelProvider;
@@ -126,6 +128,7 @@ fn cli_turn_usage_sums_other_agents_runs_under_the_model() {
         AgentKind::Codex,
         "not-a-model",
         &AgentRequestKind::SessionResume,
+        Path::new("/worktree"),
         None,
         &[&turn, &repair],
     );

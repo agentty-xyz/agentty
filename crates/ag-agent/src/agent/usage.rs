@@ -1,6 +1,8 @@
 //! Conversion of harness usage and prices into the shared usage contract,
 //! and list-price estimates for agents that report tokens without a price.
 
+use std::path::Path;
+
 use ag_contracts::{AgentRequestKind, CostBasis, CostEstimate, ModelUsage, TurnUsage};
 use ag_harness::catalog::{Pricing, PricingSource};
 use ag_harness::provider::ModelProvider;
@@ -26,12 +28,14 @@ pub(crate) fn cost_estimate(cost: Cost) -> CostEstimate {
 /// they ran: the turn's own process and its protocol repairs.
 ///
 /// Claude Code's runs are charged their share of its `modelUsage` totals,
-/// as [`claude_usage::turn_usage`] describes for `request_kind`, continuing
-/// from `checkpoint`. Other agents' runs are summed at list price.
+/// as [`claude_usage::turn_usage`] describes for `request_kind` run in
+/// `folder`, continuing from `checkpoint`. Other agents' runs are summed at
+/// list price.
 pub(crate) fn cli_turn_usage(
     kind: AgentKind,
     model: &str,
     request_kind: &AgentRequestKind,
+    folder: &Path,
     checkpoint: Option<&str>,
     runs: &[&ParsedResponse],
 ) -> TurnUsage {
@@ -39,6 +43,7 @@ pub(crate) fn cli_turn_usage(
         return claude_usage::turn_usage(
             model,
             request_kind,
+            folder,
             checkpoint,
             runs.iter().map(|run| ClaudeRun {
                 main_loop: &run.usage,

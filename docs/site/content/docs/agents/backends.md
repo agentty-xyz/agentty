@@ -170,9 +170,10 @@ Claude Code reports each model's tokens and estimated cost, subagents included, 
 running totals that a resumed session carries over on Claude Code 2.1.277 and later. A
 resumed turn continues the most recent conversation in the session's worktree, which a
 chat turn, task agent, or utility prompt may have left. Agentty therefore keeps one set
-of totals per session, replaced by every Claude run there, and charges the next resumed
-turn the difference. A model without a known price is charged at the Anthropic list
-price. When the difference cannot be trusted, the turn falls back to its
+of totals per session, replaced by every Claude run in the worktree, and charges the
+next resumed turn the difference. Runs elsewhere, such as a draft title generated in the
+project folder, leave it unchanged. A model without a known price is charged at the
+Anthropic list price. When the difference cannot be trusted, the turn falls back to its
 main-conversation tokens at the Anthropic list price. This happens on the first resumed
 turn after upgrading Agentty, when the Claude Code release is unknown, or when the
 previous Claude run reported no totals. While a Claude turn runs, its live figures use

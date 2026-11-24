@@ -2855,11 +2855,14 @@ impl SessionJoinRow {
 /// recorded. The session's token totals grow by every model's tokens, and a
 /// session turn also records the context fill of its latest request.
 ///
-/// Every invocation recorded for a session runs in its worktree, where the
-/// next continued turn resumes the most recent conversation, whether a chat
-/// turn, task turn, or utility prompt left it. A checkpoint the invocation
-/// reported therefore replaces the session's single one; an invocation
-/// without one leaves it.
+/// A session's continued turns resume the most recent conversation in its
+/// worktree, whether a chat turn, task turn, or utility prompt left it, so
+/// the session keeps one checkpoint with the folder it was reported in.
+/// Session turns always run in the worktree, so their checkpoint replaces
+/// the session's and names the worktree. A utility prompt's checkpoint
+/// replaces it only when reported in that same folder, or before any turn
+/// named one; a prompt run elsewhere, such as a draft title generated in the
+/// project folder, leaves it. An invocation without a checkpoint leaves it.
 pub(crate) async fn persist_turn_usage(
     connection: &mut SqliteConnection,
     session_id: &str,
@@ -2867,11 +2870,22 @@ pub(crate) async fn persist_turn_usage(
     now: i64,
     usage: &TurnUsage,
 ) -> Result<(), DbError> {
-    if let Some(checkpoint) = usage.checkpoint.as_deref() {
+    if let Some(checkpoint) = &usage.checkpoint {
+        let folder = checkpoint.folder.to_string_lossy();
+        let is_turn = purpose == UsagePurpose::Turn;
         sqlx::query!(
-            "UPDATE session SET usage_checkpoint = ? WHERE id = ?",
-            checkpoint,
-            session_id
+            r"
+UPDATE session
+SET usage_checkpoint = ?,
+    usage_checkpoint_folder = ?
+WHERE id = ?
+    AND (? OR usage_checkpoint_folder IS NULL OR usage_checkpoint_folder = ?)
+",
+            checkpoint.totals,
+            folder,
+            session_id,
+            is_turn,
+            folder
         )
         .execute(&mut *connection)
         .await?;

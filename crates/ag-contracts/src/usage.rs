@@ -4,6 +4,28 @@
 //! Counts a backend does not report stay `None` rather than zero, so totals
 //! never present an unknown figure as a known one.
 
+use std::path::PathBuf;
+
+/// Cumulative usage totals an agent reported for the most recent
+/// conversation in `folder`, which a later run there continues.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UsageCheckpoint {
+    /// Working directory whose most recent conversation the totals cover.
+    pub folder: PathBuf,
+    /// Opaque totals that only the reporting agent interprets.
+    pub totals: String,
+}
+
+impl UsageCheckpoint {
+    /// Returns the checkpoint of `totals` reported in `folder`.
+    pub fn new(folder: impl Into<PathBuf>, totals: impl Into<String>) -> Self {
+        Self {
+            folder: folder.into(),
+            totals: totals.into(),
+        }
+    }
+}
+
 /// Work an invocation's usage is recorded under, so utility work stays
 /// distinguishable from session turns.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -221,12 +243,12 @@ impl ModelUsage {
 /// context fill describes what the most recent request saw.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct TurnUsage {
-    /// Opaque cumulative totals an agent reported after continuing the
-    /// session, which the host stores and passes back through
-    /// [`crate::TurnContinuation::with_usage_checkpoint`] so the session's
-    /// next continued turn can derive its own share; `None` for agents and
-    /// runs that report per-turn usage.
-    pub checkpoint: Option<String>,
+    /// Cumulative totals an agent reported for the conversation it left,
+    /// which the host stores and passes back through
+    /// [`crate::TurnContinuation::with_usage_checkpoint`] so the next turn
+    /// continuing that conversation can derive its own share; `None` for
+    /// agents and runs that report per-turn usage.
+    pub checkpoint: Option<UsageCheckpoint>,
     /// One entry per model.
     pub models: Vec<ModelUsage>,
 }

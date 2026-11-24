@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::test_support::token_usage;
-use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult, TurnUsage};
+use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult, TurnUsage, UsageCheckpoint};
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::AgentResponse;
@@ -289,7 +289,7 @@ async fn test_apply_turn_result_persists_harness_turn_report_and_usage() {
         harness_report: Some(report.to_string()),
         provider_conversation_id: None,
         usage: TurnUsage {
-            checkpoint: Some("cumulative-totals".to_string()),
+            checkpoint: Some(UsageCheckpoint::new("/worktree", "cumulative-totals")),
             ..token_usage(AgentModel::MuseSpark13.as_str(), 30, 7)
         },
     });

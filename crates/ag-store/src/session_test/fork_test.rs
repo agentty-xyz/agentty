@@ -1,7 +1,7 @@
 //! Fork session snapshot tests that verify source-specific state is reset.
 
 use ag_contracts::test_support::token_usage;
-use ag_contracts::{TurnUsage, UsagePurpose};
+use ag_contracts::{TurnUsage, UsageCheckpoint, UsagePurpose};
 use ag_session::{FocusedReviewStatus, ResponseStyle};
 use sqlx::SqlitePool;
 
@@ -160,7 +160,7 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
                 usage: TurnUsage {
-                    checkpoint: Some("source-checkpoint".to_string()),
+                    checkpoint: Some(UsageCheckpoint::new("/worktree", "source-checkpoint")),
                     ..TurnUsage::default()
                 },
             },

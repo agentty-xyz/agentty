@@ -55,5 +55,6 @@ ALTER TABLE session ADD COLUMN context_window_tokens INTEGER;
 
 -- Opaque cumulative usage totals an agent reported for the most recent
 -- conversation in the session's worktree, from which the next continued turn
--- derives its own share.
+-- derives its own share, and the folder that conversation ran in.
 ALTER TABLE session ADD COLUMN usage_checkpoint TEXT;
+ALTER TABLE session ADD COLUMN usage_checkpoint_folder TEXT;

@@ -664,8 +664,8 @@ async fn resumed_claude_turn_continues_from_the_usage_checkpoint() {
         result
             .usage
             .checkpoint
-            .as_deref()
-            .is_some_and(|checkpoint| checkpoint.contains(r#""input":130"#))
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.totals.contains(r#""input":130"#))
     );
 }
 

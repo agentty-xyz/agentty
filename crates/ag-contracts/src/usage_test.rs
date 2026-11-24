@@ -1,7 +1,9 @@
 //! Usage accumulation tests: known-only-when-every-request-reported details,
 //! cost bases, context fill, and per-model ordering.
 
-use crate::usage::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsagePurpose};
+use crate::usage::{
+    ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsageCheckpoint, UsagePurpose,
+};
 
 /// Returns fully detailed usage of `model` for one request.
 fn detailed(model: &str, input_tokens: u64, micro_usd: u64) -> ModelUsage {
@@ -181,12 +183,13 @@ fn merging_keeps_the_latest_checkpoint() {
     ];
 
     for (current, next, expected) in cases {
+        let checkpoint = |totals: &str| UsageCheckpoint::new("/worktree", totals);
         let mut usage = TurnUsage {
-            checkpoint: current.map(str::to_string),
+            checkpoint: current.map(checkpoint),
             ..TurnUsage::default()
         };
         let later = TurnUsage {
-            checkpoint: next.map(str::to_string),
+            checkpoint: next.map(checkpoint),
             ..TurnUsage::default()
         };
 
@@ -194,7 +197,7 @@ fn merging_keeps_the_latest_checkpoint() {
         usage.merge(&later);
 
         // Assert
-        assert_eq!(usage.checkpoint.as_deref(), expected);
+        assert_eq!(usage.checkpoint, expected.map(checkpoint));
     }
 }
 

@@ -390,6 +390,7 @@ async fn complete_cli_turn(
             kind,
             &req.model,
             &req.request_kind,
+            &req.folder,
             req.continuation.usage_checkpoint(),
             &runs,
         ),
