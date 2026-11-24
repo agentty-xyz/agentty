@@ -7,6 +7,83 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.21.0] - 2026-11-23
+
+### Added
+
+- `agentty`: paste harness provider API keys from `/model`; Agentty stores them in its
+  auth file and copies keys already set in the environment there.
+- `agentty`: compact long `ag-harness` sessions automatically with the Default Fast
+  Model, with a `[Context]` notice in the session when history is summarized.
+- `agentty`: show `Queued` for review-request sessions whose pull requests are in
+  GitHub's merge queue.
+- `agentty`: add an experimental `Platform` tab behind `--experimental-platform` that
+  signs in to an Agentty Platform, runs remote control through its relay, and can keep
+  remote control on across launches.
+- `agentty`: show the session status line, live progress, focused review result, forge
+  and branch distance, queued actions, and staged drafts on remote devices.
+- `agentty`: let remote devices sync the project in one press, see `merge conflict` and
+  `PR ready` labels, follow and act on execution graphs, start `/graph` proposals and
+  answer graph questions, choose the agent harness from the model selector, and paste
+  images into the composer.
+- `agentty`: give the remote page's new-session composer slash commands, `@` lookup in
+  the active project's files, and model, reasoning, style, and speed settings.
+- `agentty`: show several paired Agenttys on one remote control page, and let another
+  web application serve the page inside its own layout.
+- `agentty`: show when a relay does not admit this instance.
+- `ag-relay`: admit only the listed instances with a repeatable
+  `--allow-instance <INSTANCE_ID>` flag, and publish the relay image to
+  `ghcr.io/agentty-xyz/agentty-relay`, with a Fly.io deployment guide.
+- `ag-harness`: add native-sandbox grants for coding agents: full-disk reads with
+  credential paths hidden, hidden paths, writable roots, pinned Unix sockets, and
+  approved unsandboxed excluded commands, with an advisory sandbox-denial flag.
+- `ag-store`: add `Database::open_with_busy_timeout` and busy-timeout presets.
+
+### Changed
+
+- `agentty`: make `ag-harness` models generally available in `/model` instead of a
+  separate session type.
+- `agentty`: run `ag-harness` session commands in the native sandbox where available,
+  and limit their Git writes to the session branch; a turn that retargets `HEAD` stops
+  with instructions to point it back.
+- `agentty`: move remote control into a project-level `Remote` tab.
+- `agentty`: handle mouse scrolling, selection, copy, and links inside `tmux`; hold
+  `Shift` while dragging to use the terminal's selection.
+- `agentty`: clear stale tool results from long `ag-harness` turns, accept common model
+  patch and argument habits in built-in tools, and hide encrypted reasoning from run
+  events and transcripts.
+- `agentty`: start new sessions on `claude-sonnet-5-5` when only an Anthropic key is
+  set, and accept an origin-only `ANTHROPIC_BASE_URL`.
+- `agentty`: wait up to 5 seconds for another process's lock on the app database.
+- `ag-relay`: raise the default per-stream byte budget to 64 MiB per minute.
+- docs site and remote page: recolor tokens to meet contrast, self-host the monospace
+  face, and share one set of web components.
+- `ag-harness`: seal the public API: `SessionStore` is sealed, embedder-facing enums and
+  crate-built records are `#[non_exhaustive]`, and `BashConfig::with_git_writes` takes
+  the session branch and returns a `Result` (breaking).
+- `ag-remote`: device-sent session ids use their own type, checked against the host's
+  listing before dispatch (breaking).
+- release: bump workspace crate metadata and lockfile package versions to `0.21.0`.
+
+### Fixed
+
+- `agentty`: keep sync status, syncing, and session creation separate for each project
+  while another project resolves sync conflicts.
+- `agentty`: keep long Claude harness sessions valid after context fitting, and price
+  Haiku prompts over 100,000 tokens correctly.
+- `agentty`: send Anthropic only the JSON schema keywords it accepts, so compaction,
+  graph proposals, and focused reviews work on Claude harness models.
+- `agentty`: wait out SQLite contention in the app database.
+
+### Removed
+
+- `agentty`: remove the `--experimental-harness` flag and the `/remote-control` command.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.20.0] - 2026-11-22
 
 ### Added
