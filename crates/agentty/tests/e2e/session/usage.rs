@@ -275,11 +275,16 @@ const READOUT_PROMPT: &str = "Write two notes";
 /// Answer of the live-readout scenario's last request.
 const READOUT_ANSWER: &str = "Wrote both notes.";
 
-/// Turn tokens the readout shows after the first model request.
-const FIRST_REQUEST_TOKENS: &str = "↑12.0k ↓200";
+/// Context fill the status-line readout shows after the first model
+/// request, with the turn charge that follows it.
+const FIRST_REQUEST_READOUT: &str = "▱ 12% · ≤$";
 
-/// Turn tokens the readout shows after the second model request.
-const SECOND_REQUEST_TOKENS: &str = "↑27.0k ↓500";
+/// Context fill and turn charge the status-line readout shows after the
+/// second model request.
+const SECOND_REQUEST_READOUT: &str = "▱ 13% · ≤$0.34 turn";
+
+/// Session figures the composer border shows beside the timer.
+const SESSION_READOUT: &str = " session │ Timer:";
 
 #[tokio::test]
 async fn test_usage_readout_updates_after_each_model_request() -> E2eResult {
@@ -291,6 +296,9 @@ async fn test_usage_readout_updates_after_each_model_request() -> E2eResult {
     // Act, Assert
     FeatureTest::new("usage_readout")
         .with_git()
+        // The status line keeps a readout slot only on panes wider than 80
+        // columns.
+        .with_terminal_size(130, 30)
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")
         .env("MODEL_API_BASE_URL", server)
@@ -309,34 +317,38 @@ async fn test_usage_readout_updates_after_each_model_request() -> E2eResult {
                     .press_key("Enter")
                     // The provider holds the second request, so the turn
                     // runs with the first request's usage.
-                    .wait_for_text(FIRST_REQUEST_TOKENS, 30000)
+                    .wait_for_text(FIRST_REQUEST_READOUT, 30000)
                     .capture_labeled("readout_first_request", "Readout after one request")
                     .compose(&second_request.release())
-                    .wait_for_text(SECOND_REQUEST_TOKENS, 30000)
+                    .wait_for_text(SECOND_REQUEST_READOUT, 30000)
                     .capture_labeled("readout_second_request", "Readout after two requests")
                     .compose(&third_request.release())
                     .wait_for_text(READOUT_ANSWER, 30000)
                     .step(common::wait_for_frame_text(
-                        &[" session │ Timer:"],
-                        &[SECOND_REQUEST_TOKENS],
+                        &[SESSION_READOUT],
+                        &[SECOND_REQUEST_READOUT],
                     ))
             },
             |frame, report| {
                 Box::pin(async move {
-                    for (capture, tokens, absent) in [
-                        (0, FIRST_REQUEST_TOKENS, SECOND_REQUEST_TOKENS),
-                        (1, SECOND_REQUEST_TOKENS, FIRST_REQUEST_TOKENS),
+                    // While the turn runs, its readout sits in the status
+                    // line and the composer border keeps only the timer.
+                    for (capture, readout, absent) in [
+                        (0, FIRST_REQUEST_READOUT, SECOND_REQUEST_READOUT),
+                        (1, SECOND_REQUEST_READOUT, "▱ 12% · "),
                     ] {
                         let running = common::frame_from_capture(&report.captures[capture]);
                         let full = Region::full(running.cols(), running.rows());
-                        for text in [tokens, "ctx ", " turn · ", " session │ Timer:"] {
+                        for text in [readout, "ctx ▰", " turn"] {
                             assertion::assert_text_in_region(&running, text, &full);
                         }
                         assertion::assert_not_visible(&running, absent);
+                        assertion::assert_not_visible(&running, SESSION_READOUT);
                     }
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "ctx ", &full);
-                    assertion::assert_not_visible(frame, " turn · ");
+                    assertion::assert_text_in_region(frame, "ctx 14% · ≤$", &full);
+                    assertion::assert_text_in_region(frame, SESSION_READOUT, &full);
+                    assertion::assert_not_visible(frame, " turn ·");
                 })
             },
         )
@@ -391,16 +403,16 @@ fn serve_gated_readout(
 
         answer_completion(
             &json!({"answer": READOUT_ANSWER, "questions": []}),
-            (20_000, 15_000, 100),
+            (148_000, 131_000, 1_400),
         )
     } else if body.contains(r#""tool_call_id":"call-first""#) {
         if !second_request.wait_blocking(Duration::from_secs(60)) {
             return;
         }
 
-        write_call_completion("call-second", "second.txt", (15_000, 12_000, 300))
+        write_call_completion("call-second", "second.txt", (139_400, 118_000, 2_100))
     } else if body.contains(READOUT_PROMPT) && !body.contains(TITLE_PROMPT) {
-        write_call_completion("call-first", "first.txt", (12_000, 9_000, 200))
+        write_call_completion("call-first", "first.txt", (121_600, 96_000, 1_300))
     } else {
         let _ = stream
             .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");

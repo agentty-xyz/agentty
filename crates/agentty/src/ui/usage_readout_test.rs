@@ -64,9 +64,23 @@ fn running_figures() -> ReadoutFigures {
     }
 }
 
-/// Renders `readout` at `width`, or `None` when it hides.
+/// Renders the turn readout at `width`, or `None` when it hides.
 fn text(readout: &UsageReadout, width: usize) -> Option<String> {
-    readout.line(width).map(|line| line.to_string())
+    readout.turn_line(width).map(|line| line.to_string())
+}
+
+#[test]
+fn test_session_line_leaves_out_the_running_turn() {
+    // Arrange
+    let readout = UsageReadout::new(running_figures(), false);
+
+    // Act
+    let session = readout.session_line(80).map(|line| line.to_string());
+    let narrow = readout.session_line(6);
+
+    // Assert
+    assert_eq!(session.as_deref(), Some("ctx 38% · $3.27 session"));
+    assert_eq!(narrow, None);
 }
 
 #[test]
@@ -363,7 +377,7 @@ fn test_gauge_tone_rises_with_context_fill() {
             },
             false,
         );
-        let line = readout.line(200)?;
+        let line = readout.turn_line(200)?;
 
         line.spans
             .iter()

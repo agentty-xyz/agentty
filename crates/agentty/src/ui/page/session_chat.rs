@@ -231,7 +231,8 @@ impl<'a> SessionChatPage<'a> {
         self
     }
 
-    /// Supplies the session's live usage readout, shown beside the timer.
+    /// Supplies the session's live usage readout: the running turn's figures
+    /// in the turn status line, and the session's beside the timer otherwise.
     pub(crate) fn usage_readout(mut self, readout: Option<&'a UsageReadout>) -> Self {
         self.usage_readout = readout;
 
@@ -308,7 +309,7 @@ impl<'a> SessionChatPage<'a> {
             // right slot instead of the composer border.
             readout_in_status_line = true;
             let telemetry = self.usage_readout.and_then(|usage_readout| {
-                usage_readout.line(usize::from(turn_status::telemetry_max_width(area.width)))
+                usage_readout.turn_line(usize::from(turn_status::telemetry_max_width(area.width)))
             });
             let status_line = turn_status::turn_status_line(
                 TurnStatusInput {
@@ -355,10 +356,10 @@ impl<'a> SessionChatPage<'a> {
         );
     }
 
-    /// Fits the timing label and the live usage readout into `width`
+    /// Fits the timing label and the session's usage readout into `width`
     /// columns. The timer keeps priority over the readout, which keeps
     /// priority over the session age. The border leaves the readout out
-    /// while the turn status line shows it.
+    /// while the turn status line shows the running turn's.
     fn timing_footer(
         &self,
         session: &Session,
@@ -371,7 +372,7 @@ impl<'a> SessionChatPage<'a> {
                 .width()
                 + chat_input::FOOTER_SEPARATOR.width();
 
-            usage_readout.line(usize::from(width).saturating_sub(timer_width))
+            usage_readout.session_line(usize::from(width).saturating_sub(timer_width))
         });
         let readout_width = readout.as_ref().map_or(0, |readout| {
             readout.width() + chat_input::FOOTER_SEPARATOR.width()

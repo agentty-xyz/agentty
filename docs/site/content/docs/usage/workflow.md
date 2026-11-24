@@ -558,12 +558,13 @@ are never added to charged estimates; a total with both shows them side by side,
 [subscription logins](@/docs/agents/backends.md#backends-subscription-logins) for how
 each backend is detected.
 
-<a id="usage-session-usage-readout"></a> The composer's bottom border shows a live
-readout before the timer, such as
-`↑412.0k ↓3.1k · ctx ▰▰▱▱▱ 38% · $0.24 turn · $3.27 session`. While a turn runs it shows
-the turn's input (cache included) and output tokens, the latest context fill, and the
-turn's and session's estimated cost; between turns, and after a restart, it shows
-`ctx 38% · $3.27 session`. It updates after each completed model request, never per
+<a id="usage-session-usage-readout"></a> A live usage readout follows each turn. While a
+turn runs, the right of its status line shows the turn's input (cache included) and
+output tokens, the latest context fill, and the turn's and session's estimated cost,
+such as `↑412.0k ↓3.1k · ctx ▰▰▱▱▱ 38% · $0.24 turn · $3.27 session`; the status line
+gives it at most 40 columns and none in panes 80 columns wide or narrower. Between
+turns, and after a restart, the composer's bottom border shows `ctx 38% · $3.27 session`
+before the timer. The readout updates after each completed model request, never per
 streamed token. The gauge turns to the warning tone from 75% and the danger tone from
 90%; without a known window the readout shows the prompt size, such as `ctx 71.2k`. It
 uses the panel's marks, reads `$?` for a cost without a price and `local` for a local

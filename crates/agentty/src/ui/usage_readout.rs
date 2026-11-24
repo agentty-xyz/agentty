@@ -1,16 +1,17 @@
-//! Live usage readout beside the session timer, such as
-//! `↑412k ↓3.1k · ctx ▰▰▱▱▱ 38% · $0.24 turn · $3.27 session`.
+//! Live usage readout, such as
+//! `↑412.0k ↓3.1k · ctx ▰▰▱▱▱ 38% · $0.24 turn · $3.27 session`.
 //!
-//! While a session turn runs, the readout shows the turn's input and output
-//! tokens, the latest context fill with its gauge, the turn's estimated
-//! charge, and the session's; between turns it shows
-//! `ctx 38% · $3.27 session`. Figures keep
-//! the usage panel's marks: `≥` for a lower bound, `≤` for a charge whose
-//! cached input was priced at the input price, `~` for both, and `≈` for an
-//! API equivalent. A charge without a price reads `$?`, or `local` for a
-//! session on a local model. As the width narrows, the session charge, the
-//! tokens, the gauge cells (the percentage stays), and the turn charge give
-//! way in that order; the readout hides when even the context does not fit.
+//! While a session turn runs, the turn status line shows the turn's input
+//! and output tokens, the latest context fill with its gauge, the turn's
+//! estimated charge, and the session's; the composer border beside the
+//! timer shows the session's figures, such as `ctx 38% · $3.27 session`,
+//! between turns. Figures keep the usage panel's marks: `≥` for a lower bound,
+//! `≤` for a charge whose cached input was priced at the input price, `~` for
+//! both, and `≈` for an API equivalent. A charge without a price reads `$?`, or
+//! `local` for a session on a local model. As the width narrows, the session
+//! charge, the tokens, the gauge cells (the percentage stays), and the turn
+//! charge give way in that order; the readout hides when even the context does
+//! not fit.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -47,19 +48,32 @@ impl UsageReadout {
         Self { figures, is_local }
     }
 
-    /// Returns the readout fitted to `max_width` columns, dropping segments
-    /// by priority, or `None` when even the context does not fit.
-    pub(crate) fn line(&self, max_width: usize) -> Option<Line<'static>> {
+    /// Returns the running turn's readout fitted to `max_width` columns,
+    /// dropping segments by priority, or `None` when even the context does
+    /// not fit. Before the turn's first request completes it shows the
+    /// session's figures.
+    pub(crate) fn turn_line(&self, max_width: usize) -> Option<Line<'static>> {
+        self.fit(max_width, self.figures.turn.as_ref())
+    }
+
+    /// Returns the session's context fill and charge fitted to `max_width`
+    /// columns, leaving out any running turn's figures, or `None` when even
+    /// the context does not fit.
+    pub(crate) fn session_line(&self, max_width: usize) -> Option<Line<'static>> {
+        self.fit(max_width, None)
+    }
+
+    /// Returns the widest composition with `turn` that fits `max_width`.
+    fn fit(&self, max_width: usize, turn: Option<&ReadoutTurn>) -> Option<Line<'static>> {
         Narrowing::ALL
             .into_iter()
-            .map(|narrowing| self.compose(narrowing))
+            .map(|narrowing| self.compose(narrowing, turn))
             .find(|line| line.width() <= max_width)
             .filter(|line| line.width() > 0)
     }
 
     /// Joins the segments `narrowing` keeps with separators.
-    fn compose(&self, narrowing: Narrowing) -> Line<'static> {
-        let turn = self.figures.turn.as_ref();
+    fn compose(&self, narrowing: Narrowing, turn: Option<&ReadoutTurn>) -> Line<'static> {
         let turn_cost = turn
             .filter(|_| narrowing < Narrowing::ContextOnly)
             .and_then(|turn| self.turn_cost_spans(turn));
