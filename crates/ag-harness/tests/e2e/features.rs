@@ -170,6 +170,16 @@ fn capabilities(profile: ModelProfile) -> ModelCapabilities {
         .with_tool_calls(true)
 }
 
+/// Stored history bytes of a session on a real model window, which the
+/// harness caps at 256 KiB. The budget cases declare windows of a few
+/// thousand tokens, from which a session would otherwise derive a byte budget
+/// smaller than a couple of turns carrying `OpenAI`'s encrypted reasoning, so
+/// loading and compaction sources, rather than the context budget under test,
+/// would bound the history.
+fn production_history_bytes() -> Result<NonZeroUsize, DynError> {
+    Ok(NonZeroUsize::new(256 * 1024).ok_or("history bytes")?)
+}
+
 pub(crate) fn answer_schema() -> Result<OutputSchema, DynError> {
     Ok(OutputSchema::new(json!({
         "type": "object",
@@ -422,10 +432,12 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
     )?;
     let directory = tempfile::tempdir()?;
     let harness = Harness::from_registry(&registry, provider.name())?
-        .database(directory.path().join("budget.db"));
+        .database(directory.path().join("budget.db"))
+        .max_history_bytes(production_history_bytes()?);
     let mut session = harness.session("budget", answer_schema()?).create().await?;
     let mut latest = facts[0];
     let mut stored_facts = 0;
+    let mut budget_evicted = false;
     for (index, fact) in facts.iter().enumerate() {
         provider.pace().await;
         let stored = session
@@ -433,7 +445,8 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
             .await?;
         latest = *fact;
         stored_facts = index + 1;
-        if stored_facts >= 4 && stored.report().history().evicted_turns() >= 1 {
+        budget_evicted |= stored.report().history().evicted_turns() >= 1;
+        if stored_facts >= 4 && budget_evicted {
             break;
         }
     }
@@ -467,10 +480,15 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
         .await?;
     let evicted_history = evicted.report().history();
     let evicted_answer = answer(evicted.output());
-    if evicted_history.evicted_turns() == 0 {
+    // A session stores where its projection starts, so a turn reports only
+    // the evictions its own request made; earlier ones show as prior turns
+    // that are not replayed. The facts and the recent recall precede it.
+    let prior_turns = stored_facts + 1;
+    budget_evicted |= recent_history.evicted_turns() >= 1 || evicted_history.evicted_turns() >= 1;
+    if !budget_evicted || evicted_history.replayed_turns() >= prior_turns {
         return Err(format!(
-            "budget {budget} never evicted a turn after {stored_facts} facts (replayed {}): lower \
-             the reasoning allowance",
+            "budget {budget} never evicted a turn after {stored_facts} facts (replayed {} of \
+             {prior_turns} prior turns): lower the reasoning allowance",
             evicted_history.replayed_turns()
         )
         .into());
@@ -595,7 +613,9 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     )?;
     let directory = tempfile::tempdir()?;
     let database = directory.path().join("compact.db");
-    let harness = Harness::from_registry(&registry, provider.name())?.database(&database);
+    let harness = Harness::from_registry(&registry, provider.name())?
+        .database(&database)
+        .max_history_bytes(production_history_bytes()?);
     let mut session = harness
         .session("compact", answer_schema()?)
         .system_prompt(system_prompt.clone())
@@ -672,8 +692,13 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
         .into());
     }
     let third = resumed.compact().await?;
-    if third.is_some() {
-        return Err("third compaction ran without uncovered turns".into());
+    if let Some(third) = third {
+        return Err(format!(
+            "third compaction ran without uncovered turns: covered {covered}->{}->{}",
+            second.covered_through(),
+            third.covered_through()
+        )
+        .into());
     }
     if !recovered {
         return Err(format!(
@@ -818,7 +843,16 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
         matches!(activity, ToolActivity::Read { path, truncated: true, .. } if path == "large.txt")
     });
     if found.contains("ivory-97") && truncated == 0 && !cut_as_read {
-        return Err(format!("the large result arrived without truncation: {summary}").into());
+        let calls: Vec<String> = outcome
+            .report()
+            .tool_calls()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        return Err(format!(
+            "the large result arrived without truncation: {summary} calls={calls:?}"
+        )
+        .into());
     }
     if !missing.is_empty() {
         return Err(format!("lost code words {missing:?} ({summary}): {found}").into());
