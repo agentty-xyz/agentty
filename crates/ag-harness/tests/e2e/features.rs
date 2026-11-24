@@ -577,6 +577,23 @@ async fn test_context_budget_projection() -> Result<(), DynError> {
 // Session compaction into checkpoints (#672)
 // ---------------------------------------------------------------------------
 
+/// Per-provider sizing of the compaction case.
+impl Provider {
+    /// Returns `weight`, the compaction case's budget in heuristic weight,
+    /// which fits the compat providers, scaled to this provider's token
+    /// counts: once a reply reports its input tokens, the harness
+    /// calibrates the budget to them, and for this case's requests
+    /// Anthropic reports about 1.4 times their heuristic weight.
+    fn compaction_budget(self, weight: u64) -> u64 {
+        let percent = match self {
+            Self::Anthropic => 140,
+            Self::Kimi | Self::Muse | Self::Qwen | Self::OpenAi => 100,
+        };
+
+        weight * percent / 100
+    }
+}
+
 async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     let facts = [
         ("alpha", "maroon-11"),
@@ -600,11 +617,13 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     let recall = "What is the value of fact alpha? Set answer to only the value, or to the word \
                   unknown if this conversation never established it.";
     let recall_weight = estimator.message_weight(&ModelMessage::User(recall.into()));
-    let budget = system_weight
-        + recall_weight
-        + turn_weight("bravo", "olive-23", 2)
-        + turn_weight("charlie", "indigo-35", 3)
-        + 40;
+    let budget = provider.compaction_budget(
+        system_weight
+            + recall_weight
+            + turn_weight("bravo", "olive-23", 2)
+            + turn_weight("charlie", "indigo-35", 3)
+            + 40,
+    );
     let mut registry = ModelRegistry::new();
     registry.register(
         ExecutionIdentity::new(provider.name(), "compact-1")?,

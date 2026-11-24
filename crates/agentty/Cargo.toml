@@ -31,6 +31,12 @@ name = "protocol_compliance_e2e"
 test = false
 bench = false
 
+# Live prompt evaluation: its own harness, so `main` can dispatch the
+# native sandbox helper before anything else, as Agentty's `main` does.
+[[test]]
+name = "prompt_evaluation"
+harness = false
+
 # Marketing asset generators: a plain binary without the test harness that
 # only the `e2e-container` hook runs, when `AGENTTY_MARKETING_ASSETS` names
 # assets. Cargo still builds it with dev-dependencies and the `agentty` binary.
