@@ -620,10 +620,15 @@ fn diff_output_after_index_resolution(
 ) -> Result<String, GitError> {
     let result = (|| -> Result<String, GitError> {
         let temporary_index = copy_git_index_to_temp(index_path)?;
+        let exclusions = embedded_repository_exclusions(repo_path)?;
+        let intent_to_add = ["add", "-A", "--intent-to-add", "--", "."]
+            .into_iter()
+            .chain(exclusions.iter().map(String::as_str))
+            .collect::<Vec<_>>();
 
         run_git_command_with_index_sync(
             repo_path,
-            &["add", "-A", "--intent-to-add"],
+            &intent_to_add,
             &temporary_index,
             "Git add --intent-to-add failed",
         )?;
@@ -652,6 +657,7 @@ fn diff_output_after_index_resolution(
             "--no-color",
             "--no-textconv",
             "--no-ext-diff",
+            SUBMODULE_ISOLATION,
             "--src-prefix=a/",
             "--dst-prefix=b/",
         ];
@@ -829,6 +835,12 @@ fn run_git_command_with_index_sync(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Keeps status and diff from inspecting tracked submodule paths: Git would
+/// otherwise run `git status` inside each one, and so the configuration of
+/// whatever repository a session left there. The command-line flag
+/// overrides any `ignore` setting in `.gitmodules`, which sessions can edit.
+const SUBMODULE_ISOLATION: &str = "--ignore-submodules=all";
+
 /// Returns whether a repository or worktree has no uncommitted changes.
 ///
 /// # Arguments
@@ -865,6 +877,7 @@ pub(crate) async fn worktree_status(repo_path: PathBuf) -> Result<String, GitErr
             "status".to_string(),
             "--porcelain=v1".to_string(),
             "--untracked-files=all".to_string(),
+            SUBMODULE_ISOLATION.to_string(),
         ],
         "Git status --porcelain=v1 failed".to_string(),
     )
@@ -892,6 +905,7 @@ pub(crate) async fn tracked_worktree_status(repo_path: PathBuf) -> Result<String
             "status".to_string(),
             "--porcelain=v1".to_string(),
             "--untracked-files=no".to_string(),
+            SUBMODULE_ISOLATION.to_string(),
         ],
         "Git tracked status --porcelain=v1 failed".to_string(),
     )
@@ -2006,7 +2020,12 @@ fn reset_empty_amend_sync(repo_path: &Path) -> Result<(), GitError> {
 ///
 /// Uses shared git retry behavior for transient `index.lock` contention.
 fn stage_all_sync(repo_path: &Path) -> Result<(), GitError> {
-    let output = run_git_command_with_index_lock_retry(repo_path, &["add", "-A"], &[])?;
+    let exclusions = embedded_repository_exclusions(repo_path)?;
+    let args = ["add", "-A", "--", "."]
+        .into_iter()
+        .chain(exclusions.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    let output = run_git_command_with_index_lock_retry(repo_path, &args, &[])?;
 
     if !output.status.success() {
         let detail = command_output_detail(&output.stdout, &output.stderr);
@@ -2019,6 +2038,49 @@ fn stage_all_sync(repo_path: &Path) -> Result<(), GitError> {
 
     Ok(())
 }
+
+/// Returns pathspecs that keep `git add -A` away from every repository
+/// embedded in the worktree at `repo_path`: untracked ones, which
+/// `git ls-files --others` lists with a trailing slash instead of
+/// descending into them, and tracked gitlinks.
+///
+/// Staging an embedded repository would record it as a gitlink, and Git
+/// then runs `git status` inside it, and so its configuration such as
+/// `core.fsmonitor`, whenever the host stages, diffs, or reports status. An
+/// agent can leave such a repository in a session worktree, so the host
+/// never stages one; listing them reads only the worktree and the index.
+///
+/// # Errors
+/// Returns a [`GitError`] if either listing fails.
+fn embedded_repository_exclusions(repo_path: &Path) -> Result<Vec<String>, GitError> {
+    let untracked = run_git_command_sync(
+        repo_path,
+        &["ls-files", "-z", "--others", "--exclude-standard"],
+        "Failed to list untracked files",
+    )?;
+    let staged = run_git_command_sync(
+        repo_path,
+        &["ls-files", "-z", "--stage"],
+        "Failed to list staged files",
+    )?;
+    let untracked_repositories = untracked
+        .split('\0')
+        .filter_map(|path| path.strip_suffix('/'));
+    let gitlinks = staged.split('\0').filter_map(|entry| {
+        let (metadata, path) = entry.split_once('\t')?;
+
+        metadata.starts_with(GITLINK_MODE).then_some(path)
+    });
+
+    Ok(untracked_repositories
+        .chain(gitlinks)
+        .map(|path| format!(":(exclude,literal){path}"))
+        .collect())
+}
+
+/// Index mode Git records for a gitlink, followed by the separator before
+/// its object name.
+const GITLINK_MODE: &str = "160000 ";
 
 /// Returns the full `HEAD` commit message, or `None` when no commits exist.
 fn head_commit_message_sync(repo_path: &Path) -> Result<Option<String>, GitError> {

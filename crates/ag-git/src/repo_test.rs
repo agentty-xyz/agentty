@@ -15,9 +15,9 @@ use crate::repo::{
     AsyncGitCommand, GIT_COMMAND_TIMEOUT, NETWORK_GIT_COMMAND_TIMEOUT,
     apply_non_interactive_environment, batch_mode_ssh_command, command_output_detail,
     format_git_invocation, main_checkout_working_tree, main_checkout_working_tree_sync,
-    main_repo_root, normalize_repo_url, parse_git_directory_paths, parse_repo_root,
-    repo_root_from_git_dir_async, resolve_git_dir, run_git_command_sync,
-    run_git_command_with_timeout,
+    main_repo_root, no_submodule_recursion_environment, normalize_repo_url,
+    parse_git_directory_paths, parse_repo_root, repo_root_from_git_dir_async, resolve_git_dir,
+    run_git_command_sync, run_git_command_with_timeout,
 };
 use crate::telemetry_support::{SpanCapture, attribute, attribute_keys};
 
@@ -70,6 +70,57 @@ fn test_batch_mode_ssh_command_extends_configured_command_or_defaults_to_ssh() {
     // Assert
     assert_eq!(extended_command, "ssh -i /keys/agentty -o BatchMode=yes");
     assert_eq!(default_command, "ssh -o BatchMode=yes");
+}
+
+#[test]
+fn no_submodule_recursion_follows_the_configuration_the_environment_already_passes() {
+    // Arrange / Act
+    let alone = no_submodule_recursion_environment(None);
+    let after_two = no_submodule_recursion_environment(Some("2".to_string()));
+    let unparsable = no_submodule_recursion_environment(Some("many".to_string()));
+
+    // Assert
+    let pairs = |index: usize, count: &str| {
+        [
+            (
+                format!("GIT_CONFIG_KEY_{index}"),
+                "submodule.recurse".to_string(),
+            ),
+            (format!("GIT_CONFIG_VALUE_{index}"), "false".to_string()),
+            ("GIT_CONFIG_COUNT".to_string(), count.to_string()),
+        ]
+    };
+    assert_eq!(alone, pairs(0, "1"));
+    assert_eq!(after_two, pairs(2, "3"));
+    assert_eq!(unparsable, pairs(0, "1"));
+}
+
+#[test]
+fn git_commands_never_recurse_into_submodules_whatever_the_repository_configures() {
+    // Arrange
+    let directory = tempdir().expect("repository");
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(directory.path())
+        .status()
+        .expect("git init");
+    assert!(status.success());
+    let status = Command::new("git")
+        .args(["config", "submodule.recurse", "true"])
+        .current_dir(directory.path())
+        .status()
+        .expect("git config");
+    assert!(status.success());
+
+    // Act
+    let recurse = run_git_command_sync(
+        directory.path(),
+        &["config", "--get", "submodule.recurse"],
+        "read submodule.recurse",
+    );
+
+    // Assert
+    assert_eq!(recurse.expect("configured value").trim(), "false");
 }
 
 #[test]

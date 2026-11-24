@@ -674,7 +674,10 @@ fn apply_non_interactive_environment(command: &mut Command) {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
-        .envs(trusted_history_environment());
+        .envs(trusted_history_environment())
+        .envs(no_submodule_recursion_environment(
+            std::env::var("GIT_CONFIG_COUNT").ok(),
+        ));
 }
 
 /// Disables optional index writes and interactive prompts for async Git.
@@ -687,7 +690,34 @@ fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
-        .envs(trusted_history_environment());
+        .envs(trusted_history_environment())
+        .envs(no_submodule_recursion_environment(
+            std::env::var("GIT_CONFIG_COUNT").ok(),
+        ));
+}
+
+/// Sets `submodule.recurse=false` through Git's environment configuration,
+/// after the `configured_count` pairs the caller's environment already
+/// passes, so commands such as checkout, reset, and rebase never recurse
+/// into a submodule path, where a session may have left a repository whose
+/// hooks and configuration would then run. The environment overrides every
+/// configuration file, including a user's global `submodule.recurse=true`.
+fn no_submodule_recursion_environment(configured_count: Option<String>) -> [(String, String); 3] {
+    let index = configured_count
+        .and_then(|count| count.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+
+    [
+        (
+            format!("GIT_CONFIG_KEY_{index}"),
+            "submodule.recurse".to_string(),
+        ),
+        (format!("GIT_CONFIG_VALUE_{index}"), "false".to_string()),
+        (
+            "GIT_CONFIG_COUNT".to_string(),
+            index.saturating_add(1).to_string(),
+        ),
+    ]
 }
 
 /// Makes Git read the history the objects record, ignoring `refs/replace`

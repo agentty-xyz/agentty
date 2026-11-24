@@ -8,6 +8,8 @@ mod support;
 mod commit;
 #[path = "sync_test/diff_test.rs"]
 mod diff;
+#[path = "sync_test/embedded_test.rs"]
+mod embedded;
 #[path = "sync_test/hook_test.rs"]
 mod hook;
 #[path = "sync_test/remote_test.rs"]
