@@ -338,13 +338,23 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
                     .write_text("Create notes")
                     .wait_for_text("Create notes", 3000)
                     .press_key("Enter")
+                    // The note and the failed turn status render in separate
+                    // updates, so wait until one frame shows both.
                     .eventually(
                         Duration::from_secs(30),
                         Duration::from_millis(100),
                         |frame| {
                             let full = Region::full(frame.cols(), frame.rows());
 
-                            assertion::match_text_in_region(frame, "(overloaded);", &full)
+                            assertion::match_text_in_region(frame, "(overloaded);", &full).and_then(
+                                |()| {
+                                    assertion::match_text_in_region(
+                                        frame,
+                                        "Harness turn failed",
+                                        &full,
+                                    )
+                                },
+                            )
                         },
                     )
                     .capture_labeled(
