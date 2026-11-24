@@ -138,11 +138,12 @@ impl ToolRows {
         row.status = status;
         row.facts.failure = failure;
         Self::record_outcome(&mut row, call);
+        let error = Self::error_message(&call.output);
         if row.status == ActivityStatus::Failed && row.facts.reason.is_none() {
-            row.facts.reason = first_line(&call.output);
+            row.facts.reason = first_line(error.as_deref().unwrap_or(&call.output));
         }
         if row.outcome() == ActivityStatus::Failed {
-            row.output = Self::failure_tail(row.kind, &call.output);
+            row.output = Self::failure_tail(row.kind, &call.output, error.as_deref());
         }
         row.observed_at = SystemTime::now();
 
@@ -188,11 +189,15 @@ impl ToolRows {
     /// standard error, or its standard output when that is empty. A result
     /// that is not a command outcome skips its first line, which is the
     /// row's reason.
-    fn failure_tail(kind: ActivityKind, output: &str) -> Option<String> {
-        let text = (kind == ActivityKind::Command)
-            .then(|| Self::command_output(output))
-            .flatten()
-            .unwrap_or_else(|| output.lines().skip(1).collect::<Vec<_>>().join("\n"));
+    fn failure_tail(kind: ActivityKind, output: &str, error: Option<&str>) -> Option<String> {
+        let after_reason = |text: &str| text.lines().skip(1).collect::<Vec<_>>().join("\n");
+        let text = match error {
+            Some(error) => after_reason(error),
+            None => (kind == ActivityKind::Command)
+                .then(|| Self::command_output(output))
+                .flatten()
+                .unwrap_or_else(|| after_reason(output)),
+        };
         let mut lines = text
             .lines()
             .rev()
@@ -202,6 +207,18 @@ impl ToolRows {
         lines.reverse();
 
         (!lines.is_empty()).then(|| lines.join("\n"))
+    }
+
+    /// Returns the `error` message of a result the harness answered a call
+    /// with when it did not run it, such as a rejected write's
+    /// `{"error": "invalid patch: …", "status": "rejected"}`, or `None` for
+    /// any other result.
+    fn error_message(output: &str) -> Option<String> {
+        serde_json::from_str::<Value>(output)
+            .ok()?
+            .get("error")?
+            .as_str()
+            .map(str::to_string)
     }
 
     /// Returns the end of a `bash` result's standard error, or of its

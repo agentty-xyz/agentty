@@ -1047,7 +1047,7 @@ async fn rejected_write_reports_a_failed_row_with_its_reason_after_its_narration
         row.facts
             .reason
             .as_deref()
-            .is_some_and(|reason| !reason.is_empty()),
+            .is_some_and(|reason| reason.starts_with("invalid patch")),
         "{row:?}"
     );
     assert_eq!(

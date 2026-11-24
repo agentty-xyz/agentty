@@ -343,10 +343,28 @@ fn rejected_command_tail_leaves_out_its_reason() {
         &json!({}),
     );
 
+    let malformed = answered_row(
+        "bash",
+        "{}",
+        "rejected",
+        &json!({
+            "error": "failed to parse function arguments: missing field `command`\nat line 1",
+            "hint": "This call did not run. Call `bash` again with valid JSON arguments.",
+            "status": "rejected"
+        })
+        .to_string(),
+        &json!({}),
+    );
+
     // Assert
     assert_eq!(short.facts.failure, Some(ActivityFailure::Rejected));
     assert_eq!(short.facts.reason.as_deref(), Some(output));
     assert_eq!(short.output, None);
+    assert_eq!(
+        malformed.facts.reason.as_deref(),
+        Some("failed to parse function arguments: missing field `command`")
+    );
+    assert_eq!(malformed.output.as_deref(), Some("at line 1"));
     assert_eq!(
         long.output.as_deref(),
         Some("expected an object\nwith a command")
@@ -356,11 +374,19 @@ fn rejected_command_tail_leaves_out_its_reason() {
 #[test]
 fn rejected_write_fails_with_its_reason() {
     // Arrange
-    let output = "hunk 1 context mismatch at line 1216\nexpected: fn render\nfound: fn draw";
+    let reason = "invalid patch: hunk 1 context and removed lines do not match the target at \
+                  header line 1216 or anywhere else; re-read the file and copy those lines exactly";
+    let output = json!({"error": reason, "path": "src/composer.rs", "status": "rejected"});
     let arguments = r#"{"path": "src/composer.rs", "patch": "@@ -1 +1 @@\n-a\n+b\n"}"#;
 
     // Act
-    let rejected = answered_row("write", arguments, "rejected", output, &json!({}));
+    let rejected = answered_row(
+        "write",
+        arguments,
+        "rejected",
+        &output.to_string(),
+        &json!({}),
+    );
     let written = answered_row(
         "write",
         arguments,
@@ -374,14 +400,8 @@ fn rejected_write_fails_with_its_reason() {
     assert_eq!(rejected.status, ActivityStatus::Failed);
     assert_eq!(rejected.facts.failure, Some(ActivityFailure::Rejected));
     assert_eq!(rejected.facts.target.as_deref(), Some("src/composer.rs"));
-    assert_eq!(
-        rejected.facts.reason.as_deref(),
-        Some("hunk 1 context mismatch at line 1216")
-    );
-    assert_eq!(
-        rejected.output.as_deref(),
-        Some("expected: fn render\nfound: fn draw")
-    );
+    assert_eq!(rejected.facts.reason.as_deref(), Some(reason));
+    assert_eq!(rejected.output, None);
     assert_eq!(rejected.facts.diff_stat, None);
     assert_eq!(written.status, ActivityStatus::Completed);
     assert_eq!(
