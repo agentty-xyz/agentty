@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_usage (\n    session_id, model, purpose, created_at, input_tokens, output_tokens, invocation_count,\n    cache_read_tokens, cache_write_tokens, reasoning_tokens, request_count,\n    unreported_request_count, detailed_invocation_count, cost_micro_usd, cost_basis,\n    unpriced_invocation_count, context_peak_tokens, context_window_tokens\n)\nVALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)\nON CONFLICT(session_id, model, purpose) DO UPDATE SET\n    input_tokens = input_tokens + excluded.input_tokens,\n    output_tokens = output_tokens + excluded.output_tokens,\n    invocation_count = invocation_count + 1,\n    cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,\n    cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,\n    reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens,\n    request_count = request_count + excluded.request_count,\n    unreported_request_count = unreported_request_count + excluded.unreported_request_count,\n    detailed_invocation_count = detailed_invocation_count + 1,\n    cost_micro_usd = CASE\n        WHEN excluded.cost_micro_usd IS NULL THEN cost_micro_usd\n        ELSE COALESCE(cost_micro_usd, 0) + excluded.cost_micro_usd\n    END,\n    cost_basis = CASE\n        WHEN excluded.cost_basis IS NULL THEN cost_basis\n        WHEN cost_basis IS NULL OR cost_basis = excluded.cost_basis THEN excluded.cost_basis\n        ELSE 'mixed'\n    END,\n    unpriced_invocation_count = unpriced_invocation_count + excluded.unpriced_invocation_count,\n    context_peak_tokens = MAX(\n        COALESCE(context_peak_tokens, excluded.context_peak_tokens),\n        COALESCE(excluded.context_peak_tokens, context_peak_tokens)\n    ),\n    context_window_tokens = COALESCE(excluded.context_window_tokens, context_window_tokens)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 16
+    },
+    "nullable": []
+  },
+  "hash": "25a3339fbecdb417f702a5b62adf6acb65902b93ad9c66ac2dcadc491df9a3e9"
+}

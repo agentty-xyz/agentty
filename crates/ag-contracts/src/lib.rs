@@ -13,6 +13,7 @@ mod permission;
 mod provider_call_budget;
 mod reasoning;
 mod session;
+mod usage;
 
 pub use activity::{
     ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
@@ -37,3 +38,4 @@ pub use permission::PermissionMode;
 pub use provider_call_budget::{ProviderCallBudget, ProviderCallLedger};
 pub use reasoning::ReasoningLevel;
 pub use session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
+pub use usage::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsagePurpose};

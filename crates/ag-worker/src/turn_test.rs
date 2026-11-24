@@ -6,8 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, PermissionMode,
-    ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, ModelUsage,
+    PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
+    TurnResult, TurnUsage,
 };
 use ag_protocol::TurnPrompt;
 use ag_telemetry::{Context, KeyValue, Span, TraceContextExt as _};
@@ -49,10 +50,9 @@ async fn configured_session_policy_replaces_request_policy_and_survives_repair()
                 Ok(AppServerTurnResponse {
                     assistant_message: output.into(),
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: TurnUsage::default(),
                 })
             })
         });
@@ -154,18 +154,10 @@ async fn agent_runs_pass_their_identity_to_provider_operations() {
 async fn returns_runtime_output_and_errors() {
     // Arrange
     let mut channel = MockAgentChannel::new();
-    channel.expect_run_turn().times(1).returning(|_, _, _| {
-        Box::pin(async {
-            Ok(TurnResult {
-                assistant_message: ag_protocol::AgentResponse::plain("done"),
-                context_reset: false,
-                harness_report: None,
-                input_tokens: 3,
-                output_tokens: 5,
-                provider_conversation_id: None,
-            })
-        })
-    });
+    channel
+        .expect_run_turn()
+        .times(1)
+        .returning(|_, _, _| Box::pin(async { Ok(completed_turn()) }));
     // Act
     let result = SessionRunClient::from_channel("session".into(), Arc::new(channel))
         .submit(
@@ -176,7 +168,7 @@ async fn returns_runtime_output_and_errors() {
         .await
         .expect("test operation succeeds");
     // Assert
-    assert_eq!(result.output_tokens, 5);
+    assert_eq!(result.usage.output_tokens(), 5);
     let mut channel = MockAgentChannel::new();
     channel
         .expect_run_turn()
@@ -588,8 +580,14 @@ async fn session_clients_share_global_admission_and_cancel_waiting_turns() {
         Err(AgentError::InterruptedByUser(_))
     ));
     assert!(cleanup_ran_while_turn_occupied);
-    assert_eq!(first_result.expect("regular result").output_tokens, 5);
-    assert_eq!(second_result.expect("managed result").output_tokens, 5);
+    assert_eq!(
+        first_result.expect("regular result").usage.output_tokens(),
+        5
+    );
+    assert_eq!(
+        second_result.expect("managed result").usage.output_tokens(),
+        5
+    );
     assert!(second_started.load(Ordering::SeqCst));
 }
 
@@ -684,9 +682,12 @@ fn completed_turn() -> TurnResult {
         assistant_message: ag_protocol::AgentResponse::plain("done"),
         context_reset: false,
         harness_report: None,
-        input_tokens: 3,
-        output_tokens: 5,
         provider_conversation_id: None,
+        usage: TurnUsage::single(ModelUsage {
+            input_tokens: 3,
+            output_tokens: 5,
+            ..ModelUsage::new("model")
+        }),
     }
 }
 

@@ -17,10 +17,12 @@ use ag_session::AgentKind;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::claude_usage::ClaudeUsageMeter;
 use crate::agent::cli::error;
 use crate::agent::cli::execution::{
     self, CliExecutionError, CliExecutionObserver, CliExitStatus, CliStdoutPayload,
 };
+use crate::agent::usage::priced_turn_usage;
 use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
 use crate::app_server::steering::{self, TurnSteeringRegistry};
 
@@ -38,6 +40,8 @@ pub(crate) struct CliAgentChannel {
     backend: Arc<dyn AgentBackend>,
     /// Provider family used for stream and response parsing.
     kind: AgentKind,
+    /// Latest cumulative cost estimate the agent reported for each session.
+    reported_costs: ReportedCosts,
     /// Steering inboxes of running session turns for steerable providers.
     steering: TurnSteeringRegistry,
 }
@@ -54,7 +58,39 @@ impl CliAgentChannel {
             active: Arc::default(),
             backend,
             kind,
+            reported_costs: ReportedCosts::default(),
             steering: TurnSteeringRegistry::default(),
+        }
+    }
+}
+
+/// Latest cumulative cost estimate, in micro-USD, an agent reported for each
+/// session, from which each later turn's own cost is derived.
+#[derive(Clone, Default)]
+struct ReportedCosts(Arc<Mutex<HashMap<String, u64>>>);
+
+impl ReportedCosts {
+    /// Returns a turn's own share of `cumulative`, the agent's cumulative
+    /// cost estimate after the turn, and records it as the session's latest
+    /// estimate; `None` when the agent reported none.
+    ///
+    /// Claude Code's estimate counts a resumed session's earlier spend, so a
+    /// turn costs the difference from the session's previous estimate. A
+    /// smaller estimate means the total restarted, as it does on Claude Code
+    /// releases that do not restore earlier spend, so it is the turn's own.
+    /// A resumed turn without a previous estimate in this process, such as
+    /// the first turn after a restart, has no known share.
+    fn turn_share(&self, session_id: &str, cumulative: Option<u64>, resumed: bool) -> Option<u64> {
+        let cumulative = cumulative?;
+        let previous = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session_id.to_string(), cumulative);
+
+        match previous {
+            Some(previous) => Some(cumulative.checked_sub(previous).unwrap_or(cumulative)),
+            None => (!resumed).then_some(cumulative),
         }
     }
 }
@@ -103,6 +139,10 @@ struct CliTurnObserver {
     kind: AgentKind,
     /// Whether ordinary loader text may be forwarded for this attempt.
     show_progress: bool,
+    /// Model and usage of a turn whose live usage is forwarded as
+    /// [`TurnEvent::UsageUpdated`]; only Claude Code reports usage while a
+    /// turn runs.
+    usage: Option<(String, Mutex<ClaudeUsageMeter>)>,
 }
 
 impl CliTurnObserver {
@@ -116,6 +156,31 @@ impl CliTurnObserver {
             events,
             kind,
             show_progress,
+            usage: None,
+        }
+    }
+
+    /// Forwards the live usage of a Claude Code turn on `model`.
+    fn with_usage(mut self, model: &str) -> Self {
+        if self.kind == AgentKind::Claude {
+            self.usage = Some((model.to_string(), Mutex::default()));
+        }
+
+        self
+    }
+
+    /// Folds one stdout event into the turn's usage and forwards the usage
+    /// when the event reported some.
+    fn forward_usage(&self, event: &serde_json::Value) {
+        let Some((model, meter)) = &self.usage else {
+            return;
+        };
+        let mut meter = meter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if meter.observe(event) {
+            let usage = priced_turn_usage(meter.usage(), model, self.kind, None);
+            let _ = self.events.send(TurnEvent::UsageUpdated(usage));
         }
     }
 }
@@ -131,6 +196,7 @@ impl CliExecutionObserver for CliTurnObserver {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .observe(self.kind, value);
+            self.forward_usage(value);
         }
         if !self.show_progress {
             return;
@@ -210,6 +276,7 @@ impl AgentChannel for CliAgentChannel {
         let backend = Arc::clone(&self.backend);
         let active = Arc::clone(&self.active);
         let steering_registry = self.steering.clone();
+        let reported_costs = self.reported_costs.clone();
 
         Box::pin(async move {
             let cancellation = CancellationToken::new();
@@ -236,7 +303,8 @@ impl AgentChannel for CliAgentChannel {
                 .map_err(|error| AgentError::Backend(error.to_string()))?;
                 let mut build_request = build_command_request(&req, &prompt_text);
                 build_request.replay_transcript = replay.text.as_deref();
-                let observer = CliTurnObserver::new(events.clone(), kind, true);
+                let observer =
+                    CliTurnObserver::new(events.clone(), kind, true).with_usage(&req.model);
                 if let Some(budget) = &req.provider_call_budget {
                     budget
                         .consume()
@@ -273,6 +341,11 @@ impl AgentChannel for CliAgentChannel {
                 }
 
                 let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
+                let reported_cost = reported_costs.turn_share(
+                    &session_id,
+                    parsed.reported_cost,
+                    req.request_kind.is_resume(),
+                );
                 let mut assistant_message =
                     parse_or_repair_cli_response(kind, &parsed.content, &req, &backend, &events)
                         .await?;
@@ -292,9 +365,8 @@ impl AgentChannel for CliAgentChannel {
                     assistant_message,
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: parsed.stats.input_tokens,
-                    output_tokens: parsed.stats.output_tokens,
                     provider_conversation_id: None,
+                    usage: priced_turn_usage(parsed.usage, &req.model, kind, reported_cost),
                 })
             };
             let result = tokio::select! {

@@ -1,9 +1,10 @@
 //! Task agent response persistence tests for idempotency, conflicts, usage,
 //! and per-task history.
 
+use ag_contracts::TurnUsage;
 use ag_session::{SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus};
 
-use crate::test_support::{agent_task_request, task_database_fixture};
+use crate::test_support::{agent_task_request, task_database_fixture, token_usage};
 use crate::{Database, TaskAgentTurnMetadata};
 
 #[tokio::test]
@@ -25,7 +26,7 @@ async fn task_response_preserves_ordinary_conversation_and_uses_captured_model()
     // Act
     database
         .tasks()
-        .persist_agent_turn("first", &metadata)
+        .persist_agent_turn("first", &metadata, &turn_usage())
         .await
         .expect("response");
     let history = database
@@ -91,7 +92,7 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
     let first = metadata("first");
     let first_recorded = database
         .tasks()
-        .persist_agent_turn("first", &first)
+        .persist_agent_turn("first", &first, &turn_usage())
         .await
         .expect("first response");
     database
@@ -109,14 +110,14 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
     };
     database
         .tasks()
-        .persist_agent_turn("second", &second)
+        .persist_agent_turn("second", &second, &TurnUsage::default())
         .await
         .expect("second response");
 
     // Act
     let duplicate_recorded = database
         .tasks()
-        .persist_agent_turn("first", &first)
+        .persist_agent_turn("first", &first, &turn_usage())
         .await
         .expect("late duplicate");
     let history = database
@@ -158,7 +159,7 @@ async fn conflicting_response_cannot_replace_observed_output_or_provider_state()
     let original = metadata("first");
     database
         .tasks()
-        .persist_agent_turn("first", &original)
+        .persist_agent_turn("first", &original, &turn_usage())
         .await
         .expect("response");
     let before = database
@@ -190,7 +191,10 @@ async fn conflicting_response_cannot_replace_observed_output_or_provider_state()
     ];
     for changed in changes {
         // Act
-        let result = database.tasks().persist_agent_turn("first", &changed).await;
+        let result = database
+            .tasks()
+            .persist_agent_turn("first", &changed, &turn_usage())
+            .await;
 
         // Assert
         assert!(result.is_err());
@@ -259,7 +263,7 @@ async fn response_requires_a_running_uncanceled_role_attempt() {
         // Act
         let result = database
             .tasks()
-            .persist_agent_turn("first", &metadata("first"))
+            .persist_agent_turn("first", &metadata("first"), &turn_usage())
             .await;
 
         // Assert
@@ -296,7 +300,7 @@ async fn invalid_response_metadata_is_rejected_without_storage() {
         // Act
         let result = database
             .tasks()
-            .persist_agent_turn("first", &metadata)
+            .persist_agent_turn("first", &metadata, &turn_usage())
             .await;
 
         // Assert
@@ -329,7 +333,7 @@ async fn failed_usage_write_rolls_back_response_continuation_and_counters() {
     // Act
     let result = database
         .tasks()
-        .persist_agent_turn("first", &metadata)
+        .persist_agent_turn("first", &metadata, &turn_usage())
         .await;
     let history = database
         .tasks()
@@ -356,7 +360,7 @@ async fn failed_usage_write_rolls_back_response_continuation_and_counters() {
         .expect("restore writes");
     database
         .tasks()
-        .persist_agent_turn("first", &metadata)
+        .persist_agent_turn("first", &metadata, &turn_usage())
         .await
         .expect("retry persistence");
 
@@ -372,7 +376,7 @@ async fn corrupted_task_replay_and_usage_fail_closed() {
     let metadata = metadata("first");
     database
         .tasks()
-        .persist_agent_turn("first", &metadata)
+        .persist_agent_turn("first", &metadata, &turn_usage())
         .await
         .expect("response");
     sqlx::query("PRAGMA ignore_check_constraints = ON")
@@ -399,7 +403,7 @@ async fn corrupted_task_replay_and_usage_fail_closed() {
         let load = database.tasks().load_agent_history("task").await;
         let duplicate = database
             .tasks()
-            .persist_agent_turn("first", &metadata)
+            .persist_agent_turn("first", &metadata, &turn_usage())
             .await;
 
         // Assert
@@ -448,7 +452,7 @@ async fn responses_in_the_same_session_stay_in_their_own_task_histories() {
     for attempt in ["first", "second"] {
         database
             .tasks()
-            .persist_agent_turn(attempt, &metadata(attempt))
+            .persist_agent_turn(attempt, &metadata(attempt), &turn_usage())
             .await
             .expect("response");
     }
@@ -496,6 +500,11 @@ async fn running_attempt(database: &Database, attempt_id: &str) {
         .mark_session_operation_running(&format!("task-attempt:{attempt_id}"))
         .await
         .expect("running");
+}
+
+/// Returns the usage detail of the response [`metadata`] describes.
+fn turn_usage() -> TurnUsage {
+    token_usage("gpt-6.1-sol", 7, 3)
 }
 
 fn metadata(label: &str) -> TaskAgentTurnMetadata {

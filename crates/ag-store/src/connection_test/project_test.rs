@@ -1,9 +1,10 @@
 //! Project persistence tests for session stats, favorites, and last-opened
 //! timestamps.
 
-use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
+use ag_session::test_support as model_fixture;
 
 use crate::connection::Database;
+use crate::test_support::token_usage;
 use crate::{AppRepositories, SessionTurnMetadata};
 
 #[tokio::test]
@@ -33,13 +34,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: SessionDiffState::Unknown,
-                    input_tokens: 1_200,
-                    output_tokens: 650,
-                },
+                usage: token_usage(model_fixture::CODEX_MODEL.as_str(), 1_200, 650),
             },
         )
         .await
@@ -60,13 +55,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: SessionDiffState::Unknown,
-                    input_tokens: 3,
-                    output_tokens: 5,
-                },
+                usage: token_usage(model_fixture::CODEX_MODEL.as_str(), 3, 5),
             },
         )
         .await

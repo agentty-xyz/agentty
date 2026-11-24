@@ -159,23 +159,20 @@ async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
 }
 
 #[tokio::test]
-/// Verifies blank thoughts, reserved terminal events, and a repeated thought
-/// after an exhausted coalescing budget publish no extra progress updates.
+/// Verifies blank thoughts, usage updates, reserved terminal events, and a
+/// repeated thought after an exhausted coalescing budget publish no extra
+/// progress updates.
 async fn test_consume_turn_events_skips_blank_terminal_and_repeated_progress_events() {
     // Arrange
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let completed = || TurnEvent::Completed {
-        context_reset: false,
-        input_tokens: 0,
-        output_tokens: 0,
-    };
+    let usage_updated = || TurnEvent::UsageUpdated(ag_contracts::TurnUsage::default());
     let mut events = vec![
         TurnEvent::ThoughtDelta("   ".to_string()),
-        completed(),
+        usage_updated(),
         TurnEvent::Failed("reserved".to_string()),
         TurnEvent::ThoughtDelta("same".to_string()),
-        completed(),
+        usage_updated(),
         TurnEvent::Failed("reserved".to_string()),
         TurnEvent::ThoughtDelta(" ".to_string()),
         TurnEvent::PidUpdate(Some(4242)),
@@ -271,9 +268,8 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
                     assistant_message: AgentResponse::plain("done"),
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });

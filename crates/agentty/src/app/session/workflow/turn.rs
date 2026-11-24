@@ -623,8 +623,10 @@ pub(super) async fn load_session_speed_mode(
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and keeps the latest message as the turn's fallback progress.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
-/// - [`TurnEvent::Completed`] / [`TurnEvent::Failed`]: reserved; ignored here
-///   because completion is signalled by `run_turn`'s return value.
+/// - [`TurnEvent::UsageUpdated`]: ignored; the turn's final usage is persisted
+///   from `run_turn`'s result.
+/// - [`TurnEvent::Failed`]: reserved; ignored here because completion is
+///   signalled by `run_turn`'s return value.
 ///
 /// The session's progress text, which the loader and remote clients show,
 /// follows the timeline's current action, such as `Running cargo test`, and
@@ -700,9 +702,9 @@ impl TurnEventConsumer<'_> {
             }
             TurnEvent::Notice(notice) => activity.observe_notice(&notice),
             TurnEvent::PidUpdate(pid) => set_child_pid(self.child_pid, pid),
-            TurnEvent::ThoughtDelta(_) | TurnEvent::Completed { .. } | TurnEvent::Failed(_) => {
-                // Completion is signalled by run_turn's return value; these
-                // variants are reserved for future use and ignored here.
+            TurnEvent::ThoughtDelta(_) | TurnEvent::UsageUpdated(_) | TurnEvent::Failed(_) => {
+                // Completion and final usage arrive with run_turn's return
+                // value.
             }
         }
     }

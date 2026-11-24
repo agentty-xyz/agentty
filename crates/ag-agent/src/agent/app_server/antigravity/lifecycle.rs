@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use ag_contracts::{PermissionMode, ReasoningLevel};
+use ag_contracts::{PermissionMode, ReasoningLevel, TurnUsage};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
@@ -15,6 +15,7 @@ use super::usage::{TokenUsage, TurnUsageTracker};
 use crate::agent::prompt::{
     CliPromptAccessRootMode, cli_prompt_access_directories, render_prompt_with_local_images,
 };
+use crate::agent::usage::priced_turn_usage;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::{agent, app_server_transport};
 
@@ -171,7 +172,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     state: &mut AntigravityRuntimeState,
     prompt: &TurnPrompt,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
-) -> Result<(String, u64, u64), AppServerError> {
+) -> Result<(String, TurnUsage), AppServerError> {
     run_turn_with_timeout(
         transport,
         state,
@@ -188,7 +189,7 @@ async fn run_turn_with_timeout<Transport: AppServerRuntimeTransport>(
     prompt: &TurnPrompt,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     turn_timeout: Duration,
-) -> Result<(String, u64, u64), AppServerError> {
+) -> Result<(String, TurnUsage), AppServerError> {
     let prompt_text =
         render_prompt_with_local_images(&prompt.text, &prompt.attachments, "Antigravity")
             .map_err(|error| AppServerError::PromptRender(error.to_string()))?;
@@ -243,7 +244,10 @@ async fn run_turn_with_timeout<Transport: AppServerRuntimeTransport>(
             })?;
             let usage = usage_tracker.finish(result, &mut state.previous_cumulative_usage);
 
-            return Ok((assistant_message, usage.input_tokens, usage.output_tokens));
+            return Ok((
+                assistant_message,
+                priced_turn_usage(usage, &state.model, AgentKind::Antigravity, None),
+            ));
         }
     })
     .await

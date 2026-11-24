@@ -13,7 +13,7 @@ use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::domain::composer::{PendingImagePaste, PromptAttachment};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionAttachmentState, QuestionItem, QuestionProgress};
-use crate::domain::session::{SessionDiffState, SessionId, SessionStats, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 
@@ -188,11 +188,8 @@ async fn new_turn_questions_remove_images_from_replaced_answers() {
             selected_option_index: None,
         },
     );
-    let turn_applied_state = test_turn_applied_state(
-        vec![QuestionItem::new("New question?")],
-        Vec::new(),
-        SessionStats::default(),
-    );
+    let turn_applied_state =
+        test_turn_applied_state(vec![QuestionItem::new("New question?")], Vec::new());
 
     // Act
     app.apply_app_events(AppEvent::AgentResponseReceived {
@@ -424,7 +421,6 @@ async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
             ),
         ],
         Vec::new(),
-        SessionStats::default(),
     );
 
     // Act
@@ -481,7 +477,6 @@ async fn apply_app_events_agent_response_clears_saved_question_progress() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("New question?")],
             Vec::new(),
-            SessionStats::default(),
         ),
     })
     .await;
@@ -491,9 +486,8 @@ async fn apply_app_events_agent_response_clears_saved_question_progress() {
 }
 
 #[tokio::test]
-/// Verifies reducer-applied turn projections clear stale questions and add
-/// token deltas to cached session stats.
-async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
+/// Verifies reducer-applied turn projections clear stale questions.
+async fn apply_app_events_agent_response_clears_stale_questions() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
         Arc::new(MockTmuxClient::new()),
@@ -502,24 +496,12 @@ async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
     let mut session =
         crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/session-stats-view"));
     session.questions = vec![QuestionItem::new("Old question?")];
-    session.stats.input_tokens = 5;
-    session.stats.output_tokens = 8;
     app.sessions.push_session(session);
 
     // Act
     app.apply_app_events(AppEvent::AgentResponseReceived {
         session_id: "session-1".into(),
-        turn_applied_state: test_turn_applied_state(
-            Vec::new(),
-            Vec::new(),
-            SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: SessionDiffState::Unknown,
-                input_tokens: 13,
-                output_tokens: 21,
-            },
-        ),
+        turn_applied_state: test_turn_applied_state(Vec::new(), Vec::new()),
     })
     .await;
 
@@ -528,8 +510,6 @@ async fn apply_app_events_agent_response_updates_questions_and_token_usage() {
         app.sessions.sessions()[0].questions,
         [] as [ag_protocol::QuestionItem; 0]
     );
-    assert_eq!(app.sessions.sessions()[0].stats.input_tokens, 18);
-    assert_eq!(app.sessions.sessions()[0].stats.output_tokens, 29);
 }
 
 #[tokio::test]

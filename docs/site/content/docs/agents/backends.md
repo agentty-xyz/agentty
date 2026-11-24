@@ -150,6 +150,27 @@ spawning, though provider exceptions such as resumed subagents can exceed it.
 Enforcement depends on the installed CLI. Antigravity subagents are not capped. These
 are per-session provider limits, not host-wide CPU or memory limits.
 
+## Token Usage Reporting
+
+<a id="backends-usage-reporting"></a> Agentty records the tokens each session uses per
+model, with the work they served: session turns, commit assistance, or rebase
+assistance. Input counts include prompt-cache reads and writes, matching the providers'
+own counts. A detail a backend does not report is kept as unknown, never as zero, and a
+turn that reports no counts is recorded as unreported. Estimated charges are not bills.
+
+| Backend     | Cache reads | Cache writes | Reasoning     | Context window | Estimated charge                 |
+| ----------- | ----------- | ------------ | ------------- | -------------- | -------------------------------- |
+| Harness     | Yes         | Anthropic    | Not Anthropic | Yes            | List price of cataloged models   |
+| Claude      | Yes         | Yes          | No            | Yes            | Claude Code's own, or list price |
+| Codex       | Yes         | Yes          | Yes           | Yes            | OpenAI list price, when listed   |
+| Antigravity | Yes         | No           | Yes           | No             | None                             |
+
+Claude Code reports its own estimate as a running total across a resumed session, so
+Agentty charges each turn the difference from the previous turn; the first resumed turn
+after Agentty restarts uses the Anthropic list price instead. Claude token counts cover
+the main conversation; tokens Claude subagents use are not included yet. Codex and
+Claude estimates do not yet distinguish a subscription login from an API key.
+
 ## Available Models
 
 <a id="backends-available-models"></a> Pickers show only the models below. Stored

@@ -1,5 +1,6 @@
 //! Public task-history durability and idempotent response persistence.
 
+use ag_contracts::{ModelUsage, TurnUsage};
 use ag_session::{
     AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, DurableMessageVisibility,
     SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
@@ -42,9 +43,15 @@ async fn reopening_retains_task_only_continuation_and_exact_response() {
         output_tokens: 2,
         provider_conversation_id: Some("task-thread".to_string()),
     };
+    let turn_usage = TurnUsage::single(ModelUsage {
+        input_tokens: 5,
+        output_tokens: 2,
+        requests: 1,
+        ..ModelUsage::new("gpt-6.1-sol")
+    });
     database
         .tasks()
-        .persist_agent_turn("first", &metadata)
+        .persist_agent_turn("first", &metadata, &turn_usage)
         .await
         .expect("persist response");
     database
@@ -63,7 +70,7 @@ async fn reopening_retains_task_only_continuation_and_exact_response() {
     let reopened = Database::open(&path).await.expect("reopen");
     reopened
         .tasks()
-        .persist_agent_turn("first", &metadata)
+        .persist_agent_turn("first", &metadata, &turn_usage)
         .await
         .expect("idempotent saved response");
     let history = reopened

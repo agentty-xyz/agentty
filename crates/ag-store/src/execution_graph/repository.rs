@@ -48,12 +48,14 @@ pub trait GraphRepository: Send + Sync {
     /// cascades their receipts. Legacy links never allocate runtime resources.
     async fn list_task_context_ids(&self, session_id: &str) -> Result<Vec<String>, DbError>;
     /// Records an isolated task's observed response and provider continuation
-    /// before ordered effects. Requires the exact running graph claim; usage
-    /// is accounted once. This does not settle execution or release gates.
+    /// before ordered effects. Requires the exact running graph claim;
+    /// `usage` is accounted once as a session turn's usage. This does not
+    /// settle execution or release gates.
     async fn record_task_turn(
         &self,
         dispatch: &ag_worker::GraphDispatch,
         metadata: &crate::TaskAgentTurnMetadata,
+        usage: &ag_contracts::TurnUsage,
     ) -> Result<bool, DbError>;
 
     /// Reads an observed task turn, including a response whose effects failed.
@@ -348,8 +350,9 @@ impl GraphRepository for SqliteGraphRepository {
         &self,
         dispatch: &ag_worker::GraphDispatch,
         metadata: &crate::TaskAgentTurnMetadata,
+        usage: &ag_contracts::TurnUsage,
     ) -> Result<bool, DbError> {
-        self.save_task_turn(dispatch, metadata).await
+        self.save_task_turn(dispatch, metadata, usage).await
     }
 
     async fn load_task_turn(

@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ag_contracts::{ModelUsage, TurnUsage, UsagePurpose};
 use ag_session::{SettingName, test_support as model_fixture};
 use agentty::db::{DB_DIR, DB_FILE, Database};
-use agentty::domain::session::SessionStats;
 use agentty::domain::session_message::SessionMessageKind;
 use assert_cmd::cargo::cargo_bin;
 
@@ -382,14 +382,15 @@ async fn seed_showcase_sessions(
             .update_session_diff_stats(10, 5, true, session.id, session.size)
             .await?;
         database
-            .sessions()
-            .update_session_stats(
+            .usage()
+            .upsert_session_usage(
                 session.id,
-                &SessionStats {
+                UsagePurpose::Turn,
+                &TurnUsage::single(ModelUsage {
                     input_tokens: session.input_tokens,
                     output_tokens: session.output_tokens,
-                    ..SessionStats::default()
-                },
+                    ..ModelUsage::new(session.model)
+                }),
             )
             .await?;
 

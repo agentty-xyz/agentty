@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ag_contracts::{
-    AgentRequestKind, OneShotClient as _, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode,
+    AgentRequestKind, OneShotClient as _, OneShotRequest, PermissionMode, ReasoningLevel,
+    SpeedMode, TurnUsage,
 };
 use ag_protocol::ProtocolSchemaInstructionMode;
 use ag_telemetry::{Span, TraceContextExt as _};
@@ -53,7 +54,7 @@ impl AppServerClient for ObservedServer {
                         } else {
                             r#"{"answer":"done"}"#
                         };
-                        Ok((answer.to_string(), 1, 1))
+                        Ok((answer.to_string(), TurnUsage::default()))
                     })
                 },
                 |()| Box::pin(async {}),

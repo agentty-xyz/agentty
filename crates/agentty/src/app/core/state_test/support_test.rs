@@ -28,7 +28,7 @@ use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionDiffState, SessionDiffStats,
-    SessionFollowUpTask, SessionId, SessionSize, SessionStats, Status,
+    SessionFollowUpTask, SessionId, SessionSize, Status,
 };
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -49,7 +49,6 @@ use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, Pro
 pub(super) fn test_turn_applied_state(
     questions: Vec<QuestionItem>,
     follow_up_tasks: Vec<&str>,
-    token_usage_delta: SessionStats,
 ) -> TurnAppliedState {
     TurnAppliedState {
         follow_up_tasks: follow_up_tasks
@@ -63,7 +62,6 @@ pub(super) fn test_turn_applied_state(
             })
             .collect(),
         questions,
-        token_usage_delta,
     }
 }
 

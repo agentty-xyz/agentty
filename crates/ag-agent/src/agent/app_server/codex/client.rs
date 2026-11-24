@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ag_contracts::{ReasoningLevel, SpeedMode};
+use ag_contracts::{ReasoningLevel, SpeedMode, TurnUsage};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
@@ -82,7 +82,7 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
         speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
         steering: Option<Arc<TurnSteeringInbox>>,
-    ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
+    ) -> BorrowedAppServerFuture<'scope, Result<(String, TurnUsage), AppServerError>> {
         Box::pin(async move {
             lifecycle::run_turn_with_runtime(
                 &mut runtime.transport,

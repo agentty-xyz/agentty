@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode,
+    TurnUsage,
 };
 use ag_session::AgentKind;
 use tokio::sync::mpsc;
@@ -34,10 +35,9 @@ fn response(text: &str) -> AppServerTurnResponse {
     AppServerTurnResponse {
         assistant_message: text.into(),
         context_reset: false,
-        input_tokens: 0,
-        output_tokens: 0,
         pid: None,
         provider_conversation_id: None,
+        usage: TurnUsage::default(),
     }
 }
 

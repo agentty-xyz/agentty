@@ -131,10 +131,11 @@ async fn execute(
                 assistant_message: serde_json::json!(result.assistant_message).to_string(),
                 harness_turn_report: result.harness_report,
                 instruction_conversation_id,
-                input_tokens: result.input_tokens,
-                output_tokens: result.output_tokens,
+                input_tokens: result.usage.input_tokens(),
+                output_tokens: result.usage.output_tokens(),
                 provider_conversation_id: result.provider_conversation_id,
             },
+            &result.usage,
         )
         .await?;
     if assignment.role == TaskAgentRole::Implementer && !diff_stats_current {

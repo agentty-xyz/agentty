@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO session_review_comment_target\n                 SELECT session_id, display_id, ? FROM session_review_request\n                 WHERE session_id = ? AND state = 'Open'\n                 ON CONFLICT DO UPDATE SET thread_id = excluded.thread_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8f8c66e035c135e28a297f96da3b3688563ec5662f6083e8bb74277ecbc78ed2"
+}

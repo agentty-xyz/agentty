@@ -375,7 +375,15 @@ async fn execute_turn_event_loop_answers_user_input_request_without_blocking() {
     .await;
 
     // Assert
-    assert_eq!(result.expect("turn should complete"), (String::new(), 0, 0));
+    let (message, turn_usage) = result.expect("turn should complete");
+    assert_eq!(message, String::new());
+    assert_eq!(turn_usage.models.len(), 1);
+    assert_eq!(
+        turn_usage.models[0].model,
+        model_fixture::CODEX_MODEL.as_str()
+    );
+    assert_eq!(turn_usage.models[0].unreported_requests, 1);
+    assert_eq!(turn_usage.input_tokens(), 0);
 }
 
 #[tokio::test]
@@ -416,23 +424,9 @@ async fn execute_turn_event_loop_prefers_completed_final_message_over_commentary
     .await;
 
     // Assert
-    assert_eq!(
-        result.expect("turn should return its final answer"),
-        (final_response.to_string(), 0, 0)
-    );
-}
-
-#[test]
-fn resolve_turn_usage_prefers_completed_usage_over_stream_usage() {
-    // Arrange
-    let completed_turn_usage = Some((33, 7));
-    let latest_stream_usage = Some((18, 4));
-
-    // Act
-    let usage = usage::resolve_turn_usage(completed_turn_usage, latest_stream_usage);
-
-    // Assert
-    assert_eq!(usage, (33, 7));
+    let (message, turn_usage) = result.expect("turn should return its final answer");
+    assert_eq!(message, final_response);
+    assert_eq!(turn_usage.models[0].unreported_requests, 1);
 }
 
 #[test]

@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentRequestKind, OneShotSubmission, PermissionMode, SessionStats};
+use ag_contracts::{AgentRequestKind, OneShotSubmission, PermissionMode, TurnUsage};
 use ag_forge::ReviewRequestMetadata;
 use ag_git::{GitClient, MockGitClient};
 use ag_session::test_support as model_fixture;
@@ -252,7 +252,7 @@ async fn generator_uses_published_review_target_and_applies_current_setting() {
             response: ag_protocol::AgentResponse::plain(serde_json::json!({
                 "title": "Ignored cosmetic title", "description": format!("{expected}\n\n{AGENTTY_FOOTER}"), "is_title_change_significant": false,
             }).to_string()),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let transcript = Mutex::new(SessionTranscript::default());

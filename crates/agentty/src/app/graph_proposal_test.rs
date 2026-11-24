@@ -2,9 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{
-    AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, SessionStats,
-};
+use ag_contracts::{AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, TurnUsage};
 use ag_protocol::{
     AgentResponse, GraphProposalOutcome, GraphProposalResponse, TurnPromptAttachment,
 };
@@ -56,7 +54,7 @@ async fn generation_uses_read_only_worker_contract_and_captured_inputs() {
         .return_once(move |_| {
             Ok(OneShotSubmission {
                 response: AgentResponse::plain(serde_json::json!(response).to_string()),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
 
@@ -122,7 +120,7 @@ async fn graph_proposal_generation_rejects_worker_wire_and_resolution_failures()
             } else {
                 Ok(OneShotSubmission {
                     response: AgentResponse::plain(answer),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 })
             }
         });
@@ -157,10 +155,9 @@ fn proposal_provider() -> MockAppServerClient {
                 Ok(AppServerTurnResponse {
                     assistant_message: "Graph session".into(),
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: TurnUsage::default(),
                 })
             })
         });
@@ -200,10 +197,9 @@ fn proposal_provider() -> MockAppServerClient {
                 Ok(AppServerTurnResponse {
                     assistant_message: answer,
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: TurnUsage::default(),
                 })
             })
         });
@@ -406,7 +402,7 @@ async fn graph_mode_submits_literal_requests_without_subcommands() {
                     })
                     .to_string(),
                 ),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
         app.services.set_run_client(Arc::new(client));
@@ -515,7 +511,7 @@ async fn admitted_proposal_titles_a_prepared_draft_that_still_accepts_its_first_
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain(answer),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     app.services.set_run_client(Arc::new(client));
@@ -569,7 +565,7 @@ async fn graph_request_title_completion_wakes_blocked_graphs() {
     client.expect_submit().once().returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain("Inspect the graph layout"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     app.services.set_run_client(Arc::new(client));
@@ -749,7 +745,7 @@ async fn graph_proposal_answers_regeneration_and_discard_keep_the_original_captu
                     })
                     .to_string(),
                 ),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
     app.services.set_run_client(Arc::new(client));
@@ -1141,7 +1137,7 @@ async fn generation_sends_request_and_revision_images_and_resolves_them_onto_eve
         .return_once(move |_| {
             Ok(OneShotSubmission {
                 response: AgentResponse::plain(serde_json::json!(response).to_string()),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
 

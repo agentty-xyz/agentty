@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
-use ag_session::SessionStats;
+use ag_contracts::{TurnUsage, UsagePurpose};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use crate::DbError;
+use crate::connection::begin_write;
+use crate::session::persist_turn_usage;
 use crate::timestamp::TimestampSource;
 
 /// Row returned when loading per-model token usage from the `session_usage`
@@ -33,12 +35,13 @@ pub trait UsageRepository: Send + Sync {
     /// Loads per-model token usage rows for a session, ordered by model name.
     async fn load_session_usage(&self, session_id: &str) -> Result<Vec<SessionUsageRow>, DbError>;
 
-    /// Accumulates per-model token usage for a session.
+    /// Records one invocation's usage of every model under `purpose`, and
+    /// adds its tokens to the session's totals.
     async fn upsert_session_usage(
         &self,
         session_id: &str,
-        model: &str,
-        stats: &SessionStats,
+        purpose: UsagePurpose,
+        usage: &TurnUsage,
     ) -> Result<(), DbError>;
 }
 
@@ -82,34 +85,13 @@ ORDER BY model
     async fn upsert_session_usage(
         &self,
         session_id: &str,
-        model: &str,
-        stats: &SessionStats,
+        purpose: UsagePurpose,
+        usage: &TurnUsage,
     ) -> Result<(), DbError> {
-        if stats.input_tokens == 0 && stats.output_tokens == 0 {
-            return Ok(());
-        }
-
         let now = self.timestamp_source.now_timestamp_seconds();
-
-        sqlx::query!(
-            r"
-INSERT INTO session_usage (
-    session_id, model, created_at, input_tokens, output_tokens, invocation_count
-)
-VALUES (?, ?, ?, ?, ?, 1)
-ON CONFLICT(session_id, model) DO UPDATE SET
-    input_tokens = input_tokens + excluded.input_tokens,
-    output_tokens = output_tokens + excluded.output_tokens,
-    invocation_count = invocation_count + 1
-",
-            session_id,
-            model,
-            now,
-            stats.input_tokens.cast_signed(),
-            stats.output_tokens.cast_signed()
-        )
-        .execute(&self.pool)
-        .await?;
+        let mut transaction = begin_write(&self.pool, "record session usage").await?;
+        persist_turn_usage(&mut transaction, session_id, purpose, now, usage).await?;
+        transaction.commit().await?;
 
         Ok(())
     }

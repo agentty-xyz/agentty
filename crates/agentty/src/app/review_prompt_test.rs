@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    ProviderCallBudget, ReasoningLevel, SessionStats, SpeedMode,
+    ProviderCallBudget, ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::{
     AgentResponse, FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion, diff_fence,
@@ -53,7 +53,7 @@ fn response() -> OneShotSubmission {
         response: AgentResponse::plain(
             r#"{"project_impact":["Original changes reviewed."],"suggestions":[{"severity":"high","details":"Preserved finding."}]}"#,
         ),
-        stats: SessionStats::default(),
+        usage: TurnUsage::default(),
     }
 }
 
@@ -103,7 +103,7 @@ async fn unaudited_reduction_cannot_silently_remove_a_discovered_risk() {
         if request.prompt.starts_with("Reduce review:") {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         Ok(response())
@@ -135,7 +135,7 @@ async fn omitted_suggestion_index_preserves_the_discovered_candidates() {
         if request.prompt.starts_with("Reduce review:") {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[],"candidate_decisions":[{"candidate_index":0,"reason":"Verified source"}]}"#),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         Ok(response())
@@ -167,7 +167,7 @@ async fn unlinked_consolidation_output_preserves_the_discovered_candidates() {
         if request.prompt.starts_with("Reduce review:") {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[{"details":"Unlinked replacement","severity":"high"}],"candidate_decisions":[{"candidate_index":0,"suggestion_index":null,"reason":"Rejected input"}]}"#),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         Ok(response())
@@ -231,7 +231,7 @@ async fn forty_source_fragments_complete_both_passes_and_consolidation() {
         if phase == 0 {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("All changed modules affect the same workflow."),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         Ok(accounted(&request, response()))
@@ -279,17 +279,17 @@ async fn boundary_fragments_share_changes_that_only_interact_across_files() {
     client.expect_submit().returning(|request| {
         request.provider_call_budget.as_ref().expect("shared budget").consume()?;
         if request.request_kind == AgentRequestKind::UtilityPrompt {
-            return Ok(OneShotSubmission { response: AgentResponse::plain("CALLER_CHANGED.rs calls CALLEE_CHANGED.rs; their changed contracts must agree."), stats: SessionStats::default() });
+            return Ok(OneShotSubmission { response: AgentResponse::plain("CALLER_CHANGED.rs calls CALLEE_CHANGED.rs; their changed contracts must agree."), usage: TurnUsage::default() });
         }
         if request.prompt.starts_with("Cross-file review:") || request.prompt.starts_with("Reduce review:") {
             assert!(request.prompt.contains("CALLER_CHANGED"));
             assert!(request.prompt.contains("CALLEE_CHANGED"));
             return Ok(accounted(&request, OneShotSubmission {
                 response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[{"severity":"high","details":"CALLER_CHANGED and CALLEE_CHANGED disagree on the shared contract"}]}"#),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             }));
         }
-        Ok(OneShotSubmission { response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#), stats: SessionStats::default() })
+        Ok(OneShotSubmission { response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#), usage: TurnUsage::default() })
     });
 
     // Act
@@ -340,7 +340,7 @@ async fn partial_boundary_pass_keeps_both_original_and_new_findings() {
             if request.prompt.contains("diff --git a/later") {
                 return Err(OneShotError::new("boundary unavailable"));
             }
-            return Ok(OneShotSubmission { response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[{"severity":"high","details":"New boundary finding"}]}"#), stats: SessionStats::default() });
+            return Ok(OneShotSubmission { response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[{"severity":"high","details":"New boundary finding"}]}"#), usage: TurnUsage::default() });
         }
         Ok(response())
     });
@@ -511,7 +511,7 @@ async fn single_batch_verifies_candidates_and_repairs_captured_source_citations(
                 response: AgentResponse::plain(
                     serde_json::json!({"project_impact":[], "suggestions":suggestions}).to_string(),
                 ),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             },
         ))
     });
@@ -701,7 +701,7 @@ async fn complete_shared_boundary_pass(
                 .reply
                 .send(Ok(OneShotSubmission {
                     response: AgentResponse::plain(overview.clone()),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 }))
                 .expect("shared overview reply");
             continue;
@@ -714,7 +714,7 @@ async fn complete_shared_boundary_pass(
             .reply
             .send(Ok(OneShotSubmission {
                 response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             }))
             .expect("boundary reply");
     }
@@ -807,7 +807,7 @@ async fn reviews_three_batches_concurrently_and_merges_in_input_order() {
                         "project_impact": [],
                         "suggestions": [{"severity": "high", "details": format!("Finding {}.", wave * REVIEW_CONCURRENCY + index)}],
                     }).to_string()),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 })).expect("batch remains active");
                 if index > 0 {
                     tokio::task::yield_now().await;
@@ -843,7 +843,7 @@ async fn reviews_three_batches_concurrently_and_merges_in_input_order() {
                         })
                         .to_string(),
                     ),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 },
             )))
             .expect("reduction reply");
@@ -936,7 +936,7 @@ async fn nested_size_retries_keep_source_order_in_complete_and_partial_reviews()
                             "severity": "medium", "details": format!("Finding {marker}.")
                         })))
                     }).to_string()),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 }));
             }
             if request.prompt.starts_with("Cross-file review:") {
@@ -944,7 +944,7 @@ async fn nested_size_retries_keep_source_order_in_complete_and_partial_reviews()
                 assert!(request.prompt.contains(&"a".repeat(100)) || request.prompt.contains(&"b".repeat(100)) || request.prompt.contains(&"c".repeat(100)) || request.prompt.contains(&"d".repeat(100)) || request.prompt.contains(&"e".repeat(100)) || request.prompt.contains(&"f".repeat(100)));
                 return Ok(accounted(&request, OneShotSubmission {
                     response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 }));
             }
             let marker = request.prompt.chars().next().expect("source fragment");
@@ -959,7 +959,7 @@ async fn nested_size_retries_keep_source_order_in_complete_and_partial_reviews()
                     "project_impact": [],
                     "suggestions": [{"severity": "medium", "details": format!("Finding {marker}.")}],
                 }).to_string()),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             }))
         });
 
@@ -1011,7 +1011,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
         if request.request_kind == AgentRequestKind::UtilityPrompt {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("Changed source fragments share a workflow."),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         assert_eq!(request.request_kind, AgentRequestKind::FocusedReview);
@@ -1174,7 +1174,7 @@ async fn final_reduction_replaces_candidates_and_normalizes_the_complete_review(
             if request.request_kind == AgentRequestKind::UtilityPrompt {
                 return Ok(OneShotSubmission {
                     response: AgentResponse::plain("Source changes share a caller contract."),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 });
             }
             if request.prompt.starts_with("Reduce review:") {
@@ -1200,7 +1200,7 @@ async fn final_reduction_replaces_candidates_and_normalizes_the_complete_review(
                         "project_impact": ["Coherent impact."],
                         "suggestions": suggestions
                     }).to_string()),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 }));
             }
             if request.prompt.starts_with("Cross-file review:") {
@@ -1208,7 +1208,7 @@ async fn final_reduction_replaces_candidates_and_normalizes_the_complete_review(
                     response: AgentResponse::plain(
                         r#"{"project_impact":[],"suggestions":[{"severity":"medium","details":"Cross-file candidate."},{"severity":"medium","details":"Second boundary candidate."}]}"#,
                     ),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 }));
             }
             Ok(accounted(&request, response()))
@@ -1263,7 +1263,7 @@ async fn failed_or_invalid_reduction_keeps_candidates_with_coverage_notice() {
                 if failure == "invalid" || failure.is_empty() {
                     return Ok(OneShotSubmission {
                         response: AgentResponse::plain(failure),
-                        stats: SessionStats::default(),
+                        usage: TurnUsage::default(),
                     });
                 }
                 return Err(OneShotError::new(failure));
@@ -1320,7 +1320,7 @@ async fn final_reduction_uses_the_existing_review_deadline() {
             let submission = if call.request.request_kind == AgentRequestKind::UtilityPrompt {
                 OneShotSubmission {
                     response: AgentResponse::plain("Source fragments share a workflow."),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 }
             } else {
                 completed_source_calls += 1;
@@ -1361,7 +1361,7 @@ async fn reduction_respects_remaining_budget_and_never_summarizes_oversized_cand
             if request.request_kind == AgentRequestKind::UtilityPrompt {
                 return Ok(OneShotSubmission {
                     response: AgentResponse::plain("Bounded cross-file overview."),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 });
             }
             if request.prompt.starts_with("Cross-file review:") {
@@ -1375,7 +1375,7 @@ async fn reduction_respects_remaining_budget_and_never_summarizes_oversized_cand
                     "project_impact": [if oversized { "Impact. ".repeat(20_000) } else { "Impact.".into() }],
                     "suggestions": [{"severity": "medium", "details": "Original batch finding."}]
                 }).to_string()),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
 
@@ -1542,7 +1542,7 @@ async fn render_and_invalid_response_errors_propagate() {
     client.expect_submit().once().returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain("invalid"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
 
@@ -1637,7 +1637,7 @@ async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
             assert!(request.prompt.contains("Accepted decision"));
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("Accepted decision retained."),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         if request.prompt.len() > 2_000 {
@@ -1649,7 +1649,7 @@ async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
         );
         Ok(OneShotSubmission {
             response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
 
@@ -1686,7 +1686,7 @@ async fn cross_file_pass_uses_bounded_original_source_without_discarding_finding
                 response: AgentResponse::plain(
                     "Large batch impact retained for cross-file inspection.",
                 ),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         if request.prompt.starts_with("Reduce review:") {
@@ -1709,7 +1709,7 @@ async fn cross_file_pass_uses_bounded_original_source_without_discarding_finding
                 })
                 .to_string(),
             ),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
 
@@ -1746,7 +1746,7 @@ async fn large_history_reports_preparation_and_keeps_review_reasoning() {
             assert_eq!(request.reasoning_level, ReasoningLevel::Low);
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("Accepted decisions retained."),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
@@ -1786,7 +1786,7 @@ async fn cross_file_reduces_history_after_provider_size_rejection() {
         if request.request_kind == AgentRequestKind::UtilityPrompt {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("Short evidence"),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         if request.prompt.len() > 2000 {
@@ -1838,7 +1838,7 @@ async fn hierarchical_reduction_reconciles_all_whole_candidates() {
                 response: AgentResponse::plain(
                     serde_json::json!({"project_impact":[],"suggestions": suggestions}).to_string(),
                 ),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             },
         ))
     });
@@ -1911,7 +1911,7 @@ async fn irreducible_final_passes_stop_without_discarding_distinct_evidence() {
         }
         let suggestions: Vec<_> = (0..4).filter(|id| request.prompt.contains(&format!("risk-{id}")))
             .map(|id| serde_json::json!({"severity":"high","details": format!("risk-{id} {}", "evidence ".repeat(180))})).collect();
-        Ok(accounted(&request, OneShotSubmission { response: AgentResponse::plain(serde_json::json!({"project_impact":[],"suggestions":suggestions}).to_string()), stats: SessionStats::default() }))
+        Ok(accounted(&request, OneShotSubmission { response: AgentResponse::plain(serde_json::json!({"project_impact":[],"suggestions":suggestions}).to_string()), usage: TurnUsage::default() }))
     });
     let mut request = request();
     let budget = ProviderCallBudget::new(64);
@@ -1972,7 +1972,7 @@ async fn reduction_adapts_shared_context_and_headers_to_provider_limits() {
         if request.request_kind == AgentRequestKind::UtilityPrompt {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("Short evidence"),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         if request.prompt.len() > 1800 {

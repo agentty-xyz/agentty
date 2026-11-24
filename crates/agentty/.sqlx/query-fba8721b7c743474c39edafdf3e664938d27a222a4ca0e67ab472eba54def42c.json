@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_review_watch (session_id)\nVALUES (?)\nON CONFLICT(session_id) DO NOTHING\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "fba8721b7c743474c39edafdf3e664938d27a222a4ca0e67ab472eba54def42c"
+}

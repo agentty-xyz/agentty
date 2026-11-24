@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};
+use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, ModelUsage, TurnUsage};
 use ag_git as git;
 use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
 use ag_worker::test_support::{AppServerClient, MockAppServerClient};
@@ -365,6 +365,32 @@ pub(crate) fn session_fixture_with_folder(session_folder: PathBuf) -> Session {
 /// Returns a mock app-server client wrapped in `Arc` for test injection.
 pub(crate) fn mock_app_server() -> Arc<dyn AppServerClient> {
     Arc::new(MockAppServerClient::new())
+}
+
+/// Returns turn usage of one `model` with the given input and output tokens
+/// and every other detail unknown.
+pub(crate) fn token_usage(model: &str, input_tokens: u64, output_tokens: u64) -> TurnUsage {
+    TurnUsage::single(ModelUsage {
+        input_tokens,
+        output_tokens,
+        ..ModelUsage::new(model)
+    })
+}
+
+/// Loads `(model, purpose, input_tokens, output_tokens)` of every persisted
+/// usage row of `session_id`, ordered by model and purpose.
+pub(crate) async fn session_usage_by_purpose(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Vec<(String, String, i64, i64)> {
+    sqlx::query_as(
+        "SELECT model, purpose, input_tokens, output_tokens FROM session_usage WHERE session_id = \
+         ? ORDER BY model, purpose",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .expect("session usage rows should load")
 }
 
 /// Builds one client bundle with a caller-provided agent availability

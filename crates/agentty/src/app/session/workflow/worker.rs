@@ -40,8 +40,7 @@ use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager, spawn};
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session::{
-    PublishBranchAction, QueuedMessage, ReviewRequest, SessionHandles, SessionId, SessionStats,
-    Status,
+    PublishBranchAction, QueuedMessage, ReviewRequest, SessionHandles, SessionId, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -934,32 +933,13 @@ impl SessionWorkerRebaseAssistClient {
         &self,
         turn_result: &TurnResult,
     ) -> Result<(), SessionError> {
-        let token_usage_delta = SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: ag_contracts::SessionDiffState::Unknown,
-            input_tokens: turn_result.input_tokens,
-            output_tokens: turn_result.output_tokens,
-        };
-        if let Err(error) = self
-            .db
-            .sessions()
-            .update_session_stats(&self.session_id, &token_usage_delta)
-            .await
-        {
-            tracing::warn!(
-                session_id = %self.session_id,
-                error = %error,
-                "failed to persist session stats after rebase-assist turn"
-            );
-        }
         if let Err(error) = self
             .db
             .usage()
             .upsert_session_usage(
                 &self.session_id,
-                self.session_agent.model().as_str(),
-                &token_usage_delta,
+                ag_contracts::UsagePurpose::Rebase,
+                &turn_result.usage,
             )
             .await
         {

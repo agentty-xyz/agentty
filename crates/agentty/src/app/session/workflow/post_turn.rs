@@ -4,7 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentError, TurnResult};
+use ag_contracts::{AgentError, TurnResult, TurnUsage};
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
@@ -28,7 +28,7 @@ use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::agent::{AgentKind, AgentSelection};
-use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionId, SessionStats, Status};
+use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionId, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::{AppRepositories, NewSessionReviewCommentResolution, SessionTurnMetadata};
@@ -223,8 +223,7 @@ impl TurnPersistence<'_> {
         &self,
         assistant_message: &AgentResponse,
         harness_report: Option<String>,
-        input_tokens: u64,
-        output_tokens: u64,
+        usage: TurnUsage,
         provider_conversation_id: Option<&str>,
     ) -> Result<TurnAppliedState, SessionError> {
         let questions = assistant_message.question_items();
@@ -234,13 +233,6 @@ impl TurnPersistence<'_> {
             serde_json::to_string(&questions).unwrap_or_default()
         };
         let follow_up_tasks = turn_applied_follow_up_tasks(assistant_message);
-        let token_usage_delta = SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: ag_contracts::SessionDiffState::Unknown,
-            input_tokens,
-            output_tokens,
-        };
         let instruction_conversation_id =
             if ag_worker::uses_persistent_session(self.session_agent.kind()) {
                 // The worker contract exposes a conversation ID, not the
@@ -264,7 +256,7 @@ impl TurnPersistence<'_> {
                     provider_conversation_id: provider_conversation_id.map(str::to_string),
                     questions_json,
                     review_comment_resolutions: self.review_comment_resolutions.to_vec(),
-                    token_usage_delta: token_usage_delta.clone(),
+                    usage,
                 },
             )
             .await?;
@@ -272,7 +264,6 @@ impl TurnPersistence<'_> {
         Ok(TurnAppliedState {
             follow_up_tasks,
             questions,
-            token_usage_delta,
         })
     }
 }
@@ -446,9 +437,8 @@ async fn apply_successful_turn_result(
         assistant_message,
         context_reset: _,
         harness_report,
-        input_tokens,
-        output_tokens,
         provider_conversation_id,
+        usage,
     } = result;
 
     append_turn_summary(context, activity).await;
@@ -486,8 +476,7 @@ async fn apply_successful_turn_result(
     .apply(
         &assistant_message,
         harness_report,
-        input_tokens,
-        output_tokens,
+        usage,
         provider_conversation_id.as_deref(),
     )
     .await)

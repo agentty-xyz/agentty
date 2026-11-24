@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_plan_acceptance (task_attempt_id, plan, accepted_at) VALUES (?, ?, ?) ON CONFLICT(task_attempt_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "dca56551177b2f14b7bd99eb0008c44db3a4c62dd292b41a5067014f607d64b0"
+}

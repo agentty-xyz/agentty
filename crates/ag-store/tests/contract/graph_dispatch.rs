@@ -10,7 +10,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
-use ag_contracts::{PermissionMode, ProviderCallBudget};
+use ag_contracts::{ModelUsage, PermissionMode, ProviderCallBudget, TurnUsage};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{GraphContext, GraphResultState, GraphWorkspaceAccess};
 use ag_store::{Database, GraphEvidence, TaskAgentTurnMetadata};
@@ -43,7 +43,7 @@ async fn graph_task_history_is_immutable_and_accounts_usage_before_effects()
     assert!(
         database
             .graphs()
-            .record_task_turn(&missing, &metadata)
+            .record_task_turn(&missing, &metadata, &TurnUsage::default())
             .await
             .is_err()
     );
@@ -115,7 +115,7 @@ async fn graph_task_history_is_immutable_and_accounts_usage_before_effects()
     assert!(
         database
             .graphs()
-            .record_task_turn(&utility, &metadata)
+            .record_task_turn(&utility, &metadata, &TurnUsage::default())
             .await
             .is_err()
     );
@@ -172,6 +172,16 @@ async fn task_history_fixture() -> Result<TaskHistoryFixture, Box<dyn Error>> {
     })
 }
 
+/// Returns the usage detail matching the token totals of `metadata`.
+fn usage_of(metadata: &TaskAgentTurnMetadata) -> TurnUsage {
+    TurnUsage::single(ModelUsage {
+        input_tokens: metadata.input_tokens,
+        output_tokens: metadata.output_tokens,
+        requests: 1,
+        ..ModelUsage::new("gpt-6.1-sol")
+    })
+}
+
 async fn assert_task_turn_admission(
     database: &Database,
     dispatch: &ag_worker::GraphDispatch,
@@ -210,7 +220,7 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, metadata)
+            .record_task_turn(dispatch, metadata, &usage_of(metadata))
             .await
             .is_err()
     );
@@ -219,7 +229,7 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(&invalid, metadata)
+            .record_task_turn(&invalid, metadata, &TurnUsage::default())
             .await
             .is_err()
     );
@@ -237,20 +247,20 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, &malformed)
+            .record_task_turn(dispatch, &malformed, &TurnUsage::default())
             .await
             .is_err()
     );
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, metadata)
+            .record_task_turn(dispatch, metadata, &usage_of(metadata))
             .await?
     );
     assert!(
         !database
             .graphs()
-            .record_task_turn(dispatch, metadata)
+            .record_task_turn(dispatch, metadata, &usage_of(metadata))
             .await?
     );
     assert_eq!(
@@ -265,7 +275,7 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, &conflicting)
+            .record_task_turn(dispatch, &conflicting, &TurnUsage::default())
             .await
             .is_err()
     );

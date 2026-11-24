@@ -10,6 +10,6 @@ mod codex;
 mod command;
 mod stdio_transport;
 
-pub(crate) use antigravity::RealAntigravityClient;
+pub(crate) use antigravity::{AntigravityTokenUsage, RealAntigravityClient};
 pub(crate) use codex::RealCodexAppServerClient;
 pub(crate) use command::build_codex_app_server_command;

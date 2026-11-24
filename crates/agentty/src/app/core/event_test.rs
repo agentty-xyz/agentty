@@ -857,7 +857,6 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
     let turn_applied_state = TurnAppliedState {
         follow_up_tasks: Vec::new(),
         questions: Vec::new(),
-        token_usage_delta: crate::domain::session::SessionStats::default(),
     };
 
     // Act
@@ -938,7 +937,6 @@ async fn late_completed_turn_for_deleted_session_is_not_deferred() {
     let turn_applied_state = TurnAppliedState {
         follow_up_tasks: Vec::new(),
         questions: Vec::new(),
-        token_usage_delta: crate::domain::session::SessionStats::default(),
     };
 
     // Act
@@ -969,7 +967,6 @@ async fn completed_turn_with_questions_is_not_deferred() {
     let turn_applied_state = TurnAppliedState {
         follow_up_tasks: Vec::new(),
         questions: vec![crate::domain::question::QuestionItem::new("Which project?")],
-        token_usage_delta: crate::domain::session::SessionStats::default(),
     };
 
     // Act
@@ -1053,7 +1050,6 @@ async fn settle_graph_holding_a_review(app: &mut App, settle: impl FnOnce()) -> 
         turn_applied_state: TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            token_usage_delta: crate::domain::session::SessionStats::default(),
         },
     })
     .await;

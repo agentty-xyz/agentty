@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, OneShotError};
+use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, OneShotError, UsagePurpose};
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
@@ -40,6 +40,7 @@ async fn assist_activity_follows_answer_or_failure_and_is_excluded_from_replay()
             id: "session-id".into(),
             run_client: Arc::new(run_client),
             prompt: "Recover the session".into(),
+            purpose: UsagePurpose::CommitAssist,
             session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -147,6 +148,7 @@ async fn test_run_agent_assist_task_rejects_plain_text_output() {
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
+        purpose: UsagePurpose::Rebase,
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),

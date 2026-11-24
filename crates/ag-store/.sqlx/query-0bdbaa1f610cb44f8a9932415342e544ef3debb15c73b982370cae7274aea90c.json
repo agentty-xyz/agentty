@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET input_tokens = input_tokens + ?,\n    output_tokens = output_tokens + ?,\n    context_window_tokens = CASE WHEN ? IS NULL THEN context_window_tokens ELSE ? END,\n    context_tokens = COALESCE(?, context_tokens),\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "0bdbaa1f610cb44f8a9932415342e544ef3debb15c73b982370cae7274aea90c"
+}

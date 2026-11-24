@@ -1,12 +1,13 @@
 //! Session metadata persistence tests for conversation IDs, upstream refs,
 //! merged commits, and turn metadata.
 
-use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
+use ag_session::test_support as model_fixture;
 
 use super::support::insert_session_fixture;
 use crate::SessionTurnMetadata;
 use crate::connection::Database;
 use crate::error::DbError;
+use crate::test_support::token_usage;
 
 /// Verifies `load_sessions_metadata()` counts sessions in every project while
 /// taking the latest `updated_at` from the requested project only.
@@ -366,13 +367,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 provider_conversation_id: Some("thread-123".to_string()),
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: SessionDiffState::Unknown,
-                    input_tokens: 3,
-                    output_tokens: 5,
-                },
+                usage: token_usage(model_fixture::CODEX_MODEL.as_str(), 3, 5),
             },
         )
         .await;
@@ -430,13 +425,7 @@ async fn test_persist_session_turn_metadata_keeps_harness_turn_report_after_sess
                 provider_conversation_id: None,
                 questions_json: String::new(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: SessionDiffState::Unknown,
-                    input_tokens: 30,
-                    output_tokens: 7,
-                },
+                usage: token_usage("muse-spark-1.3", 30, 7),
             },
         )
         .await

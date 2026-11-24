@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::UsagePurpose;
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -355,6 +356,7 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
+        purpose: UsagePurpose::Rebase,
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),

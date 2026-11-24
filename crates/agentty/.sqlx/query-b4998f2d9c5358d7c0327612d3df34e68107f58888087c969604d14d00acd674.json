@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO execution_graph_result (id, execution_graph_execution_id, execution_graph_id, node_id, output_name, version, reference, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "b4998f2d9c5358d7c0327612d3df34e68107f58888087c969604d14d00acd674"
+}

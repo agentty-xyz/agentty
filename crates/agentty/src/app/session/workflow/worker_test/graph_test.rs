@@ -296,6 +296,7 @@ async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
                 output_tokens: 0,
                 provider_conversation_id: Some("task-provider".into()),
             },
+            &ag_contracts::TurnUsage::default(),
         )
         .await
         .expect("first delivery");

@@ -41,7 +41,7 @@ use crate::app::test_support::diff_content_hash;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{
     ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SessionHandles, SessionId, SessionStats, Status,
+    SessionHandles, SessionId, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
@@ -1119,11 +1119,7 @@ async fn test_switch_immediately_after_response_recovers_in_progress_review() {
     // Act
     app.apply_app_events(AppEvent::AgentResponseReceived {
         session_id: session_id.into(),
-        turn_applied_state: test_turn_applied_state(
-            Vec::new(),
-            Vec::new(),
-            SessionStats::default(),
-        ),
+        turn_applied_state: test_turn_applied_state(Vec::new(), Vec::new()),
     })
     .await;
     let deferred_before_switch = app.deferred_auto_review_session_ids.clone();
@@ -2360,11 +2356,7 @@ async fn apply_app_events_agent_response_supersedes_pending_auto_review_diff() {
     // Act
     app.apply_app_events(AppEvent::AgentResponseReceived {
         session_id: session_id.into(),
-        turn_applied_state: test_turn_applied_state(
-            Vec::new(),
-            Vec::new(),
-            SessionStats::default(),
-        ),
+        turn_applied_state: test_turn_applied_state(Vec::new(), Vec::new()),
     })
     .await;
     let replacement_request_id = *app

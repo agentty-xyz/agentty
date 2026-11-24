@@ -666,8 +666,6 @@ impl SessionManager {
                     Some(false) => SessionDiffState::Empty,
                     None => SessionDiffState::Unknown,
                 },
-                input_tokens: input.row.input_tokens.cast_unsigned(),
-                output_tokens: input.row.output_tokens.cast_unsigned(),
             },
             status: input.session_status,
             title: input.row.title,

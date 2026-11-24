@@ -325,9 +325,8 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
                     assistant_message: AgentResponse::plain("Resolved the review comment."),
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -815,9 +814,8 @@ fn review_comment_question_channel(
                     assistant_message: response,
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -859,9 +857,8 @@ fn review_comment_queue_channel(
                     assistant_message: AgentResponse::plain("Completed queued work"),
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -1033,9 +1030,8 @@ fn generated_follow_up_channel(
                     assistant_message: AgentResponse::plain("Completed queued work"),
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });

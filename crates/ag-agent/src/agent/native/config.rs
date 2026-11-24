@@ -681,6 +681,26 @@ impl ModelSelection {
         format!("{}/{}", self.provider, self.model)
     }
 
+    /// Returns this model's entry in the harness provider catalog, with its
+    /// list prices and declared profile, or `None` for a model the catalog
+    /// does not describe, such as one a local server serves.
+    pub(crate) fn catalog_spec(&self) -> Option<ModelSpec> {
+        self.provider.model_spec(&self.model)
+    }
+
+    /// Returns the context window turns on this model are fitted to, as
+    /// [`Self::profile`] resolves it, or `None` for an invalid
+    /// environment-declared profile.
+    pub(crate) fn context_window(
+        &self,
+        environment: &BTreeMap<String, String>,
+        running_context_window: Option<u64>,
+    ) -> Option<u64> {
+        self.profile(environment, running_context_window)
+            .ok()
+            .map(ModelProfile::context_window_tokens)
+    }
+
     /// Returns the Agentty model id of the registration key `key`, as users
     /// pick the model: `ChatGPT` plan and local server models keep their
     /// provider, as in `chatgpt/gpt-6-luna`, and other cataloged models are

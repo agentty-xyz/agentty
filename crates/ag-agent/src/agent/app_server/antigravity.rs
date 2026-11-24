@@ -9,3 +9,4 @@ mod stream_parser;
 mod usage;
 
 pub(crate) use client::RealAntigravityClient;
+pub(crate) use usage::TokenUsage as AntigravityTokenUsage;

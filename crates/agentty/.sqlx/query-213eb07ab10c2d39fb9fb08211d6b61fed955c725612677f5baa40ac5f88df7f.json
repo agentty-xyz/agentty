@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nDELETE FROM session_review_comment_resolution\nWHERE session_id = ?\n  AND reply_token = ?\n  AND is_posting = 0\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "213eb07ab10c2d39fb9fb08211d6b61fed955c725612677f5baa40ac5f88df7f"
+}

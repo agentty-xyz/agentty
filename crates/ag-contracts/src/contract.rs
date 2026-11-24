@@ -350,15 +350,10 @@ pub enum TurnEvent {
     /// Something about how the turn ran that the user should know, such as
     /// a compaction of the session's earlier context.
     Notice(crate::TurnNotice),
-    /// The turn completed successfully with final token counts.
-    Completed {
-        /// Whether the provider reset its context for this turn.
-        context_reset: bool,
-        /// Input token count for the turn.
-        input_tokens: u64,
-        /// Output token count for the turn.
-        output_tokens: u64,
-    },
+    /// Cumulative usage of the turn so far, sent after each model request
+    /// whose usage the backend reports while the turn runs. The final
+    /// [`TurnResult::usage`] supersedes it.
+    UsageUpdated(crate::TurnUsage),
     /// The turn failed with an error description.
     Failed(String),
     /// A child process PID update.
@@ -381,16 +376,15 @@ pub struct TurnResult {
     /// usage, context fitting, corrections, and tool activity. Other agents
     /// return `None`.
     pub harness_report: Option<String>,
-    /// Input token count for the turn.
-    pub input_tokens: u64,
-    /// Output token count for the turn.
-    pub output_tokens: u64,
     /// Provider-native conversation identifier observed after the turn.
     ///
     /// App-server providers return this so the worker can persist it for
     /// future runtime restarts. CLI channels always return `None`.
     /// Opaque runtime conversation identifier.
     pub provider_conversation_id: Option<String>,
+    /// Tokens and estimated charge of every model the turn used, as its
+    /// backend reported them.
+    pub usage: crate::TurnUsage,
 }
 
 /// Opaque reference to an active agent session.

@@ -9,6 +9,7 @@ use ag_contracts::OneShotSubmission;
 use crate::app::session::Clock;
 use crate::db::AppRepositories;
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::test_support::token_usage;
 
 /// Mutable test clock used to drive deterministic status-transition timing
 /// assertions.
@@ -54,13 +55,7 @@ pub(super) fn one_shot_submission(
 ) -> OneShotSubmission {
     OneShotSubmission {
         response: ag_protocol::AgentResponse::plain(answer),
-        stats: ag_contracts::SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: ag_contracts::SessionDiffState::Unknown,
-            input_tokens,
-            output_tokens,
-        },
+        usage: token_usage("fixture-model", input_tokens, output_tokens),
     }
 }
 

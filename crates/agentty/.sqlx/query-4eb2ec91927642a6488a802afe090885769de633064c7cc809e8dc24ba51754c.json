@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_agent_context (task_id, role, agent, model, input, definition) VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "4eb2ec91927642a6488a802afe090885769de633064c7cc809e8dc24ba51754c"
+}

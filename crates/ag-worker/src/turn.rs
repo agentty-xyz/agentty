@@ -174,11 +174,11 @@ impl SessionRunClient {
                 ag_telemetry::milestone("agent.completed");
                 span.attribute(
                     "gen_ai.usage.input_tokens",
-                    i64::try_from(result.input_tokens).unwrap_or(i64::MAX),
+                    i64::try_from(result.usage.input_tokens()).unwrap_or(i64::MAX),
                 );
                 span.attribute(
                     "gen_ai.usage.output_tokens",
-                    i64::try_from(result.output_tokens).unwrap_or(i64::MAX),
+                    i64::try_from(result.usage.output_tokens()).unwrap_or(i64::MAX),
                 );
                 span.attribute("agentty.context_reset", result.context_reset);
                 Outcome::Completed

@@ -1,6 +1,7 @@
 //! Persists graph task-agent turns and appends node questions to the session
 //! transcript.
 
+use ag_contracts::{TurnUsage, UsagePurpose};
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
     ExecutionGraph, GraphExecutionRef, SessionMessageKind, node_question_notice,
@@ -18,6 +19,7 @@ impl SqliteGraphRepository {
         &self,
         dispatch: &GraphDispatch,
         metadata: &TaskAgentTurnMetadata,
+        usage: &TurnUsage,
     ) -> Result<bool, DbError> {
         let mut transaction = begin_write(&self.pool, "save graph task turn").await?;
         let record = &dispatch.record;
@@ -74,10 +76,16 @@ impl SqliteGraphRepository {
         session::persist_turn_usage(
             &mut transaction,
             graph.session_id.as_str(),
+            UsagePurpose::Turn,
+            now,
+            usage,
+        )
+        .await?;
+        session::persist_harness_turn_report(
+            &mut transaction,
+            graph.session_id.as_str(),
             dispatch.node.agent.model().as_str(),
             now,
-            metadata.input_tokens,
-            metadata.output_tokens,
             metadata.harness_turn_report.as_deref(),
         )
         .await?;

@@ -211,9 +211,8 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
         },
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: ag_contracts::TurnUsage::default(),
     });
 
     // Act

@@ -21,7 +21,7 @@ use crate::app::session::TurnAppliedState;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, AppEvent};
 use crate::domain::review::FocusedReviewStatus;
-use crate::domain::session::{SessionHandles, SessionStats, Status};
+use crate::domain::session::{SessionHandles, Status};
 use crate::test_support::{
     SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, set_session_status_for_test,
     test_app_clients,
@@ -194,7 +194,6 @@ async fn role_completion_and_late_review_results_cannot_start_ordinary_automatio
         turn_applied_state: TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            token_usage_delta: SessionStats::default(),
         },
     })
     .await;
@@ -306,7 +305,6 @@ async fn new_ordinary_intent_restores_review_after_role_ownership() {
             turn_applied_state: TurnAppliedState {
                 follow_up_tasks: Vec::new(),
                 questions: Vec::new(),
-                token_usage_delta: SessionStats::default(),
             },
         })
         .await;

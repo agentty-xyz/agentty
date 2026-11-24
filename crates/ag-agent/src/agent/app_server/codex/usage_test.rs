@@ -1,5 +1,7 @@
 //! Codex token usage extraction and cumulative billing unit tests.
 
+use ag_contracts::{ContextFill, ModelUsage};
+
 use crate::agent::app_server::codex::usage::{
     extract_thread_token_usage_for_turn, extract_turn_usage_for_turn,
     update_turn_usage_from_response,
@@ -152,7 +154,7 @@ fn cumulative_usage_counts_every_request_once_and_retains_turn_baselines() {
     tracker.observe(&second, Some("active-turn"));
     // Assert
     assert_eq!(tracker.totals(), Some((250, 30)));
-    assert_eq!(tracker.turn_cached, Some(70));
+    assert_eq!(tracker.cached.turn, Some(70));
     assert_eq!(tracker.latest_input, Some(150));
     // Act
     tracker.begin_turn();
@@ -162,7 +164,7 @@ fn cumulative_usage_counts_every_request_once_and_retains_turn_baselines() {
     );
     // Assert
     assert_eq!(tracker.totals(), Some((180, 20)));
-    assert_eq!(tracker.turn_cached, Some(20));
+    assert_eq!(tracker.cached.turn, Some(20));
     assert_eq!(tracker.latest_input, Some(180));
 }
 
@@ -183,14 +185,14 @@ fn resumed_threads_bill_every_response_after_the_reconstructed_baseline() {
     );
     // Assert
     assert_eq!(tracker.totals(), Some((400, 40)));
-    assert_eq!(tracker.turn_cached, Some(90));
+    assert_eq!(tracker.cached.turn, Some(90));
     assert_eq!(tracker.latest_input, Some(300));
     // Act
     tracker.begin_turn();
     tracker.observe(&token_update(20, 5, Some(10), Some(20)), None);
     // Assert
     assert_eq!(tracker.totals(), Some((20, 5)));
-    assert_eq!(tracker.turn_cached, Some(10));
+    assert_eq!(tracker.cached.turn, Some(10));
 }
 
 #[test]
@@ -217,7 +219,7 @@ fn resumed_baselines_reconstruct_only_counters_consistent_with_the_latest_respon
         tracker.begin_turn();
         tracker.observe(&update, None);
         assert_eq!(tracker.totals(), expected_totals);
-        assert_eq!(tracker.turn_cached, expected_cached);
+        assert_eq!(tracker.cached.turn, expected_cached);
     }
 }
 
@@ -234,7 +236,7 @@ fn unknown_fields_and_last_only_notifications_remain_unknown() {
     ] {
         tracker.begin_turn();
         tracker.observe(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":usage}}), None);
-        assert_eq!(tracker.turn_cached, None);
+        assert_eq!(tracker.cached.turn, None);
         if usage.get("last").is_some() {
             assert_eq!(tracker.totals(), None);
         } else {
@@ -257,7 +259,7 @@ fn delegated_usage_is_ignored_and_compaction_invalidates_context_size() {
     );
     // Assert
     assert_eq!(tracker.totals(), Some((80, 2)));
-    assert_eq!(tracker.turn_cached, Some(40));
+    assert_eq!(tracker.cached.turn, Some(40));
     assert_eq!(tracker.latest_input, Some(80));
     // Act
     tracker.observe(&serde_json::json!({"method":"item/completed","params":{"item":{"type":"contextCompaction"}}}), None);
@@ -268,6 +270,98 @@ fn delegated_usage_is_ignored_and_compaction_invalidates_context_size() {
     tracker.observe(&serde_json::json!({"method":"turn/completed","params":{"turn":{"usage":{"inputTokens":7,"outputTokens":1}}}}), None);
     // Assert
     assert_eq!(tracker.latest_input, None);
+}
+
+#[test]
+fn turn_usage_reports_cumulative_details_context_and_request_count() {
+    // Arrange
+    let mut tracker = super::UsageTracker::default();
+    tracker.begin_turn();
+    let first = serde_json::json!({"method":"thread/tokenUsage/updated","params":{"turnId":"active-turn","tokenUsage":{
+        "total":{"inputTokens":200,"outputTokens":20,"cachedInputTokens":50,"cacheWriteInputTokens":10,"reasoningOutputTokens":5},
+        "last":{"inputTokens":200,"outputTokens":20},
+        "modelContextWindow":272_000
+    }}});
+    let second = serde_json::json!({"method":"thread/tokenUsage/updated","params":{"turnId":"active-turn","tokenUsage":{
+        "total":{"inputTokens":350,"outputTokens":50,"cachedInputTokens":120,"cacheWriteInputTokens":10,"reasoningOutputTokens":15},
+        "last":{"inputTokens":150,"outputTokens":30}
+    }}});
+    let unrelated =
+        serde_json::json!({"method":"turn/started","params":{"turn":{"id":"active-turn"}}});
+
+    // Act
+    let observed = [
+        tracker.observe(&first, Some("active-turn")),
+        tracker.observe(&second, Some("active-turn")),
+        tracker.observe(&unrelated, Some("active-turn")),
+    ];
+    let usage = tracker.turn_usage(Some((1, 1)));
+
+    // Assert
+    assert_eq!(observed, [true, true, false]);
+    assert_eq!(
+        usage,
+        ModelUsage {
+            cache_read_tokens: Some(120),
+            cache_write_tokens: Some(10),
+            context: Some(ContextFill {
+                last_input_tokens: 150,
+                peak_input_tokens: 200,
+                window_tokens: Some(272_000),
+            }),
+            input_tokens: 350,
+            output_tokens: 50,
+            reasoning_tokens: Some(15),
+            requests: 2,
+            ..ModelUsage::new("")
+        }
+    );
+}
+
+#[test]
+fn turn_usage_falls_back_without_details_or_reports_an_unreported_request() {
+    // Arrange
+    let total_only = serde_json::json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":500,"outputTokens":50,"cachedInputTokens":20,"reasoningOutputTokens":9}}}});
+    let last_only = serde_json::json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"inputTokens":12,"outputTokens":3}}}});
+    let cases = [
+        (None, None, ModelUsage::unreported("", 1)),
+        (
+            Some(total_only),
+            Some((40, 4)),
+            ModelUsage {
+                input_tokens: 40,
+                output_tokens: 4,
+                requests: 1,
+                ..ModelUsage::new("")
+            },
+        ),
+        (
+            Some(last_only),
+            Some((12, 3)),
+            ModelUsage {
+                context: Some(ContextFill::of_request(12, None)),
+                input_tokens: 12,
+                output_tokens: 3,
+                requests: 1,
+                ..ModelUsage::new("")
+            },
+        ),
+    ];
+
+    for (notification, fallback, expected) in cases {
+        let mut tracker = super::UsageTracker::default();
+        tracker.resumed();
+        tracker.begin_turn();
+
+        // Act
+        if let Some(notification) = &notification {
+            tracker.observe(notification, None);
+        }
+        let usage = tracker.turn_usage(fallback);
+
+        // Assert
+        assert_eq!(usage, expected);
+    }
 }
 
 fn token_update(
@@ -313,17 +407,17 @@ fn missing_cumulative_turns_discard_old_baselines_and_recover_from_a_fresh_snaps
         tracker.finish_turn();
         assert_eq!(tracker.totals(), None);
         assert_eq!(tracker.previous, None);
-        assert_eq!(tracker.previous_cached, None);
+        assert_eq!(tracker.cached.previous, None);
         tracker.begin_turn();
         tracker.observe(&token_update(200, 20, Some(60), Some(50)), None);
         tracker.finish_turn();
         assert_eq!(tracker.totals(), Some((50, 20)));
         assert_eq!(tracker.previous, Some((200, 20)));
-        assert_eq!(tracker.previous_cached, Some(60));
+        assert_eq!(tracker.cached.previous, Some(60));
         tracker.begin_turn();
         tracker.observe(&token_update(250, 25, Some(75), Some(50)), None);
         tracker.finish_turn();
         assert_eq!(tracker.totals(), Some((50, 5)));
-        assert_eq!(tracker.turn_cached, Some(15));
+        assert_eq!(tracker.cached.turn, Some(15));
     }
 }

@@ -22,7 +22,7 @@ pub(crate) fn purpose_recording_run_worker(
     runtime.expect_submit_cancellable().returning(move |_, _| {
         Ok(ag_contracts::OneShotSubmission {
             response: ag_protocol::AgentResponse::plain(answer),
-            stats: ag_contracts::SessionStats::default(),
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
     let worker = ag_worker::RunWorker::with_client(

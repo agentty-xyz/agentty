@@ -1440,6 +1440,7 @@ async fn accepted_implementation(
                 output_tokens: 0,
                 provider_conversation_id: None,
             },
+            &ag_contracts::TurnUsage::default(),
         )
         .await
         .expect("plan response");

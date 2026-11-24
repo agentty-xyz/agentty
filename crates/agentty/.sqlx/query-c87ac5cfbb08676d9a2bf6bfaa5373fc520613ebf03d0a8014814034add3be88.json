@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.id, c.role, c.agent, c.model, c.input, c.definition, t.session_id\n               FROM task_agent_context c JOIN task t ON t.id = c.task_id\n               WHERE c.task_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "role",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "agent",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "input",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "input"
+          }
+        }
+      },
+      {
+        "name": "definition",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "definition"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task",
+            "name": "session_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "c87ac5cfbb08676d9a2bf6bfaa5373fc520613ebf03d0a8014814034add3be88"
+}

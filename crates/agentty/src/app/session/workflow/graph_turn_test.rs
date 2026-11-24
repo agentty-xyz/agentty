@@ -96,7 +96,7 @@ async fn effect_children_preserve_local_budgets_beneath_the_shared_graph_limit()
             assert!(budget.consume().is_err());
             Ok(OneShotSubmission {
                 response: ag_protocol::AgentResponse::plain("done"),
-                stats: ag_contracts::SessionStats::default(),
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
         let client = GraphEffectClient {

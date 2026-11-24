@@ -19,7 +19,8 @@ use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver, CliS
 use crate::agent::{MockAgentBackend, create_backend};
 use crate::app_server::steering::TurnSteeringRegistry;
 use crate::channel::cli::{
-    CliAgentChannel, CliTurnObserver, build_command_request, map_cli_turn_execution_error,
+    CliAgentChannel, CliTurnObserver, ReportedCosts, build_command_request,
+    map_cli_turn_execution_error,
 };
 
 /// Delivers one stdout line with the payload the shared executor parses.
@@ -123,6 +124,7 @@ async fn test_run_turn_spawn_failure_returns_err_without_delta() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -162,6 +164,7 @@ async fn test_run_turn_kill_signal_returns_err_without_stopped_delta() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -207,6 +210,7 @@ async fn test_run_turn_clean_exit_returns_ok_result_without_context_reset() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -240,6 +244,7 @@ async fn test_run_turn_writes_large_stdin_concurrently_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -278,6 +283,7 @@ async fn test_run_turn_writes_prompt_to_stdin_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -325,6 +331,7 @@ async fn resumed_claude_turn_delivers_legacy_instruction_withdrawal_over_stdin()
         active: Arc::default(),
         backend: Arc::new(backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let mut request = make_turn_request(directory.path().to_path_buf());
@@ -364,6 +371,7 @@ async fn test_run_turn_preserves_child_error_after_broken_pipe() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -427,6 +435,7 @@ async fn test_run_turn_returns_claude_auth_guidance_for_expired_token() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -464,6 +473,7 @@ async fn test_run_turn_returns_exit_error_for_non_zero_status() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -493,7 +503,7 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
         command.arg("-c").arg(concat!(
             r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash"}]}}';"#,
             r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"streamed fragment"}]}}';"#,
-            r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3}}'"#,
+            r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3},"modelUsage":{"claude-sonnet-5-5":{"costUSD":0.0125}}}'"#,
         ));
 
         Ok(command)
@@ -502,6 +512,7 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -515,13 +526,35 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
 
     // Assert
     let mut saw_loader_update = false;
+    let mut usage_updates = Vec::new();
     while let Ok(event) = events_rx.try_recv() {
-        if matches!(event, TurnEvent::ThoughtDelta(_)) {
-            saw_loader_update = true;
+        match event {
+            TurnEvent::ThoughtDelta(_) => saw_loader_update = true,
+            TurnEvent::UsageUpdated(usage) => usage_updates.push(usage),
+            _ => {}
         }
     }
     assert!(saw_loader_update, "loader updates should be streamed live");
     assert_eq!(result.assistant_message.to_display_text(), "final answer");
+    assert_eq!(
+        usage_updates
+            .iter()
+            .map(ag_contracts::TurnUsage::input_tokens)
+            .collect::<Vec<_>>(),
+        [5]
+    );
+    assert_eq!(result.usage.models[0].model, "claude-sonnet-5-5");
+    assert_eq!(
+        (result.usage.input_tokens(), result.usage.output_tokens()),
+        (5, 3)
+    );
+    assert_eq!(
+        result.usage.models[0].cost,
+        Some(ag_contracts::CostEstimate {
+            basis: ag_contracts::CostBasis::AgentReported,
+            micro_usd: 12_500,
+        })
+    );
 }
 
 #[tokio::test]
@@ -588,6 +621,68 @@ fn repair_activity_is_forwarded_without_private_loader_text() {
             .iter()
             .all(|event| matches!(event, TurnEvent::Activity(_)))
     );
+}
+
+#[test]
+fn reported_costs_attribute_each_turn_its_share_of_the_cumulative_estimate() {
+    // Arrange
+    let costs = ReportedCosts::default();
+    let turns = [
+        ("fresh", None, false, None),
+        ("fresh", Some(500), false, Some(500)),
+        ("fresh", Some(800), true, Some(300)),
+        ("fresh", Some(100), true, Some(100)),
+        ("resumed", Some(900), true, None),
+        ("resumed", Some(950), true, Some(50)),
+    ];
+
+    for (session_id, cumulative, resumed, expected) in turns {
+        // Act
+        let share = costs.turn_share(session_id, cumulative, resumed);
+
+        // Assert
+        assert_eq!(share, expected, "{session_id} {cumulative:?}");
+    }
+}
+
+#[test]
+fn cli_turn_observer_forwards_live_usage_only_for_new_claude_responses() {
+    // Arrange
+    let response = r#"{"type":"assistant","message":{"id":"msg-1","model":"claude-opus-5-5","content":[],"usage":{"input_tokens":5,"cache_read_input_tokens":100,"output_tokens":1}}}"#;
+    let cases = [
+        (AgentKind::Claude, vec![105]),
+        (AgentKind::Codex, Vec::new()),
+    ];
+
+    for (kind, expected_inputs) in cases {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let observer = CliTurnObserver::new(sender, kind, false).with_usage("claude-opus-5-5");
+
+        // Act
+        observe_line(&observer, response);
+        observe_line(&observer, response);
+        drop(observer);
+        let usage_updates = std::iter::from_fn(|| receiver.try_recv().ok())
+            .filter_map(|event| match event {
+                TurnEvent::UsageUpdated(usage) => Some(usage),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            usage_updates
+                .iter()
+                .map(ag_contracts::TurnUsage::input_tokens)
+                .collect::<Vec<_>>(),
+            expected_inputs
+        );
+        for usage in &usage_updates {
+            assert_eq!(usage.models[0].model, "claude-opus-5-5");
+            assert_eq!(usage.models[0].cache_read_tokens, Some(100));
+            assert!(usage.models[0].cost.is_some());
+        }
+    }
 }
 
 #[test]

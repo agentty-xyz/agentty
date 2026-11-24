@@ -1,13 +1,13 @@
 //! Fork session snapshot tests that verify source-specific state is reset.
 
-use ag_session as agent;
-use ag_session::{FocusedReviewStatus, ResponseStyle, SessionStats};
+use ag_contracts::{TurnUsage, UsagePurpose};
+use ag_session::{FocusedReviewStatus, ResponseStyle};
 use sqlx::SqlitePool;
 
 use crate::AppRepositories;
 use crate::review::SessionReviewRequestRow;
 use crate::session::{ForkSessionSnapshot, SessionRow, SessionTurnMetadata};
-use crate::test_support::review_request_fixture;
+use crate::test_support::{review_request_fixture, token_usage};
 
 #[tokio::test]
 async fn test_fork_session_snapshot_resets_source_specific_state() {
@@ -152,7 +152,7 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats::default(),
+                usage: TurnUsage::default(),
             },
         )
         .await
@@ -202,16 +202,11 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
         .await
         .expect("failed to update focused review");
     database
-        .sessions()
-        .update_session_stats(
+        .usage()
+        .upsert_session_usage(
             "source-session",
-            &SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: agent::SessionDiffState::Unknown,
-                input_tokens: 11,
-                output_tokens: 29,
-            },
+            UsagePurpose::Turn,
+            &token_usage("gpt-5.6-sol", 11, 29),
         )
         .await
         .expect("failed to update token stats");

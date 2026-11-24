@@ -249,7 +249,19 @@ async fn session_turn_answers_and_resumes_with_stored_history() {
 
     // Assert
     assert_eq!(first.assistant_message.answer, "First answer");
-    assert_eq!((first.input_tokens, first.output_tokens), (30, 7));
+    assert_eq!(
+        (first.usage.input_tokens(), first.usage.output_tokens()),
+        (30, 7)
+    );
+    assert_eq!(
+        first_events
+            .iter()
+            .filter(
+                |event| matches!(event, TurnEvent::UsageUpdated(usage) if *usage == first.usage)
+            )
+            .count(),
+        1
+    );
     let report: Value =
         serde_json::from_str(first.harness_report.as_deref().expect("harness report"))
             .expect("report JSON");
@@ -2358,11 +2370,13 @@ async fn utility_run_charges_the_budget_and_parses_the_answer() {
     assert_eq!(submission.response.answer, "Harness title");
     assert_eq!(
         (
-            submission.stats.input_tokens,
-            submission.stats.output_tokens
+            submission.usage.input_tokens(),
+            submission.usage.output_tokens()
         ),
         (30, 7)
     );
+    assert_eq!(submission.usage.models.len(), 1);
+    assert_eq!(submission.usage.models[0].requests, 1);
     assert!(exhausted.is_err());
     assert!(budget.ensure_available().is_err());
     assert_eq!(request_bodies(&server).await.len(), 1);
@@ -2800,13 +2814,33 @@ async fn long_session_compacts_on_the_fast_model_at_its_prices() {
         compaction["cost"]["micro_usd"],
         Cost::of(&usage, pricing).micro_usd
     );
-    // The turn's usage counts the compaction request with its own.
+    // The turn's usage counts the compaction request with its own, and each
+    // completed request streams the turn's cumulative usage.
     assert_eq!(
-        result.input_tokens,
+        result.usage.input_tokens(),
         COMPACTION_INPUT_TOKENS + 30,
         "{report}"
     );
-    assert_eq!(result.output_tokens, COMPACTION_OUTPUT_TOKENS + 7);
+    assert_eq!(result.usage.output_tokens(), COMPACTION_OUTPUT_TOKENS + 7);
+    assert_eq!(result.usage.models.len(), 2);
+    let usage_updates = events
+        .iter()
+        .filter_map(|event| match event {
+            TurnEvent::UsageUpdated(usage) => Some(usage),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        usage_updates
+            .iter()
+            .map(|usage| (usage.input_tokens(), usage.output_tokens()))
+            .collect::<Vec<_>>(),
+        [
+            (COMPACTION_INPUT_TOKENS, COMPACTION_OUTPUT_TOKENS),
+            (COMPACTION_INPUT_TOKENS + 30, COMPACTION_OUTPUT_TOKENS + 7),
+        ]
+    );
+    assert_eq!(usage_updates.last().copied(), Some(&result.usage));
 }
 
 #[tokio::test]

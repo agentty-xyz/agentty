@@ -454,8 +454,8 @@ async fn live_prompt_evaluation() -> EvaluationResult {
                 Ok(Ok(submission)) => {
                     record["grade"] = case.grade(&submission.response);
                     record["response"] = json!(submission.response);
-                    record["input_tokens"] = json!(submission.stats.input_tokens);
-                    record["output_tokens"] = json!(submission.stats.output_tokens);
+                    record["input_tokens"] = json!(submission.usage.input_tokens());
+                    record["output_tokens"] = json!(submission.usage.output_tokens());
                     if record["grade"]["success"] != true {
                         failures.push(format!("{} repetition {repetition}", case.name));
                     }

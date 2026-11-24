@@ -1,5 +1,7 @@
 //! Codex response, stream-line, and progress message parsing unit tests.
 
+use ag_contracts::ModelUsage;
+
 use crate::agent::cli::execution::CliStdoutPayload;
 use crate::agent::response_parser::{
     compact_codex_progress_message, parse_codex_response_with_fallback, parse_codex_stream_payload,
@@ -30,8 +32,8 @@ fn test_parse_response_codex_ignores_trailing_completion_status_message() {
 
     // Assert
     assert_eq!(parsed.content, "Planned final answer");
-    assert_eq!(parsed.stats.input_tokens, 21);
-    assert_eq!(parsed.stats.output_tokens, 8);
+    assert_eq!(parsed.usage.input_tokens, 21);
+    assert_eq!(parsed.usage.output_tokens, 8);
 }
 
 #[test]
@@ -52,8 +54,8 @@ fn test_parse_response_codex_prefers_agent_message_over_trailing_reasoning_paylo
 
     // Assert
     assert_eq!(parsed.content, "Focused review summary");
-    assert_eq!(parsed.stats.input_tokens, 13);
-    assert_eq!(parsed.stats.output_tokens, 9);
+    assert_eq!(parsed.usage.input_tokens, 13);
+    assert_eq!(parsed.usage.output_tokens, 9);
 }
 
 #[test]
@@ -72,8 +74,8 @@ fn test_parse_response_codex_falls_back_to_reasoning_without_agent_message() {
 
     // Assert
     assert_eq!(parsed.content, "Fallback reasoning output");
-    assert_eq!(parsed.stats.input_tokens, 5);
-    assert_eq!(parsed.stats.output_tokens, 3);
+    assert_eq!(parsed.usage.input_tokens, 5);
+    assert_eq!(parsed.usage.output_tokens, 3);
 }
 
 #[test]
@@ -92,8 +94,8 @@ fn test_parse_response_codex_ignores_completion_status_as_final_message() {
 
     // Assert
     assert_eq!(parsed.content, "Final answer");
-    assert_eq!(parsed.stats.input_tokens, 13);
-    assert_eq!(parsed.stats.output_tokens, 9);
+    assert_eq!(parsed.usage.input_tokens, 13);
+    assert_eq!(parsed.usage.output_tokens, 9);
 }
 
 #[test]
@@ -207,8 +209,7 @@ fn test_parse_response_codex_skips_unusable_events() {
 
     // Assert
     assert_eq!(parsed.content, "Delta answer");
-    assert_eq!(parsed.stats.input_tokens, 0);
-    assert_eq!(parsed.stats.output_tokens, 0);
+    assert_eq!(parsed.usage, ModelUsage::unreported("", 1));
 }
 
 #[test]

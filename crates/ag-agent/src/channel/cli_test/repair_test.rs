@@ -14,7 +14,7 @@ use super::support::make_turn_request;
 use crate::agent::{AgentBackend, BuildCommandRequest, MockAgentBackend};
 use crate::app_server::steering::TurnSteeringRegistry;
 use crate::channel::cli::{
-    CliAgentChannel, execute_cli_repair_command, execute_cli_repair_turn,
+    CliAgentChannel, ReportedCosts, execute_cli_repair_command, execute_cli_repair_turn,
     parse_or_repair_cli_response,
 };
 
@@ -216,6 +216,7 @@ async fn test_run_turn_recovers_wrapped_structured_output_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -256,6 +257,7 @@ async fn test_run_turn_returns_error_for_invalid_structured_output_for_claude() 
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -353,6 +355,7 @@ async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();

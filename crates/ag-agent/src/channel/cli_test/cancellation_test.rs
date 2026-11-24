@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use super::support::make_turn_request;
 use crate::agent::MockAgentBackend;
 use crate::app_server::steering::TurnSteeringRegistry;
-use crate::channel::cli::{CliAgentChannel, CliTurnLease};
+use crate::channel::cli::{CliAgentChannel, CliTurnLease, ReportedCosts};
 
 #[tokio::test]
 async fn start_session_returns_reference_without_building_a_command() {
@@ -123,6 +123,7 @@ async fn poisoned_ownership_fails_closed_and_drop_remains_safe() {
         backend: Arc::new(MockAgentBackend::new()),
         kind: AgentKind::Claude,
         active: Arc::clone(&active),
+        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     // Act

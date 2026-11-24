@@ -389,7 +389,7 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
                 response: ag_protocol::AgentResponse::plain(
                     r#"{"title":"Manual stable title","description":"Tracks #42: https://example.com/issues/42\n\nNew body.","is_title_change_significant":false}"#,
                 ),
-                stats: ag_contracts::SessionStats::default(),
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
         let (input, transcript) = metadata_sync_test_input(db.clone(), git_client);

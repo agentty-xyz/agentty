@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::OneShotSubmission;
+use ag_contracts::{OneShotSubmission, UsagePurpose};
 use ag_git::MockGitClient;
 use ag_worker::MockRunClient;
 use tempfile::tempdir;
@@ -14,9 +14,10 @@ use crate::app::service::HarnessModels;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
+use crate::test_support::{session_usage_by_purpose, token_usage};
 
 #[tokio::test]
-async fn test_run_agent_assist_uses_injected_run_client() {
+async fn test_run_agent_assist_uses_injected_run_client_and_records_usage_under_purpose() {
     // Arrange
     let temp_directory = tempdir().expect("failed to create temp dir");
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
@@ -26,22 +27,28 @@ async fn test_run_agent_assist_uses_injected_run_client() {
 
         Ok(OneShotSubmission {
             response: ag_protocol::AgentResponse::plain("Conflict resolved"),
-            stats: ag_contracts::SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: ag_contracts::SessionDiffState::Unknown,
-                input_tokens: 0,
-                output_tokens: 0,
-            },
+            usage: token_usage("assist-model", 11, 4),
         })
     });
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let project_id = db
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project should persist");
+    db.sessions()
+        .insert_session("session-id", "model", "main", "Review", project_id)
+        .await
+        .expect("session should persist");
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
-        db: AppRepositories::in_memory().await.expect("db should open"),
+        db,
         folder: temp_directory.path().to_path_buf(),
         git_client: Arc::new(MockGitClient::new()),
         id: "session-id".to_string(),
@@ -52,7 +59,7 @@ async fn test_run_agent_assist_uses_injected_run_client() {
     };
 
     // Act
-    let result = run_agent_assist(&context, "Resolve the conflict").await;
+    let result = run_agent_assist(&context, "Resolve the conflict", UsagePurpose::Rebase).await;
 
     // Assert
     result.expect("assist should succeed");
@@ -61,6 +68,10 @@ async fn test_run_agent_assist_uses_injected_run_client() {
         .expect("transcript lock should succeed")
         .replay_text();
     assert_eq!(replay_text.as_deref(), Some("Conflict resolved\n\n"));
+    assert_eq!(
+        session_usage_by_purpose(&pool, "session-id").await,
+        vec![("assist-model".to_string(), "rebase".to_string(), 11, 4)]
+    );
 }
 
 #[test]

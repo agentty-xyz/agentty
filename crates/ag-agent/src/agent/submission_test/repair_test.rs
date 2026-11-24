@@ -3,7 +3,9 @@
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_contracts::{
+    AgentRequestKind, CostBasis, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode,
+};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tempfile::tempdir;
@@ -279,6 +281,66 @@ async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
         response.response.answers(),
         vec!["Repaired title".to_string()]
     );
+}
+
+#[tokio::test]
+/// Verifies a repaired Claude one-shot sums both attempts' usage, and their
+/// reported costs only when both attempts report one, else falls back to
+/// the list price.
+async fn claude_repair_sums_reported_costs_only_when_both_attempts_report_one() {
+    // Arrange
+    let initial = r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1},"modelUsage":{"claude-sonnet-5-5":{"costUSD":0.01}}}"#;
+    let repaired_with_cost = r#"{"result":"{\"answer\":\"Repaired\"}","usage":{"input_tokens":3,"output_tokens":2},"modelUsage":{"claude-sonnet-5-5":{"costUSD":0.002}}}"#;
+    let repaired_without_cost =
+        r#"{"result":"{\"answer\":\"Repaired\"}","usage":{"input_tokens":3,"output_tokens":2}}"#;
+    let cases = [
+        (repaired_with_cost, CostBasis::AgentReported, Some(12_000)),
+        (repaired_without_cost, CostBasis::ListPrice, None),
+    ];
+
+    for (repaired, expected_basis, expected_micro_usd) in cases {
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let outputs = Arc::new(Mutex::new(vec![repaired, initial]));
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().times(2).returning(move |_| {
+            let stdout = outputs.lock().expect("outputs").pop().expect("attempt");
+
+            Ok(mock_shell_command(stdout, "", 0))
+        });
+
+        // Act
+        let submission = submit_one_shot_with_backend(
+            &backend,
+            OneShotRequest {
+                activity_tx: None,
+                attachments: Vec::new(),
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
+                provider_call_budget: None,
+                harness: (AgentKind::Claude).to_string(),
+                child_pid: None,
+                folder: temp_directory.path().to_path_buf(),
+                model: AgentModel::ClaudeSonnet55.as_str().to_string(),
+                permission_mode: PermissionMode::AutoEdit,
+                prompt: "Generate title".to_string(),
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
+            },
+        )
+        .await
+        .expect("repair retry should succeed");
+
+        // Assert
+        assert_eq!(submission.response.answers(), vec!["Repaired".to_string()]);
+        let usage = &submission.usage.models[0];
+        assert_eq!(usage.model, AgentModel::ClaudeSonnet55.as_str());
+        assert_eq!((usage.input_tokens, usage.output_tokens), (5, 3));
+        let cost = usage.cost.expect("Claude usage is priced");
+        assert_eq!(cost.basis, expected_basis);
+        if let Some(micro_usd) = expected_micro_usd {
+            assert_eq!(cost.micro_usd, micro_usd);
+        }
+    }
 }
 
 #[tokio::test]

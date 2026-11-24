@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT plan FROM task_plan_acceptance WHERE task_attempt_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "plan",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_plan_acceptance",
+            "name": "plan"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "04853eade1c9d74a108f5f56b5b695cb40418463a9fbfff9f5167153bb5819ab"
+}

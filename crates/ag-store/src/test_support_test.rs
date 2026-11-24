@@ -1,5 +1,6 @@
 //! Fixtures shared by persistence unit suites.
 
+use ag_contracts::{ModelUsage, TurnUsage};
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, ForgeKind, ReviewRequest,
     ReviewRequestState, ReviewRequestSummary, SubmitAgentTaskRequest, TaskAgentAssignment,
@@ -92,4 +93,14 @@ pub(crate) fn enable_tracing_log_fallback() {
     static SINK: LogFallbackSink = LogFallbackSink;
     let _ = tracing::log::set_logger(&SINK);
     tracing::log::set_max_level(tracing::log::LevelFilter::Trace);
+}
+
+/// Returns one request's usage of `model` with only token totals reported.
+pub(crate) fn token_usage(model: &str, input_tokens: u64, output_tokens: u64) -> TurnUsage {
+    TurnUsage::single(ModelUsage {
+        input_tokens,
+        output_tokens,
+        requests: 1,
+        ..ModelUsage::new(model)
+    })
 }

@@ -299,10 +299,9 @@ async fn test_cancel_session_triggers_app_server_shutdown() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -420,9 +419,8 @@ async fn test_spawn_integration() {
                     assistant_message: AgentResponse::plain(&delta_text),
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -797,13 +795,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain("Refine session work"),
-            stats: ag_contracts::SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: ag_contracts::SessionDiffState::Unknown,
-                input_tokens: 0,
-                output_tokens: 0,
-            },
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
 

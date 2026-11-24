@@ -597,13 +597,7 @@ pub(super) fn auto_commit_run_client() -> Arc<dyn ag_worker::RunClient> {
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain("Existing session commit"),
-            stats: ag_contracts::SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: ag_contracts::SessionDiffState::Unknown,
-                input_tokens: 0,
-                output_tokens: 0,
-            },
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
 

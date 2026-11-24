@@ -81,13 +81,7 @@ pub(super) fn test_run_client() -> Arc<dyn RunClient> {
     run_client.expect_submit().times(0..).returning(|_| {
         Ok(OneShotSubmission {
             response: ag_protocol::AgentResponse::plain("Existing session commit"),
-            stats: ag_contracts::SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: ag_contracts::SessionDiffState::Unknown,
-                input_tokens: 0,
-                output_tokens: 0,
-            },
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
 
@@ -538,7 +532,7 @@ pub(super) fn metadata_sync_run_client() -> Arc<dyn RunClient> {
                 response: ag_protocol::AgentResponse::plain(
                     r#"{"title":"Old title","description":"Old details.\n\n- Preserve sync details.","is_title_change_significant":false}"#,
                 ),
-                stats: ag_contracts::SessionStats::default(),
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
 

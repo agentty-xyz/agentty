@@ -2345,13 +2345,7 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
 
             Ok(OneShotSubmission {
                 response: ag_protocol::AgentResponse::plain("resolved"),
-                stats: ag_contracts::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_contracts::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
     let sync_assist_client = RealSyncAssistClient {

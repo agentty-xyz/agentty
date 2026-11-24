@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.snapshot FROM execution_graph g JOIN execution_graph_revision r ON r.execution_graph_id = g.id AND r.revision = g.revision WHERE g.session_id = ? ORDER BY g.rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "snapshot",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_revision",
+            "name": "snapshot"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "957115faf85d8ff66bf61a04c5380badb590a73a068a4254e3038525c6324017"
+}

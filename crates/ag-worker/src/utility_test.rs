@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    PermissionMode, ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::AgentResponse;
 use ag_telemetry::{Context, KeyValue, Span, TraceContextExt as _};
@@ -204,10 +204,9 @@ fn policy_response(text: &str) -> AppServerTurnResponse {
     AppServerTurnResponse {
         assistant_message: text.into(),
         context_reset: false,
-        input_tokens: 1,
-        output_tokens: 1,
         pid: None,
         provider_conversation_id: None,
+        usage: TurnUsage::default(),
     }
 }
 
@@ -345,7 +344,7 @@ fn request() -> OneShotRequest {
 fn result() -> OneShotSubmission {
     OneShotSubmission {
         response: AgentResponse::plain("summary"),
-        stats: SessionStats::default(),
+        usage: TurnUsage::default(),
     }
 }
 

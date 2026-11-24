@@ -187,11 +187,10 @@ async fn run_turn_with_runtime_compacts_proactively_before_turn_start() {
         .await;
 
     // Assert
-    let (message, input_tokens, output_tokens) =
-        result.expect("turn should complete after proactive compaction");
+    let (message, turn_usage) = result.expect("turn should complete after proactive compaction");
     assert_eq!(message, String::new());
-    assert_eq!(input_tokens, 12);
-    assert_eq!(output_tokens, 3);
+    assert_eq!(turn_usage.input_tokens(), 12);
+    assert_eq!(turn_usage.output_tokens(), 3);
     assert_eq!(state.latest_input_tokens, 12);
     assert_compaction_span(&exporter, "completed");
     assert!(
@@ -241,11 +240,10 @@ async fn run_turn_with_runtime_compacts_and_retries_after_context_overflow() {
         .await;
 
     // Assert
-    let (message, input_tokens, output_tokens) =
-        result.expect("turn should complete after reactive compaction");
+    let (message, turn_usage) = result.expect("turn should complete after reactive compaction");
     assert_eq!(message, String::new());
-    assert_eq!(input_tokens, 21);
-    assert_eq!(output_tokens, 5);
+    assert_eq!(turn_usage.input_tokens(), 21);
+    assert_eq!(turn_usage.output_tokens(), 5);
     assert_eq!(state.latest_input_tokens, 21);
     assert_compaction_span(&exporter, "completed");
     assert!(

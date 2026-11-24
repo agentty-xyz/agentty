@@ -39,6 +39,7 @@ use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::test_support::token_usage;
 
 /// Shared Env gates for stand-alone worker host tests.
 pub(super) fn test_graph_resources() -> Arc<ag_worker::GraphResources> {
@@ -212,13 +213,7 @@ pub(super) fn read_only_title_run_client() -> Arc<dyn RunClient> {
         .returning(|_| {
             Ok(OneShotSubmission {
                 response: AgentResponse::plain("Inspect architecture boundaries"),
-                stats: ag_contracts::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_contracts::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
 
@@ -242,13 +237,7 @@ pub(super) fn auto_commit_run_client() -> Arc<dyn RunClient> {
 
             Ok(OneShotSubmission {
                 response: AgentResponse::plain(answer),
-                stats: ag_contracts::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_contracts::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
 
@@ -1120,9 +1109,8 @@ pub(super) fn successful_turn_result(answer: &str) -> TurnResult {
         },
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: ag_contracts::TurnUsage::default(),
     }
 }
 
@@ -1140,9 +1128,8 @@ pub(super) fn fixed_review_turn_result() -> TurnResult {
         },
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: ag_contracts::TurnUsage::default(),
     }
 }
 
@@ -1235,9 +1222,8 @@ pub(super) fn mock_existing_session_rebase_channel(
                     },
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 11,
-                    output_tokens: 7,
                     provider_conversation_id: Some("thread-after".to_string()),
+                    usage: token_usage(model_fixture::CODEX_MODEL_ID, 11, 7),
                 })
             })
         });

@@ -1,9 +1,12 @@
 //! Final response and stream-line parsing for Claude, Codex, and Antigravity
 //! CLI output.
 
-use ag_contracts::{SessionDiffState, SessionStats};
+use ag_contracts::ModelUsage;
 use ag_protocol::{FocusedReview, ReviewMetadata, UtilityResponse};
 use serde::Deserialize;
+
+use crate::agent::app_server::AntigravityTokenUsage;
+use crate::agent::claude_usage::ClaudeUsageMeter;
 
 /// Parsed agent response including content text and usage statistics.
 pub(crate) struct ParsedResponse {
@@ -12,8 +15,14 @@ pub(crate) struct ParsedResponse {
     /// Final response texts of later turns the same run answered, in order,
     /// such as Claude replying to a steering prompt after its turn ended.
     pub follow_up_contents: Vec<String>,
-    /// Token usage statistics associated with every returned content.
-    pub stats: SessionStats,
+    /// The agent's own cumulative cost estimate in micro-USD, as
+    /// [`ClaudeUsageMeter::reported_cost`] describes; `None` when the agent
+    /// reports none.
+    pub reported_cost: Option<u64>,
+    /// Usage of every returned content, under an empty model name that
+    /// [`crate::agent::usage::priced_turn_usage`] replaces. A run that
+    /// reported no usage counts as one unreported request.
+    pub usage: ModelUsage,
 }
 
 /// Claude CLI JSON response shape.
@@ -21,14 +30,6 @@ pub(crate) struct ParsedResponse {
 struct ClaudeResponse {
     result: Option<String>,
     structured_output: Option<serde_json::Value>,
-    usage: Option<ClaudeUsage>,
-}
-
-/// Token usage from a Claude CLI response.
-#[derive(Deserialize)]
-struct ClaudeUsage {
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
 }
 
 /// Single NDJSON event emitted by Codex CLI (`--json`).
@@ -61,7 +62,8 @@ pub(super) fn parse_claude_response_with_fallback(stdout: &str, stderr: &str) ->
     parse_claude_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
-        stats: SessionStats::default(),
+        reported_cost: None,
+        usage: ModelUsage::unreported("", 1),
     })
 }
 
@@ -70,7 +72,8 @@ pub(super) fn parse_codex_response_with_fallback(stdout: &str, stderr: &str) -> 
     parse_codex_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
-        stats: SessionStats::default(),
+        reported_cost: None,
+        usage: ModelUsage::unreported("", 1),
     })
 }
 
@@ -83,7 +86,8 @@ pub(super) fn parse_antigravity_response_with_fallback(
     parse_antigravity_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
-        stats: SessionStats::default(),
+        reported_cost: None,
+        usage: ModelUsage::unreported("", 1),
     })
 }
 
@@ -120,7 +124,7 @@ fn parse_antigravity_response(stdout: &str) -> Option<ParsedResponse> {
 
     let mut final_content: Option<String> = None;
     let mut streamed_content = String::new();
-    let mut latest_stats: Option<SessionStats> = None;
+    let mut latest_stats: Option<AntigravityTokenUsage> = None;
 
     if let Ok(payload) = serde_json::from_str::<serde_json::Value>(trimmed_stdout) {
         record_antigravity_payload(
@@ -154,12 +158,16 @@ fn parse_antigravity_response(stdout: &str) -> Option<ParsedResponse> {
             Some(streamed_content)
         }
     })?;
-    let stats = latest_stats.unwrap_or_default();
+    let usage = latest_stats.map_or_else(
+        || ModelUsage::unreported("", 1),
+        AntigravityTokenUsage::model_usage,
+    );
 
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        stats,
+        reported_cost: None,
+        usage,
     })
 }
 
@@ -169,7 +177,7 @@ fn record_antigravity_payload(
     payload: &serde_json::Value,
     final_content: &mut Option<String>,
     streamed_content: &mut String,
-    latest_stats: &mut Option<SessionStats>,
+    latest_stats: &mut Option<AntigravityTokenUsage>,
 ) {
     if let Some(events) = payload.as_array() {
         for event in events {
@@ -264,26 +272,11 @@ fn antigravity_event_label(payload: &serde_json::Value) -> Option<&str> {
 
 /// Extracts the latest Antigravity token counters from top-level or nested
 /// usage data.
-fn extract_antigravity_usage_stats(payload: &serde_json::Value) -> Option<SessionStats> {
-    let usage = payload
+fn extract_antigravity_usage_stats(payload: &serde_json::Value) -> Option<AntigravityTokenUsage> {
+    payload
         .get("usage")
-        .or_else(|| payload.get("result").and_then(|result| result.get("usage")))?;
-
-    Some(SessionStats {
-        added_lines: 0,
-        deleted_lines: 0,
-        diff_state: SessionDiffState::Unknown,
-        input_tokens: antigravity_token_count(usage, "input_tokens"),
-        output_tokens: antigravity_token_count(usage, "output_tokens"),
-    })
-}
-
-/// Reads one non-negative token counter from Antigravity usage JSON.
-fn antigravity_token_count(usage: &serde_json::Value, field: &str) -> u64 {
-    usage
-        .get(field)
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
+        .or_else(|| payload.get("result").and_then(|result| result.get("usage")))
+        .and_then(AntigravityTokenUsage::parse)
 }
 
 /// Parses one full Claude run payload from stream-json stdout.
@@ -306,7 +299,10 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     }
 
     let mut turn_contents = Vec::new();
-    let mut stats = SessionStats::default();
+    // In `stream-json` input mode each `result` reports usage for its own
+    // turn only, so a run that answers several turns is the sum of its
+    // results.
+    let mut usage = ClaudeUsageMeter::default();
     let mut latest_stream_message_content: Option<String> = None;
 
     for line in stdout
@@ -314,8 +310,12 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
+        let Ok(stream_event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        usage.observe_payload(&stream_event);
+
         if let Some(parsed_response) = parse_claude_complete_payload(line) {
-            add_claude_turn_usage(&mut stats, &parsed_response.stats);
             if !parsed_response.content.trim().is_empty() {
                 turn_contents.push(parsed_response.content);
             }
@@ -323,25 +323,20 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
             continue;
         }
 
-        let Ok(stream_event) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-
-        if let Some(turn_stats) = extract_claude_usage_stats(&stream_event) {
-            add_claude_turn_usage(&mut stats, &turn_stats);
-        }
-
         if let Some(content) = extract_claude_stream_assistant_content(&stream_event) {
             latest_stream_message_content = Some(content);
         }
     }
 
+    let reported_cost = usage.reported_cost();
+    let usage = usage.usage();
     let mut turn_contents = turn_contents.into_iter();
     if let Some(content) = turn_contents.next() {
         return Some(ParsedResponse {
             content,
             follow_up_contents: turn_contents.collect(),
-            stats,
+            reported_cost,
+            usage,
         });
     }
 
@@ -353,7 +348,8 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        stats,
+        reported_cost,
+        usage,
     })
 }
 
@@ -361,15 +357,6 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
 /// event array.
 fn parse_claude_complete_payload(payload: &str) -> Option<ParsedResponse> {
     parse_claude_response_payload(payload).or_else(|| parse_claude_response_array_payload(payload))
-}
-
-/// Adds one Claude turn's token usage to the run total.
-///
-/// In `stream-json` input mode each `result` reports usage for its own turn
-/// only, so a run that answers several turns is the sum of its results.
-fn add_claude_turn_usage(total: &mut SessionStats, turn: &SessionStats) {
-    total.input_tokens = total.input_tokens.saturating_add(turn.input_tokens);
-    total.output_tokens = total.output_tokens.saturating_add(turn.output_tokens);
 }
 
 /// Classifies one parsed Claude stream-line payload into display text and
@@ -399,6 +386,7 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
     let mut last_reasoning_message: Option<String> = None;
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
+    let mut reported = false;
 
     for line in stdout.lines() {
         let trimmed_line = line.trim();
@@ -410,7 +398,8 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
             continue;
         };
 
-        record_codex_turn_usage(&event, &mut total_input_tokens, &mut total_output_tokens);
+        reported |=
+            record_codex_turn_usage(&event, &mut total_input_tokens, &mut total_output_tokens);
 
         if event.event_type.as_deref() != Some("item.completed") {
             continue;
@@ -423,12 +412,15 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
         record_codex_completed_item(item, &mut last_agent_message, &mut last_reasoning_message);
     }
 
-    let stats = SessionStats {
-        added_lines: 0,
-        deleted_lines: 0,
-        diff_state: SessionDiffState::Unknown,
-        input_tokens: total_input_tokens,
-        output_tokens: total_output_tokens,
+    let usage = if reported {
+        ModelUsage {
+            input_tokens: total_input_tokens,
+            output_tokens: total_output_tokens,
+            requests: 1,
+            ..ModelUsage::new("")
+        }
+    } else {
+        ModelUsage::unreported("", 1)
     };
 
     last_agent_message
@@ -436,26 +428,30 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
         .map(|content| ParsedResponse {
             content,
             follow_up_contents: Vec::new(),
-            stats,
+            reported_cost: None,
+            usage,
         })
 }
 
-/// Adds token usage from one Codex turn completion event.
+/// Adds token usage from one Codex turn completion event and returns whether
+/// the event reported usage.
 fn record_codex_turn_usage(
     event: &CodexEvent,
     total_input_tokens: &mut u64,
     total_output_tokens: &mut u64,
-) {
+) -> bool {
     if event.event_type.as_deref() != Some("turn.completed") {
-        return;
+        return false;
     }
 
     let Some(usage) = event.usage.as_ref() else {
-        return;
+        return false;
     };
 
     *total_input_tokens += usage.input_tokens.unwrap_or(0).cast_unsigned();
     *total_output_tokens += usage.output_tokens.unwrap_or(0).cast_unsigned();
+
+    true
 }
 
 /// Records visible content from one completed Codex item event.
@@ -538,33 +534,20 @@ pub(super) fn parse_codex_stream_payload(
 }
 
 fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
-    let response = serde_json::from_str::<ClaudeResponse>(stdout).ok()?;
+    let payload = serde_json::from_str::<serde_json::Value>(stdout).ok()?;
+    let response = ClaudeResponse::deserialize(&payload).ok()?;
     let content = response
         .structured_output
         .map(|structured_output| structured_output.to_string())
         .or(response.result)?;
-    let stats = SessionStats {
-        added_lines: 0,
-        deleted_lines: 0,
-        diff_state: SessionDiffState::Unknown,
-        input_tokens: response
-            .usage
-            .as_ref()
-            .and_then(|usage| usage.input_tokens)
-            .unwrap_or(0)
-            .cast_unsigned(),
-        output_tokens: response
-            .usage
-            .as_ref()
-            .and_then(|usage| usage.output_tokens)
-            .unwrap_or(0)
-            .cast_unsigned(),
-    };
+    let mut usage = ClaudeUsageMeter::default();
+    usage.observe(&payload);
 
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        stats,
+        reported_cost: usage.reported_cost(),
+        usage: usage.usage(),
     })
 }
 
@@ -581,12 +564,10 @@ fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
     let mut latest_structured_output_content: Option<String> = None;
     let mut latest_result_content: Option<String> = None;
     let mut latest_assistant_content: Option<String> = None;
-    let mut latest_stats: Option<SessionStats> = None;
+    let mut usage = ClaudeUsageMeter::default();
 
     for event in events {
-        if let Some(stats) = extract_claude_usage_stats(event) {
-            latest_stats = Some(stats);
-        }
+        usage.observe(event);
 
         if let Some(result_content) = event.get("result").and_then(serde_json::Value::as_str)
             && !result_content.trim().is_empty()
@@ -608,33 +589,12 @@ fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
     let content = latest_structured_output_content
         .or(latest_result_content)
         .or(latest_assistant_content)?;
-    let stats = latest_stats.unwrap_or_default();
 
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        stats,
-    })
-}
-
-/// Extracts Claude usage statistics from one JSON stream event.
-fn extract_claude_usage_stats(stream_event: &serde_json::Value) -> Option<SessionStats> {
-    let usage = stream_event.get("usage")?;
-
-    Some(SessionStats {
-        added_lines: 0,
-        deleted_lines: 0,
-        diff_state: SessionDiffState::Unknown,
-        input_tokens: usage
-            .get("input_tokens")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0)
-            .cast_unsigned(),
-        output_tokens: usage
-            .get("output_tokens")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0)
-            .cast_unsigned(),
+        reported_cost: usage.reported_cost(),
+        usage: usage.usage(),
     })
 }
 

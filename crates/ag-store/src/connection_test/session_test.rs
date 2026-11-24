@@ -1,10 +1,11 @@
 //! Session row loading, status timing, and lookup persistence tests.
 
-use ag_session::{ReviewRequest, SessionDiffState, SessionStats};
+use ag_contracts::UsagePurpose;
+use ag_session::ReviewRequest;
 
 use super::support::{assert_review_request_row, insert_session_fixture, load_session_row};
 use crate::connection::Database;
-use crate::test_support::review_request_fixture;
+use crate::test_support::{review_request_fixture, token_usage};
 
 /// Verifies `load_sessions()` maps persisted joined session fields.
 #[tokio::test]
@@ -284,19 +285,14 @@ async fn persist_joined_session_metadata(database: &Database, review_request: &R
         .await
         .expect("failed to update session title");
     database
-        .sessions()
-        .update_session_stats(
+        .usage()
+        .upsert_session_usage(
             "session-a",
-            &SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: SessionDiffState::Unknown,
-                input_tokens: 11,
-                output_tokens: 29,
-            },
+            UsagePurpose::Turn,
+            &token_usage("claude-opus-4.1", 11, 29),
         )
         .await
-        .expect("failed to update session stats");
+        .expect("failed to record session usage");
     database
         .sessions()
         .update_session_model("session-a", "claude-opus-4.1")

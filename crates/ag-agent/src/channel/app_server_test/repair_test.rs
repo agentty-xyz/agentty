@@ -82,6 +82,12 @@ async fn repair_forwards_live_pid_and_publishes_retained_or_cleared_response_pid
             .expect("join turn")
             .expect("repaired turn succeeds");
         assert_eq!(result.assistant_message.to_display_text(), "repaired");
+        assert_eq!(result.usage.models.len(), 1);
+        assert_eq!(result.usage.models[0].requests, 2);
+        assert_eq!(
+            (result.usage.input_tokens(), result.usage.output_tokens()),
+            (20, 10)
+        );
         assert!(
             matches!(events_rx.recv().await, Some(TurnEvent::PidUpdate(pid)) if pid == final_pid)
         );

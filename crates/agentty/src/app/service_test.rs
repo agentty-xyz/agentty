@@ -23,7 +23,7 @@ use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
-use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
+use crate::domain::session::{PublishedBranchSyncStatus, SessionId};
 use crate::domain::transient_message::GeneratedTurnUpdate;
 use crate::infra::clock::Clock;
 use crate::infra::db::Database;
@@ -969,7 +969,6 @@ fn session_event_labels_preserve_variant_identity() {
             turn_applied_state: TurnAppliedState {
                 follow_up_tasks: Vec::new(),
                 questions: Vec::new(),
-                token_usage_delta: SessionStats::default(),
             },
         },
         AppEvent::ImplementerAttemptSucceeded {
@@ -1025,10 +1024,9 @@ async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"project_impact":[],"suggestions":[]}"#.into(),
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });

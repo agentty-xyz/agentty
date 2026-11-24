@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT session_id, status FROM agent_run WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_run",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_run",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "60afdde66f360e414888861b34466315a908402662c14d29f0612732321332ab"
+}

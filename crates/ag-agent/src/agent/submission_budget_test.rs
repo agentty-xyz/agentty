@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ProviderCallBudget,
-    ReasoningLevel, SpeedMode,
+    ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::ProtocolSchemaInstructionMode;
 use ag_session::{AgentKind, test_support as model_fixture};
@@ -111,7 +111,7 @@ async fn app_server_initial_turns_restart_retries_and_protocol_repairs_share_the
                             } else {
                                 r#"{"answer":"summary"}"#
                             };
-                            Ok((response.to_string(), 0, 0))
+                            Ok((response.to_string(), TurnUsage::default()))
                         })
                     },
                     |()| Box::pin(async {}),

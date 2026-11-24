@@ -19,6 +19,7 @@ use crate::agent::submission::{
 use crate::app_server::{
     AppServerError, AppServerStreamEvent, AppServerTurnResponse, MockAppServerClient,
 };
+use crate::test_support::token_usage;
 
 #[tokio::test]
 /// Verifies app-server-backed one-shot execution returns the parsed
@@ -53,10 +54,9 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"Generated title"}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 11,
-                    output_tokens: 7,
                     pid: Some(42),
                     provider_conversation_id: Some("thread-1".to_string()),
+                    usage: token_usage(model_fixture::CODEX_MODEL.as_str(), 11, 7),
                 })
             })
         });
@@ -94,8 +94,10 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
         response.response.answers(),
         vec!["Generated title".to_string()]
     );
-    assert_eq!(response.stats.input_tokens, 11);
-    assert_eq!(response.stats.output_tokens, 7);
+    assert_eq!(
+        response.usage,
+        token_usage(model_fixture::CODEX_MODEL.as_str(), 11, 7)
+    );
     assert_eq!(
         activity_rx.try_recv().expect("started activity is ready"),
         activity_event(ActivityStatus::Running)
@@ -206,10 +208,9 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
                     Ok(AppServerTurnResponse {
                         assistant_message: r#"{"answer":"Repaired"}"#.into(),
                         context_reset: false,
-                        input_tokens: 2,
-                        output_tokens: 1,
                         pid: None,
                         provider_conversation_id: Some("native-session".into()),
+                        usage: token_usage("repair-model", 2, 1),
                     })
                 })
             });
@@ -230,7 +231,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
         };
 
         // Act
-        let (response, input_tokens, output_tokens) = attempt_one_shot_app_server_repair(
+        let (response, repair_usage) = attempt_one_shot_app_server_repair(
             &client,
             "invalid JSON",
             "malformed",
@@ -244,7 +245,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
 
         // Assert
         assert_eq!(response.to_display_text(), "Repaired");
-        assert_eq!((input_tokens, output_tokens), (2, 1));
+        assert_eq!(repair_usage, token_usage("repair-model", 2, 1));
         assert_eq!(
             activity_rx.try_recv().expect("repair activity is ready"),
             activity_event(ActivityStatus::Completed)
@@ -276,10 +277,9 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
                 Ok(AppServerTurnResponse {
                     assistant_message: "plain text".to_string(),
                     context_reset: false,
-                    input_tokens: 2,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: token_usage("model", 2, 1),
                 })
             })
         });
@@ -339,10 +339,9 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_util
                 Ok(AppServerTurnResponse {
                     assistant_message: "plain text".to_string(),
                     context_reset: false,
-                    input_tokens: 2,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: token_usage("model", 2, 1),
                 })
             })
         });
@@ -428,10 +427,9 @@ async fn test_submit_one_shot_with_app_server_client_sends_images_only_initially
                 Ok(AppServerTurnResponse {
                     assistant_message,
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: token_usage("model", 1, 1),
                 })
             })
         });
@@ -467,4 +465,13 @@ async fn test_submit_one_shot_with_app_server_client_sends_images_only_initially
     // Assert
     assert_eq!(response.response.answers(), vec!["Seen".to_string()]);
     assert_eq!(*seen.lock().expect("turns"), [vec![attachment], Vec::new()]);
+    assert_eq!(response.usage.models.len(), 1);
+    assert_eq!(response.usage.models[0].requests, 2);
+    assert_eq!(
+        (
+            response.usage.input_tokens(),
+            response.usage.output_tokens()
+        ),
+        (2, 2)
+    );
 }

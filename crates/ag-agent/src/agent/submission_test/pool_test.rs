@@ -15,6 +15,7 @@ use crate::app_server::{
     AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     AppServerTurnResponse, MockAppServerClient,
 };
+use crate::test_support::token_usage;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
@@ -52,10 +53,9 @@ async fn pooled_submissions_reuse_runtime_identity_but_request_fresh_conversatio
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"project_impact":[],"suggestions":[]}"#.into(),
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 2,
                     pid: Some(42),
                     provider_conversation_id: Some("fresh".into()),
+                    usage: token_usage("fixture", 1, 2),
                 })
             })
         });
@@ -204,10 +204,9 @@ async fn custom_client_retained_repair_uses_ordinary_turn_fallback() {
             Ok(AppServerTurnResponse {
                 assistant_message: message.into(),
                 context_reset: false,
-                input_tokens: 1,
-                output_tokens: 2,
                 pid: None,
                 provider_conversation_id: None,
+                usage: token_usage("fixture", 1, 2),
             })
         })
     });
@@ -222,6 +221,6 @@ async fn custom_client_retained_repair_uses_ordinary_turn_fallback() {
     client.close().await;
 
     // Assert
-    assert_eq!(response.stats.input_tokens, 2);
-    assert_eq!(response.stats.output_tokens, 4);
+    assert_eq!(response.usage.input_tokens(), 2);
+    assert_eq!(response.usage.output_tokens(), 4);
 }

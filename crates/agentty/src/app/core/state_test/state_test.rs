@@ -21,9 +21,7 @@ use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::question::QuestionItem;
-use crate::domain::session::{
-    SessionDiffState, SessionHandles, SessionId, SessionSize, SessionStats, Status,
-};
+use crate::domain::session::{SessionHandles, SessionId, SessionSize, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
 use crate::infra::terminal_clipboard::MockTerminalClipboard;
@@ -237,7 +235,6 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("first question")],
             Vec::new(),
-            SessionStats::default(),
         ),
     });
     event_batch.collect_event(AppEvent::AgentResponseReceived {
@@ -245,7 +242,6 @@ fn app_event_batch_collect_event_keeps_latest_same_session_updates() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("second question")],
             Vec::new(),
-            SessionStats::default(),
         ),
     });
 
@@ -681,7 +677,6 @@ async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_sessio
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("Need context?")],
             Vec::new(),
-            SessionStats::default(),
         ),
     })
     .await;
@@ -691,8 +686,8 @@ async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_sessio
 }
 
 #[tokio::test]
-/// Verifies one reducer tick preserves the latest turn projection while
-/// accumulating token usage from multiple queued completions.
+/// Verifies one reducer tick applies the latest of multiple queued turn
+/// projections.
 async fn apply_app_events_agent_response_batches_same_session_turns() {
     // Arrange
     let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
@@ -707,25 +702,11 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
 
     let first_turn = test_turn_applied_state(
         vec![QuestionItem::new("First question?")],
-        Vec::new(),
-        SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: SessionDiffState::Unknown,
-            input_tokens: 2,
-            output_tokens: 3,
-        },
+        vec!["Superseded follow-up task."],
     );
     let second_turn = test_turn_applied_state(
         vec![QuestionItem::new("Latest question?")],
         vec!["Capture reducer batching coverage."],
-        SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: SessionDiffState::Unknown,
-            input_tokens: 5,
-            output_tokens: 8,
-        },
     );
 
     event_sender
@@ -747,8 +728,6 @@ async fn apply_app_events_agent_response_batches_same_session_turns() {
         app.sessions.sessions()[0].questions,
         vec![QuestionItem::new("Latest question?")]
     );
-    assert_eq!(app.sessions.sessions()[0].stats.input_tokens, 7);
-    assert_eq!(app.sessions.sessions()[0].stats.output_tokens, 11);
     assert_eq!(
         app.sessions.sessions()[0]
             .follow_up_tasks

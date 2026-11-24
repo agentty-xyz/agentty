@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    PermissionMode, ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::AgentResponse;
 use async_trait::async_trait;
@@ -88,7 +88,7 @@ impl OneShotClient for Runtime {
     async fn submit(&self, _: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
         Ok(OneShotSubmission {
             response: AgentResponse::plain("child"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     }
 }

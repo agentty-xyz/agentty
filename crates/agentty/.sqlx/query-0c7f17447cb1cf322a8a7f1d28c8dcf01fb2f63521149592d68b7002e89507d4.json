@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, reference, body FROM execution_graph_result WHERE execution_graph_id = ? AND node_id = ? AND output_name = ? ORDER BY version",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_result",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "reference",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_result",
+            "name": "reference"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_result",
+            "name": "body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0c7f17447cb1cf322a8a7f1d28c8dcf01fb2f63521149592d68b7002e89507d4"
+}

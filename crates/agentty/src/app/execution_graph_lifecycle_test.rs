@@ -72,9 +72,8 @@ async fn clarification_app(
                             assistant_message: response,
                             context_reset: false,
                             harness_report: None,
-                            input_tokens: 1,
-                            output_tokens: 1,
                             provider_conversation_id: None,
+                            usage: ag_contracts::TurnUsage::default(),
                         })
                     })
                 });

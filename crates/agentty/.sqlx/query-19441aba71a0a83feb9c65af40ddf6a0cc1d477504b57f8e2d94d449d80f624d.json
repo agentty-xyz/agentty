@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO execution_graph (id, session_id, revision) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "19441aba71a0a83feb9c65af40ddf6a0cc1d477504b57f8e2d94d449d80f624d"
+}

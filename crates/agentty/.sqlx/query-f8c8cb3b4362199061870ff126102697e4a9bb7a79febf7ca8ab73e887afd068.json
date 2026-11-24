@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task SET completed_at = COALESCE(completed_at, ?) WHERE id = ?\n             AND NOT EXISTS (SELECT 1 FROM task_attempt a\n                 JOIN session_operation o ON o.id = a.session_operation_id\n                 WHERE a.task_id = task.id AND o.status IN ('queued', 'running'))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f8c8cb3b4362199061870ff126102697e4a9bb7a79febf7ca8ab73e887afd068"
+}

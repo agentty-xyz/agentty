@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use ag_contracts::OneShotError;
+use ag_contracts::{OneShotError, UsagePurpose};
 use ag_git::{GitError, MockGitClient};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
@@ -328,6 +328,7 @@ async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
+        purpose: UsagePurpose::Rebase,
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         session_update_versions: Arc::default(),
         transcript: Arc::new(Mutex::new(SessionTranscript::default())),
@@ -342,22 +343,15 @@ async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
 }
 
 #[tokio::test]
-/// Verifies assist output stays successful when its stats and usage rows
-/// cannot be persisted.
-async fn test_run_agent_assist_task_tolerates_stats_and_usage_persistence_failures() {
+/// Verifies assist output stays successful when its usage cannot be
+/// persisted.
+async fn test_run_agent_assist_task_tolerates_usage_persistence_failure() {
     // Arrange
     enable_tracing_log_fallback();
     let (database, pool) = AppRepositories::in_memory_with_pool()
         .await
         .expect("db should open");
     insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
-    sqlx::query(
-        "CREATE TRIGGER reject_stats BEFORE UPDATE OF input_tokens ON session BEGIN SELECT \
-         RAISE(ABORT, 'stats failure'); END",
-    )
-    .execute(&pool)
-    .await
-    .expect("failing stats fixture");
     sqlx::query("DROP TABLE session_usage")
         .execute(&pool)
         .await
@@ -379,6 +373,7 @@ async fn test_run_agent_assist_task_tolerates_stats_and_usage_persistence_failur
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
+        purpose: UsagePurpose::Rebase,
         session_agent: model_fixture::codex_selection(),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),

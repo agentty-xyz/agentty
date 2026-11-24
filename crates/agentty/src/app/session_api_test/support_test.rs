@@ -229,10 +229,9 @@ pub(super) fn app_server_response(
     AppServerTurnResponse {
         assistant_message: assistant_message.to_string(),
         context_reset: false,
-        input_tokens: 0,
-        output_tokens: 0,
         pid: None,
         provider_conversation_id: provider_conversation_id.map(str::to_string),
+        usage: ag_contracts::TurnUsage::default(),
     }
 }
 

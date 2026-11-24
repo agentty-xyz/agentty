@@ -159,8 +159,8 @@ async fn claude_session_turn_keeps_every_answer_when_a_steer_gets_a_follow_up_tu
         result.assistant_message.to_display_text(),
         "first\n\nsecond"
     );
-    assert_eq!(result.input_tokens, 16);
-    assert_eq!(result.output_tokens, 10);
+    assert_eq!(result.usage.input_tokens(), 16);
+    assert_eq!(result.usage.output_tokens(), 10);
 }
 
 #[tokio::test]

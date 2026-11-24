@@ -11,8 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
 use ag_contracts::{
-    OneShotClient, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    SessionDiffState, SessionStats,
+    OneShotClient, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode, TurnUsage,
 };
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt,
@@ -30,6 +29,7 @@ use super::cli::execution::{
 };
 use super::native::NativeHarnessConfig;
 use super::submission_pool::{SubmissionLease, SubmissionPool};
+use super::usage::priced_turn_usage;
 use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
 
@@ -315,7 +315,7 @@ async fn execute_one_shot_app_server_turns(
 
     let parse_result =
         match parse_one_shot_response(&turn_result.assistant_message, protocol_profile) {
-            Ok(response) => Ok((response, 0, 0)),
+            Ok(response) => Ok((response, TurnUsage::default())),
             Err(parse_error) => {
                 attempt_one_shot_app_server_repair(
                     app_server_client,
@@ -330,18 +330,11 @@ async fn execute_one_shot_app_server_turns(
             }
         };
 
-    let (response, repair_input_tokens, repair_output_tokens) = parse_result?;
+    let (response, repair_usage) = parse_result?;
+    let mut usage = turn_result.usage;
+    usage.merge(&repair_usage);
 
-    Ok(OneShotSubmission {
-        response,
-        stats: SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: SessionDiffState::Unknown,
-            input_tokens: turn_result.input_tokens + repair_input_tokens,
-            output_tokens: turn_result.output_tokens + repair_output_tokens,
-        },
-    })
+    Ok(OneShotSubmission { response, usage })
 }
 
 /// Executes one isolated prompt using the provided backend.
@@ -358,9 +351,11 @@ async fn submit_one_shot_with_backend(
     request: OneShotRequest,
 ) -> Result<OneShotSubmission, String> {
     let protocol_profile = request.request_kind.protocol_profile();
+    let agent_kind = request.harness.parse::<AgentKind>()?;
+    let model = request.model.clone();
     let parsed_response =
-        execute_one_shot_command(backend, &request.prompt, request.clone()).await?;
-    let (agent_response, repair_stats) =
+        execute_one_shot_command(backend, agent_kind, &request.prompt, request.clone()).await?;
+    let (agent_response, repair_response) =
         match parse_one_shot_response(&parsed_response.content, protocol_profile) {
             Ok(response) => (response, None),
             Err(parse_error) => {
@@ -371,9 +366,12 @@ async fn submit_one_shot_with_backend(
                     permission_mode: PermissionMode::ReadOnly,
                     ..request
                 };
-                let repair_response = execute_one_shot_command(backend, &repair_prompt, request)
-                    .await
-                    .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
+                let repair_response =
+                    execute_one_shot_command(backend, agent_kind, &repair_prompt, request)
+                        .await
+                        .map_err(|error| {
+                            format!("{parse_error}\nrepair transport failed: {error}")
+                        })?;
 
                 let response = parse_one_shot_response(&repair_response.content, protocol_profile)
                     .map_err(|error| {
@@ -384,19 +382,24 @@ async fn submit_one_shot_with_backend(
                         )
                     })?;
 
-                (response, Some(repair_response.stats))
+                (response, Some(repair_response))
             }
         };
 
-    let mut stats = parsed_response.stats;
-    if let Some(repair) = repair_stats {
-        stats.input_tokens += repair.input_tokens;
-        stats.output_tokens += repair.output_tokens;
+    // Each attempt is a fresh, unresumed process, so the agent's own cost
+    // estimate covers that attempt alone.
+    let mut usage = parsed_response.usage;
+    let mut reported_cost = parsed_response.reported_cost;
+    if let Some(repair) = repair_response {
+        usage.add(&repair.usage);
+        reported_cost = reported_cost
+            .zip(repair.reported_cost)
+            .map(|(cost, repair_cost)| cost.saturating_add(repair_cost));
     }
 
     Ok(OneShotSubmission {
         response: agent_response,
-        stats,
+        usage: priced_turn_usage(usage, &model, agent_kind, reported_cost),
     })
 }
 
@@ -441,7 +444,7 @@ async fn attempt_one_shot_app_server_repair(
     session_id: &str,
     provider_conversation_id: Option<&str>,
     pooled: bool,
-) -> Result<(AgentResponse, u64, u64), String> {
+) -> Result<(AgentResponse, TurnUsage), String> {
     let protocol_profile = request.request_kind.protocol_profile();
     let repair_prompt = build_protocol_repair_prompt(parse_error, malformed_response)?;
 
@@ -483,11 +486,7 @@ async fn attempt_one_shot_app_server_repair(
             )
         })?;
 
-    Ok((
-        response,
-        repair_result.input_tokens,
-        repair_result.output_tokens,
-    ))
+    Ok((response, repair_result.usage))
 }
 
 /// Runs one one-shot backend command and returns the parsed provider content.
@@ -501,13 +500,13 @@ async fn attempt_one_shot_app_server_repair(
 /// unsuccessfully.
 async fn execute_one_shot_command(
     backend: &dyn AgentBackend,
+    agent_kind: AgentKind,
     prompt: &str,
     request: OneShotRequest,
 ) -> Result<ParsedResponse, String> {
     if let Some(budget) = &request.provider_call_budget {
         budget.consume().map_err(|error| error.to_string())?;
     }
-    let agent_kind = request.harness.parse::<AgentKind>()?;
     let build_request = BuildCommandRequest {
         execution_policy: &request.execution_policy,
         attachments: &request.attachments,

@@ -26,6 +26,7 @@ use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::COMMITTING_PROGRESS_LABEL;
 use crate::domain::session_message::SessionTranscript;
+use crate::test_support::session_usage_by_purpose;
 
 /// Evolving session commit on an unpublished branch forked from `main`.
 const UNPUBLISHED: SessionCommitMode<'static> = SessionCommitMode::Evolving {
@@ -595,11 +596,14 @@ async fn commit_generation_bounds_oversized_diff_and_existing_message_without_su
 
 #[tokio::test]
 /// Auto-commit assistance preserves the retained runtime PID on success
-/// and failure, even when a one-shot client clears its cancellation slot.
+/// and failure, even when a one-shot client clears its cancellation slot,
+/// and records a successful assist's usage as commit assistance.
 async fn test_commit_assist_preserves_retained_runtime_accounting() {
     // Arrange
     for assist_fails in [false, true] {
-        let database = AppRepositories::in_memory().await.expect("db should open");
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
         insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let child_pid = Arc::new(Mutex::new(Some(4242)));
@@ -616,7 +620,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
                 if assist_fails {
                     Err(OneShotError::new("assist failed"))
                 } else {
-                    Ok(one_shot_submission("Fixed the commit failure", 0, 0))
+                    Ok(one_shot_submission("Fixed the commit failure", 3, 2))
                 }
             });
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
@@ -643,13 +647,24 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         assert_eq!(result.is_err(), assist_fails);
         assert_eq!(*child_pid.lock().expect("retained runtime PID"), Some(4242));
         let replay_text = transcript.lock().expect("transcript lock").replay_text();
+        let usage = session_usage_by_purpose(&pool, "session-id").await;
         if assist_fails {
             assert_eq!(
                 replay_text.as_deref(),
                 Some("[Error] Agent assistance failed.")
             );
+            assert_eq!(usage, []);
         } else {
             assert_eq!(replay_text.as_deref(), Some("Fixed the commit failure\n\n"));
+            assert_eq!(
+                usage,
+                vec![(
+                    "fixture-model".to_string(),
+                    "commit_assist".to_string(),
+                    3,
+                    2
+                )]
+            );
         }
     }
 }

@@ -719,9 +719,8 @@ async fn test_run_channel_turn_proceeds_after_previous_cancellation() {
                     },
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -810,9 +809,8 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
                     },
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -917,9 +915,8 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
                     },
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -1011,9 +1008,8 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
                     },
                     context_reset: false,
                     harness_report: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });

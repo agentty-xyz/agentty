@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ag_contracts::{
-    AgentRequestKind, ExecutionPolicy, PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    AgentRequestKind, ExecutionPolicy, ModelUsage, PermissionMode, ReasoningLevel, SpeedMode,
 };
 use ag_harness::provider::ModelProvider;
 use ag_session::AgentKind;
@@ -103,7 +103,8 @@ fn test_harness_parsers_return_no_content() {
 
     // Assert
     assert_eq!(response.content, "");
-    assert_eq!(response.stats, SessionStats::default());
+    assert_eq!(response.usage, ModelUsage::new(""));
+    assert_eq!(response.reported_cost, None);
     assert_eq!(stream_line, None);
 }
 

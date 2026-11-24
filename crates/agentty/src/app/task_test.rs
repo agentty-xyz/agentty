@@ -169,7 +169,7 @@ async fn final_passes_keep_original_criteria_when_summaries_retain_only_some_pat
                 }
             }]}).to_string())
         };
-        Ok(OneShotSubmission { response, stats: ag_contracts::SessionStats::default() })
+        Ok(OneShotSubmission { response, usage: ag_contracts::TurnUsage::default() })
     });
 
     // Act
@@ -224,7 +224,7 @@ async fn oversized_review_batches_original_diff_and_discloses_summarized_history
         };
         Ok(OneShotSubmission {
             response,
-            stats: ag_contracts::SessionStats::default(),
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
 
@@ -1225,7 +1225,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Review completed."],"suggestions":[]}"#,
             ),
-            stats: ag_contracts::SessionStats::default(),
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
     let input = ReviewAssistTaskInput {
@@ -1373,7 +1373,7 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Review completed."],"suggestions":[]}"#,
             ),
-            stats: ag_contracts::SessionStats::default(),
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
 
@@ -1417,7 +1417,7 @@ impl RunClient for DelayedReviewClient {
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-            stats: ag_contracts::SessionStats::default(),
+            usage: ag_contracts::TurnUsage::default(),
         })
     }
 }
@@ -1935,7 +1935,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Completed review retained"],"suggestions":[]}"#,
             ),
-            stats: ag_contracts::SessionStats::default(),
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
     let (app_event_tx, mut events) = mpsc::unbounded_channel();

@@ -967,9 +967,7 @@ async fn review_diff_baseline_migration_preserves_existing_review_hashes() {
 #[tokio::test]
 async fn test_migrate_sonnet_5_to_55_updates_sessions_and_model_settings() {
     // Arrange
-    let database = Database::open_in_memory()
-        .await
-        .expect("database should open");
+    let database = pre_usage_detail_database().await;
     let project_id = database
         .projects()
         .upsert_project("/tmp/sonnet-migration", None)
@@ -1051,9 +1049,7 @@ async fn test_migrate_sonnet_5_to_55_updates_sessions_and_model_settings() {
 #[tokio::test]
 async fn test_migrate_sonnet_5_to_55_consolidates_usage_without_losing_history() {
     // Arrange
-    let database = Database::open_in_memory()
-        .await
-        .expect("database should open");
+    let database = pre_usage_detail_database().await;
     let project_id = database
         .projects()
         .upsert_project("/tmp/sonnet-usage", None)
@@ -1525,6 +1521,27 @@ VALUES (?, ?, ?, ?)
     .expect("failed to insert raw session message row");
 }
 
+/// Opens a database at the last schema whose `session_usage` rows are unique
+/// by session and model, so model-rename migrations can be reapplied.
+async fn pre_usage_detail_database() -> Database {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("legacy pool");
+    let migrations = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version < 126)
+        .cloned()
+        .collect::<Vec<_>>();
+    Migrator::with_migrations(migrations)
+        .run(&pool)
+        .await
+        .expect("legacy schema");
+
+    Database::from_pool(pool, system_timestamp_source())
+}
+
 /// Reapplies one embedded migration under an isolated test tracking table.
 async fn rerun_embedded_migration(pool: &SqlitePool, version: i64) {
     let migration = sqlx::migrate!("./migrations")
@@ -1981,4 +1998,70 @@ async fn retirement_closes_active_work_timers() {
     assert_eq!(sessions[3].3, None);
     assert_eq!(operation.0, "failed");
     assert!((before..=after).contains(&operation.1));
+}
+
+/// Verifies the usage-detail migration keeps recorded usage as session turns
+/// whose details read unknown, and lets a later invocation of another
+/// purpose record a separate row.
+#[tokio::test]
+async fn usage_detail_migration_keeps_rows_as_turns_with_unknown_detail() {
+    // Arrange
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("legacy pool");
+    let migrations = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version < 126)
+        .cloned()
+        .collect::<Vec<_>>();
+    Migrator::with_migrations(migrations)
+        .run(&pool)
+        .await
+        .expect("legacy schema");
+    sqlx::raw_sql(
+        r"
+INSERT INTO project (id, path) VALUES (1, 'project');
+INSERT INTO session (id, model, base_branch, status, project_id, input_tokens, output_tokens)
+VALUES ('session-a', 'gpt-5.6-sol', 'main', 'Review', 1, 40, 9);
+INSERT INTO session_usage (session_id, model, created_at, input_tokens, invocation_count, output_tokens)
+VALUES ('session-a', 'gpt-5.6-sol', 12, 40, 3, 9);
+",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy usage");
+
+    // Act
+    MIGRATOR.run(&pool).await.expect("usage detail migration");
+    sqlx::query(
+        "INSERT INTO session_usage (session_id, model, purpose, created_at) VALUES ('session-a', \
+         'gpt-5.6-sol', 'title', 13)",
+    )
+    .execute(&pool)
+    .await
+    .expect("purposes share a model");
+    let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64, Option<i64>, Option<i64>)>(
+        r"
+SELECT purpose, created_at, input_tokens, invocation_count, detailed_invocation_count,
+       cache_read_tokens, cost_micro_usd
+FROM session_usage
+ORDER BY purpose DESC
+",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("migrated usage rows");
+    let context = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+        "SELECT context_tokens, context_window_tokens FROM session WHERE id = 'session-a'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("session context");
+
+    // Assert
+    assert_eq!(rows[0], ("turn".to_string(), 12, 40, 3, 0, None, None));
+    assert_eq!(rows[1].0, "title");
+    assert_eq!(context, (None, None));
 }

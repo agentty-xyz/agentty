@@ -15,9 +15,7 @@ use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionAttachmentState, QuestionItem};
-use crate::domain::session::{
-    PublishBranchAction, ReviewRequest, ReviewRequestState, SessionStats, Status,
-};
+use crate::domain::session::{PublishBranchAction, ReviewRequest, ReviewRequestState, Status};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor,
     DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview,
@@ -96,7 +94,6 @@ async fn background_questions_preserve_graph_snapshots_and_bound_drafts() {
     let turn = TurnAppliedState {
         follow_up_tasks: Vec::new(),
         questions: vec![QuestionItem::new("A background session question?")],
-        token_usage_delta: SessionStats::default(),
     };
     for kind in [None, Some(GraphEditKind::Reply)] {
         for needs_reconciliation in [false, true] {

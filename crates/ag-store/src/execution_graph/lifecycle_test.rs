@@ -4,6 +4,7 @@
 use std::num::NonZeroU64;
 use std::path::Path;
 
+use ag_contracts::TurnUsage;
 use ag_protocol::TurnPromptAttachment;
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphStatus, GraphBlockedReason,
@@ -944,7 +945,7 @@ async fn graph_lifecycle_retry_retains_observed_task_turns_when_ordered_effects_
     };
     database
         .graphs()
-        .record_task_turn(&source, &metadata)
+        .record_task_turn(&source, &metadata, &TurnUsage::default())
         .await
         .expect("observed response");
     database
@@ -983,7 +984,7 @@ async fn graph_lifecycle_retry_retains_observed_task_turns_when_ordered_effects_
     assert!(
         database
             .graphs()
-            .record_task_turn(&source, &metadata)
+            .record_task_turn(&source, &metadata, &TurnUsage::default())
             .await
             .is_err()
     );
@@ -1028,7 +1029,7 @@ async fn graph_lifecycle_node_questions_join_chat_with_their_task_turn() {
     // Act
     let recorded = database
         .graphs()
-        .record_task_turn(&source, &metadata)
+        .record_task_turn(&source, &metadata, &TurnUsage::default())
         .await
         .expect("question turn");
     let question = database

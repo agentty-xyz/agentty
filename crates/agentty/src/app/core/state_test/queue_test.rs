@@ -10,7 +10,7 @@ use super::support::{
 };
 use crate::app::core::event::AppEvent;
 use crate::app::{AppError, Tab};
-use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionStats, Status};
+use crate::domain::session::{QueuedMessage, SessionFollowUpTask, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
@@ -538,7 +538,6 @@ async fn apply_app_events_agent_response_updates_session_follow_up_tasks() {
                 "Document the new shortcut.",
                 "Add a focused regression test.",
             ],
-            SessionStats::default(),
         ),
     })
     .await;

@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
+use ag_contracts::{ModelUsage, TurnUsage, UsagePurpose};
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, FocusedReviewStatus,
-    ReasoningLevel, ResponseStyle, SessionMessageKind, SessionStats, SettingName, SpeedMode,
+    ReasoningLevel, ResponseStyle, SessionMessageKind, SettingName, SpeedMode,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -38,7 +39,7 @@ pub struct SessionTurnMetadata {
     pub harness_turn_report: Option<String>,
     /// Session-scoped instruction bootstrap marker for app-server providers.
     pub instruction_conversation_id: Option<String>,
-    /// Model identifier used for per-model usage aggregation.
+    /// Session model the harness turn report is recorded under.
     pub model: String,
     /// Persisted provider-native conversation identifier for future resumes.
     pub provider_conversation_id: Option<String>,
@@ -46,8 +47,8 @@ pub struct SessionTurnMetadata {
     pub questions_json: String,
     /// Review-comment operations committed with this completed turn.
     pub review_comment_resolutions: Vec<NewSessionReviewCommentResolution>,
-    /// Token-usage delta attributed to the completed turn.
-    pub token_usage_delta: SessionStats,
+    /// Usage of every model the completed turn used.
+    pub usage: TurnUsage,
 }
 
 /// Borrowed values used to persist a newly created session with explicit
@@ -591,9 +592,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         id: &str,
         published_upstream_ref: Option<String>,
     ) -> Result<(), DbError>;
-
-    /// Accumulates token statistics for a session.
-    async fn update_session_stats(&self, id: &str, stats: &SessionStats) -> Result<(), DbError>;
 
     /// Updates the status for a session row and opens or closes the persisted
     /// cumulative active-work interval when crossing the `InProgress`
@@ -1663,10 +1661,16 @@ WHERE id = ?
         persist_turn_usage(
             &mut transaction,
             session_id,
+            UsagePurpose::Turn,
+            now,
+            &turn_metadata.usage,
+        )
+        .await?;
+        persist_harness_turn_report(
+            &mut transaction,
+            session_id,
             turn_metadata.model.as_str(),
             now,
-            turn_metadata.token_usage_delta.input_tokens,
-            turn_metadata.token_usage_delta.output_tokens,
             turn_metadata.harness_turn_report.as_deref(),
         )
         .await?;
@@ -2198,32 +2202,6 @@ SET published_upstream_ref = ?,
 WHERE id = ?
 ",
             published_upstream_ref.as_deref(),
-            now,
-            id
-        )
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn update_session_stats(&self, id: &str, stats: &SessionStats) -> Result<(), DbError> {
-        if stats.input_tokens == 0 && stats.output_tokens == 0 {
-            return Ok(());
-        }
-
-        let now = self.now();
-
-        sqlx::query!(
-            r"
-UPDATE session
-SET input_tokens = input_tokens + ?,
-    output_tokens = output_tokens + ?,
-    updated_at = ?
-WHERE id = ?
-",
-            stats.input_tokens.cast_signed(),
-            stats.output_tokens.cast_signed(),
             now,
             id
         )
@@ -2874,52 +2852,153 @@ impl SessionJoinRow {
     }
 }
 
-/// Records shared session usage without replacing any conversation state.
+/// Records one invocation's usage under `purpose` without replacing any
+/// conversation state.
+///
+/// Each model's row accumulates the invocation; a detail stays known only
+/// while every invocation of the row reported it. Models whose usage is
+/// empty are skipped, but a model whose requests went unreported is
+/// recorded. The session's token totals grow by every model's tokens, and a
+/// session turn also records the context fill of its latest request.
 pub(crate) async fn persist_turn_usage(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    purpose: UsagePurpose,
+    now: i64,
+    usage: &TurnUsage,
+) -> Result<(), DbError> {
+    let models = usage
+        .models
+        .iter()
+        .filter(|model| !model.is_empty())
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        return Ok(());
+    }
+    for model in models {
+        upsert_model_usage(&mut *connection, session_id, purpose, now, model).await?;
+    }
+    let input_tokens = usage.input_tokens().cast_signed();
+    let output_tokens = usage.output_tokens().cast_signed();
+    let context = usage.context().filter(|_| purpose == UsagePurpose::Turn);
+    let context_tokens = context.map(|context| context.last_input_tokens.cast_signed());
+    let context_window_tokens = context
+        .and_then(|context| context.window_tokens)
+        .map(u64::cast_signed);
+    sqlx::query!(
+        r"
+UPDATE session
+SET input_tokens = input_tokens + ?,
+    output_tokens = output_tokens + ?,
+    context_window_tokens = CASE WHEN ? IS NULL THEN context_window_tokens ELSE ? END,
+    context_tokens = COALESCE(?, context_tokens),
+    updated_at = ?
+WHERE id = ?
+",
+        input_tokens,
+        output_tokens,
+        context_tokens,
+        context_window_tokens,
+        context_tokens,
+        now,
+        session_id
+    )
+    .execute(&mut *connection)
+    .await?;
+
+    Ok(())
+}
+
+/// Accumulates one invocation's usage of one model into its row for
+/// `purpose`.
+async fn upsert_model_usage(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    purpose: UsagePurpose,
+    now: i64,
+    model: &ModelUsage,
+) -> Result<(), DbError> {
+    let purpose_label = purpose.as_str();
+    let cache_read_tokens = model.cache_read_tokens.map(u64::cast_signed);
+    let cache_write_tokens = model.cache_write_tokens.map(u64::cast_signed);
+    let reasoning_tokens = model.reasoning_tokens.map(u64::cast_signed);
+    let cost_micro_usd = model.cost.map(|cost| cost.micro_usd.cast_signed());
+    let cost_basis = model.cost.map(|cost| cost.basis.as_str());
+    let unpriced_invocation_count = i64::from(model.cost.is_none());
+    let context_peak_tokens = model
+        .context
+        .map(|context| context.peak_input_tokens.cast_signed());
+    let context_window_tokens = model
+        .context
+        .and_then(|context| context.window_tokens)
+        .map(u64::cast_signed);
+    sqlx::query!(
+        r"
+INSERT INTO session_usage (
+    session_id, model, purpose, created_at, input_tokens, output_tokens, invocation_count,
+    cache_read_tokens, cache_write_tokens, reasoning_tokens, request_count,
+    unreported_request_count, detailed_invocation_count, cost_micro_usd, cost_basis,
+    unpriced_invocation_count, context_peak_tokens, context_window_tokens
+)
+VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+ON CONFLICT(session_id, model, purpose) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    invocation_count = invocation_count + 1,
+    cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+    cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+    reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens,
+    request_count = request_count + excluded.request_count,
+    unreported_request_count = unreported_request_count + excluded.unreported_request_count,
+    detailed_invocation_count = detailed_invocation_count + 1,
+    cost_micro_usd = CASE
+        WHEN excluded.cost_micro_usd IS NULL THEN cost_micro_usd
+        ELSE COALESCE(cost_micro_usd, 0) + excluded.cost_micro_usd
+    END,
+    cost_basis = CASE
+        WHEN excluded.cost_basis IS NULL THEN cost_basis
+        WHEN cost_basis IS NULL OR cost_basis = excluded.cost_basis THEN excluded.cost_basis
+        ELSE 'mixed'
+    END,
+    unpriced_invocation_count = unpriced_invocation_count + excluded.unpriced_invocation_count,
+    context_peak_tokens = MAX(
+        COALESCE(context_peak_tokens, excluded.context_peak_tokens),
+        COALESCE(excluded.context_peak_tokens, context_peak_tokens)
+    ),
+    context_window_tokens = COALESCE(excluded.context_window_tokens, context_window_tokens)
+",
+        session_id,
+        model.model,
+        purpose_label,
+        now,
+        model.input_tokens.cast_signed(),
+        model.output_tokens.cast_signed(),
+        cache_read_tokens,
+        cache_write_tokens,
+        reasoning_tokens,
+        model.requests,
+        model.unreported_requests,
+        cost_micro_usd,
+        cost_basis,
+        unpriced_invocation_count,
+        context_peak_tokens,
+        context_window_tokens
+    )
+    .execute(connection)
+    .await?;
+
+    Ok(())
+}
+
+/// Records the content-free report of one in-process harness turn under the
+/// session model; other agents report none.
+pub(crate) async fn persist_harness_turn_report(
     connection: &mut SqliteConnection,
     session_id: &str,
     model: &str,
     now: i64,
-    input_tokens: u64,
-    output_tokens: u64,
     harness_report: Option<&str>,
 ) -> Result<(), DbError> {
-    if input_tokens != 0 || output_tokens != 0 {
-        sqlx::query!(
-            r"
-UPDATE session
-SET input_tokens = input_tokens + ?,
-    output_tokens = output_tokens + ?,
-    updated_at = ?
-WHERE id = ?
-",
-            input_tokens.cast_signed(),
-            output_tokens.cast_signed(),
-            now,
-            session_id
-        )
-        .execute(&mut *connection)
-        .await?;
-        sqlx::query!(
-            r"
-INSERT INTO session_usage (
-    session_id, model, created_at, input_tokens, output_tokens, invocation_count
-)
-VALUES (?, ?, ?, ?, ?, 1)
-ON CONFLICT(session_id, model) DO UPDATE SET
-    input_tokens = input_tokens + excluded.input_tokens,
-    output_tokens = output_tokens + excluded.output_tokens,
-    invocation_count = invocation_count + 1
-",
-            session_id,
-            model,
-            now,
-            input_tokens.cast_signed(),
-            output_tokens.cast_signed()
-        )
-        .execute(&mut *connection)
-        .await?;
-    }
     if let Some(report) = harness_report {
         sqlx::query!(
             r"

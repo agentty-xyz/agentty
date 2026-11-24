@@ -45,7 +45,9 @@ use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
-use crate::test_support::{enable_tracing_log_fallback, poison_lock};
+use crate::test_support::{
+    enable_tracing_log_fallback, poison_lock, session_usage_by_purpose, token_usage,
+};
 
 #[tokio::test]
 /// Verifies completed turns keep a linked open PR/MR title and
@@ -301,9 +303,8 @@ async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
         },
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: ag_contracts::TurnUsage::default(),
     });
 
     // Act
@@ -382,12 +383,15 @@ async fn test_queued_rebase_validation_failure_persists_error_before_resolving_r
 #[tokio::test]
 /// Verifies session rebase conflict assistance runs through the existing
 /// session channel, preserving provider conversation identifiers while
-/// Agentty owns staging and `git rebase --continue`.
+/// Agentty owns staging and `git rebase --continue`, and recording the
+/// assist turn's usage as rebase work.
 async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     write_rebase_conflict_file(base_dir.path());
-    let db = AppRepositories::in_memory().await.expect("db should open");
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
     seed_existing_session_rebase_metadata(&db).await;
     let harness = rebase_assist_worker_harness(
         base_dir.path().to_path_buf(),
@@ -417,8 +421,18 @@ async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
         .expect("failed to load instruction conversation id");
     let output_text = transcript_text(&harness.context.transcript);
     let final_status = *harness.status.lock().expect("status lock");
+    let usage = session_usage_by_purpose(&pool, "sess1").await;
 
     // Assert
+    assert_eq!(
+        usage,
+        [(
+            ag_session::test_support::CODEX_MODEL_ID.to_string(),
+            "rebase".to_string(),
+            11,
+            7
+        )]
+    );
     assert_eq!(provider_conversation_id.as_deref(), Some("thread-after"));
     assert_eq!(instruction_conversation_id, None);
     assert_eq!(final_status, Status::Review);
@@ -763,9 +777,8 @@ async fn rebase_assist_persists_cli_conversation_despite_usage_failures() {
     channel.expect_run_turn().once().returning(|_, _, _| {
         Box::pin(async {
             Ok(TurnResult {
-                input_tokens: 3,
-                output_tokens: 5,
                 provider_conversation_id: Some("assist-conversation".to_string()),
+                usage: token_usage(AgentModel::ClaudeSonnet55.as_str(), 3, 5),
                 ..successful_turn_result("  ")
             })
         })
@@ -794,16 +807,10 @@ async fn rebase_assist_persists_cli_conversation_despite_usage_failures() {
         .update_session_instruction_conversation_id("sess1", Some("instructions".to_string()))
         .await
         .expect("instructions");
-    for failure_sql in [
-        "CREATE TRIGGER reject_assist_stats BEFORE UPDATE OF input_tokens ON session BEGIN SELECT \
-         RAISE(FAIL, 'stats rejected'); END",
-        "DROP TABLE session_usage",
-    ] {
-        sqlx::query(failure_sql)
-            .execute(&pool)
-            .await
-            .expect("failure injection");
-    }
+    sqlx::query("DROP TABLE session_usage")
+        .execute(&pool)
+        .await
+        .expect("failure injection");
     context.db = db.clone();
     context.session_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
     let assist =

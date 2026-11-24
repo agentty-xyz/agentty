@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nDELETE FROM session_review_watch\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ff6ba56df8e7f3f262c5df2ab4c15955bd406eed3c9d01a8bc00e50638d86ec6"
+}

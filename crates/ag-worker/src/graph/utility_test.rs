@@ -3,7 +3,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use ag_contracts::{MockOneShotClient, OneShotSubmission, PermissionMode, SessionStats};
+use ag_contracts::{MockOneShotClient, OneShotSubmission, PermissionMode, TurnUsage};
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment};
 use ag_session::{GraphContext, GraphExecutionRef};
 
@@ -79,7 +79,7 @@ async fn fresh_utility_nodes_send_request_images_after_their_data() {
         .returning(|_, _| {
             Ok(OneShotSubmission {
                 response: AgentResponse::plain("Seen"),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
     client.expect_close().once().return_const(());

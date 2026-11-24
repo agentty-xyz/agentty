@@ -514,9 +514,8 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
         },
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: ag_contracts::TurnUsage::default(),
     };
 
     // Act

@@ -6,6 +6,7 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use ag_contracts::UsagePurpose;
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_telemetry::{Outcome, Span};
@@ -305,6 +306,8 @@ pub(crate) struct RunAgentAssistTaskInput {
     pub(crate) run_client: Arc<dyn RunClient>,
     /// One-shot assist prompt submitted to the agent.
     pub(crate) prompt: String,
+    /// Work the assist prompt's usage is recorded under.
+    pub(crate) purpose: UsagePurpose,
     /// Session agent/model selection used for agent metadata and parsing.
     pub(crate) session_agent: AgentSelection,
     /// Per-app session update versions shared with the main runtime.
@@ -967,7 +970,7 @@ impl SessionTaskService {
         let compacted_error = compact_commit_error_for_assist(commit_error);
         let prompt = Self::auto_commit_assist_prompt(&compacted_error);
 
-        run_agent_assist(context, &prompt)
+        run_agent_assist(context, &prompt, UsagePurpose::CommitAssist)
             .await
             .map_err(|error| error.with_context("Commit assistance failed"))
     }
@@ -1471,6 +1474,7 @@ impl SessionTaskService {
             id,
             run_client,
             prompt,
+            purpose,
             session_agent,
             session_update_versions,
             transcript,
@@ -1531,24 +1535,8 @@ impl SessionTaskService {
 
         let assist_submission = assist_submission?;
         if let Err(error) = db
-            .sessions()
-            .update_session_stats(&id, &assist_submission.stats)
-            .await
-        {
-            warn!(
-                session_id = id,
-                error = %error,
-                "failed to persist session stats after utility prompt"
-            );
-        }
-
-        if let Err(error) = db
             .usage()
-            .upsert_session_usage(
-                &id,
-                session_agent.model().as_str(),
-                &assist_submission.stats,
-            )
+            .upsert_session_usage(&id, purpose, &assist_submission.usage)
             .await
         {
             warn!(

@@ -1,5 +1,6 @@
 //! Task-only replay history, continuation, and idempotent usage accounting.
 
+use ag_contracts::{TurnUsage, UsagePurpose};
 use ag_session::TaskAgentInput;
 use sqlx::SqliteConnection;
 
@@ -40,7 +41,8 @@ pub struct TaskAgentHistoryRow {
 /// Observed response and provider state to commit before post-processing.
 ///
 /// The host owns response-schema validation. This adapter stores the exact
-/// serialized response and accounts usage under the task's captured model.
+/// serialized response with its token totals; the usage detail passed beside
+/// it is accounted once as a session turn's usage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskAgentTurnMetadata {
     /// Exact host-serialized structured response.
@@ -110,6 +112,7 @@ impl TaskAgentTurnStore {
         transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
+        usage: &TurnUsage,
         now: i64,
     ) -> Result<bool, DbError> {
         let connection = &mut **transaction;
@@ -187,12 +190,18 @@ impl TaskAgentTurnStore {
         .execute(&mut *connection)
         .await?;
         session::persist_turn_usage(
+            &mut *connection,
+            &owner.session_id,
+            UsagePurpose::Turn,
+            now,
+            usage,
+        )
+        .await?;
+        session::persist_harness_turn_report(
             connection,
             &owner.session_id,
             &owner.model,
             now,
-            metadata.input_tokens,
-            metadata.output_tokens,
             metadata.harness_turn_report.as_deref(),
         )
         .await?;

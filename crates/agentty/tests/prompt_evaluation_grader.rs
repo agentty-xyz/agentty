@@ -20,7 +20,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ag_contracts::{
-    AgentRequestKind, OneShotRequest, PermissionMode, ProviderCallBudget, ReasoningLevel, SpeedMode,
+    AgentRequestKind, ModelUsage, OneShotRequest, PermissionMode, ProviderCallBudget,
+    ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion};
 use ag_store::Database;
@@ -1722,10 +1723,9 @@ async fn evaluation_uses_worker_runtime_and_request_specific_protocol() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"Add password reset"}"#.into(),
                     context_reset: false,
-                    input_tokens: 10,
-                    output_tokens: 5,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: fixture_usage(),
                 })
             })
         });
@@ -1755,7 +1755,16 @@ async fn evaluation_uses_worker_runtime_and_request_specific_protocol() {
 
     // Assert
     assert_eq!(case.grade(&submission.response)["success"], true);
-    assert_eq!(submission.stats.input_tokens, 10);
+    assert_eq!(submission.usage.input_tokens(), 10);
+}
+
+/// Returns the usage every scripted provider turn reports.
+fn fixture_usage() -> TurnUsage {
+    TurnUsage::single(ModelUsage {
+        input_tokens: 10,
+        output_tokens: 5,
+        ..ModelUsage::new("fixture")
+    })
 }
 
 fn expected_review(case: &Case) -> Result<Value, &'static str> {
@@ -2508,10 +2517,9 @@ async fn positive_review_evaluations_use_focused_protocol_through_the_worker() {
                 Ok(AppServerTurnResponse {
                     assistant_message: answer,
                     context_reset: false,
-                    input_tokens: 10,
-                    output_tokens: 5,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: fixture_usage(),
                 })
             })
         });

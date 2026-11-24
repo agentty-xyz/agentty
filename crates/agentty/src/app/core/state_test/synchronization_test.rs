@@ -34,7 +34,7 @@ use crate::domain::composer::PromptAttachment;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     ForgeKind, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SessionDiffState, SessionFollowUpTask, SessionHandles, SessionId, SessionStats, Status,
+    SessionFollowUpTask, SessionHandles, SessionId, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::TransientMessageSlot;
@@ -1430,8 +1430,8 @@ async fn apply_queued_sync_resolved_retracts_waiting_row() {
 
 #[test]
 /// Verifies repeated `AgentResponseReceived` events keep the newest
-/// reducer projection while accumulating token usage for the session.
-fn app_event_batch_collect_event_merges_agent_response_token_usage() {
+/// reducer projection for the session.
+fn app_event_batch_collect_event_keeps_latest_agent_response() {
     // Arrange
     let mut event_batch = AppEventBatch::default();
     let latest_turn = test_turn_applied_state(
@@ -1440,13 +1440,6 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
             QuestionItem::new("Need tests?"),
         ],
         vec!["Document the batched reducer path."],
-        SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: SessionDiffState::Unknown,
-            input_tokens: 7,
-            output_tokens: 11,
-        },
     );
 
     // Act
@@ -1455,13 +1448,6 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
         turn_applied_state: test_turn_applied_state(
             vec![QuestionItem::new("Old question")],
             vec!["Old follow-up task"],
-            SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: SessionDiffState::Unknown,
-                input_tokens: 3,
-                output_tokens: 5,
-            },
         ),
     });
     event_batch.collect_event(AppEvent::AgentResponseReceived {
@@ -1483,14 +1469,6 @@ fn app_event_batch_collect_event_merges_agent_response_token_usage() {
                 .collect::<Vec<_>>()
         }),
         Some(vec!["Document the batched reducer path.".to_string()])
-    );
-    assert_eq!(
-        merged_turn.map(|turn| turn.token_usage_delta.input_tokens),
-        Some(10)
-    );
-    assert_eq!(
-        merged_turn.map(|turn| turn.token_usage_delta.output_tokens),
-        Some(16)
     );
 }
 
@@ -2005,11 +1983,7 @@ async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_s
     // Act
     app.apply_app_events(AppEvent::AgentResponseReceived {
         session_id: session_id.into(),
-        turn_applied_state: test_turn_applied_state(
-            Vec::new(),
-            Vec::new(),
-            SessionStats::default(),
-        ),
+        turn_applied_state: test_turn_applied_state(Vec::new(), Vec::new()),
     })
     .await;
     apply_next_session_diff(&mut app).await;

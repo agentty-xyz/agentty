@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    PermissionMode, ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::{AgentResponse, ProtocolRequestProfile};
 use ag_session::{
@@ -46,7 +46,7 @@ fn request() -> OneShotRequest {
 fn empty_review() -> OneShotSubmission {
     OneShotSubmission {
         response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-        stats: SessionStats::default(),
+        usage: TurnUsage::default(),
     }
 }
 
@@ -203,7 +203,7 @@ async fn failed_discovery_keeps_findings_and_closes_the_generation_graph() {
             response: AgentResponse::plain(
                 r#"{"project_impact":[],"suggestions":[{"severity":"high","details":"Kept finding."}]}"#,
             ),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
 
@@ -616,7 +616,7 @@ impl ag_worker::RunClient for LimitedClient {
         if request.request_kind == AgentRequestKind::UtilityPrompt {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("Shared overview."),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
         if request.prompt.len() > 30_000 {
