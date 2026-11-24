@@ -274,8 +274,9 @@ pub(super) async fn seed_review_ready_session_on_sessions_tab(
     Ok(())
 }
 
-/// Seeds the rebase transcript fixture with a pre-rebase hook that runs
-/// `hold_rebase`: a fixed `sleep` or a `ReleaseGate::shell_wait` statement.
+/// Seeds the rebase transcript fixture with a Git smudge filter that runs
+/// `hold_rebase`, a fixed `sleep` or a `ReleaseGate::shell_wait` statement,
+/// while the rebase writes the base branch's new file.
 pub(super) async fn seed_rebase_transcript_session_with_delay(
     env: &BuilderEnv,
     hold_rebase: &str,
@@ -307,10 +308,26 @@ pub(super) async fn seed_rebase_transcript_session_with_delay(
     })
     .await?;
 
-    let pre_rebase_hook = env.workdir.join(".git").join("hooks").join("pre-rebase");
-    std::fs::write(&pre_rebase_hook, format!("#!/bin/sh\n{hold_rebase}\n"))?;
-    #[cfg(unix)]
-    std::fs::set_permissions(&pre_rebase_hook, std::fs::Permissions::from_mode(0o750))?;
+    // The rebase writes the base branch's new file into the session worktree.
+    hold_checkouts(env, "base-update.txt", hold_rebase)
+}
+
+/// Holds every Git checkout that writes a file matching `pattern` into a
+/// worktree of the project until the shell statement `hold` returns. It uses
+/// a smudge filter, because Agentty's own Git commands run no hooks.
+pub(super) fn hold_checkouts(
+    env: &BuilderEnv,
+    pattern: &str,
+    hold: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let smudge = format!("{hold}; cat");
+    run_git(
+        &env.workdir,
+        &["config", "filter.hold.smudge", smudge.as_str()],
+    )?;
+    let info = env.workdir.join(".git").join("info");
+    std::fs::create_dir_all(&info)?;
+    std::fs::write(info.join("attributes"), format!("{pattern} filter=hold\n"))?;
 
     Ok(())
 }

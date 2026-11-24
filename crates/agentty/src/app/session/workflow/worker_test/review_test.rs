@@ -36,6 +36,7 @@ use crate::app::branch_publish::BranchPublishTaskSession;
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::question::QuestionItem;
@@ -199,6 +200,7 @@ async fn test_apply_turn_result_starts_background_push_for_published_branch() {
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             cargo_cache: CargoCacheWarmer::default(),
+            session_commands: accepting_session_commands(),
             session_run: SessionRunClient::from_channel(
                 "sess1".to_string(),
                 Arc::new(MockAgentChannel::new()),
@@ -298,6 +300,7 @@ async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             cargo_cache: CargoCacheWarmer::default(),
+            session_commands: accepting_session_commands(),
             session_run: SessionRunClient::from_channel(
                 "sess1".to_string(),
                 Arc::new(MockAgentChannel::new()),
@@ -484,6 +487,7 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -567,6 +571,7 @@ async fn test_failed_push_retains_but_does_not_resolve_review_fix_undone_by_desc
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -881,6 +886,7 @@ async fn test_commit_failure_discards_review_operations_before_later_push() {
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -973,6 +979,7 @@ async fn test_commit_binding_failure_retains_review_operation_for_fresh_retry() 
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),

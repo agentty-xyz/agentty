@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::OneShotError;
 use ag_forge as forge;
-use ag_git::{GitError, MockGitClient};
+use ag_git::{GitError, MockCommitHookRunner, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
@@ -146,6 +146,7 @@ fn review_operation_test_context(
         cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         db,
         folder: PathBuf::from("/tmp/project"),
         git_client: Arc::new(git_client),
@@ -455,6 +456,7 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
         cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         db,
         folder: PathBuf::new(),
         git_client: Arc::new(MockGitClient::new()),
@@ -512,6 +514,7 @@ async fn test_auto_push_rechecks_queued_work_after_waiting_for_branch_lock() {
             cancel_token: CancellationToken::new(),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),
+            commit_hooks: Arc::new(MockCommitHookRunner::new()),
             db: db.clone(),
             folder: PathBuf::new(),
             git_client: Arc::new(mock_git_client),

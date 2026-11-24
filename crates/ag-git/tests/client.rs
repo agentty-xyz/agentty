@@ -6,14 +6,30 @@ use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Arc;
 
 use ag_git::{
-    GitClient, GitError, GitFuture, RealGitClient, RebaseStepResult, SingleCommitMessageStrategy,
+    CommitHookRunner, GitClient, GitError, GitFuture, HookOutput, RealGitClient, RebaseStepResult,
+    SingleCommitMessageStrategy,
 };
 use tempfile::tempdir;
 
 /// Fallible fixture result that can cross the `Send` client futures.
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+
+/// Hook runner whose `pre-commit` hook accepts every commit.
+struct AcceptingHooks;
+
+impl CommitHookRunner for AcceptingHooks {
+    fn run_pre_commit(&self, _repo_path: PathBuf) -> GitFuture<Result<HookOutput, GitError>> {
+        Box::pin(async {
+            Ok(HookOutput {
+                output: String::new(),
+                success: true,
+            })
+        })
+    }
+}
 
 /// One client operation driven against a freshly prepared repository.
 struct ContractCase {
@@ -218,6 +234,7 @@ const LOCAL_HISTORY_CASES: &[ContractCase] = &[
                         "feature".to_string(),
                         "main".to_string(),
                         "Squash feature".to_string(),
+                        Arc::new(AcceptingHooks),
                     )
                     .await;
 
@@ -241,6 +258,7 @@ const LOCAL_HISTORY_CASES: &[ContractCase] = &[
                         "main".to_string(),
                         "Session commit".to_string(),
                         SingleCommitMessageStrategy::Replace,
+                        Arc::new(AcceptingHooks),
                     )
                     .await;
                 let session_commits =

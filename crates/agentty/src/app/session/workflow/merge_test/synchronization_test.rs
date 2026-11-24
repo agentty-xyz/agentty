@@ -189,8 +189,8 @@ async fn test_execute_rebase_workflow_aborts_when_assist_loop_fails() {
         .expect_commit_all_preserving_single_commit()
         .times(1)
         .in_sequence(&mut sequence)
-        .withf(|_, base_branch, _, _| base_branch == "origin/main")
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .withf(|_, base_branch, _, _, _| base_branch == "origin/main")
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -257,7 +257,7 @@ async fn test_execute_rebase_workflow_adds_follow_up_commit_for_published_sessio
     mock_git_client
         .expect_commit_all()
         .times(1)
-        .returning(|_, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -541,6 +541,7 @@ async fn test_rebase_assist_input_clone() {
         available_agent_kinds: Arc::from(AgentKind::ALL),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
+        commit_hooks: Arc::new(git::MockCommitHookRunner::new()),
         db,
         folder: temp_dir.path().to_path_buf(),
         fs_client: test_fs_client(),
@@ -1084,7 +1085,7 @@ async fn test_run_rebase_assist_loop_core_aborts_after_pre_commit_repairs_are_ex
     mock_git_client
         .expect_run_pre_commit_hook()
         .times(REBASE_ASSIST_POLICY.max_attempts + 1)
-        .returning(|_| {
+        .returning(|_, _| {
             Box::pin(async {
                 Err(GitError::CommandFailed {
                     command: "git hook run pre-commit".to_string(),
@@ -1150,7 +1151,7 @@ async fn assert_repeated_conflict_detail_stops_assistance(is_project: bool, erro
     mock_git_client
         .expect_run_pre_commit_hook()
         .times(REBASE_ASSIST_POLICY.max_attempts)
-        .returning(|_| Box::pin(async { Ok(()) }));
+        .returning(|_, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_rebase_continue()
         .times(REBASE_ASSIST_POLICY.max_attempts)
@@ -1234,7 +1235,7 @@ async fn test_run_rebase_assist_loop_tracks_initial_rebase_conflict_detail() {
             .expect_run_pre_commit_hook()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(|_| Box::pin(async { Ok(()) }));
+            .returning(|_, _| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_rebase_continue()
             .times(1)
@@ -1310,7 +1311,7 @@ async fn assert_retry_exhaustion_reports_final_conflict(is_project: bool, error_
             .expect_run_pre_commit_hook()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(|_| Box::pin(async { Ok(()) }));
+            .returning(|_, _| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_rebase_continue()
             .times(1)
@@ -1868,7 +1869,7 @@ async fn test_execute_merge_workflow_reuses_session_branch_commit_messages() {
         .returning({
             let canonical_commit_message = canonical_commit_message.to_string();
 
-            move |_, _, _, commit_message| {
+            move |_, _, _, commit_message, _| {
                 let canonical_commit_message = canonical_commit_message.clone();
 
                 Box::pin(async move {
@@ -2469,7 +2470,10 @@ async fn test_sync_main_for_project_resolves_conflicts_with_assistance() {
             operation: operation.clone(),
         }),
         test_fs_client(),
-        Arc::new(mock_git_client),
+        (
+            Arc::new(mock_git_client),
+            Arc::new(git::MockCommitHookRunner::new()),
+        ),
         AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         Arc::new(mock_sync_assist_client),
     )
@@ -2562,7 +2566,10 @@ async fn test_sync_main_for_project_fails_after_max_assistance_attempts() {
         working_dir,
         None,
         test_fs_client(),
-        Arc::new(mock_git_client),
+        (
+            Arc::new(mock_git_client),
+            Arc::new(git::MockCommitHookRunner::new()),
+        ),
         AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         Arc::new(mock_sync_assist_client),
     )
@@ -2647,7 +2654,10 @@ async fn test_sync_main_for_project_reports_git_failures() {
             PathBuf::from("/tmp/project"),
             None,
             test_fs_client(),
-            Arc::new(mock_git_client),
+            (
+                Arc::new(mock_git_client),
+                Arc::new(git::MockCommitHookRunner::new()),
+            ),
             test_session_agent(),
             Arc::new(MockSyncAssistClient::new()),
         )
@@ -2685,7 +2695,10 @@ async fn test_sync_main_for_project_uses_pre_pull_ahead_count_when_post_pull_loo
         PathBuf::from("/tmp/project"),
         None,
         test_fs_client(),
-        Arc::new(mock_git_client),
+        (
+            Arc::new(mock_git_client),
+            Arc::new(git::MockCommitHookRunner::new()),
+        ),
         test_session_agent(),
         Arc::new(MockSyncAssistClient::new()),
     )

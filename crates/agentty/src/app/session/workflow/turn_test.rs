@@ -27,6 +27,7 @@ use crate::app::AppEvent;
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -614,6 +615,7 @@ fn turn_test_context(db: AppRepositories) -> SessionWorkerContext {
         review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
         session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "worker".into(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "worker".to_string(),
             Arc::new(MockAgentChannel::new()),

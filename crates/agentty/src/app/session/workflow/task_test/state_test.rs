@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use ag_contracts::{OneShotError, UsagePurpose};
-use ag_git::{GitError, MockGitClient};
+use ag_git::{GitError, MockCommitHookRunner, MockGitClient};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -110,7 +110,7 @@ async fn test_handle_auto_commit_updates_session_title() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .returning(|_, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -130,6 +130,7 @@ async fn test_handle_auto_commit_updates_session_title() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),

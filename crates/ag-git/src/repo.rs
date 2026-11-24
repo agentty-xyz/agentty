@@ -496,7 +496,7 @@ async fn run_git_command_with_timeout(
         .current_dir(&command.repo_path)
         .stdin(Stdio::null())
         .kill_on_drop(true);
-    apply_non_interactive_environment_async(&mut process);
+    apply_non_interactive_environment_async(&mut process, &command.arguments);
     for (key, value) in &command.environment {
         process.env(key, value);
     }
@@ -632,7 +632,7 @@ where
         .args(args)
         .current_dir(repo_path)
         .stdin(Stdio::null());
-    apply_non_interactive_environment(&mut command);
+    apply_non_interactive_environment(&mut command, args);
 
     for (key, value) in environment {
         command.env(key, value);
@@ -663,10 +663,20 @@ where
 /// which can never exist, so Git reads no grafts and warns about none.
 const NO_GRAFT_FILE: &str = "/dev/null/grafts";
 
+/// Hooks directory host Git commands search instead of the configured one:
+/// a file, below which no hook can exist, so Git runs none.
+pub(super) const NO_HOOKS_DIRECTORY: &str = "/dev/null";
+
+/// Git subcommands that never run a hook or another configured program, so
+/// they read the configuration as it is, including the hooks directory
+/// that the pre-commit readiness check resolves.
+const CONFIGURATION_READERS: [&str; 2] = ["config", "rev-parse"];
+
 /// Disables optional index writes and interactive prompts for Git subprocesses.
 /// Required locks for staging, commits, and other mutations remain enabled.
-/// See [`trusted_history_environment`] for the history Git reads.
-fn apply_non_interactive_environment(command: &mut Command) {
+/// See [`trusted_history_environment`] for the history Git reads and
+/// [`host_configuration`] for the programs it runs.
+fn apply_non_interactive_environment(command: &mut Command, args: &[&str]) {
     let git_ssh_command = batch_mode_ssh_command(std::env::var("GIT_SSH_COMMAND").ok());
 
     command
@@ -675,14 +685,17 @@ fn apply_non_interactive_environment(command: &mut Command) {
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
         .envs(trusted_history_environment())
-        .envs(no_submodule_recursion_environment(
+        .envs(host_configuration(
             std::env::var("GIT_CONFIG_COUNT").ok(),
+            disables_hooks(args.iter().copied()),
         ));
 }
 
-/// Disables optional index writes and interactive prompts for async Git.
-/// See [`trusted_history_environment`] for the history Git reads.
-fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
+/// Disables optional index writes and interactive prompts for async Git
+/// running `args`.
+/// See [`trusted_history_environment`] for the history Git reads and
+/// [`host_configuration`] for the programs it runs.
+fn apply_non_interactive_environment_async(command: &mut AsyncCommand, args: &[String]) {
     let git_ssh_command = batch_mode_ssh_command(std::env::var("GIT_SSH_COMMAND").ok());
 
     command
@@ -691,33 +704,64 @@ fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
         .envs(trusted_history_environment())
-        .envs(no_submodule_recursion_environment(
+        .envs(host_configuration(
             std::env::var("GIT_CONFIG_COUNT").ok(),
+            disables_hooks(args.iter().map(String::as_str)),
         ));
 }
 
-/// Sets [`SUBMODULE_ISOLATION_CONFIGURATION`] through Git's environment
-/// configuration, after the `configured_count` pairs the caller's
-/// environment already passes. The environment overrides every
-/// configuration file, including a user's global `submodule.recurse=true`.
-fn no_submodule_recursion_environment(configured_count: Option<String>) -> Vec<(String, String)> {
+/// Returns Git's environment configuration, appended after the
+/// `configured_count` pairs the caller's environment already passes, that
+/// keeps host Git from running programs a session can control: the
+/// [`SUBMODULE_ISOLATION_CONFIGURATION`], no `core.fsmonitor` daemon, and,
+/// when `disable_hooks` is set, no hooks.
+///
+/// A session can write its worktree, so a hooks directory inside it, such
+/// as one a hook manager configures there, or a hook manager reading its
+/// configuration from the worktree, would run session-written commands with
+/// the host's access. The commit hooks Agentty relies on run inside the
+/// session's sandbox instead. The environment overrides every configuration
+/// file, including a user's global `submodule.recurse=true`; an explicit
+/// `git -c` still overrides it.
+fn host_configuration(
+    configured_count: Option<String>,
+    disable_hooks: bool,
+) -> Vec<(String, String)> {
     let first = configured_count
         .and_then(|count| count.trim().parse::<usize>().ok())
         .unwrap_or(0);
-    let mut environment = Vec::new();
-    for (offset, (key, value)) in SUBMODULE_ISOLATION_CONFIGURATION.iter().enumerate() {
-        let index = first.saturating_add(offset);
-        environment.push((format!("GIT_CONFIG_KEY_{index}"), (*key).to_string()));
-        environment.push((format!("GIT_CONFIG_VALUE_{index}"), (*value).to_string()));
+    let mut entries = SUBMODULE_ISOLATION_CONFIGURATION.to_vec();
+    entries.push(("core.fsmonitor", "false"));
+    if disable_hooks {
+        entries.push(("core.hooksPath", NO_HOOKS_DIRECTORY));
     }
+    let mut environment = entries
+        .iter()
+        .enumerate()
+        .flat_map(|(offset, (key, value))| {
+            let index = first.saturating_add(offset);
+
+            [
+                (format!("GIT_CONFIG_KEY_{index}"), (*key).to_string()),
+                (format!("GIT_CONFIG_VALUE_{index}"), (*value).to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
     environment.push((
         "GIT_CONFIG_COUNT".to_string(),
-        first
-            .saturating_add(SUBMODULE_ISOLATION_CONFIGURATION.len())
-            .to_string(),
+        first.saturating_add(entries.len()).to_string(),
     ));
 
     environment
+}
+
+/// Returns whether host Git runs `arguments` without the configured hooks:
+/// always, except for subcommands that never run one. Even a hook the
+/// session cannot write, such as a `pre-push` hook in the shared Git
+/// directory, runs in the worktree and commonly runs whatever the worktree
+/// configures, so pushes run no hooks either.
+fn disables_hooks<'argument>(arguments: impl IntoIterator<Item = &'argument str>) -> bool {
+    !git_subcommand(arguments).is_some_and(|subcommand| CONFIGURATION_READERS.contains(&subcommand))
 }
 
 /// Configuration every host Git command runs with, because a session may

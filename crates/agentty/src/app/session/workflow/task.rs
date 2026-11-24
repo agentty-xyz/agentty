@@ -234,12 +234,14 @@ impl<'a> SessionCommitMode<'a> {
     }
 
     /// Commits all pending changes with `commit_message`, amending the
-    /// evolving session commit or adding a follow-up commit.
+    /// evolving session commit or adding a follow-up commit, after `hooks`
+    /// runs the repository's `pre-commit` hook.
     fn commit(
         self,
         git_client: &dyn GitClient,
         folder: std::path::PathBuf,
         commit_message: String,
+        hooks: Arc<dyn git::CommitHookRunner>,
     ) -> git::GitFuture<Result<(), git::GitError>> {
         match self {
             Self::Evolving { base_branch } => git_client.commit_all_preserving_single_commit(
@@ -247,8 +249,9 @@ impl<'a> SessionCommitMode<'a> {
                 base_branch.to_string(),
                 commit_message,
                 git::SingleCommitMessageStrategy::Replace,
+                hooks,
             ),
-            Self::FollowUp => git_client.commit_all(folder, commit_message),
+            Self::FollowUp => git_client.commit_all(folder, commit_message, hooks),
         }
     }
 }
@@ -931,7 +934,10 @@ impl SessionTaskService {
         let commit_mode = Self::session_commit_mode(&context.db, &context.id, &base_branch).await?;
 
         Self::commit_session_changes(
-            context.git_client.as_ref(),
+            (
+                context.git_client.as_ref(),
+                Arc::clone(&context.commit_hooks),
+            ),
             &context.folder,
             commit_mode,
             (
@@ -1176,14 +1182,15 @@ impl SessionTaskService {
     /// the existing session message. A follow-up commit describes only the
     /// changes pending on top of `HEAD`. Input-limit failures retry with the
     /// matching changed filenames and the bounded user/assistant transcript,
-    /// sharing the primary call budget.
+    /// sharing the primary call budget. `git` pairs the Git boundary with the
+    /// runner of the repository's commit hooks.
     ///
     /// # Errors
     /// Returns an error if the worktree is clean, the diff cannot be
     /// generated, commit-message generation fails, or the git commit cannot be
     /// created/amended.
     pub(crate) async fn commit_session_changes(
-        git_client: &dyn GitClient,
+        git: (&dyn GitClient, Arc<dyn git::CommitHookRunner>),
         folder: &Path,
         mode: SessionCommitMode<'_>,
         agent_settings: (
@@ -1195,6 +1202,7 @@ impl SessionTaskService {
         include_coauthored_by_agentty: bool,
         transcript: &Mutex<SessionTranscript>,
     ) -> Result<SessionCommitOutcome, SessionError> {
+        let (git_client, commit_hooks) = git;
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
         let speed_mode = setting::normalized_speed_mode(session_agent, speed_mode);
         let folder = folder.to_path_buf();
@@ -1274,7 +1282,12 @@ impl SessionTaskService {
             result => result?,
         };
 
-        let commit = mode.commit(git_client, folder.clone(), generated_commit_message.clone());
+        let commit = mode.commit(
+            git_client,
+            folder.clone(),
+            generated_commit_message.clone(),
+            commit_hooks,
+        );
         Span::child("commit.git")
             .run(commit, |_| Outcome::Failed)
             .await?;

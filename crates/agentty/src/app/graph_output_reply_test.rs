@@ -34,6 +34,7 @@ use crate::app::graph_reply::GraphReplyOutcome;
 use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::service::MockSessionRunFactory;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::fs::MockFsClient;
@@ -1123,6 +1124,9 @@ fn reader_graph() -> ExecutionGraph {
 async fn reader_graph_app() -> (App, TempDir, mpsc::UnboundedReceiver<TurnRequest>) {
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let mut factory = MockSessionRunFactory::new();
+    factory
+        .expect_session_commands()
+        .returning(accepting_session_commands);
     factory.expect_create().returning(|id, _| {
         let mut channel = MockAgentChannel::new();
         channel

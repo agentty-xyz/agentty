@@ -9,8 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{env, io};
 
-use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel, TurnRequest};
-use ag_harness::bash::BashConfig;
+use ag_contracts::{
+    CommandScope, PermissionMode, ProviderCallBudget, ReasoningLevel, SessionCommandOutput,
+    SessionCommandRequest,
+};
+use ag_harness::bash::{BashArguments, BashConfig};
 use ag_harness::catalog::{
     Capabilities, ModelCatalog, ModelHandle, ModelId, ModelSelector, ModelSpec,
 };
@@ -23,7 +26,7 @@ use ag_harness::provider::{
     ChatGptConfig, CostTier, LocalServerKind, ModelConfiguration, ModelProvider,
     chatgpt_auth_file_in,
 };
-use ag_harness::sandbox::Sandbox;
+use ag_harness::sandbox::{Sandbox, run_command};
 use ag_harness::{
     Harness, HarnessError, Model, ModelError, OutputSchema, Repository, RepositoryError,
     RunRequest, ToolSet, TurnInput,
@@ -37,7 +40,9 @@ use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
 
 use super::cargo_cache::TrustedCargoCache;
-use super::sandbox::CommandSandbox;
+use super::sandbox::{
+    CommandSandbox, SESSION_SANDBOX, UTILITY_SANDBOX, command_output, sandbox_state,
+};
 use crate::agent::model_profile;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
@@ -75,6 +80,10 @@ const SESSION_TEMPORARY_DIRECTORY: &str = "tmp";
 const UTILITY_TEMPORARY_PARENT: &str = ".utility";
 /// Deadline for one `bash` call.
 const BASH_TIMEOUT: Duration = Duration::from_secs(600);
+/// Deadline for one command a host runs in a session's sandbox, such as a
+/// repository's commit hooks, which can build and test a whole project:
+/// the longest deadline the harness accepts.
+const SESSION_COMMAND_TIMEOUT: Duration = Duration::from_secs(3600);
 /// Environment variable naming the model the OpenAI-compatible server serves
 /// for [`AgentModel::OpenAiCompatible`], such as Ollama's `qwen3:latest`.
 const OPENAI_COMPATIBLE_MODEL_ENV: &str = "OPENAI_COMPATIBLE_MODEL";
@@ -201,6 +210,51 @@ impl NativeHarnessConfig {
         self
     }
 
+    /// Runs `request`'s command with Bash in its folder inside the sandbox
+    /// its scope selects. [`CommandScope::Session`] uses the grants,
+    /// environment, and temporary directory of the session's own commands,
+    /// and, where the native sandbox cannot run, runs without it with the
+    /// warning a session turn reports. [`CommandScope::Workspace`] uses a
+    /// utility prompt's grants in the folder with a fresh temporary
+    /// directory, and refuses where the native sandbox cannot run. Hosts use
+    /// it for commands they run on their own behalf over content commands
+    /// could have written, such as the repository's Git hooks.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid folder, session id, or command, when
+    /// a workspace command cannot run inside the native sandbox, or when the
+    /// command cannot be run at all; a command that runs and fails is
+    /// reported through its exit code instead.
+    pub async fn run_session_command(
+        &self,
+        request: SessionCommandRequest,
+    ) -> Result<SessionCommandOutput, String> {
+        let environment = self.environment();
+        let repository = repository(&request.folder, &environment)?;
+        // Kept until the command ends; dropping it removes a workspace
+        // command's temporary directory.
+        let (sandbox, policy, _temporary_directory) = self
+            .command_sandbox(&request.scope, &request.folder, &environment)
+            .await?;
+        let configuration = bash_config(
+            &environment,
+            &sandbox,
+            SESSION_COMMAND_TIMEOUT,
+            BashConfig::MAX_CAPTURE_BYTES,
+        )?;
+        let command =
+            BashArguments::new(request.command).map_err(failure("Invalid session command"))?;
+        let run = run_command(&configuration, policy, &repository, &command)
+            .await
+            .map_err(failure("Failed to run the session command"))?;
+
+        Ok(SessionCommandOutput {
+            exit_code: run.outcome.exit_code,
+            output: command_output(&run.outcome),
+            sandbox: sandbox_state(run.warning.as_ref()),
+        })
+    }
+
     /// Returns a fresh environment snapshot, before stored API keys replace
     /// its key variables.
     pub(crate) fn environment(&self) -> BTreeMap<String, String> {
@@ -228,12 +282,12 @@ impl NativeHarnessConfig {
         Ok(directory.join(SESSION_DATABASE_FILE))
     }
 
-    /// Returns the sandbox of the session's commands run in the folder of
-    /// `request`, with the session's own temporary directory, which keeps one
-    /// path for the session's lifetime because the harness fingerprints it
-    /// into the policy, and goes with the session's harness directory. When
-    /// the host keeps Cargo caches and resolved the project's main checkout,
-    /// its `CARGO_HOME` receives copies from that project's cache.
+    /// Returns the sandbox of the session's commands run in `folder`, with
+    /// the session's own temporary directory, which keeps one path for the
+    /// session's lifetime because the harness fingerprints it into the
+    /// policy, and goes with the session's harness directory. When the host
+    /// keeps Cargo caches and passes the project's `main_checkout`, its
+    /// `CARGO_HOME` receives copies from that project's cache.
     ///
     /// # Errors
     /// Returns an error for an invalid session id or when the directory
@@ -241,7 +295,8 @@ impl NativeHarnessConfig {
     pub(crate) async fn session_sandbox(
         &self,
         session_id: &str,
-        request: &TurnRequest,
+        folder: &Path,
+        main_checkout: Option<&Path>,
         environment: &BTreeMap<String, String>,
     ) -> Result<CommandSandbox, String> {
         let database = self.session_database(session_id).await?;
@@ -254,13 +309,13 @@ impl NativeHarnessConfig {
         let cargo_cache = self
             .cargo_cache_root
             .as_deref()
-            .zip(request.main_checkout_root.as_deref())
+            .zip(main_checkout)
             .map(|(root, main_checkout)| TrustedCargoCache::for_project(root, main_checkout));
 
         CommandSandbox::prepare(
             &self.data_root,
             temporary_directory,
-            &request.folder,
+            folder,
             environment,
             cargo_cache,
         )
@@ -302,6 +357,34 @@ impl NativeHarnessConfig {
         .await?;
 
         Ok((sandbox, directory))
+    }
+
+    /// Returns the sandbox of one host command in `folder` that `scope`
+    /// selects, the policy for a host where the native sandbox cannot run,
+    /// and the command's own temporary directory, if any, removed when it
+    /// drops. Scopes other than a session's get the refusing workspace
+    /// sandbox. A session command copies nothing new from the Cargo cache;
+    /// it reuses what the session's turns already copied.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid session id or when the sandbox
+    /// cannot be prepared.
+    async fn command_sandbox(
+        &self,
+        scope: &CommandScope,
+        folder: &Path,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<(CommandSandbox, Sandbox, Option<tempfile::TempDir>), String> {
+        let CommandScope::Session { session_id } = scope else {
+            let (sandbox, directory) = self.utility_sandbox(folder, environment).await?;
+
+            return Ok((sandbox, UTILITY_SANDBOX, Some(directory)));
+        };
+        let sandbox = self
+            .session_sandbox(session_id, folder, None, environment)
+            .await?;
+
+        Ok((sandbox, SESSION_SANDBOX, None))
     }
 }
 
@@ -1096,7 +1179,12 @@ impl RunOptions {
         }
 
         Ok(Self {
-            bash: Some(bash_config(environment, sandbox)?),
+            bash: Some(bash_config(
+                environment,
+                sandbox,
+                BASH_TIMEOUT,
+                BashConfig::DEFAULT_CAPTURE_BYTES,
+            )?),
             output,
             tools: ToolSet::builtins(),
         })
@@ -1120,17 +1208,20 @@ impl RunOptions {
 
 /// Configures `bash` in the native sandbox with `sandbox`'s grants and the
 /// host environment minus provider variables, keeping essentials first
-/// within the harness grant limits. Host values of the variables the
-/// grants set, such as `TMPDIR` and the tool caches, are not granted.
+/// within the harness grant limits, with each command's `timeout` and
+/// `capture_bytes`. Host values of the variables the grants set, such as
+/// `TMPDIR` and the tool caches, are not granted.
 fn bash_config(
     environment: &BTreeMap<String, String>,
     sandbox: &CommandSandbox,
+    timeout: Duration,
+    capture_bytes: usize,
 ) -> Result<BashConfig, String> {
     let mut config = BashConfig::native(
         PathBuf::from(BASH_EXECUTABLE),
         BASH_POLICY_REVISION.to_string(),
-        BASH_TIMEOUT,
-        BashConfig::DEFAULT_CAPTURE_BYTES,
+        timeout,
+        capture_bytes,
     )
     .and_then(|config| sandbox.grant(config.with_host_information()))
     .map_err(failure("Invalid harness bash policy"))?;

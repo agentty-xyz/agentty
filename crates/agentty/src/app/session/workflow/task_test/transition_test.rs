@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{OneShotError, PermissionMode, UsagePurpose};
-use ag_git::{GitError, MockGitClient};
+use ag_git::{GitError, MockCommitHookRunner, MockGitClient};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -55,6 +55,7 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
@@ -112,6 +113,7 @@ async fn test_handle_auto_commit_returns_last_error_after_assist_attempts_are_ex
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
@@ -156,6 +158,7 @@ async fn test_handle_auto_commit_reports_missing_session_base_branch() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database,
@@ -202,7 +205,7 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .returning(|_, _, _, _| {
+        .returning(|_, _, _, _, _| {
             Box::pin(async {
                 Err(GitError::CommandFailed {
                     command: "git add -A".to_string(),
@@ -229,6 +232,7 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
@@ -287,8 +291,8 @@ async fn test_handle_auto_commit_adds_follow_up_commit_to_published_branch() {
     mock_git_client
         .expect_commit_all()
         .times(1)
-        .withf(|_, commit_message| commit_message.starts_with("Address review feedback"))
-        .returning(|_, _| Box::pin(async { Ok(()) }));
+        .withf(|_, commit_message, _| commit_message.starts_with("Address review feedback"))
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -319,6 +323,7 @@ async fn test_handle_auto_commit_adds_follow_up_commit_to_published_branch() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
@@ -422,7 +427,7 @@ async fn assert_auto_commit_pre_commit_hook_outcome(is_hook_missing: bool) {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .returning(|_, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok::<_, GitError>(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -453,6 +458,7 @@ async fn assert_auto_commit_pre_commit_hook_outcome(is_hook_missing: bool) {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
@@ -504,6 +510,7 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
@@ -623,6 +630,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         let context = AssistContext {
             app_event_tx,
             available_agent_kinds: Arc::from(AgentKind::ALL),
+            commit_hooks: Arc::new(MockCommitHookRunner::new()),
             harness_models: HarnessModels::default(),
             child_pid: Arc::clone(&child_pid),
             db: database,
@@ -848,11 +856,11 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
         git_client
             .expect_commit_all_preserving_single_commit()
             .times(1)
-            .withf(|_, _, message, strategy| {
+            .withf(|_, _, message, strategy, _| {
                 message == "Recover oversized commits"
                     && *strategy == ag_git::SingleCommitMessageStrategy::Replace
             })
-            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+            .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
         git_client
             .expect_head_short_hash()
             .times(1)
@@ -902,7 +910,7 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
 
         // Act
         let outcome = SessionTaskService::commit_session_changes(
-            &git_client,
+            (&git_client, Arc::new(MockCommitHookRunner::new())),
             Path::new("project"),
             UNPUBLISHED,
             (
@@ -946,6 +954,7 @@ async fn test_append_pre_commit_hook_warning_ignores_duplicate_advisory() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
@@ -1024,11 +1033,11 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
     git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .withf(move |_, _, message, strategy| {
+        .withf(move |_, _, message, strategy, _| {
             message == &committed_message
                 && *strategy == ag_git::SingleCommitMessageStrategy::Replace
         })
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     git_client
         .expect_head_short_hash()
         .times(1)
@@ -1065,7 +1074,7 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
 
     // Act
     let outcome = SessionTaskService::commit_session_changes(
-        &git_client,
+        (&git_client, Arc::new(MockCommitHookRunner::new())),
         Path::new("project"),
         UNPUBLISHED,
         (
@@ -1103,7 +1112,7 @@ async fn commit_message_generation_records_its_utility_purpose() {
     git_client
         .expect_commit_all_preserving_single_commit()
         .once()
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     git_client
         .expect_head_short_hash()
         .once()
@@ -1124,7 +1133,7 @@ async fn commit_message_generation_records_its_utility_purpose() {
             ..ag_worker::RunScope::default()
         },
         SessionTaskService::commit_session_changes(
-            &git_client,
+            (&git_client, Arc::new(MockCommitHookRunner::new())),
             Path::new("project"),
             UNPUBLISHED,
             (
@@ -1180,7 +1189,7 @@ async fn commit_message_generation_keeps_model_without_fast_support() {
     git_client
         .expect_commit_all_preserving_single_commit()
         .once()
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     git_client
         .expect_head_short_hash()
         .once()
@@ -1195,7 +1204,7 @@ async fn commit_message_generation_keeps_model_without_fast_support() {
 
     // Act
     let outcome = SessionTaskService::commit_session_changes(
-        &git_client,
+        (&git_client, Arc::new(MockCommitHookRunner::new())),
         Path::new("project"),
         UNPUBLISHED,
         (
@@ -1241,7 +1250,7 @@ async fn commit_fallback_cannot_reset_an_exhausted_provider_budget() {
     });
     // Act
     let result = SessionTaskService::commit_session_changes(
-        &git_client,
+        (&git_client, Arc::new(MockCommitHookRunner::new())),
         Path::new("project"),
         UNPUBLISHED,
         (

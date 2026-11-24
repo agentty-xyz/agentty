@@ -54,21 +54,27 @@ impl SandboxNoticeTarget<'_> {
 
                 continue;
             };
-            let text = self
-                .transcript
-                .lock()
-                .map_or_default(|transcript| sandbox.notice(&notice, transcript.messages()));
-            if let Some(text) = text {
-                SessionTaskService::append_workflow_notice(
-                    self.transcript,
-                    self.db,
-                    self.app_event_tx,
-                    self.session_update_versions,
-                    self.session_id,
-                    &text,
-                )
-                .await;
-            }
+            self.report(&mut sandbox, &notice).await;
+        }
+    }
+
+    /// Appends the workflow notice `notice` adds to the session transcript,
+    /// if any, as `sandbox` decides.
+    pub(super) async fn report(&self, sandbox: &mut SandboxNotices, notice: &TurnNotice) {
+        let text = self
+            .transcript
+            .lock()
+            .map_or_default(|transcript| sandbox.notice(notice, transcript.messages()));
+        if let Some(text) = text {
+            SessionTaskService::append_workflow_notice(
+                self.transcript,
+                self.db,
+                self.app_event_tx,
+                self.session_update_versions,
+                self.session_id,
+                &text,
+            )
+            .await;
         }
     }
 }

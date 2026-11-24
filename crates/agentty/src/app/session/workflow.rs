@@ -12,6 +12,7 @@ pub(super) mod access;
 pub(super) mod activity;
 mod base_branch;
 mod commit_context;
+mod commit_hook;
 pub(super) mod draft;
 mod graph_turn;
 pub(super) mod isolation;

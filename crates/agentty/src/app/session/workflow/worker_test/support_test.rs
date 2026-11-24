@@ -30,6 +30,7 @@ use crate::app::branch_publish::BranchPublishTaskSession;
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::app::session::SessionError;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
@@ -288,6 +289,7 @@ pub(super) fn preparation_test_worker_context(
         branch_operation_lock: runtime.branch_operation_lock,
         cancel_token: runtime.cancel_token,
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             (runtime.session_id).to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -851,7 +853,7 @@ pub(super) fn dirty_auto_commit_git_client(commit_message: &str) -> MockGitClien
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .once()
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .once()
@@ -1307,7 +1309,7 @@ pub(super) fn mock_successful_conflict_rebase_git_client(
         .expect_run_pre_commit_hook()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(|_| Box::pin(async { Ok(()) }));
+        .returning(|_, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_rebase_continue()
         .times(1)
@@ -1358,6 +1360,7 @@ pub(super) fn rebase_assist_worker_harness(
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(mock_existing_session_rebase_channel(
@@ -1467,6 +1470,7 @@ pub(super) async fn queue_test_context(
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -1503,6 +1507,7 @@ pub(super) async fn queue_helper_context(
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "sess".to_string().clone(),
             Arc::new(MockAgentChannel::new()),

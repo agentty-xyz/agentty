@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_contracts::AgentError;
+use ag_contracts::{AgentError, SessionCommandClient};
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_session::{AgentAvailabilityProbe, TaskAgentContext, test_support as model_fixture};
@@ -733,6 +733,12 @@ impl SessionRunFactory for AppServerOverrideSessionRunFactory {
 
     fn create_task(&self, context: &TaskAgentContext) -> Result<SessionRunClient, AgentError> {
         self.inner.create_task(context)
+    }
+
+    /// The override replaces provider CLIs, not the sandbox, so commit hooks
+    /// succeed without running a sandboxed process.
+    fn session_commands(&self) -> Arc<dyn SessionCommandClient> {
+        app::service::test_support::accepting_session_commands()
     }
 
     fn setup_backend(&self, _kind: AgentKind, _folder: &Path) -> Result<(), AgentError> {

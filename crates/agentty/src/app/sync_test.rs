@@ -25,6 +25,7 @@ use super::{
 };
 use crate::app::core::SyncReviewRequestTaskResult;
 use crate::app::review_watch_config::ReviewWatchConfig;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppEvent, session};
 use crate::domain::agent::AgentModel;
@@ -124,6 +125,7 @@ fn sync_context_fixture(
         project_name: "agentty".to_string(),
         review_request_client: Arc::new(MockReviewRequestClient::new()),
         review_request_sync_targets,
+        session_commands: accepting_session_commands(),
         session_git_status_targets: Vec::new(),
         working_dir: PathBuf::from("/tmp/project"),
     }

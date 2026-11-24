@@ -14,6 +14,7 @@ use tokio::time;
 use super::super::{SessionWorkerRuntime, SessionWorkerService};
 use super::support::queue_test_context;
 use crate::app::service::MockSessionRunFactory;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{QueuedMessage, Status};
 use crate::test_support::{
@@ -28,6 +29,9 @@ async fn workers_reuse_channels_and_recompose_after_model_switch_and_shutdown() 
     let captured_creations = Arc::clone(&creations);
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel();
     let mut factory = MockSessionRunFactory::new();
+    factory
+        .expect_session_commands()
+        .returning(accepting_session_commands);
     factory.expect_create().times(3).returning(move |id, kind| {
         captured_creations
             .lock()
@@ -135,6 +139,9 @@ async fn model_switch_commits_before_retiring_runtime_and_discards_queue() {
     let release = Arc::new(Notify::new());
     let channel = gated_shutdown_channel(&started, &release);
     let mut factory = MockSessionRunFactory::new();
+    factory
+        .expect_session_commands()
+        .returning(accepting_session_commands);
     factory.expect_create().once().returning(move |id, _| {
         ag_worker::SessionRunClient::from_channel(id.to_string(), channel.clone())
     });

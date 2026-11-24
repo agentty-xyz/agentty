@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, OneShotClient, OneShotError, OneShotRequest,
-    OneShotSubmission, TurnEvent, TurnRequest, TurnResult,
+    OneShotSubmission, SessionCommandClient, SessionCommandOutput, SessionCommandRequest,
+    TurnEvent, TurnRequest, TurnResult,
 };
 use ag_protocol::TurnPrompt;
 use ag_session::AgentKind;
@@ -54,6 +55,15 @@ impl RuntimeFactory {
         }
     }
 
+    /// Composes the client that runs host commands in session sandboxes.
+    /// Without [`Self::with_native_harness`], every command fails before it
+    /// runs, because the sandbox and its session directories live there.
+    pub fn session_commands(&self) -> Arc<dyn SessionCommandClient> {
+        Arc::new(SessionCommands {
+            native_harness: self.native_harness.clone(),
+        })
+    }
+
     /// Composes pooled utility execution with adapter-owned cleanup.
     pub fn utility(&self) -> UtilityRuntime {
         let client = ag_agent::RealOneShotClient::pooled(self.app_server.clone());
@@ -98,6 +108,34 @@ impl SessionRuntime {
     /// Releases resources belonging to the selected harness session.
     pub fn shutdown(&self, id: String) -> AgentFuture<Result<(), AgentError>> {
         self.channel.shutdown_session(id)
+    }
+}
+
+/// Host commands run in session sandboxes through the native harness
+/// configuration.
+struct SessionCommands {
+    native_harness: Option<ag_agent::NativeHarnessConfig>,
+}
+
+impl SessionCommandClient for SessionCommands {
+    fn run(
+        &self,
+        request: SessionCommandRequest,
+    ) -> AgentFuture<Result<SessionCommandOutput, AgentError>> {
+        let native_harness = self.native_harness.clone();
+
+        Box::pin(async move {
+            let native_harness = native_harness.ok_or_else(|| {
+                AgentError::Runtime(
+                    "Session commands need the in-process harness configuration.".to_string(),
+                )
+            })?;
+
+            native_harness
+                .run_session_command(request)
+                .await
+                .map_err(AgentError::Runtime)
+        })
     }
 }
 

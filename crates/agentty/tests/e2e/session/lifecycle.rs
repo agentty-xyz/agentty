@@ -20,9 +20,9 @@ use testty::region::Region;
 use testty::step::Step;
 
 use super::fixture::{
-    CLAUDE_STRUCTURED_RESPONSE_TEXT, E2eResult, seed_claude_structured_output_project,
-    seed_review_ready_session, seed_running_stop_session, seed_session_title_candidate_project,
-    seed_sessions_tab,
+    CLAUDE_STRUCTURED_RESPONSE_TEXT, E2eResult, hold_checkouts, run_git,
+    seed_claude_structured_output_project, seed_review_ready_session, seed_running_stop_session,
+    seed_session_title_candidate_project, seed_sessions_tab,
 };
 use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed, SettingsRow};
 use crate::{common, test_support};
@@ -813,16 +813,18 @@ async fn session_stop_turn_returns_to_review() -> E2eResult {
     Ok(())
 }
 
-/// Delays the checkout hook so navigation must work before creation finishes.
+/// Delays the worktree checkout so navigation must work before creation
+/// finishes.
 ///
 /// `hold_checkout` accepts [`ReleaseGate::shell_wait`] so the scenario can
 /// choose when setup completes.
 async fn seed_delayed_session_creation(env: &BuilderEnv, hold_checkout: &str) -> E2eResult {
     seed_sessions_tab(env).await?;
-    let hook = env.workdir.join(".git/hooks/post-checkout");
-    std::fs::write(&hook, format!("#!/bin/sh\n{hold_checkout}\n"))?;
-    #[cfg(unix)]
-    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o750))?;
+    // The session worktree checks out this file, which the filter holds.
+    std::fs::write(env.workdir.join("checkout-hold.txt"), "held\n")?;
+    run_git(&env.workdir, &["add", "checkout-hold.txt"])?;
+    run_git(&env.workdir, &["commit", "-m", "Add checkout hold"])?;
+    hold_checkouts(env, "checkout-hold.txt", hold_checkout)?;
 
     Ok(())
 }

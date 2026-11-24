@@ -5,9 +5,9 @@ use std::num::NonZeroUsize;
 use std::process::Command;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, ExecutionPolicy, McpPolicy, OneShotRequest,
-    PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy, TurnContinuation,
-    TurnRequest,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, CommandScope, ExecutionPolicy, McpPolicy,
+    OneShotRequest, PermissionMode, ReasoningLevel, ResponseStyle, SessionCommandRequest,
+    SpeedMode, ToolPolicy, TurnContinuation, TurnRequest,
 };
 use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel, HarnessModelStatus};
 
@@ -15,6 +15,46 @@ use crate::{
     RealAgentAvailabilityProbe, RuntimeConfig, cleanup_session_worktree_artifacts, setup_backend,
     supports_turn_steering, uses_persistent_session,
 };
+
+#[tokio::test]
+async fn session_commands_run_in_the_native_harness_sandbox_or_fail_without_it() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(workspace.path())
+        .status()
+        .expect("git init");
+    assert!(status.success());
+    let request = SessionCommandRequest {
+        command: "printf hook; exit 1".to_string(),
+        folder: workspace.path().to_path_buf(),
+        scope: CommandScope::Session {
+            session_id: "session-1".to_string(),
+        },
+    };
+
+    // Act
+    let configured = RuntimeConfig::default()
+        .with_native_harness(data_root.path().to_path_buf())
+        .session_commands()
+        .run(request.clone())
+        .await
+        .expect("command runs");
+    let unconfigured = RuntimeConfig::default()
+        .session_commands()
+        .run(request)
+        .await;
+
+    // Assert
+    assert_eq!(configured.exit_code, Some(1));
+    assert_eq!(configured.output, "hook");
+    assert!(matches!(
+        unconfigured,
+        Err(AgentError::Runtime(message)) if message.contains("in-process harness")
+    ));
+}
 
 #[test]
 fn subagent_limit_replaces_only_policies_that_enforce_one() {

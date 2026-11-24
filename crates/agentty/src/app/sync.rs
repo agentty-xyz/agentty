@@ -258,6 +258,9 @@ pub(crate) struct SyncContext {
     pub(crate) review_request_client: Arc<dyn ReviewRequestClient>,
     /// Review-request refresh targets for active sessions.
     pub(crate) review_request_sync_targets: Vec<ReviewRequestSyncTarget>,
+    /// Runs the checkout's commit hooks inside the native sandbox after
+    /// assisted conflict resolution.
+    pub(crate) session_commands: Arc<dyn ag_contracts::SessionCommandClient>,
     /// Ahead/behind polling targets for active session branches.
     pub(crate) session_git_status_targets: Vec<SessionGitStatusTarget>,
     /// Active project working directory used to resolve the repository root.
@@ -908,6 +911,7 @@ impl SyncOrchestrator {
                     Arc::clone(&sync_context.git_client),
                     session_model,
                     run_client,
+                    Arc::clone(&sync_context.session_commands),
                 )
                 .await
             }

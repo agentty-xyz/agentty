@@ -6,11 +6,13 @@ use std::time::Duration;
 
 use ag_contracts::TurnNotice;
 use ag_harness::RunEventKind;
-use ag_harness::bash::BashConfig;
+use ag_harness::bash::{BashConfig, CommandOutcome};
 use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, SandboxWarning};
 use serde_json::json;
 
-use super::{CommandSandbox, SESSION_SANDBOX, UTILITY_SANDBOX, notice};
+use super::{
+    CommandSandbox, SESSION_SANDBOX, UTILITY_SANDBOX, command_output, notice, sandbox_state,
+};
 use crate::agent::native::cargo_cache::TrustedCargoCache;
 
 /// Returns a native policy without Agentty's grants.
@@ -427,4 +429,54 @@ async fn prepare_hides_the_cargo_cache() {
         root.path().join("cache").is_dir(),
         "the hidden cache root exists before any sandbox starts"
     );
+}
+
+#[test]
+/// Joins both streams with their omitted middles marked, skips empty ones,
+/// and notes a command its deadline stopped.
+fn command_output_joins_streams_and_marks_omissions() {
+    // Arrange
+    let outcome = |stdout: (&str, u64, &str), stderr: (&str, u64, &str), termination: &str| {
+        serde_json::from_value::<CommandOutcome>(json!({
+            "cleanup_failed": false,
+            "cleanup_scope": "process_group_best_effort",
+            "execution_failure": null,
+            "exit_code": null,
+            "signal": null,
+            "stderr": stderr.0,
+            "stderr_omitted_bytes": stderr.1,
+            "stderr_tail": stderr.2,
+            "stdout": stdout.0,
+            "stdout_omitted_bytes": stdout.1,
+            "stdout_tail": stdout.2,
+            "termination": termination,
+            "truncated": stdout.1 + stderr.1 > 0,
+        }))
+        .expect("outcome")
+    };
+
+    // Act
+    let joined = command_output(&outcome(("out", 0, ""), ("err", 0, ""), "completed"));
+    let omitted = command_output(&outcome(("head", 7, "tail"), ("", 0, ""), "completed"));
+    let stopped = command_output(&outcome(("", 0, ""), ("late", 0, ""), "deadline"));
+
+    // Assert
+    assert_eq!(joined, "out\nerr");
+    assert_eq!(omitted, "head\n[7 bytes omitted]\ntail");
+    assert_eq!(stopped, "late\n[stopped at its deadline]");
+}
+
+#[test]
+/// Reports a warning for a command run without the sandbox, otherwise that
+/// the sandbox ran it.
+fn sandbox_state_reports_whether_the_sandbox_ran_the_command() {
+    // Arrange
+    let warning = SandboxWarning::new(SandboxUnavailableReason::HelperMissing);
+
+    // Act / Assert
+    assert_eq!(sandbox_state(None), TurnNotice::SandboxAvailable);
+    assert!(matches!(
+        sandbox_state(Some(&warning)),
+        TurnNotice::SandboxUnavailable { .. }
+    ));
 }

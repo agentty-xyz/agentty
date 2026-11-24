@@ -7,7 +7,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
+    AgentChannel, AgentError, AgentFuture, MockSessionCommandClient, SessionCommandClient,
+    SessionCommandOutput, SessionRef, StartSessionRequest, TurnEvent, TurnNotice, TurnRequest,
     TurnResult,
 };
 use ag_forge::ReviewRequestClient;
@@ -93,10 +94,32 @@ impl SessionRunFactory for TestSessionRunFactory {
             })
     }
 
+    fn session_commands(&self) -> Arc<dyn SessionCommandClient> {
+        accepting_session_commands()
+    }
+
     /// Scripted channels replace provider CLIs, so workspaces need no setup.
     fn setup_backend(&self, _kind: AgentKind, _folder: &Path) -> Result<(), AgentError> {
         Ok(())
     }
+}
+
+/// Returns a session command client whose every command, such as a
+/// repository's `pre-commit` hook, succeeds silently in the sandbox, for
+/// tests that commit without configured hooks.
+pub(crate) fn accepting_session_commands() -> Arc<dyn SessionCommandClient> {
+    let mut client = MockSessionCommandClient::new();
+    client.expect_run().returning(|_| {
+        Box::pin(async {
+            Ok(SessionCommandOutput {
+                exit_code: Some(0),
+                output: String::new(),
+                sandbox: TurnNotice::SandboxAvailable,
+            })
+        })
+    });
+
+    Arc::new(client)
 }
 
 impl AppServices {

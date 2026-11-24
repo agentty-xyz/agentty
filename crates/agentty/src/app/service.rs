@@ -794,6 +794,10 @@ pub(crate) trait SessionRunFactory: Send + Sync {
         context: &ag_session::TaskAgentContext,
     ) -> Result<SessionRunClient, ag_contracts::AgentError>;
 
+    /// Returns the client that runs host commands, such as a repository's
+    /// commit hooks, inside the sandbox of a session's own commands.
+    fn session_commands(&self) -> Arc<dyn ag_contracts::SessionCommandClient>;
+
     /// Prepares the selected provider's resources in a session workspace
     /// before work is admitted.
     fn setup_backend(&self, kind: AgentKind, folder: &Path)
@@ -831,6 +835,10 @@ impl SessionRunFactory for RealSessionRunFactory {
         context: &ag_session::TaskAgentContext,
     ) -> Result<SessionRunClient, ag_contracts::AgentError> {
         SessionRunClient::for_task_context(context, &self.config)
+    }
+
+    fn session_commands(&self) -> Arc<dyn ag_contracts::SessionCommandClient> {
+        self.config.session_commands()
     }
 
     fn setup_backend(

@@ -107,3 +107,11 @@ once per turn, and leaves them all out of provider replay. Notices are advisory;
 layer reruns a command outside the sandbox because of one. One-shot utility runs report
 no notices, because `OneShotSubmission` carries none, so they refuse to run commands
 where the sandbox cannot run, failing with its remedy.
+
+Hosts run the commands they start on their own behalf over content that commands could
+have written, such as the repository's commit hooks, through `SessionCommandClient`,
+which `RuntimeConfig::session_commands` returns. A session-scoped command runs in the
+same sandbox as that session's commands, and its output carries the sandbox state as a
+notice, which the host shows like a turn's. A workspace-scoped command, such as a hook
+in the project checkout, runs in a utility prompt's sandbox and is refused where the
+sandbox cannot run. These commands involve no model, so they skip turn admission.

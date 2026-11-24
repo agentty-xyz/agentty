@@ -14,10 +14,10 @@ use crate::error::GitError;
 use crate::repo::{
     AsyncGitCommand, GIT_COMMAND_TIMEOUT, NETWORK_GIT_COMMAND_TIMEOUT,
     apply_non_interactive_environment, batch_mode_ssh_command, command_output_detail,
-    format_git_invocation, main_checkout_working_tree, main_checkout_working_tree_sync,
-    main_repo_root, no_submodule_recursion_environment, normalize_repo_url,
-    parse_git_directory_paths, parse_repo_root, repo_root_from_git_dir_async, resolve_git_dir,
-    run_git_command_sync, run_git_command_with_timeout,
+    disables_hooks, format_git_invocation, host_configuration, main_checkout_working_tree,
+    main_checkout_working_tree_sync, main_repo_root, normalize_repo_url, parse_git_directory_paths,
+    parse_repo_root, repo_root_from_git_dir_async, resolve_git_dir, run_git_command_sync,
+    run_git_command_with_timeout,
 };
 use crate::telemetry_support::{SpanCapture, attribute, attribute_keys};
 
@@ -27,7 +27,7 @@ fn test_apply_non_interactive_environment_sets_git_prompt_controls() {
     let mut command = Command::new("git");
 
     // Act
-    apply_non_interactive_environment(&mut command);
+    apply_non_interactive_environment(&mut command, &["status"]);
 
     // Assert
     let env_pairs: Vec<(String, String)> = command
@@ -59,6 +59,115 @@ fn test_apply_non_interactive_environment_sets_git_prompt_controls() {
 }
 
 #[test]
+fn host_configuration_appends_isolation_fsmonitor_and_hook_overrides_after_configured_pairs() {
+    // Act
+    let with_hooks_disabled = host_configuration(Some("2".to_string()), true);
+    let configuration_reader = host_configuration(Some("invalid".to_string()), false);
+    let alone = host_configuration(None, false);
+
+    // Assert
+    let pairs = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        with_hooks_disabled,
+        pairs(&[
+            ("GIT_CONFIG_KEY_2", "submodule.recurse"),
+            ("GIT_CONFIG_VALUE_2", "false"),
+            ("GIT_CONFIG_KEY_3", "commit.status"),
+            ("GIT_CONFIG_VALUE_3", "false"),
+            ("GIT_CONFIG_KEY_4", "core.fsmonitor"),
+            ("GIT_CONFIG_VALUE_4", "false"),
+            ("GIT_CONFIG_KEY_5", "core.hooksPath"),
+            ("GIT_CONFIG_VALUE_5", "/dev/null"),
+            ("GIT_CONFIG_COUNT", "6"),
+        ])
+    );
+    let without_hooks_override = pairs(&[
+        ("GIT_CONFIG_KEY_0", "submodule.recurse"),
+        ("GIT_CONFIG_VALUE_0", "false"),
+        ("GIT_CONFIG_KEY_1", "commit.status"),
+        ("GIT_CONFIG_VALUE_1", "false"),
+        ("GIT_CONFIG_KEY_2", "core.fsmonitor"),
+        ("GIT_CONFIG_VALUE_2", "false"),
+        ("GIT_CONFIG_COUNT", "3"),
+    ]);
+    assert_eq!(configuration_reader, without_hooks_override);
+    assert_eq!(alone, without_hooks_override);
+}
+
+#[test]
+fn disables_hooks_for_every_subcommand_except_configuration_reads() {
+    // Act / Assert
+    assert!(!disables_hooks(["config", "-l"]));
+    assert!(!disables_hooks(["-c", "a=b", "rev-parse", "HEAD"]));
+    assert!(disables_hooks(["status"]));
+    assert!(disables_hooks(["push", "origin"]));
+    assert!(disables_hooks(["--version"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn host_git_runs_no_fsmonitor_or_hook_a_session_can_write() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let repo_path = temp_dir.path().join("repo");
+    let marker = temp_dir.path().join("ran-on-host");
+    fs::create_dir(&repo_path).expect("failed to create repository");
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["config", "user.name", "Test User"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "core.hooksPath", ".githooks"],
+        vec!["config", "core.fsmonitor", "./monitor.sh"],
+    ] {
+        run_git_command_sync(&repo_path, &args, "setup").expect("setup");
+    }
+    let script = format!("#!/bin/sh\necho \"$0\" >> '{}'\n", marker.display());
+    for path in [
+        ".githooks/reference-transaction",
+        ".githooks/post-commit",
+        "monitor.sh",
+    ] {
+        let path = repo_path.join(path);
+        fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+        fs::write(&path, &script).expect("script");
+        let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        fs::set_permissions(&path, permissions).expect("executable");
+    }
+
+    // Act
+    run_git_command_sync(&repo_path, &["add", "-A"], "add").expect("add");
+    run_git_command_sync(&repo_path, &["commit", "-qm", "base"], "commit").expect("commit");
+    run_git_command_sync(&repo_path, &["status"], "status").expect("status");
+    let hooks_path =
+        run_git_command_sync(&repo_path, &["config", "--get", "core.hooksPath"], "config")
+            .expect("config");
+
+    // Assert
+    assert!(
+        !marker.exists(),
+        "host Git ran {}",
+        fs::read_to_string(&marker).unwrap_or_default()
+    );
+    assert_eq!(hooks_path.trim(), ".githooks");
+    // Positive control: plain Git runs both from this repository.
+    let plain = Command::new("git")
+        .args(["commit", "-q", "--allow-empty", "-m", "plain"])
+        .current_dir(&repo_path)
+        .status()
+        .expect("plain git commit");
+    assert!(plain.success());
+    let ran = fs::read_to_string(&marker).expect("plain Git runs session-written programs");
+    assert!(ran.contains("post-commit"), "{ran}");
+    assert!(ran.contains("monitor.sh"), "{ran}");
+}
+
+#[test]
 fn test_batch_mode_ssh_command_extends_configured_command_or_defaults_to_ssh() {
     // Arrange
     let configured_command = Some("ssh -i /keys/agentty".to_string());
@@ -70,36 +179,6 @@ fn test_batch_mode_ssh_command_extends_configured_command_or_defaults_to_ssh() {
     // Assert
     assert_eq!(extended_command, "ssh -i /keys/agentty -o BatchMode=yes");
     assert_eq!(default_command, "ssh -o BatchMode=yes");
-}
-
-#[test]
-fn no_submodule_recursion_follows_the_configuration_the_environment_already_passes() {
-    // Arrange / Act
-    let alone = no_submodule_recursion_environment(None);
-    let after_two = no_submodule_recursion_environment(Some("2".to_string()));
-    let unparsable = no_submodule_recursion_environment(Some("many".to_string()));
-
-    // Assert
-    let pairs = |index: usize, count: &str| {
-        let next = index + 1;
-
-        vec![
-            (
-                format!("GIT_CONFIG_KEY_{index}"),
-                "submodule.recurse".to_string(),
-            ),
-            (format!("GIT_CONFIG_VALUE_{index}"), "false".to_string()),
-            (
-                format!("GIT_CONFIG_KEY_{next}"),
-                "commit.status".to_string(),
-            ),
-            (format!("GIT_CONFIG_VALUE_{next}"), "false".to_string()),
-            ("GIT_CONFIG_COUNT".to_string(), count.to_string()),
-        ]
-    };
-    assert_eq!(alone, pairs(0, "2"));
-    assert_eq!(after_two, pairs(2, "4"));
-    assert_eq!(unparsable, pairs(0, "2"));
 }
 
 #[test]

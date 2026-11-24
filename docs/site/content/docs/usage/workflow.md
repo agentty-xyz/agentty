@@ -279,6 +279,20 @@ warns you: continue with `Enter` or cancel with `Esc` / `q`, and install the hoo
 `prek install` or `pre-commit install`. Commits without the hook show
 `[Commit Warning]`; failing hooks stop commits.
 
+Session commits and session sync run the pre-commit hook inside Agentty's native sandbox
+for the session's worktree, with the grants of Harness session commands, because the
+hook or its configuration can come from files the session wrote. Where the sandbox
+cannot run, the hook runs without it and the session shows the sandbox warning. The
+squash merge (`m`) and conflict resolution during project sync (`s`) run the hook in a
+sandbox scoped to your checkout instead, and fail where the sandbox cannot run.
+Agentty's own Git commands run no other hooks: `commit-msg`, `prepare-commit-msg`, and
+`post-commit` hooks are skipped, and pushes skip `pre-push` hooks, so run
+`git lfs push <remote> <branch>` yourself if the project stores files with Git LFS. Hook
+tools keep their caches in the sandbox's temporary directory, so a session's first
+commit and each squash merge set up hook environments again. The sandbox scoped to your
+checkout keeps its Git metadata read-only, so hooks that stage or stash changes fail
+there.
+
 For an unlinked session, `m` queues a local squash merge using the session commit
 message, followed by the titles of any commits added after publishing. The target
 checkout must be clean. A failed rebase or merge returns the session to **Review**.

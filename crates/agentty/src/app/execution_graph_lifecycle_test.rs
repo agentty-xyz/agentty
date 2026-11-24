@@ -21,6 +21,7 @@ use super::{graph, seed_session};
 use crate::app::App;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::service::MockSessionRunFactory;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::MockFsClient;
 use crate::test_support::{new_test_app_with_clients, test_app_clients};
@@ -34,6 +35,9 @@ async fn clarification_app(
 ) {
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let mut factory = MockSessionRunFactory::new();
+    factory
+        .expect_session_commands()
+        .returning(accepting_session_commands);
     factory.expect_create().once().returning(|id, _| {
         let mut channel = MockAgentChannel::new();
         channel

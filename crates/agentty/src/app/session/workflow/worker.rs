@@ -9,10 +9,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use ag_contracts::{
-    AgentError, AgentRequestKind, TurnContinuation, TurnEvent, TurnRequest, TurnResult,
+    AgentError, AgentRequestKind, SessionCommandClient, TurnContinuation, TurnEvent, TurnRequest,
+    TurnResult,
 };
 use ag_forge as forge;
-use ag_git::GitClient;
+use ag_git::{CommitHookRunner, GitClient};
 use ag_protocol::AgentResponse;
 use ag_telemetry::{FutureExt as _, KeyValue, Outcome, QueuedTrace};
 use ag_worker::{RunClient, SessionRunClient};
@@ -21,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::base_branch::{BaseBranchScope, BaseBranchSnapshot};
+use super::commit_hook::{SandboxedCommitHookRunner, SessionHookTarget};
 use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
@@ -651,6 +653,8 @@ pub(super) struct SessionWorkerContext {
     pub(super) review_request_client: Arc<dyn forge::ReviewRequestClient>,
     /// Agent provider and model selected for this session.
     pub(super) session_agent: AgentSelection,
+    /// Runs host commands, such as commit hooks, in the session sandbox.
+    pub(super) session_commands: Arc<dyn SessionCommandClient>,
     pub(super) session_id: SessionId,
     /// Per-app session update versions shared with the main runtime.
     pub(super) session_update_versions: SessionUpdateVersionMap,
@@ -659,6 +663,21 @@ pub(super) struct SessionWorkerContext {
 }
 
 impl SessionWorkerContext {
+    /// Returns the runner of the session worktree's commit hooks inside the
+    /// session sandbox, reporting its sandbox state to the transcript.
+    pub(super) fn commit_hooks(&self) -> Arc<dyn CommitHookRunner> {
+        Arc::new(SandboxedCommitHookRunner::session(
+            Arc::clone(&self.session_commands),
+            SessionHookTarget {
+                app_event_tx: self.app_event_tx.clone(),
+                db: self.db.clone(),
+                session_id: self.session_id.clone(),
+                session_update_versions: Arc::clone(&self.session_update_versions),
+                transcript: Arc::clone(&self.transcript),
+            },
+        ))
+    }
+
     /// Returns the submission order of the next queued chat prompt.
     fn next_queued_message_order(&self) -> Option<u64> {
         self.queued_messages
@@ -1513,6 +1532,7 @@ impl SessionWorkerService {
             session_update_versions: Arc::clone(&runtime.session_update_versions),
             session_id: runtime.session_id.clone(),
             session_agent: runtime.session_agent,
+            session_commands: services.task_run_factory().session_commands(),
             status: Arc::clone(&runtime.status),
             transcript: Arc::clone(&runtime.transcript),
         };
@@ -2219,6 +2239,7 @@ impl SessionWorkerService {
             branch_operation_lock: Arc::clone(&context.branch_operation_lock),
             child_pid: Arc::clone(&context.child_pid),
             clock: Arc::clone(&context.clock),
+            commit_hooks: context.commit_hooks(),
             db: context.db.clone(),
             folder: context.folder.clone(),
             fs_client: Arc::clone(&context.fs_client),

@@ -327,21 +327,24 @@ still describes the call by the model's arguments. A denial answers the model wi
   and resolves links at access time, so links can reach only granted targets. The
   workspace repository's Git metadata stays read-only under every grant, as in Codex:
   commands can inspect the repository but cannot stage, commit, or move references, and
-  the host commits what they change. Unsupported policy fails closed on enforcing
-  executors, and a command the native sandbox refuses to start returns to the model as a
-  rejected tool call. For coding sessions the policy follows Claude Code's and Codex's
-  sandboxes: optional full-disk reads minus hidden paths, which always include the
-  keychain, credential stores, browser profiles, and other sessions' temporary
-  directories, and which fail closed without a known home directory; writable roots kept
-  out of home and system directories, since host tools would run what commands plant
-  there; a per-path Unix-socket allowlist that only macOS enforces (Linux reports it
-  through the sandbox warning); and excluded programs whose plain-word commands run
-  without a shell, outside the sandbox, only when the `ApprovalHandler` explicitly
-  decides `Decision::AllowUnsandboxed` after seeing the exact argument vector; a plain
-  allow keeps them sandboxed. Hidden paths are the policy's only narrowing field, so
-  host executors receive them only by declaring support. A sandboxed command whose
-  failure reads like an operating-system denial gets an advisory `likely_sandbox_denial`
-  flag; it never triggers an unsandboxed rerun by itself. Each executor reports its
+  the host commits what they change. `sandbox::run_command` runs one host-chosen command
+  under the same configuration outside a turn, so a host can run programs that read
+  command-written content, such as Git hooks, inside the sandbox rather than with its
+  own access. Unsupported policy fails closed on enforcing executors, and a command the
+  native sandbox refuses to start returns to the model as a rejected tool call. For
+  coding sessions the policy follows Claude Code's and Codex's sandboxes: optional
+  full-disk reads minus hidden paths, which always include the keychain, credential
+  stores, browser profiles, and other sessions' temporary directories, and which fail
+  closed without a known home directory; writable roots kept out of home and system
+  directories, since host tools would run what commands plant there; a per-path
+  Unix-socket allowlist that only macOS enforces (Linux reports it through the sandbox
+  warning); and excluded programs whose plain-word commands run without a shell, outside
+  the sandbox, only when the `ApprovalHandler` explicitly decides
+  `Decision::AllowUnsandboxed` after seeing the exact argument vector; a plain allow
+  keeps them sandboxed. Hidden paths are the policy's only narrowing field, so host
+  executors receive them only by declaring support. A sandboxed command whose failure
+  reads like an operating-system denial gets an advisory `likely_sandbox_denial` flag;
+  it never triggers an unsandboxed rerun by itself. Each executor reports its
   `Enforcement` (none, filesystem, or filesystem and network), and the model-facing
   `bash` description states exactly that and names the excluded programs, so an
   unsandboxed command is never presented as sandboxed. Output is captured within one

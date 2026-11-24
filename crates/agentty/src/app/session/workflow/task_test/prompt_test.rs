@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::OneShotError;
-use ag_git::MockGitClient;
+use ag_git::{MockCommitHookRunner, MockGitClient};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -72,6 +72,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),

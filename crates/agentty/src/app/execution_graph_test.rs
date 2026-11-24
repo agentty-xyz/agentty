@@ -23,6 +23,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use super::{GraphDriverSession, GraphNodeLeases, can_still_finish};
 use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::app::session::SessionManager;
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
@@ -432,6 +433,9 @@ impl GraphScenario {
         let effects_entered = Arc::new(Notify::new());
         let effects_release = Arc::new(Notify::new());
         let mut factory = MockSessionRunFactory::new();
+        factory
+            .expect_session_commands()
+            .returning(accepting_session_commands);
         factory.expect_create().once().returning(|id, _| {
             let mut channel = MockAgentChannel::new();
             channel

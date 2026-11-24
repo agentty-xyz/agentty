@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, MockAgentChannel, PermissionMode, ReasoningLevel,
-    ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, CommandScope, MockAgentChannel,
+    PermissionMode, ReasoningLevel, ResponseStyle, SessionCommandRequest, SpeedMode,
+    TurnContinuation, TurnRequest,
 };
 use ag_worker::test_support::MockAppServerClient;
 use ag_worker::{RuntimeConfig, SessionRunClient};
@@ -17,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use super::test_support::TestSessionRunFactory;
+use super::test_support::{TestSessionRunFactory, accepting_session_commands};
 use super::{MockSessionRunFactory, RealSessionRunFactory, SessionRunFactory};
 use crate::domain::agent::AgentKind;
 use crate::domain::session::SessionId;
@@ -59,6 +60,9 @@ async fn session_factory_receives_identity_and_provider_through_app_composition(
     // Arrange
     let mut factory = MockSessionRunFactory::new();
     factory
+        .expect_session_commands()
+        .returning(accepting_session_commands);
+    factory
         .expect_create()
         .withf(|id, kind| id.as_str() == "session" && *kind == AgentKind::Codex)
         .once()
@@ -81,6 +85,28 @@ async fn session_factory_receives_identity_and_provider_through_app_composition(
 
     // Assert
     assert!(worker.shutdown().await.is_ok());
+}
+
+#[tokio::test]
+async fn real_session_factory_runs_session_commands_through_its_runtime_config() {
+    // Arrange
+    let factory = RealSessionRunFactory::new(RuntimeConfig::default());
+
+    // Act
+    let result = factory
+        .session_commands()
+        .run(SessionCommandRequest {
+            command: "true".to_string(),
+            folder: PathBuf::from("/tmp/project"),
+            scope: CommandScope::Workspace,
+        })
+        .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(AgentError::Runtime(message)) if message.contains("in-process harness")
+    ));
 }
 
 #[tokio::test]
