@@ -368,26 +368,9 @@ impl Pricing {
     }
 
     /// Returns built-in list prices in micro-USD per million tokens for a
-    /// provider that discounts cached input but charges no separate cache
-    /// write, so cache writes keep billing at the input price.
-    #[cfg(any(
-        feature = "providers-anthropic",
-        feature = "providers-compat",
-        feature = "providers-openai",
-        test
-    ))]
-    pub(crate) const fn built_in_cache_read(
-        input_per_mtok_micro_usd: u64,
-        output_per_mtok_micro_usd: u64,
-        cache_read_per_mtok_micro_usd: u64,
-    ) -> Self {
-        Self::built_in(input_per_mtok_micro_usd, output_per_mtok_micro_usd)
-            .with_cache_read(cache_read_per_mtok_micro_usd)
-            .with_source(PricingSource::BuiltIn)
-    }
-
-    /// Returns built-in list prices in micro-USD per million tokens for a
-    /// provider that publishes separate cache-read and cache-write prices.
+    /// provider that discounts cached input. A provider that charges no
+    /// separate cache write passes `None` for it, so writes bill at the
+    /// input price.
     #[cfg(any(
         feature = "providers-anthropic",
         feature = "providers-compat",
@@ -398,12 +381,13 @@ impl Pricing {
         input_per_mtok_micro_usd: u64,
         output_per_mtok_micro_usd: u64,
         cache_read_per_mtok_micro_usd: u64,
-        cache_write_per_mtok_micro_usd: u64,
+        cache_write_per_mtok_micro_usd: Option<u64>,
     ) -> Self {
-        Self::built_in(input_per_mtok_micro_usd, output_per_mtok_micro_usd)
-            .with_cache_read(cache_read_per_mtok_micro_usd)
-            .with_cache_write(cache_write_per_mtok_micro_usd)
-            .with_source(PricingSource::BuiltIn)
+        let mut pricing = Self::built_in(input_per_mtok_micro_usd, output_per_mtok_micro_usd);
+        pricing.cache_read = Some(cache_read_per_mtok_micro_usd);
+        pricing.cache_write = cache_write_per_mtok_micro_usd;
+
+        pricing
     }
 
     /// Returns these prices attributed to `source`.

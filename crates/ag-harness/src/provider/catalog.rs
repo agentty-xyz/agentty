@@ -821,12 +821,13 @@ const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
 ///
 /// Cached input bills at each provider's published cache-hit price.
 /// Claude models carry Anthropic's 5-minute cache-write price, the
-/// breakpoints the Messages requests mark; `OpenAI` models from GPT-5.6 on
-/// carry their default 30-minute cache-write price, and Kimi K3 its
-/// 5-minute one. The other providers charge no separate cache write, so
-/// their writes fall back to the input price. Qwen applies its implicit
-/// cache's 20% rate to `qwen-plus` and `qwen3.7-flash`, but publishes no
-/// cache-hit price for `qwen3.8-max` and `qwen3.8-flash`, whose cached
+/// breakpoints the Messages requests mark, and `OpenAI` models from GPT-5.6
+/// on their default 30-minute cache-write price; both providers report the
+/// tokens they write. The other models bill cache writes at the input
+/// price: Muse, Kimi K2.6, and Qwen's implicit cache charge no separate
+/// write, and Kimi K3's 5-minute write costs its input price. Qwen applies its
+/// implicit cache's 20% rate to `qwen-plus` and `qwen3.7-flash`, but publishes
+/// no cache-hit price for `qwen3.8-max` and `qwen3.8-flash`, whose cached
 /// input therefore falls back to the input price.
 ///
 /// Claude Haiku 5.5 also carries its prices for a prompt over 100,000
@@ -836,21 +837,23 @@ const MULTIMODAL_REASONING: Capabilities = Capabilities::NONE
 const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: muse::MUSE_SPARK_1_3,
-        pricing: Some(Pricing::built_in_cache_read(1_250_000, 4_250_000, 150_000)),
+        pricing: Some(Pricing::built_in_cached(
+            1_250_000, 4_250_000, 150_000, None,
+        )),
         provider: ModelProvider::Muse,
         supports: MULTIMODAL_REASONING,
     },
     // Meta trains on this tier's prompts and completions.
     CatalogedModel {
         model: muse::MUSE_SPARK_1_3_CONTRIBUTOR,
-        pricing: Some(Pricing::built_in_cache_read(100_000, 200_000, 2_000)),
+        pricing: Some(Pricing::built_in_cached(100_000, 200_000, 2_000, None)),
         provider: ModelProvider::Muse,
         supports: MULTIMODAL_REASONING,
     },
     CatalogedModel {
         model: kimi::KIMI_K3,
         pricing: Some(Pricing::built_in_cached(
-            3_000_000, 15_000_000, 300_000, 3_000_000,
+            3_000_000, 15_000_000, 300_000, None,
         )),
         provider: ModelProvider::Kimi,
         supports: MULTIMODAL_REASONING,
@@ -858,7 +861,7 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     // Moonshot AI retires the K2 models by the end of 2026.
     CatalogedModel {
         model: kimi::KIMI_K2_6,
-        pricing: Some(Pricing::built_in_cache_read(950_000, 4_000_000, 160_000)),
+        pricing: Some(Pricing::built_in_cached(950_000, 4_000_000, 160_000, None)),
         provider: ModelProvider::Kimi,
         supports: MULTIMODAL_REASONING,
     },
@@ -871,7 +874,7 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     // Under 256,000 input tokens.
     CatalogedModel {
         model: qwen::QWEN_PLUS,
-        pricing: Some(Pricing::built_in_cache_read(400_000, 1_200_000, 80_000)),
+        pricing: Some(Pricing::built_in_cached(400_000, 1_200_000, 80_000, None)),
         provider: ModelProvider::Qwen,
         supports: MULTIMODAL_REASONING,
     },
@@ -884,14 +887,17 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     // Under 32,000 input tokens; text only, without reasoning effort.
     CatalogedModel {
         model: qwen::QWEN3_7_FLASH,
-        pricing: Some(Pricing::built_in_cache_read(30_000, 130_000, 6_000)),
+        pricing: Some(Pricing::built_in_cached(30_000, 130_000, 6_000, None)),
         provider: ModelProvider::Qwen,
         supports: Capabilities::NONE,
     },
     CatalogedModel {
         model: openai::GPT_6_1_SOL,
         pricing: Some(Pricing::built_in_cached(
-            2_000_000, 10_000_000, 100_000, 2_500_000,
+            2_000_000,
+            10_000_000,
+            100_000,
+            Some(2_500_000),
         )),
         provider: ModelProvider::OpenAi,
         supports: MULTIMODAL_REASONING,
@@ -899,28 +905,41 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: openai::GPT_6_ASTRA,
         pricing: Some(Pricing::built_in_cached(
-            10_000_000, 50_000_000, 1_000_000, 12_500_000,
+            10_000_000,
+            50_000_000,
+            1_000_000,
+            Some(12_500_000),
         )),
         provider: ModelProvider::OpenAi,
         supports: MULTIMODAL_REASONING,
     },
     CatalogedModel {
         model: openai::GPT_6_LUNA,
-        pricing: Some(Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000)),
+        pricing: Some(Pricing::built_in_cached(
+            100_000,
+            500_000,
+            10_000,
+            Some(125_000),
+        )),
         provider: ModelProvider::OpenAi,
         supports: MULTIMODAL_REASONING,
     },
     CatalogedModel {
         model: openai::GPT_5_6_TERRA,
         pricing: Some(Pricing::built_in_cached(
-            2_000_000, 12_000_000, 200_000, 2_500_000,
+            2_000_000,
+            12_000_000,
+            200_000,
+            Some(2_500_000),
         )),
         provider: ModelProvider::OpenAi,
         supports: MULTIMODAL_REASONING,
     },
     CatalogedModel {
         model: openai::GPT_5_3_CODEX,
-        pricing: Some(Pricing::built_in_cache_read(1_750_000, 14_000_000, 175_000)),
+        pricing: Some(Pricing::built_in_cached(
+            1_750_000, 14_000_000, 175_000, None,
+        )),
         provider: ModelProvider::OpenAi,
         supports: MULTIMODAL_REASONING,
     },
@@ -975,7 +994,10 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: anthropic::CLAUDE_FABLE_5_2,
         pricing: Some(Pricing::built_in_cached(
-            8_000_000, 40_000_000, 200_000, 10_000_000,
+            8_000_000,
+            40_000_000,
+            200_000,
+            Some(10_000_000),
         )),
         provider: ModelProvider::Anthropic,
         supports: MULTIMODAL_REASONING,
@@ -983,7 +1005,10 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: anthropic::CLAUDE_OPUS_5_5,
         pricing: Some(Pricing::built_in_cached(
-            4_000_000, 20_000_000, 200_000, 5_000_000,
+            4_000_000,
+            20_000_000,
+            200_000,
+            Some(5_000_000),
         )),
         provider: ModelProvider::Anthropic,
         supports: MULTIMODAL_REASONING,
@@ -991,7 +1016,10 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: anthropic::CLAUDE_SONNET_5_5,
         pricing: Some(Pricing::built_in_cached(
-            2_000_000, 10_000_000, 100_000, 2_500_000,
+            2_000_000,
+            10_000_000,
+            100_000,
+            Some(2_500_000),
         )),
         provider: ModelProvider::Anthropic,
         supports: MULTIMODAL_REASONING,
@@ -1001,10 +1029,10 @@ const CATALOGED_MODELS: &[CatalogedModel] = &[
     CatalogedModel {
         model: anthropic::CLAUDE_HAIKU_5_5,
         pricing: Some(
-            Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000)
+            Pricing::built_in_cached(100_000, 500_000, 10_000, Some(125_000))
                 .with_long_context(
                     100_000,
-                    Pricing::built_in_cached(500_000, 2_500_000, 50_000, 625_000),
+                    Pricing::built_in_cached(500_000, 2_500_000, 50_000, Some(625_000)),
                 )
                 .with_source(PricingSource::BuiltIn),
         ),

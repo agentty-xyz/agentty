@@ -189,7 +189,7 @@ async fn streams_a_stateless_request_and_validates_the_output()
             item_done(message_item(r#"{"name":"Ada"}"#)),
             completed(json!({
                 "input_tokens": 1200,
-                "input_tokens_details": {"cached_tokens": 1024},
+                "input_tokens_details": {"cached_tokens": 1024, "cache_write_tokens": 150},
                 "output_tokens": 90,
                 "output_tokens_details": {"reasoning_tokens": 64},
                 "total_tokens": 1290
@@ -226,6 +226,7 @@ async fn streams_a_stateless_request_and_validates_the_output()
     let usage = metadata.usage().ok_or("usage expected")?;
     assert_eq!(usage.input_tokens(), Some(1200));
     assert_eq!(usage.cache_hit_tokens(), Some(1024));
+    assert_eq!(usage.cache_write_tokens(), Some(150));
     assert_eq!(usage.cache_miss_tokens(), None);
     assert_eq!(usage.output_tokens(), Some(90));
     assert_eq!(usage.reasoning_tokens(), Some(64));

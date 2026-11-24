@@ -21,9 +21,8 @@ const TOKENS_PER_MTOK: u128 = 1_000_000;
 /// - Input tokens neither read from nor written to the cache bill at the input
 ///   price.
 /// - `cache_read` tokens bill at [`Pricing::cache_read_per_mtok_micro_usd`] and
-///   `cache_write` tokens at [`Pricing::cache_write_per_mtok_micro_usd`]; both
-///   fall back to the input price when the pricing declares no cache price, as
-///   built-in prices do not yet.
+///   `cache_write` tokens at [`Pricing::cache_write_per_mtok_micro_usd`]; each
+///   falls back to the input price when the pricing declares no such price.
 /// - Output tokens, reasoning included, bill at the output price.
 /// - A usage whose `input` exceeds a declared long-context threshold bills at
 ///   the long-context prices ([`Pricing::for_prompt`]), so price one request at

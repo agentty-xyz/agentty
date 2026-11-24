@@ -146,11 +146,12 @@ non-strict function tools, `parallel_tool_calls` is on, and `prompt_cache_key` i
 The reasoning items of a response are returned as one JSON array in the reasoning
 content of its first call or output, and replayed verbatim before that assistant turn;
 reasoning content that is not such an array is omitted. Usage reports cached input
-tokens. An overflow is recognized from an HTTP rejection or from a streamed
-`response.failed`, a response cut short reports its `incomplete_details` reason, and a
-stream that closes before its terminal event is a transport failure. Output text,
-reasoning summary, and function-argument deltas reach a `DeltaObserver`. The current
-`Task` surface supports chat only; other model modes are not yet implemented.
+tokens and, where the model reports them, cache writes. An overflow is recognized from
+an HTTP rejection or from a streamed `response.failed`, a response cut short reports its
+`incomplete_details` reason, and a stream that closes before its terminal event is a
+transport failure. Output text, reasoning summary, and function-argument deltas reach a
+`DeltaObserver`. The current `Task` surface supports chat only; other model modes are
+not yet implemented.
 
 `anthropic` sends streamed requests to `{base_url}/messages` with the key in `x-api-key`
 and the protocol's `anthropic-version: 2023-06-01` header, which `with_header` replaces.
