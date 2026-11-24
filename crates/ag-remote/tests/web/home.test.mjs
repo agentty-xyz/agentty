@@ -60,6 +60,7 @@ function mountHome({
       error: byId("home-error"),
       form: byId("home-form"),
       hint: byId("home-composer-hint"),
+      images: byId("home-composer-images"),
       message: byId("home-message"),
       meta: byId("home-composer-meta"),
       modes: byId("home-modes"),
@@ -290,7 +291,7 @@ test("a failed first message still opens the new session with the text kept", as
   page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
   await settle();
 
-  assert.deepEqual(page.created, [["new", { draft: "Fix the relay", error: "Session is busy" }]]);
+  assert.deepEqual(page.created, [["new", { draft: "Fix the relay", error: "Session is busy", images: [] }]]);
   assert.equal(page.byId("home-message").value, "");
 });
 
@@ -734,7 +735,11 @@ test("failed settings open the session with the message unsent", async () => {
   assert.deepEqual(page.created, [
     [
       "new",
-      { draft: "Fix the relay", error: "Could not apply the settings: Model `claude-sonnet-5-5` is not available" },
+      {
+        draft: "Fix the relay",
+        error: "Could not apply the settings: Model `claude-sonnet-5-5` is not available",
+        images: [],
+      },
     ],
   ]);
 });
@@ -753,4 +758,51 @@ test("settings picked while the capability was offered are dropped once it is no
     page.requests.filter((body) => body.method !== "get_host").map((body) => body.method),
     ["create_session", "send_message"],
   );
+});
+
+test("a first message takes its pasted images, and a failed one keeps them", async () => {
+  let isRefusing = false;
+  const page = mountHome({
+    respond: (body) => {
+      if (body.method === "send_message" && isRefusing) {
+        throw new Error("Session is busy");
+      }
+
+      return body.method === "create_session" ? { kind: "created", session_id: "new" } : { kind: "accepted" };
+    },
+  });
+  await page.home.setCapabilities([...CAPABILITIES, "images"]);
+  type(page, "Fix this: ");
+  const paste = (bytes) =>
+    page.byId("home-message").dispatchEvent(
+      new FakeEvent("paste", {
+        clipboardData: { files: [new File([Uint8Array.from(bytes)], "shot.png", { type: "image/png" })] },
+      }),
+    );
+  paste([1, 2]);
+  assert.equal(page.byId("home-message").value, "Fix this: [Image #1]");
+  assert.equal(page.byId("home-composer-images").children.length, 1);
+  page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+
+  assert.deepEqual(page.requests.slice(1), [
+    { method: "create_session", mode: "regular" },
+    { images: [{ data: "AQI=" }], message: "Fix this: [Image #1]", method: "send_message", session_id: "new" },
+  ]);
+  assert.deepEqual(page.created, [["new", null]]);
+  assert.equal(page.byId("home-composer-images").hidden, true);
+
+  isRefusing = true;
+  type(page, "Again ");
+  paste([3]);
+  page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+  const [, failure] = page.created[1];
+  assert.equal(failure.error, "Session is busy");
+  assert.equal(failure.draft, "Again [Image #1]");
+  assert.deepEqual(
+    failure.images.map((image) => [image.number, image.file.size]),
+    [[1, 1]],
+  );
+  assert.equal(page.byId("home-composer-images").children.length, 0);
 });

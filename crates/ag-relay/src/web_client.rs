@@ -52,7 +52,7 @@ macro_rules! script {
 }
 
 /// Files the page loads.
-const FILES: [WebClientFile; 24] = [
+const FILES: [WebClientFile; 25] = [
     // The generated design tokens, font faces, and shared base styles come
     // first, as Agentty's listener serves them.
     WebClientFile {
@@ -75,6 +75,7 @@ const FILES: [WebClientFile; 24] = [
     script!("format.mjs"),
     script!("graph.mjs"),
     script!("home.mjs"),
+    script!("image.mjs"),
     script!("instance.mjs"),
     script!("markdown.mjs"),
     script!("mention.mjs"),

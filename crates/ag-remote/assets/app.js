@@ -168,6 +168,7 @@ const elements = {
   "home-title": document.getElementById("home-title"),
   "home-form": document.getElementById("home-form"),
   "home-message": document.getElementById("home-message"),
+  "home-composer-images": document.getElementById("home-composer-images"),
   "home-composer-hint": document.getElementById("home-composer-hint"),
   "home-composer-meta": document.getElementById("home-composer-meta"),
   "home-composer-settings": document.getElementById("home-composer-settings"),
@@ -218,6 +219,7 @@ const elements = {
   "composer-hint": document.getElementById("composer-hint"),
   "composer-graph": document.getElementById("composer-graph"),
   "composer-graph-leave": document.getElementById("composer-graph-leave"),
+  "composer-images": document.getElementById("composer-images"),
   "composer-graph-note": document.getElementById("composer-graph-note"),
   "merge-lines": document.getElementById("merge-lines"),
   stop: document.getElementById("stop"),
@@ -1248,6 +1250,7 @@ const chat = createChat({
     composerGraphLeave: elements["composer-graph-leave"],
     composerGraphNote: elements["composer-graph-note"],
     composerHint: elements["composer-hint"],
+    composerImages: elements["composer-images"],
     composerMeta: elements["composer-meta"],
     composerSettings: elements["composer-settings"],
     diff: elements.diff,
@@ -1394,6 +1397,7 @@ const home = createHome({
     error: elements["home-error"],
     form: elements["home-form"],
     hint: elements["home-composer-hint"],
+    images: elements["home-composer-images"],
     message: elements["home-message"],
     meta: elements["home-composer-meta"],
     modes: elements["home-modes"],
@@ -1409,7 +1413,7 @@ const home = createHome({
       enterSession(instance, sessionId, failure);
     } else {
       if (failure) {
-        chat.keepDraft(sessionId, failure.draft);
+        chat.keepDraft(sessionId, failure.draft, failure.images);
       }
       instance.refreshGate.request(true);
     }

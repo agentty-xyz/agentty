@@ -22,8 +22,10 @@ use crate::entropy::{Entropy, OsEntropy};
 use crate::pairing::{PairingCode, PairingState};
 use crate::relay::{self, RelayStatus, RemoteRelayConfig};
 
-/// Largest accepted WebSocket message or frame, in bytes.
-const MAX_MESSAGE_SIZE: usize = 1 << 20;
+/// Largest accepted WebSocket message or frame, in bytes, and largest
+/// frame an encrypted device stream reassembles: room for a message whose
+/// images reach the most `crate::request` accepts.
+pub(crate) const MAX_MESSAGE_SIZE: usize = 10 << 20;
 /// Sockets that may be open without an authenticated device, including
 /// pairing requests that wait for approval.
 pub(crate) const MAX_UNAUTHENTICATED_SOCKETS: usize = 8;
@@ -53,7 +55,7 @@ macro_rules! script {
 /// Web client files by request path, with their content types. The page
 /// refers to the others by relative path, so a relay can serve the same
 /// files under a path prefix.
-const WEB_ASSETS: [(&str, &str, &str); 25] = [
+const WEB_ASSETS: [(&str, &str, &str); 26] = [
     (
         "/",
         "text/html; charset=utf-8",
@@ -81,6 +83,7 @@ const WEB_ASSETS: [(&str, &str, &str); 25] = [
     script!("format.mjs"),
     script!("graph.mjs"),
     script!("home.mjs"),
+    script!("image.mjs"),
     script!("instance.mjs"),
     script!("markdown.mjs"),
     script!("mention.mjs"),

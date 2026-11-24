@@ -2700,6 +2700,48 @@ input.graph-editor-input {
   font-size: 1rem;
 }
 
+/* ---- Pasted images (image.mjs) ---------------------------------------
+   One chip per image under the text: its placeholder, size, and a
+   remove button. */
+.composer-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-images[hidden] {
+  display: none;
+}
+
+.composer-image {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding-left: var(--space-xs);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.composer-image-label {
+  color: var(--color-text);
+}
+
+.composer-image-size {
+  color: var(--color-dim);
+}
+
+.composer-image-remove {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1rem;
+}
+
 /* ---- Suggestion popup (suggest.mjs) ---------------------------------
    Opens above the composer, as wide as it, in the settings sheet's
    raised surface. The list scrolls once it outgrows the space. */

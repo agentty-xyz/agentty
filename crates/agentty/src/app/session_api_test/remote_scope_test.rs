@@ -12,7 +12,7 @@ use ag_session::test_support::graph_proposal_state;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, CreateTaskRequest,
     DurableMessageRequest, DurableMessageVisibility, GenerateGraphProposalRequest,
-    GraphProposalState, SessionError as ApiSessionError, SessionGraphAction,
+    GraphProposalState, MessageImage, SessionError as ApiSessionError, SessionGraphAction,
     SessionGraphActionRequest, SessionGraphsRequest, SessionId, SessionService,
     SessionSettingsChange, StartExecutionGraphRequest, test_support as model_fixture,
 };
@@ -34,10 +34,11 @@ type RequestCall = fn(SessionService, SessionId) -> Request;
 /// missing before it reads or changes anything else. The host lists exactly
 /// its loaded sessions, so no unlisted session can tell the scope check
 /// apart from these handlers.
-const ANSWERED_AS_MISSING_BY_THEIR_HANDLER: [&str; 9] = [
+const ANSWERED_AS_MISSING_BY_THEIR_HANDLER: [&str; 10] = [
     "read diff",
     "read files",
     "send message",
+    "send message with images",
     "cancel",
     "stop turn",
     "rebase",
@@ -429,6 +430,20 @@ fn turn_mutations(remote: &SessionService, id: &SessionId) -> Vec<(&'static str,
             "send message",
             request(|remote, id| {
                 boxed(async move { remote.send_message(&id, "Hello").await.map(|()| true) })
+            }),
+        ),
+        (
+            "send message with images",
+            request(|remote, id| {
+                boxed(async move {
+                    let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+                    let image = MessageImage::new(png).expect("PNG image");
+
+                    remote
+                        .send_message_with_images(&id, "Hello", vec![image])
+                        .await
+                        .map(|()| true)
+                })
             }),
         ),
         (

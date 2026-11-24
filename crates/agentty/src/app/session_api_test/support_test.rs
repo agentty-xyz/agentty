@@ -6,8 +6,8 @@ use std::sync::Arc;
 use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode};
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
-    HostProjectStatus, QuestionAnswer, ReviewRequest, SessionError as ApiSessionError, SessionId,
-    SessionMessageKind, test_support as model_fixture,
+    HostProjectStatus, MessageImage, QuestionAnswer, ReviewRequest,
+    SessionError as ApiSessionError, SessionId, SessionMessageKind, test_support as model_fixture,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
@@ -67,6 +67,23 @@ pub(super) async fn request_message(
 
     app.drive_session_request(async move { service.send_message(&session_id, message).await })
         .await
+}
+
+pub(super) async fn request_message_with_images(
+    app: &mut App,
+    session_id: SessionId,
+    message: &str,
+    images: Vec<MessageImage>,
+) -> Result<(), ApiSessionError> {
+    let service = app.session_service();
+    let message = message.to_string();
+
+    app.drive_session_request(async move {
+        service
+            .send_message_with_images(&session_id, message, images)
+            .await
+    })
+    .await
 }
 
 pub(super) async fn request_durable_message(

@@ -21,6 +21,9 @@ mod graph_question;
 #[path = "session_api_test/lifecycle_test.rs"]
 mod lifecycle;
 
+#[path = "session_api_test/message_image_test.rs"]
+mod message_image;
+
 #[path = "session_api_test/persistence_test.rs"]
 mod persistence;
 

@@ -18,6 +18,7 @@
 
 import { composerState } from "./chat.mjs";
 import { createComposer } from "./composer.mjs";
+import { encodeImages, numberedText } from "./image.mjs";
 import { agentModels, currentChoice, offersSettings, parseModels, settingsChange } from "./settings.mjs";
 
 // Where the unsent first message waits, among the per-session drafts.
@@ -119,14 +120,15 @@ export function modeLabel(mode) {
 }
 
 // Wires the home composer. `elements` holds `form`, `message`, `meta`,
-// `settingsButton`, `hint`, `modes`, `send` and `error`, the nodes with the
-// ids named in index.html. `request(body)` sends one request and resolves
+// `settingsButton`, `hint`, `images`, `modes`, `send` and `error`, the nodes
+// with the ids named in index.html. `request(body)` sends one request and resolves
 // with its result. `settings` is the settings sheet from settings.mjs,
 // shared with the open session. `onHost(host)` runs whenever the host
 // description changes, `null` when home cannot create sessions.
 // `onCreated(sessionId, failure)` opens a new session; `failure` is `null`
-// when the first message went through, and otherwise `{ draft, error }`
-// with the text to keep and why it failed.
+// when the first message went through, and otherwise
+// `{ draft, error, images }` with the text and images to keep and why it
+// failed.
 //
 // Returns `setCapabilities(list)`, which loads the host when it is
 // offered, `setConnected(isConnected)`, `focus()`, and `host()`.
@@ -174,6 +176,7 @@ export function createHome({
     elements: {
       form: elements.form,
       hint: elements.hint,
+      images: elements.images,
       message: elements.message,
       meta: elements.meta,
       send: elements.send,
@@ -281,7 +284,9 @@ export function createHome({
 
   async function create() {
     const text = elements.message.value;
-    if (!text.trim() || !state.host || state.isCreating || !state.isConnected) {
+    const images = composer.images();
+    const isEmpty = !text.trim() && images.length === 0;
+    if (isEmpty || !state.host || state.isCreating || !state.isConnected) {
       return;
     }
     const change = pickedChange();
@@ -302,10 +307,12 @@ export function createHome({
 
       return;
     }
-    // The new session holds the text from here on, sent or not. Text typed
-    // while the session was being created stays.
+    // The new session holds the text and images from here on, sent or not.
+    // Text typed and images pasted while the session was being created
+    // stay.
     composer.forgetDraft(HOME_DRAFT_ID, text);
     composer.clearText(text);
+    composer.forgetImages(HOME_DRAFT_ID, images);
     // The first message waits for the picked settings, so the first turn
     // runs with them; when they fail, the message stays unsent.
     let failure = null;
@@ -313,14 +320,19 @@ export function createHome({
       try {
         await request({ method: "set_session_settings", session_id: sessionId, ...change });
       } catch (error) {
-        failure = { draft: text, error: "Could not apply the settings: " + error.message };
+        failure = { draft: text, error: "Could not apply the settings: " + error.message, images: images };
       }
     }
     if (!failure) {
       try {
-        await request({ method: "send_message", session_id: sessionId, message: text });
+        const body = { method: "send_message", session_id: sessionId, message: text };
+        if (images.length > 0) {
+          body.message = numberedText(text, images);
+          body.images = await encodeImages(images);
+        }
+        await request(body);
       } catch (error) {
-        failure = { draft: text, error: error.message };
+        failure = { draft: text, error: error.message, images: images };
       }
     }
     state.isCreating = false;
