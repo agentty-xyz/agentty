@@ -22,7 +22,7 @@ pub use crate::tool_handler::{
     ToolSetError,
 };
 pub use crate::write::{WriteError, WriteOutput};
-use crate::{ComparisonBase, model, schema_contract};
+use crate::{ComparisonBase, model, schema_contract, write};
 
 /// `bash` isolation clause when the executor enforces nothing.
 const BASH_UNSANDBOXED: &str = "Run Bash directly on the host without a sandbox. Commands run \
@@ -100,6 +100,15 @@ impl Builtin {
             Self::Bash => BASH_NAME,
             Self::Read => READ_NAME,
             Self::Write => WRITE_NAME,
+        }
+    }
+
+    /// Decodes this tool's JSON arguments text.
+    fn decode(self, arguments: &str) -> Result<ToolArguments, serde_json::Error> {
+        match self {
+            Self::Bash => serde_json::from_str(arguments).map(ToolArguments::Bash),
+            Self::Read => serde_json::from_str(arguments).map(ToolArguments::Read),
+            Self::Write => serde_json::from_str(arguments).map(ToolArguments::Write),
         }
     }
 }
@@ -337,7 +346,9 @@ impl ToolCall {
     /// The call identifier must contain non-whitespace text and be at most
     /// 1,024 UTF-8 bytes. Accepted identifiers are preserved verbatim.
     /// Arguments and optional provider reasoning are bounded before decoding.
-    /// Arguments the tool cannot decode, such as invalid JSON, an unknown
+    /// Arguments sent as a JSON string that holds the arguments object are
+    /// decoded from that string. Arguments the tool cannot decode, such as
+    /// invalid JSON, an unknown
     /// field, an oversized read path, or an unsafe write path, are kept
     /// verbatim as [`MalformedArguments`] so the harness answers the call
     /// with an error result instead of running it. Structurally valid
@@ -389,11 +400,14 @@ impl ToolCall {
                 });
             }
         };
-        let decoded = match tool {
-            Builtin::Bash => serde_json::from_str(arguments).map(ToolArguments::Bash),
-            Builtin::Read => serde_json::from_str(arguments).map(ToolArguments::Read),
-            Builtin::Write => serde_json::from_str(arguments).map(ToolArguments::Write),
-        };
+        // Some models send the arguments object JSON-encoded as a string; it
+        // is decoded once more, and a failure reports the original error.
+        let decoded = tool.decode(arguments).or_else(|error| {
+            serde_json::from_str::<String>(arguments)
+                .ok()
+                .and_then(|inner| tool.decode(&inner).ok())
+                .ok_or(error)
+        });
         let arguments = decoded.unwrap_or_else(|error| {
             ToolArguments::Malformed(MalformedArguments {
                 raw: arguments.to_string(),
@@ -902,13 +916,12 @@ pub enum ReadSide {
 /// Validated arguments for the native `write` function.
 ///
 /// `path` names exactly one repository-relative text file and `patch` is a
-/// standard unified diff that creates or updates that same file.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// unified diff that creates or updates that same file. A `path` left out
+/// or `null` is taken from the patch's file headers when they name one (see
+/// the `write` tool for the patch forms it accepts).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WriteArguments {
-    #[serde(deserialize_with = "deserialize_bounded_patch")]
     patch: String,
-    #[serde(deserialize_with = "deserialize_repository_path")]
     path: String,
 }
 
@@ -921,6 +934,37 @@ impl WriteArguments {
     /// Returns the repository-relative path to write.
     pub fn path(&self) -> &str {
         &self.path
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteArgumentsWire {
+    #[serde(deserialize_with = "deserialize_bounded_patch")]
+    patch: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for WriteArguments {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let WriteArgumentsWire { patch, path } = WriteArgumentsWire::deserialize(deserializer)?;
+        let path = match path {
+            Some(path) => path,
+            None => write::header_target(&patch)
+                .ok_or_else(|| {
+                    de::Error::custom(
+                        "missing field `path`, and the patch has no `+++` header naming the file",
+                    )
+                })?
+                .to_string(),
+        };
+        validate_repository_path(&path).map_err(de::Error::custom)?;
+
+        Ok(Self { patch, path })
     }
 }
 
@@ -1064,16 +1108,6 @@ fn parse_positive_json_integer(number: &str) -> Option<u64> {
     let value = digits.parse::<u64>().ok()?;
 
     (0..appended_zeros).try_fold(value, |value, _| value.checked_mul(10))
-}
-
-fn deserialize_repository_path<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let path = String::deserialize(deserializer)?;
-    validate_repository_path(&path).map_err(de::Error::custom)?;
-
-    Ok(path)
 }
 
 fn validate_repository_path(path: &str) -> Result<(), &'static str> {

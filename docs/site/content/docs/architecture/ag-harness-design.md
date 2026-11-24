@@ -295,7 +295,12 @@ still describes the call by the model's arguments. A denial answers the model wi
   result.
 - `write` — applies one bounded git-style unified diff atomically. Hunks may be
   relocated only to a unique match; ambiguous or unmatched hunks reject the patch, and
-  the result reports every adjusted hunk.
+  the result reports every adjusted hunk. A hunk that matches nowhere returns the file's
+  current lines where it most nearly matches, so the model can retry without reading the
+  file again. The tool also accepts patch forms models trained on other harnesses send:
+  a diff without file headers or with blank context lines, a diff inside Codex's
+  `*** Begin Patch` envelope, and Codex's `apply_patch` format for one added or updated
+  file. A missing `path` is taken from the patch headers.
 - Comparisons (`diff`, `show(base)`) additionally require a host-pinned `ComparisonBase`
   commit; no base is ever chosen implicitly.
 - `bash` — requires an explicit per-turn `BashConfig` naming an executor: the native

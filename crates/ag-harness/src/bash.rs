@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -900,10 +901,17 @@ impl fmt::Debug for BashArguments {
     }
 }
 
+/// Wire form of [`BashArguments`]. A `timeout` or `timeout_ms`, which
+/// models trained on other harnesses send, is accepted and ignored: the
+/// host alone selects the deadline, and `timeout` names no unit.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawArguments {
     command: String,
+    #[serde(default, rename = "timeout")]
+    _timeout: Option<IgnoredAny>,
+    #[serde(default, rename = "timeout_ms")]
+    _timeout_ms: Option<IgnoredAny>,
 }
 
 impl TryFrom<RawArguments> for BashArguments {
