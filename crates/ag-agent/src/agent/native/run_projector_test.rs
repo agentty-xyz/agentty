@@ -375,8 +375,14 @@ fn rejected_command_tail_leaves_out_its_reason() {
 fn rejected_write_fails_with_its_reason() {
     // Arrange
     let reason = "invalid patch: hunk 1 context and removed lines do not match the target at \
-                  header line 1216 or anywhere else; re-read the file and copy those lines exactly";
-    let output = json!({"error": reason, "path": "src/composer.rs", "status": "rejected"});
+                  header line 1216 or anywhere else; the lines where the hunk most nearly matches \
+                  are attached";
+    let output = json!({
+        "current": {"content": "fn render() {\n    draw();\n}\n", "end_line": 1218, "start_line": 1216},
+        "error": reason,
+        "path": "src/composer.rs",
+        "status": "rejected"
+    });
     let arguments = r#"{"path": "src/composer.rs", "patch": "@@ -1 +1 @@\n-a\n+b\n"}"#;
 
     // Act

@@ -1,4 +1,5 @@
 use ag_contracts::{ActivityKind, LineRange};
+use serde_json::json;
 
 use super::ToolDescription;
 
@@ -61,6 +62,40 @@ fn read_actions_select_exploration_kinds_targets_and_ranges() {
             (ActivityKind::List, Some("crates".to_string()), None),
             (ActivityKind::List, None, None),
             (ActivityKind::Read, Some("src/b.rs".to_string()), None),
+        ]
+    );
+}
+
+#[test]
+fn arguments_the_harness_tolerates_describe_the_call() {
+    // Arrange
+    let string_arguments = json!(r#"{"command": "cargo test"}"#).to_string();
+    let calls = [
+        (
+            "bash",
+            r#"{"command": "cargo test", "timeout": 120000}"#.to_string(),
+        ),
+        ("bash", string_arguments),
+        (
+            "write",
+            r#"{"patch": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n"}"#.to_string(),
+        ),
+    ];
+
+    // Act
+    let descriptions = calls.map(|(name, arguments)| {
+        let description = describe(name, &arguments);
+
+        (description.kind, description.target)
+    });
+
+    // Assert
+    assert_eq!(
+        descriptions,
+        [
+            (ActivityKind::Command, Some("cargo test".to_string())),
+            (ActivityKind::Command, Some("cargo test".to_string())),
+            (ActivityKind::FileChange, Some("src/lib.rs".to_string())),
         ]
     );
 }
