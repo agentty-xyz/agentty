@@ -112,7 +112,7 @@ fn test_platform_actions_follow_the_sign_in_state() {
     let signed_in = |access| {
         PlatformState::SignedIn(PlatformAccountView {
             access,
-            login: None,
+            ..PlatformAccountView::checking(None)
         })
     };
     let cases = [
@@ -128,12 +128,15 @@ fn test_platform_actions_follow_the_sign_in_state() {
             vec!["o", "c", "Enter"],
         ),
         (signed_in(PlatformAccess::Checking), vec!["l"]),
-        (signed_in(PlatformAccess::Waitlisted), vec!["Enter", "l"]),
+        (
+            signed_in(PlatformAccess::Waitlisted),
+            vec!["Enter", "a", "l"],
+        ),
         (
             signed_in(PlatformAccess::Registered {
                 name: "Agentty on box".to_string(),
             }),
-            vec!["Enter", "l"],
+            vec!["Enter", "a", "l"],
         ),
     ];
 
@@ -159,6 +162,7 @@ fn test_platform_actions_follow_the_sign_in_state() {
 
         // Assert
         assert_eq!(tab_keys, expected);
+        assert!(expected.iter().all(|key| overlay_keys.contains(key)));
         assert_eq!(overlay_keys.last(), Some(&"?"));
         assert!(overlay_keys.contains(&"Shift+Tab"));
     }

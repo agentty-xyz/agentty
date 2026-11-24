@@ -23,10 +23,11 @@ pub enum Tab {
     /// Settings for the active project.
     Settings,
     /// Remote control of the active project's sessions, offered only with
-    /// `--experimental-remote`.
+    /// `--experimental-remote` or `--remote-relay`.
     Remote,
     /// Sign-in to an Agentty Platform and remote control through its relay,
-    /// offered only with `--experimental-platform`.
+    /// offered only with `--experimental-platform` and without
+    /// `--remote-relay`.
     Platform,
 }
 
@@ -80,9 +81,9 @@ impl Tab {
 #[derive(Default)]
 pub struct TabManager {
     current: Tab,
-    /// Whether `--experimental-platform` offers [`Tab::Platform`].
+    /// Whether this launch offers [`Tab::Platform`].
     is_platform_available: bool,
-    /// Whether `--experimental-remote` offers [`Tab::Remote`].
+    /// Whether this launch offers [`Tab::Remote`].
     is_remote_available: bool,
 }
 
@@ -123,7 +124,8 @@ impl TabManager {
 
     /// Returns the currently selected tab. A selected tab this launch does
     /// not offer, such as [`Tab::Remote`] restored from a launch with
-    /// `--experimental-remote`, reads as [`Tab::Sessions`].
+    /// `--experimental-remote` or `--remote-relay`, reads as
+    /// [`Tab::Sessions`].
     #[must_use]
     pub fn current(&self) -> Tab {
         if self.available_tabs().contains(&self.current) {

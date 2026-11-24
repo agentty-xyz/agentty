@@ -17,8 +17,9 @@ its base branch, publish its branch, sync the active project's branch with its r
 ask for a graph proposal with `/graph`, and act on an execution graph as the terminal's
 graph inspector does; the web page offers each of these.
 
-Remote control is a preview feature. Start Agentty with `--experimental-remote` to add
-the `Remote` tab to the right of `Settings`.
+Remote control is a preview feature. Start Agentty with `--experimental-remote`, or with
+`--remote-relay <URL>` alone to [use a relay](#usage-remote-control-relay), to add the
+`Remote` tab to the right of `Settings`.
 
 <!-- more -->
 
@@ -235,10 +236,12 @@ a free one.
 tunnel: Agentty connects out to the relay, and devices connect to it too. Start Agentty
 with `--remote-relay <URL>`, such as `--remote-relay wss://relay.example`, and run your
 own `ag-relay` behind a reverse proxy that serves it over TLS, or, as a preview, sign in
-to the [Agentty Platform](@/docs/usage/platform.md) and use its hosted relay. A relay
-named with `--remote-relay` wins over the platform's. The relay's container image is
-published for `amd64` and `arm64`: each release tags it with the version and `latest`,
-and each commit to `main` tags it `main`. The relay listens on port `8787`:
+to the [Agentty Platform](@/docs/usage/platform.md) and use its hosted relay.
+`--remote-relay` alone enables remote control and the `Remote` tab, and accepts
+`--remote-control-port` and `--remote-control-host`; a launch with it does not contact
+the platform. The relay's container image is published for `amd64` and `arm64`: each
+release tags it with the version and `latest`, and each commit to `main` tags it `main`.
+The relay listens on port `8787`:
 
 ```sh
 podman run --detach --name agentty-relay --publish 127.0.0.1:8787:8787 \

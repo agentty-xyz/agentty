@@ -535,7 +535,7 @@ async fn start_remote_control_without_the_flag_reports_how_to_enable_it() {
     assert_eq!(app.remote_control.view().listener, None);
     assert_eq!(
         app.remote_control.view().error.as_deref(),
-        Some("Remote control needs `agentty --experimental-remote`.")
+        Some("Remote control needs `agentty --experimental-remote` or `--remote-relay`.")
     );
 }
 
@@ -1822,41 +1822,8 @@ async fn the_platform_relay_alone_starts_remote_control_on_a_free_port_and_pairs
     );
     assert_eq!(
         app.remote_control.view().error.as_deref(),
-        Some("Remote control needs `agentty --experimental-remote`.")
+        Some("Remote control needs `agentty --experimental-remote` or `--remote-relay`.")
     );
-}
-
-#[tokio::test]
-async fn an_explicit_relay_wins_over_the_platform_relay_and_keeps_running() {
-    // Arrange
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_relay_launcher(
-        &mut app,
-        launcher,
-        MockBrowserClient::new(),
-        MockTerminalClipboard::new(),
-    )
-    .await;
-    app.start_remote_control().await;
-
-    // Act
-    app.set_platform_relay(Some(platform_relay())).await;
-
-    // Assert
-    assert!(app.remote_control.has_explicit_relay());
-    let relay = probe.relay.lock().expect("relay lock").clone();
-    assert_eq!(relay.map(|relay| relay.url), Some(RELAY_URL.to_string()));
-    assert!(probe.calls.lock().expect("calls lock").is_empty());
-    let link = app
-        .remote_control
-        .view()
-        .listener
-        .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
-        .map(|relay| relay.link.clone())
-        .expect("relay link should show");
-    assert!(link.starts_with("https://relay.example/#relay="));
 }
 
 #[tokio::test]

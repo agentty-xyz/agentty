@@ -76,8 +76,31 @@ pub struct PlatformSignInView {
 pub struct PlatformAccountView {
     /// What this Agentty may use of the platform.
     pub access: PlatformAccess,
+    /// Whether remote control through the platform's relay starts whenever
+    /// Agentty starts.
+    pub keep_on: bool,
+    /// Warning that the last keep-on change could not be saved.
+    pub keep_on_notice: Option<String>,
     /// Account login, once the platform named it.
     pub login: Option<String>,
+}
+
+impl PlatformAccountView {
+    /// Starts checking the account of `login`, with keep on off.
+    pub fn checking(login: Option<String>) -> Self {
+        Self {
+            access: PlatformAccess::Checking,
+            keep_on: false,
+            keep_on_notice: None,
+            login,
+        }
+    }
+
+    /// Returns whether the keep-on toggle is offered: once the account
+    /// check has answered.
+    pub fn offers_keep_on(&self) -> bool {
+        self.access != PlatformAccess::Checking
+    }
 }
 
 /// What a signed-in Agentty may use of the platform.
@@ -85,8 +108,6 @@ pub struct PlatformAccountView {
 pub enum PlatformAccess {
     /// Reading the account and registering this Agentty.
     Checking,
-    /// `--remote-relay` names a relay, which remote control uses instead.
-    ExplicitRelay,
     /// The platform offers this account no relay.
     NoRelay,
     /// Registered, so remote control runs through the platform's relay.

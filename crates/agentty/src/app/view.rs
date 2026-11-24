@@ -52,8 +52,8 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) latest_available_version: Option<&'a str>,
     pub(crate) mode: &'a AppMode,
     pub(crate) mru_project_order: &'a [usize],
-    /// Platform sign-in and remote-control state, or `None` unless
-    /// `--experimental-platform` offers the Platform tab.
+    /// Platform sign-in and remote-control state, or `None` unless the
+    /// launch offers the Platform tab.
     pub(crate) platform: Option<PlatformTabView<'a>>,
     /// Latest totals for the Agentty process and all of its descendants.
     pub(crate) process_resources: Option<SessionResources>,
@@ -61,7 +61,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     pub(crate) projects: &'a [ProjectListItem],
     /// Remote-control listener and paired-device state, or `None` unless
-    /// `--experimental-remote` offers the Remote tab.
+    /// `--experimental-remote` or `--remote-relay` offers the Remote tab.
     pub(crate) remote_control: Option<&'a RemoteControlView>,
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,

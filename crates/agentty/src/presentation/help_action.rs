@@ -361,14 +361,15 @@ pub(crate) fn platform_actions(view: PlatformTabView<'_>) -> Vec<HelpAction> {
 /// Returns the Platform tab's own actions in the state `view` shows:
 /// sign-in actions while signed out or signing in, and, once signed in,
 /// sign-out and either the remote-control actions of a registered Agentty
-/// or another account check.
+/// or another account check, with the keep-on toggle once the check
+/// answered.
 pub(crate) fn platform_tab_actions(view: PlatformTabView<'_>) -> Vec<HelpAction> {
     match &view.platform.state {
         PlatformState::SignedOut { .. } => {
             vec![HelpAction::new(
-                "sign in",
+                "sign in and connect",
                 "Enter",
-                "Sign in to the platform",
+                "Sign in and start remote control through the platform's relay",
             )]
         }
         PlatformState::SigningOut { .. } => Vec::new(),
@@ -382,8 +383,7 @@ pub(crate) fn platform_tab_actions(view: PlatformTabView<'_>) -> Vec<HelpAction>
             let mut actions = match account.access {
                 PlatformAccess::Checking => Vec::new(),
                 PlatformAccess::Registered { .. } => remote_control_actions(view.remote_control),
-                PlatformAccess::ExplicitRelay
-                | PlatformAccess::NoRelay
+                PlatformAccess::NoRelay
                 | PlatformAccess::Unavailable { .. }
                 | PlatformAccess::Waitlisted => {
                     vec![HelpAction::new(
@@ -393,6 +393,13 @@ pub(crate) fn platform_tab_actions(view: PlatformTabView<'_>) -> Vec<HelpAction>
                     )]
                 }
             };
+            if account.offers_keep_on() {
+                actions.push(HelpAction::new(
+                    "keep on",
+                    "a",
+                    "Toggle starting remote control whenever Agentty starts",
+                ));
+            }
             actions.push(HelpAction::new("sign out", "l", "Sign out of the platform"));
 
             actions

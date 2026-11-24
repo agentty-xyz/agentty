@@ -40,7 +40,8 @@ use crate::presentation::remote_control::{
 /// Loopback port used unless `--remote-control-port` selects another.
 pub const DEFAULT_REMOTE_CONTROL_PORT: u16 = 4646;
 /// Reported when remote control is started without its launch flag.
-const REMOTE_CONTROL_DISABLED: &str = "Remote control needs `agentty --experimental-remote`.";
+const REMOTE_CONTROL_DISABLED: &str =
+    "Remote control needs `agentty --experimental-remote` or `--remote-relay`.";
 /// Confirms a copied pairing link.
 const LINK_COPIED: &str = "Link copied. It works once.";
 /// Reported when the terminal could not be asked to copy.
@@ -68,11 +69,10 @@ pub(crate) struct RemoteControl {
     /// Relay the running listener registers with and the key devices pin,
     /// while it is linked to one.
     linked_relay: Option<LinkedRelay>,
-    /// Relay of the platform this Agentty is registered with, used unless
-    /// `--remote-relay` names one.
+    /// Relay of the platform this Agentty is registered with.
     platform_relay: Option<RemoteControlService>,
-    /// Loopback port, or `None` until `--experimental-remote` enables
-    /// remote control.
+    /// Loopback port, or `None` until `--experimental-remote` or
+    /// `--remote-relay` enables remote control.
     port: Option<u16>,
     /// Relay base URL from `--remote-relay`.
     relay_url: Option<String>,
@@ -120,28 +120,24 @@ impl RemoteControl {
         }
     }
 
-    /// Returns whether `--experimental-remote` enabled remote control.
+    /// Returns whether `--experimental-remote` or `--remote-relay` enabled
+    /// remote control.
     pub(crate) fn is_enabled(&self) -> bool {
         self.port.is_some()
     }
 
-    /// Returns whether `--remote-relay` names a relay, which then wins over
-    /// the platform's.
-    pub(crate) fn has_explicit_relay(&self) -> bool {
-        self.relay_url.is_some()
-    }
-
     /// Returns the port the listener binds: the configured one with
-    /// `--experimental-remote`, otherwise a free one while the platform's
-    /// relay is available, since only devices reaching it through that
-    /// relay are expected then.
+    /// `--experimental-remote` or `--remote-relay`, otherwise a free one
+    /// while the platform's relay is available, since only devices reaching
+    /// it through that relay are expected then.
     fn listen_port(&self) -> Option<u16> {
         self.port
             .or_else(|| self.platform_relay.as_ref().map(|_| 0))
     }
 
     /// Returns the relay a listener starting now registers with:
-    /// `--remote-relay` when set, else the platform's.
+    /// `--remote-relay` when set, else the platform's. A launch never has
+    /// both, since `--remote-relay` keeps the platform disabled.
     fn relay_to_link(&self) -> Option<(String, Option<String>)> {
         if let Some(relay_url) = &self.relay_url {
             return Some((relay_url.clone(), None));
@@ -254,10 +250,11 @@ struct ReportedSession {
 }
 
 impl App {
-    /// Offers the experimental Remote tab with its paired devices. Remote
-    /// control listens on the loopback `port` once it starts and accepts
-    /// requests that name a loopback host or one of `allowed_hosts`. With
-    /// `relay_url`, the listener also registers with that relay.
+    /// Offers the experimental Remote tab with its paired devices, for
+    /// `--experimental-remote` or `--remote-relay`. Remote control listens
+    /// on the loopback `port` once it starts and accepts requests that name
+    /// a loopback host or one of `allowed_hosts`. With `relay_url`, the
+    /// listener also registers with that relay.
     pub async fn enable_remote_control(
         &mut self,
         port: u16,
@@ -548,16 +545,15 @@ impl App {
     }
 
     /// Replaces the platform relay remote control may use. A running
-    /// listener that `--remote-relay` does not link restarts, so it
-    /// registers with the new relay, or with none: devices connected
-    /// through the old relay drop, and when only the platform's relay made
-    /// remote control available, it stays off.
+    /// listener restarts, so it registers with the new relay, or with none:
+    /// devices connected through the old relay drop, and when only the
+    /// platform's relay made remote control available, it stays off.
     pub(crate) async fn set_platform_relay(&mut self, relay: Option<RemoteControlService>) {
         if self.remote_control.platform_relay == relay {
             return;
         }
         self.remote_control.platform_relay = relay;
-        if self.remote_control.has_explicit_relay() || self.remote_control.server.is_none() {
+        if self.remote_control.server.is_none() {
             return;
         }
 

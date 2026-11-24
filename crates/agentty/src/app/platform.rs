@@ -4,8 +4,11 @@
 //! Platform requests run in the background and report through
 //! [`AppEvent::PlatformUpdated`]; each carries the request it answers, so
 //! the result of a cancelled or replaced request is dropped. A registered
-//! Agentty hands the platform's relay to remote control, which dials it
-//! unless `--remote-relay` names another relay. The access token goes only
+//! Agentty hands the platform's relay to remote control. Remote control
+//! starts only after an account check the user asked to connect, by signing
+//! in, by `Enter`, or by turning keep on on; keep on, saved with the
+//! sign-in, also connects the check a launch runs. A launch with
+//! `--remote-relay` never enables the platform. The access token goes only
 //! to the platform, never to a relay.
 
 use std::sync::Arc;
@@ -19,6 +22,7 @@ use crate::app::link_copy::LinkCopy;
 use crate::app::{App, AppEvent, spawn};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::BrowserClient;
+use crate::infra::db::{DbError, SettingRepository};
 use crate::infra::platform::{
     AccessToken, DeviceAuthorization, PlatformClient, PlatformError, RemoteControlService, SignIn,
 };
@@ -41,6 +45,9 @@ const LINK_NOT_COPIED: &str = "Could not copy the link; select it instead.";
 /// Warns that a sign-out left the saved sign-in behind.
 const SAVED_SIGN_IN_KEPT: &str =
     "The saved sign-in could not be removed, so it returns when Agentty restarts.";
+/// Warns that a keep-on change lasts only for this launch.
+const KEEP_ON_NOT_SAVED: &str =
+    "Could not save keep on, so the change lasts only until Agentty quits.";
 
 /// Background platform progress delivered to the foreground reducer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,8 +87,6 @@ pub(crate) enum PlatformUpdate {
 /// What a checked account lets this Agentty use.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Access {
-    /// `--remote-relay` wins, so this Agentty does not register.
-    ExplicitRelay,
     /// The platform offers no relay.
     NoRelay,
     /// Registered as `name`; remote control may use `service`.
@@ -99,6 +104,9 @@ pub(crate) struct Platform {
     /// Client for the configured platform, once `--experimental-platform`
     /// enabled the tab.
     client: Option<Arc<dyn PlatformClient>>,
+    /// Whether the next account check `Enter` asks for connects, because it
+    /// is the first check of a sign-in that could not be saved.
+    connects_on_next_check: bool,
     /// Name this Agentty asks to be shown as.
     instance_name: String,
     /// Whether the last sign-out could not remove the saved sign-in, which
@@ -128,6 +136,7 @@ impl Platform {
         Self {
             browser,
             client: None,
+            connects_on_next_check: false,
             instance_name: String::new(),
             is_saved_sign_in_kept: false,
             link_copy: LinkCopy::new(clipboard, |request_id, is_copied| {
@@ -161,6 +170,7 @@ impl Platform {
             task.abort();
         }
         self.link_copy.forget();
+        self.connects_on_next_check = false;
         self.starts_remote_control_after_check = false;
         self.request_id += 1;
 
@@ -195,10 +205,16 @@ impl Drop for Platform {
 }
 
 /// Stored form of a sign-in: the token together with the platform that
-/// issued it, so a token is never sent to another platform.
+/// issued it, so a token is never sent to another platform, and whether
+/// keep on starts remote control at launch. A fresh sign-in starts with
+/// keep on off, and a sign-out clears it with the token.
 #[derive(Deserialize)]
 struct StoredSignIn {
     access_token: String,
+    /// Missing in a sign-in saved before keep on existed, which reads as
+    /// off.
+    #[serde(default)]
+    keep_on: bool,
     platform_url: String,
 }
 
@@ -224,7 +240,8 @@ impl App {
     /// Offers the experimental Platform tab for the platform at
     /// `platform_url`, reached through `client`, naming this Agentty
     /// `instance_name` there. A sign-in saved for the same platform is
-    /// checked right away.
+    /// checked right away, and with keep on, remote control starts once the
+    /// check confirms the registration.
     pub async fn enable_platform(
         &mut self,
         client: Arc<dyn PlatformClient>,
@@ -237,19 +254,19 @@ impl App {
         self.tabs.enable_platform();
         // The tab lists paired devices even without `--experimental-remote`.
         self.refresh_remote_devices().await;
-        if let Some(token) = self.stored_platform_token().await {
-            self.platform.token = Some(token);
+        if let Some(stored) = self.stored_platform_sign_in().await {
+            self.platform.token = Some(AccessToken::new(stored.access_token));
             self.platform.view.state = PlatformState::SignedIn(PlatformAccountView {
-                access: PlatformAccess::Checking,
-                login: None,
+                keep_on: stored.keep_on,
+                ..PlatformAccountView::checking(None)
             });
-            self.refresh_platform().await;
+            self.refresh_platform(stored.keep_on).await;
         }
     }
 
     /// Runs the Platform tab's `Enter` action: starts or cancels a sign-in,
-    /// starts or stops remote control through the platform's relay, or
-    /// checks the account again.
+    /// starts or stops remote control through the platform's relay for this
+    /// launch, or checks the account again, which connects with keep on.
     pub(crate) async fn activate_platform(&mut self) {
         match &self.platform.view.state {
             // Signing in again waits until the old registration is removed.
@@ -270,15 +287,47 @@ impl App {
                 }
                 // Checks the sign-in and the registration first, so a token
                 // revoked meanwhile signs out instead of dialling the relay.
-                PlatformAccess::Registered { .. } => {
-                    self.refresh_platform().await;
-                    self.platform.starts_remote_control_after_check = true;
-                }
-                PlatformAccess::ExplicitRelay
-                | PlatformAccess::NoRelay
+                PlatformAccess::Registered { .. } => self.refresh_platform(true).await,
+                PlatformAccess::NoRelay
                 | PlatformAccess::Unavailable { .. }
-                | PlatformAccess::Waitlisted => self.refresh_platform().await,
+                | PlatformAccess::Waitlisted => {
+                    let starts_remote_control =
+                        account.keep_on || self.platform.connects_on_next_check;
+                    self.refresh_platform(starts_remote_control).await;
+                }
             },
+        }
+    }
+
+    /// Runs the Platform tab's keep-on toggle while signed in and not
+    /// checking: saves whether remote control through the platform starts
+    /// whenever Agentty starts. Turning it on while registered with remote
+    /// control off also connects now, after an account check; turning it
+    /// off leaves running remote control alone.
+    pub(crate) async fn toggle_platform_keep_on(&mut self) {
+        let platform = &mut self.platform;
+        let (PlatformState::SignedIn(account), Some(token)) =
+            (&mut platform.view.state, platform.token.as_ref())
+        else {
+            return;
+        };
+        if !account.offers_keep_on() {
+            return;
+        }
+        account.keep_on = !account.keep_on;
+        let saved = save_sign_in(
+            self.services.db().settings(),
+            &platform.view.platform_url,
+            token,
+            account.keep_on,
+        )
+        .await;
+        account.keep_on_notice = saved.is_err().then(|| KEEP_ON_NOT_SAVED.to_string());
+        let connects = account.keep_on
+            && matches!(account.access, PlatformAccess::Registered { .. })
+            && self.remote_control.view().listener.is_none();
+        if connects {
+            self.refresh_platform(true).await;
         }
     }
 
@@ -313,8 +362,9 @@ impl App {
     }
 
     /// Reads the account in the background and registers this Agentty
-    /// when the platform offers a relay and `--remote-relay` names none.
-    async fn refresh_platform(&mut self) {
+    /// when the platform offers a relay. With `starts_remote_control`,
+    /// remote control starts once the check confirms the registration.
+    async fn refresh_platform(&mut self, starts_remote_control: bool) {
         let (Some(client), Some(token)) =
             (self.platform.client.clone(), self.platform.token.clone())
         else {
@@ -322,21 +372,18 @@ impl App {
         };
         let request_id = self.platform.next_request();
         self.set_platform_access(PlatformAccess::Checking);
-        let instance = if self.remote_control.has_explicit_relay() {
-            None
-        } else {
-            match self.remote_instance_key().await {
-                Ok(instance_key) => Some((
-                    instance_key.public().fingerprint(),
-                    self.platform.instance_name.clone(),
-                )),
-                Err(message) => {
-                    self.set_platform_access(PlatformAccess::Unavailable { message });
+        let instance = match self.remote_instance_key().await {
+            Ok(instance_key) => (
+                instance_key.public().fingerprint(),
+                self.platform.instance_name.clone(),
+            ),
+            Err(message) => {
+                self.set_platform_access(PlatformAccess::Unavailable { message });
 
-                    return;
-                }
+                return;
             }
         };
+        self.platform.starts_remote_control_after_check = starts_remote_control;
         let event_tx = self.services.event_sender();
         // Kept, so a sign-out or a later check stops it before it registers.
         self.platform.task = Some(spawn::spawn_detached(async move {
@@ -481,8 +528,9 @@ impl App {
         }
     }
 
-    /// Saves the token of a finished sign-in and checks the account, or
-    /// shows why the sign-in ended without a token.
+    /// Saves the token of a finished sign-in with keep on off and checks
+    /// the account, whose answer then starts remote control; or shows why
+    /// the sign-in ended without a token.
     async fn finish_platform_sign_in(&mut self, result: Result<SignIn, PlatformError>) {
         let sign_in = match result {
             Ok(sign_in) => sign_in,
@@ -503,21 +551,16 @@ impl App {
                 return;
             }
         };
-        let stored = serde_json::json!({
-            "access_token": sign_in.access_token.expose(),
-            "platform_url": self.platform.view.platform_url,
-        });
-        let saved = self
-            .services
-            .db()
-            .settings()
-            .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
-            .await;
+        let saved = save_sign_in(
+            self.services.db().settings(),
+            &self.platform.view.platform_url,
+            &sign_in.access_token,
+            false,
+        )
+        .await;
         self.platform.token = Some(sign_in.access_token);
-        self.platform.view.state = PlatformState::SignedIn(PlatformAccountView {
-            access: PlatformAccess::Checking,
-            login: Some(sign_in.login),
-        });
+        self.platform.view.state =
+            PlatformState::SignedIn(PlatformAccountView::checking(Some(sign_in.login)));
         if saved.is_err() {
             // Checking the account now would hide this until the next check.
             self.set_platform_access(PlatformAccess::Unavailable {
@@ -525,14 +568,18 @@ impl App {
                           Enter to use it anyway."
                     .to_string(),
             });
+            // The `Enter` that uses it anyway runs the sign-in's check.
+            self.platform.connects_on_next_check = true;
 
             return;
         }
-        self.refresh_platform().await;
+        // Only `Enter` starts a sign-in, so it ends connected.
+        self.refresh_platform(true).await;
     }
 
-    /// Shows the checked account and hands its relay, if any, to remote
-    /// control.
+    /// Shows the checked account, hands its relay, if any, to remote
+    /// control, and starts remote control when the check was to connect,
+    /// this Agentty is registered, and remote control is off.
     async fn apply_platform_refresh(
         &mut self,
         login: Option<String>,
@@ -544,7 +591,6 @@ impl App {
             account.login = Some(login);
         }
         let (access, relay) = match result {
-            Ok(Access::ExplicitRelay) => (PlatformAccess::ExplicitRelay, None),
             Ok(Access::NoRelay) => (PlatformAccess::NoRelay, None),
             Ok(Access::Registered { name, service }) => {
                 (PlatformAccess::Registered { name }, Some(service))
@@ -568,17 +614,19 @@ impl App {
         let is_registered = relay.is_some();
         self.set_platform_access(access);
         self.set_platform_relay(relay).await;
-        if starts_remote_control && is_registered {
+        let is_running = self.remote_control.view().listener.is_some();
+        if starts_remote_control && is_registered && !is_running {
             self.start_remote_control().await;
         }
     }
 
-    /// Forgets the token here, stops remote control through the platform,
-    /// and shows `notice`. Returns the request a sign-out reports under.
+    /// Forgets the token and keep on here, stops remote control through
+    /// the platform, and shows `notice`. Returns the request a sign-out
+    /// reports under.
     async fn forget_platform_sign_in(&mut self, notice: Option<String>) -> u64 {
         let request_id = self.platform.next_request();
         self.platform.token = None;
-        // An empty value leaves no token behind.
+        // An empty value leaves no token, and no keep on, behind.
         let cleared = self
             .services
             .db()
@@ -594,8 +642,9 @@ impl App {
         request_id
     }
 
-    /// Loads the token saved for the configured platform.
-    async fn stored_platform_token(&self) -> Option<AccessToken> {
+    /// Loads the sign-in saved for the configured platform, ignoring one
+    /// another platform issued together with its keep on.
+    async fn stored_platform_sign_in(&self) -> Option<StoredSignIn> {
         let stored = self
             .services
             .db()
@@ -607,8 +656,7 @@ impl App {
         let stored: StoredSignIn = serde_json::from_str(&stored).ok()?;
         let is_this_platform = stored.platform_url == self.platform.view.platform_url;
 
-        (is_this_platform && !stored.access_token.is_empty())
-            .then(|| AccessToken::new(stored.access_token))
+        (is_this_platform && !stored.access_token.is_empty()).then_some(stored)
     }
 
     /// Replaces what the signed-in account may use.
@@ -671,23 +719,22 @@ async fn poll_until_decided(
     }
 }
 
-/// Reads the account behind `token` and, when the platform offers a relay
-/// and `instance` names this Agentty's identifier and name, registers it.
-/// `instance` is `None` when `--remote-relay` wins. Returns the login when
-/// the account could be read.
+/// Reads the account behind `token` and, when the platform offers a relay,
+/// registers this Agentty under the identifier and name `instance` gives.
+/// Returns the login when the account could be read.
 pub(crate) async fn check_account(
     client: &dyn PlatformClient,
     token: &AccessToken,
-    instance: Option<(String, String)>,
+    instance: (String, String),
 ) -> (Option<String>, Result<Access, PlatformError>) {
     let account = match client.account(token).await {
         Ok(account) => account,
         Err(error) => return (None, Err(error)),
     };
-    let result = match (instance, account.remote_control) {
-        (None, _) => Ok(Access::ExplicitRelay),
-        (Some(_), None) => Ok(Access::NoRelay),
-        (Some((instance_id, name)), Some(service)) => client
+    let (instance_id, name) = instance;
+    let result = match account.remote_control {
+        None => Ok(Access::NoRelay),
+        Some(service) => client
             .register_instance(token, &instance_id, &name)
             .await
             .map(|registered| Access::Registered {
@@ -697,6 +744,25 @@ pub(crate) async fn check_account(
     };
 
     (Some(account.login), result)
+}
+
+/// Saves `token` as the sign-in for the platform at `platform_url`, with
+/// `keep_on`.
+async fn save_sign_in(
+    settings: &dyn SettingRepository,
+    platform_url: &str,
+    token: &AccessToken,
+    keep_on: bool,
+) -> Result<(), DbError> {
+    let stored = serde_json::json!({
+        "access_token": token.expose(),
+        "keep_on": keep_on,
+        "platform_url": platform_url,
+    });
+
+    settings
+        .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
+        .await
 }
 
 #[cfg(test)]
