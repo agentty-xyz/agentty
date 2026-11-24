@@ -701,13 +701,15 @@ function tickCountdown() {
 // code comes from the pairing link, so the fields appear only once a link
 // was opened. A page that names its relay is on another origin than the
 // page a link from Agentty's Remote tab opens, so it takes the link pasted.
+// The form starts over, so a pairing still in progress is abandoned; in the
+// main pane the device menu beside the flow can reopen it meanwhile.
 function showPairing() {
   // The drawer and the session route belong to the views the flow
   // replaces.
   shell.reset();
   clearSessionRoute();
   leaveSession();
-  setPairingWait(null);
+  stopPairing();
   if (usesRelay) {
     const link = state.pairingLink;
     const takesPaste = Boolean(configuredRelay);
@@ -1714,7 +1716,6 @@ async function startThroughRelay() {
   // paired stay connected behind the pairing flow.
   window.addEventListener("hashchange", () => {
     if (adoptPairingLink()) {
-      stopPairing();
       showPairing();
     }
   });

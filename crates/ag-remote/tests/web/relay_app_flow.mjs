@@ -539,6 +539,25 @@ async function embedFlow() {
     submitHidden: byId("pair-submit").hidden,
   });
 
+  // The device menu stays beside the flow, so `Pair another Agentty` can
+  // reopen it while a pairing runs: that pairing stops, and the next one
+  // starts. Both stop before reaching Agentty, so B's code still works.
+  paste(secondLink);
+  byId("pair-submit").click();
+  const wasConnecting = !byId("pair-cancel").hidden;
+  byId("device-more").click();
+  byId("pair-another").click();
+  const restarted = {
+    cancelHidden: byId("pair-cancel").hidden,
+    confirmHidden: byId("pair-confirm").hidden,
+    linkHidden: byId("pair-link-field").hidden,
+    wasConnecting: wasConnecting,
+  };
+  paste(secondLink);
+  byId("pair-submit").click();
+  restarted.resubmitted = !byId("pair-cancel").hidden;
+  byId("pair-cancel").click();
+
   // `Back to sessions` returns home, with focus on its heading, and a
   // session chosen in the sidebar beside the flow opens in its place.
   byId("pair-back").click();
@@ -562,6 +581,7 @@ async function embedFlow() {
       view: visibleView(),
     },
     reopened: reopened,
+    restarted: restarted,
   });
 
   // A link to this page itself may leave the relay out.

@@ -1070,8 +1070,9 @@ fn assert_first_pairing_by_paste(
 }
 
 /// Checks that `Pair another Agentty` opens the pairing flow in the main
-/// pane beside A's sessions, and that `Back to sessions` and a session
-/// chosen in the sidebar leave it.
+/// pane beside A's sessions, that reopening it stops a pairing in progress,
+/// and that `Back to sessions` and a session chosen in the sidebar leave
+/// it.
 fn assert_another_pairing_beside_the_sessions(other_relay: &Value, left: &Value) {
     // Agentty's link from the Remote tab opens the relay's page, so this
     // page takes it pasted.
@@ -1112,6 +1113,15 @@ fn assert_another_pairing_beside_the_sessions(other_relay: &Value, left: &Value)
                 "view": "session-view",
             },
             "reopened": "pair-pane",
+            // Reopening the flow while a pairing runs stops it, so the next
+            // submit pairs again instead of being ignored.
+            "restarted": {
+                "cancelHidden": true,
+                "confirmHidden": true,
+                "linkHidden": false,
+                "resubmitted": true,
+                "wasConnecting": true,
+            },
         })
     );
 }
