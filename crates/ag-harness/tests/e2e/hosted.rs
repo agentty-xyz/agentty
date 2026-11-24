@@ -281,7 +281,7 @@ async fn test_structured_output() -> Result<(), DynError> {
 /// turns replay it verbatim; a provider that rejects the replayed blocks
 /// fails the follow-up turns.
 async fn reasoning_replay(provider: Provider) -> Result<String, DynError> {
-    let (_workspace, repository) = notes_repository()?;
+    let (_workspace, repository) = notes_repository().await?;
     let harness = provider
         .harness(&provider.model())?
         .store(Arc::new(MemoryStore::new()))
@@ -364,7 +364,7 @@ async fn test_reasoning_replay() -> Result<(), DynError> {
 /// replaced by its notice; the final answer only confirms that the turn
 /// finished normally.
 async fn stale_read_cleared(provider: Provider) -> Result<String, DynError> {
-    let (workspace, repository) = notes_repository()?;
+    let (workspace, repository) = notes_repository().await?;
     let notes = (0..60)
         .map(|line| format!("{}\n", filler(line, 120)))
         .chain(["The code word is lantern-58.\n".to_string()])
