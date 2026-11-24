@@ -338,8 +338,9 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
                     .write_text("Create notes")
                     .wait_for_text("Create notes", 3000)
                     .press_key("Enter")
-                    // The note and the failed turn status render in separate
-                    // updates, so wait until one frame shows both.
+                    // A frame can show the end of the wrapped failure note
+                    // before its first line is drawn, so wait until one frame
+                    // shows both.
                     .eventually(
                         Duration::from_secs(30),
                         Duration::from_millis(100),
