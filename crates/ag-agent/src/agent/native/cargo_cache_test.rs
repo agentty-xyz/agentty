@@ -26,10 +26,19 @@ const LEAF_ENTRY: &str = "registry/index/index.crates.io-0123456789abcdef/.cache
 const TWIG_ENTRY: &str = "registry/index/index.crates.io-0123456789abcdef/.cache/tw/ig/twig";
 /// Lockfile source of crates.io packages.
 const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+/// Index configuration of crates.io.
+const CRATES_IO_CONFIG: &str =
+    r#"{"dl":"https://static.crates.io/crates","api":"https://crates.io"}"#;
+/// Registry directory of a mirror the fake Cargo also fills.
+const MIRROR: &str = "mirror.example.com-0123456789abcdef";
+/// Registry directory named like crates.io's whose index requires
+/// authentication, which the fake Cargo also fills.
+const AUTHENTICATED: &str = "index.crates.io-fedcba9876543210";
 
 /// A worktree whose `Cargo.lock` pins `leaf` and `twig` from crates.io
 /// beside a Git and a path package, and a fake `cargo` on the `PATH` that
-/// records how it ran and stores the pinned archives like a fetch.
+/// records how it ran and stores the pinned archives like a fetch, in the
+/// crates.io registry and in two registries that must be ignored.
 struct Fixture {
     bin: PathBuf,
     cache: TrustedCargoCache,
@@ -38,7 +47,9 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// Creates the fixture. The fake `cargo` answers `-V` with
+    /// Creates the fixture. The fetch passes the fake `cargo` no variables
+    /// of the test's own, so it reads its controls from files that
+    /// [`Self::refresh_in`] writes for `FAKE_*` names: it answers `-V` with
     /// `FAKE_VERSION`, sleeps for `FAKE_SLEEP` seconds or `-V` for
     /// `FAKE_VERSION_SLEEP`, fails with `FAKE_EXIT` or `-V` with
     /// `FAKE_VERSION_EXIT`, and leaves out `twig` under `FAKE_SKIP_TWIG`.
@@ -59,29 +70,37 @@ impl Fixture {
         )
         .expect("lockfile");
         let bin = root.path().join("bin");
-        std::fs::create_dir_all(&bin).expect("bin");
+        std::fs::create_dir_all(bin.join("control")).expect("bin");
         let cargo = bin.join("cargo");
+        let record = root.path().join("record");
         std::fs::write(
             &cargo,
             format!(
-                "#!/bin/sh\nif [ \"$1\" = -V ]; then\n  [ -n \"$FAKE_VERSION_SLEEP\" ] && sleep \
-                 \"$FAKE_VERSION_SLEEP\"\n  [ -n \"$FAKE_VERSION_EXIT\" ] && exit \
-                 \"$FAKE_VERSION_EXIT\"\n  echo \"cargo ${{FAKE_VERSION:-1.99.0}}\"\n  exit \
-                 0\nfi\n{{ pwd -P; printf '%s\\n' \"$@\"; }} > \"$RECORD\"\nenv > \
-                 \"$RECORD.env\"\ncp Cargo.toml \"$RECORD.manifest\"\ncp Cargo.lock \
-                 \"$RECORD.lock\"\necho run >> \"$RECORD.runs\"\n[ -n \"$FAKE_SLEEP\" ] && sleep \
-                 \"$FAKE_SLEEP\"\n[ -n \"$FAKE_EXIT\" ] && exit \"$FAKE_EXIT\"\nmkdir -p \
-                 \"$CARGO_HOME/registry/cache/{REGISTRY}\" \
-                 \"$CARGO_HOME/registry/index/{REGISTRY}/.cache/le/af\" \
-                 \"$CARGO_HOME/registry/index/{REGISTRY}/.cache/tw/ig\"\nprintf leaf > \
-                 \"$CARGO_HOME/{LEAF_ARCHIVE}\"\nprintf leaf-entry > \
-                 \"$CARGO_HOME/{LEAF_ENTRY}\"\nprintf '{{}}' > \"$CARGO_HOME/{INDEX_CONFIG}\"\nif \
-                 [ -z \"$FAKE_SKIP_TWIG\" ]; then\n  printf twig > \
-                 \"$CARGO_HOME/{TWIG_ARCHIVE}\"\n  printf twig-entry > \
-                 \"$CARGO_HOME/{TWIG_ENTRY}\"\nfi\nln -sf /etc/hosts \
-                 \"$CARGO_HOME/registry/cache/{REGISTRY}/linked.crate\"\nprintf notes > \
-                 \"$CARGO_HOME/registry/cache/{REGISTRY}/notes.txt\"\nprintf other > \
-                 \"$CARGO_HOME/registry/cache/{REGISTRY}/unrequested-1.0.0.crate\"\n"
+                "#!/bin/sh\nC='{control}'\nR='{record}'\nv() {{ cat \"$C/$1\" 2>/dev/null; \
+                 }}\nif [ \"$1\" = -V ]; then\n  [ -n \"$(v FAKE_VERSION_SLEEP)\" ] && sleep \
+                 \"$(v FAKE_VERSION_SLEEP)\"\n  [ -n \"$(v FAKE_VERSION_EXIT)\" ] && exit \
+                 \"$(v FAKE_VERSION_EXIT)\"\n  version=$(v FAKE_VERSION)\n  echo \"cargo \
+                 ${{version:-1.99.0}}\"\n  exit 0\nfi\n{{ pwd -P; printf '%s\\n' \"$@\"; }} > \
+                 \"$R\"\nenv > \"$R.env\"\nls -A \"$CARGO_HOME\" > \"$R.home\"\ncp Cargo.toml \
+                 \"$R.manifest\"\ncp Cargo.lock \"$R.lock\"\necho run >> \"$R.runs\"\n[ -n \
+                 \"$(v FAKE_SLEEP)\" ] && sleep \"$(v FAKE_SLEEP)\"\n[ -n \"$(v FAKE_EXIT)\" ] && \
+                 exit \"$(v FAKE_EXIT)\"\nfor registry in {REGISTRY} {MIRROR} {AUTHENTICATED}; \
+                 do\n  mkdir -p \"$CARGO_HOME/registry/cache/$registry\" \
+                 \"$CARGO_HOME/registry/index/$registry/.cache/le/af\" \
+                 \"$CARGO_HOME/registry/index/$registry/.cache/tw/ig\"\n  printf leaf > \
+                 \"$CARGO_HOME/registry/cache/$registry/leaf-1.0.0.crate\"\n  printf leaf-entry > \
+                 \"$CARGO_HOME/registry/index/$registry/.cache/le/af/leaf\"\ndone\nprintf '%s' \
+                 '{CRATES_IO_CONFIG}' > \"$CARGO_HOME/{INDEX_CONFIG}\"\nprintf '%s' \
+                 '{{\"dl\":\"https://mirror.example.com/crates\"}}' > \
+                 \"$CARGO_HOME/registry/index/{MIRROR}/config.json\"\nprintf '%s' \
+                 '{{\"dl\":\"https://static.crates.io/crates\",\"auth-required\":true}}' > \
+                 \"$CARGO_HOME/registry/index/{AUTHENTICATED}/config.json\"\nif [ -z \"$(v \
+                 FAKE_SKIP_TWIG)\" ]; then\n  printf twig > \"$CARGO_HOME/{TWIG_ARCHIVE}\"\n  \
+                 printf twig-entry > \"$CARGO_HOME/{TWIG_ENTRY}\"\nfi\nln -sf /etc/hosts \
+                 \"$CARGO_HOME/registry/cache/{REGISTRY}/linked.crate\"\nprintf other > \
+                 \"$CARGO_HOME/registry/cache/{REGISTRY}/unrequested-1.0.0.crate\"\n",
+                control = bin.join("control").display(),
+                record = record.display(),
             ),
         )
         .expect("fake cargo");
@@ -118,34 +137,40 @@ impl Fixture {
         lockfile
     }
 
-    /// Returns the host environment the fake `cargo` runs with, plus
-    /// `extra`.
+    /// Returns the host environment the fake `cargo` runs with, plus the
+    /// `extra` variables whose names do not start with `FAKE_`.
     fn environment(&self, extra: &[(&str, &str)]) -> BTreeMap<String, String> {
         let mut environment = BTreeMap::from([
             (
                 "PATH".to_string(),
                 format!("{}:/usr/bin:/bin", self.bin.display()),
             ),
-            ("RECORD".to_string(), self.record().display().to_string()),
             (
                 "HOME".to_string(),
                 self.root.path().join("home").display().to_string(),
             ),
         ]);
-        for (name, value) in extra {
+        for (name, value) in extra.iter().filter(|(name, _)| !name.starts_with("FAKE_")) {
             environment.insert((*name).to_string(), (*value).to_string());
         }
 
         environment
     }
 
-    /// Refreshes the cache for `worktree` with `extra` variables, returning
-    /// the outcome and whether a fetch started.
+    /// Refreshes the cache for `worktree` with `extra` variables, writing
+    /// `FAKE_*` ones as the fake `cargo`'s controls, and returns the outcome
+    /// and whether a fetch started.
     async fn refresh_in(
         &self,
         worktree: &Path,
         extra: &[(&str, &str)],
     ) -> (std::io::Result<()>, bool) {
+        let control = self.bin.join("control");
+        std::fs::remove_dir_all(&control).expect("old controls");
+        std::fs::create_dir_all(&control).expect("controls");
+        for (name, value) in extra.iter().filter(|(name, _)| name.starts_with("FAKE_")) {
+            std::fs::write(control.join(name), value).expect("control");
+        }
         let fetched = AtomicBool::new(false);
         let outcome = self
             .cache
@@ -170,6 +195,17 @@ impl Fixture {
     /// Returns a file the fake `cargo` wrote beside its record.
     fn recorded(&self, suffix: &str) -> String {
         std::fs::read_to_string(format!("{}{suffix}", self.record().display())).unwrap_or_default()
+    }
+
+    /// Returns the variables the fake `cargo`'s last fetch received,
+    /// without those its shell sets.
+    fn recorded_environment(&self) -> BTreeMap<String, String> {
+        self.recorded(".env")
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .filter(|(name, _)| !["OLDPWD", "PWD", "SHLVL", "_"].contains(name))
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
     }
 
     /// Returns how many fetches the fake `cargo` ran.
@@ -227,61 +263,101 @@ fn for_project_keys_the_cache_by_main_checkout() {
 
 #[tokio::test]
 /// Fetches only the lockfile's crates.io packages, through a synthetic
-/// workspace in the cache's private directory: the worktree manifest, its
-/// Git dependency, and its other registry never reach Cargo, nor do agent
-/// sockets, credentials, or Git configuration, and Cargo may authenticate
-/// only with tokens; then records the requested archives it stored and
-/// their index metadata, but no other archive, link, or file, and fetches
-/// nothing while every pinned archive is cached.
+/// workspace in a fresh directory under the host's temporary directory,
+/// with a `CARGO_HOME` cleared of configuration and credentials and only
+/// the allowed host variables: the worktree manifest, its Git dependency,
+/// and its other registry never reach Cargo, nor do agent sockets,
+/// credentials, Git or Cargo configuration variables. It then records the
+/// requested archives it stored in the canonical crates.io registry and
+/// their index metadata, but no mirror, authenticated registry, other
+/// archive, link, or file, and fetches nothing while every pinned archive
+/// is cached.
 async fn refresh_fetches_only_crates_io_packages_through_a_synthetic_workspace() {
     // Arrange
     let fixture = Fixture::new();
-    let withheld = [
+    let temporary = fixture.root.path().join("tmp");
+    std::fs::create_dir_all(&temporary).expect("temporary directory");
+    std::fs::create_dir_all(fixture.home()).expect("cache home");
+    for name in ["config.toml", "credentials.toml"] {
+        std::fs::write(fixture.home().join(name), "[registry]\n").expect("planted file");
+    }
+    let temporary_value = temporary.display().to_string();
+    let host = [
         ("SSH_AUTH_SOCK", "/agent.sock"),
         ("GIT_ASKPASS", "/askpass"),
-        ("GIT_SSH_COMMAND", "ssh -i key"),
         ("GIT_CONFIG_GLOBAL", "/gitconfig"),
         ("CARGO_REGISTRIES_PRIVATE_TOKEN", "token"),
+        (
+            "CARGO_REGISTRIES_PRIVATE_CREDENTIAL_PROVIDER",
+            "cargo:token",
+        ),
+        ("CARGO_NET_GIT_FETCH_WITH_CLI", "true"),
         ("DEPLOY_TOKEN", "token"),
+        ("HTTPS_PROXY", "http://proxy.example.com:3128"),
+        ("TMPDIR", &temporary_value),
     ];
 
     // Act
-    let first = fixture.refresh(&withheld).await;
+    let first = fixture.refresh(&host).await;
     let again = fixture.refresh(&[]).await;
 
     // Assert
     assert!(first.0.is_ok() && first.1, "{first:?}");
     assert!(again.0.is_ok() && !again.1, "{again:?}");
     assert_eq!(fixture.runs(), 1);
-    let work = std::fs::canonicalize(fixture.cache.root.join("private/work")).expect("work");
-    assert_eq!(fixture.recorded(""), format!("{}\nfetch\n", work.display()));
+    let record = fixture.recorded("");
+    let mut record = record.lines();
+    let work = PathBuf::from(record.next().expect("working directory"));
+    assert_eq!(
+        work.parent(),
+        Some(
+            std::fs::canonicalize(&temporary)
+                .expect("temporary")
+                .as_path()
+        )
+    );
+    assert!(
+        work.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("agentty-cargo-fetch-"))
+    );
+    assert_eq!(record.collect::<Vec<_>>(), ["fetch"]);
+    assert!(!work.exists(), "the work directory is removed");
     let manifest = fixture.recorded(".manifest");
     assert!(manifest.contains("package = \"leaf\", version = \"=1.0.0\""));
     assert!(manifest.contains("package = \"twig\", version = \"=2.0.0\""));
     assert!(!manifest.contains("secret") && !manifest.contains("private"));
     assert!(!fixture.recorded(".lock").contains("git+"));
-    let environment = fixture.recorded(".env");
-    for (name, _) in withheld {
-        assert!(!environment.contains(&format!("{name}=")), "{name} leaked");
-    }
-    for expected in [
-        format!("CARGO_HOME={}", fixture.home().display()),
-        format!(
-            "CARGO_TARGET_DIR={}",
-            fixture.cache.root.join("private/target").display()
-        ),
-        "CARGO_NET_GIT_FETCH_WITH_CLI=false".to_string(),
-        "GIT_TERMINAL_PROMPT=0".to_string(),
-        "CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS=cargo:token".to_string(),
-    ] {
-        assert!(
-            environment.lines().any(|line| line == expected),
-            "{expected}"
-        );
-    }
+    let home_entries = fixture.recorded(".home");
+    assert!(!home_entries.contains("config") && !home_entries.contains("credentials"));
+    let environment = fixture.recorded_environment();
+    let names = environment.keys().map(String::as_str).collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            "CARGO_HOME",
+            "CARGO_TARGET_DIR",
+            "HOME",
+            "HTTPS_PROXY",
+            "PATH"
+        ]
+    );
+    assert_eq!(
+        environment.get("CARGO_HOME").map(String::as_str),
+        fixture.home().to_str()
+    );
+    let work_name = work
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    assert!(
+        environment
+            .get("CARGO_TARGET_DIR")
+            .is_some_and(|target| target.ends_with(&format!("{work_name}/target")))
+    );
     let generation = fixture.generation().expect("generation");
     let mut lines = generation.lines();
-    assert_eq!(lines.next(), Some("agentty-cargo-cache 2"));
+    assert_eq!(lines.next(), Some("agentty-cargo-cache 3"));
     assert_eq!(lines.next(), Some("1"));
     assert_eq!(lines.next().map(str::len), Some(16));
     assert_eq!(
@@ -299,8 +375,8 @@ async fn refresh_fetches_only_crates_io_packages_through_a_synthetic_workspace()
 #[tokio::test]
 /// Covers one project's worktrees cumulatively: a worktree locking a subset
 /// fetches nothing, one adding a package fetches again, and a new Cargo
-/// version or host configuration fetches again.
-async fn refresh_covers_worktrees_cumulatively_per_toolchain_and_configuration() {
+/// version fetches again.
+async fn refresh_covers_worktrees_cumulatively_per_toolchain() {
     // Arrange
     let fixture = Fixture::new();
     std::fs::write(
@@ -319,10 +395,6 @@ async fn refresh_covers_worktrees_cumulatively_per_toolchain_and_configuration()
     std::fs::create_dir_all(&subset).expect("subset worktree");
     std::fs::write(subset.join("Cargo.lock"), Fixture::lockfile(&["twig"]))
         .expect("subset lockfile");
-    let host = fixture.root.path().join("host-cargo");
-    std::fs::create_dir_all(&host).expect("host Cargo home");
-    std::fs::write(host.join("config.toml"), "[net]\n").expect("host config");
-    let host_home = host.display().to_string();
 
     // Act
     let first = fixture.refresh(&[("FAKE_SKIP_TWIG", "1")]).await;
@@ -331,61 +403,47 @@ async fn refresh_covers_worktrees_cumulatively_per_toolchain_and_configuration()
     let upgraded = fixture
         .refresh_in(&subset, &[("FAKE_VERSION", "2.0.0")])
         .await;
-    let configured = fixture
-        .refresh_in(
-            &subset,
-            &[("FAKE_VERSION", "2.0.0"), ("CARGO_HOME", &host_home)],
-        )
-        .await;
-    let linked = std::fs::read_link(fixture.home().join("config.toml")).ok();
 
     // Assert
-    let fetched = [first, added, covered, upgraded, configured].map(|(outcome, fetched)| {
+    let fetched = [first, added, covered, upgraded].map(|(outcome, fetched)| {
         assert!(outcome.is_ok());
         fetched
     });
-    assert_eq!(fetched, [true, true, false, true, true]);
-    assert_eq!(linked, Some(host.join("config.toml")));
+    assert_eq!(fetched, [true, true, false, true]);
 }
 
 #[tokio::test]
-/// Fetches nothing, and does not even read the Cargo version, when the
-/// Cargo configuration the fetch would read replaces crates.io, includes
-/// other files, or cannot be parsed.
-async fn refresh_skips_a_configuration_that_replaces_crates_io() {
+/// Fetches nothing, and does not even read the Cargo version, when an
+/// ancestor of the fetch directory holds Cargo configuration or a toolchain
+/// file, which Cargo or `rustup` would read.
+async fn refresh_skips_configuration_above_the_fetch_directory() {
     // Arrange
     let fixture = Fixture::new();
-    let host = fixture.root.path().join("host-cargo");
-    std::fs::create_dir_all(&host).expect("host Cargo home");
-    let host_home = host.display().to_string();
-    let configurations = [
-        "[source.crates-io]\nreplace-with = \"mirror\"\n\n[source.mirror]\nregistry = \
-         \"sparse+https://mirror.example.com/index/\"\n",
-        "include = [\"other.toml\"]\n",
-        "[source\n",
-    ];
+    let parent = fixture.root.path().join("configured");
+    let temporary = parent.join("tmp");
+    std::fs::create_dir_all(&temporary).expect("temporary directory");
+    let temporary_value = temporary.display().to_string();
     let mut outcomes = Vec::new();
 
     // Act
-    for configuration in configurations {
-        std::fs::write(host.join("config.toml"), configuration).expect("host config");
+    for planted in [".cargo/config.toml", "rust-toolchain.toml"] {
+        let file = parent.join(planted);
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("planted parent");
+        std::fs::write(&file, "").expect("planted file");
         outcomes.push(
             fixture
-                .refresh(&[("CARGO_HOME", &host_home), ("PATH", "/nonexistent")])
+                .refresh(&[("TMPDIR", &temporary_value), ("PATH", "/nonexistent")])
                 .await,
         );
+        std::fs::remove_file(&file).expect("remove planted file");
     }
-    std::fs::write(host.join("config.toml"), "[net]\nretry = 1\n").expect("host config");
-    let plain = fixture.refresh(&[("CARGO_HOME", &host_home)]).await;
+    let clean = fixture.refresh(&[("TMPDIR", &temporary_value)]).await;
 
     // Assert
     for (outcome, fetched) in outcomes {
         assert!(outcome.is_ok() && !fetched);
     }
-    assert!(
-        plain.0.is_ok() && plain.1,
-        "an ordinary configuration fetches"
-    );
+    assert!(clean.0.is_ok() && clean.1, "a clean directory fetches");
 }
 
 #[tokio::test]
@@ -465,8 +523,8 @@ async fn refresh_reports_and_remembers_uncached_packages() {
 
 #[tokio::test]
 /// Keeps the previous generation when Cargo fails or cannot start, its
-/// version cannot be read, the host configuration cannot be linked, or the
-/// cache cannot be written.
+/// version cannot be read, configuration in the cache `CARGO_HOME` cannot
+/// be removed, or the cache cannot be written.
 async fn refresh_keeps_the_previous_generation_on_failure() {
     // Arrange
     let fixture = Fixture::new();
@@ -490,7 +548,7 @@ async fn refresh_keeps_the_previous_generation_on_failure() {
     let missing = fixture.refresh(&[("PATH", "/nonexistent")]).await;
     let versionless = fixture.refresh(&[("FAKE_VERSION_EXIT", "1")]).await;
     std::fs::create_dir_all(fixture.home().join("config.toml/kept")).expect("planted directory");
-    let unlinkable = fixture.refresh(&[]).await;
+    let unremovable = fixture.refresh(&[]).await;
     std::fs::remove_dir_all(fixture.home().join("config.toml")).expect("remove directory");
     let unwritable = unwritable
         .refresh("cargo", &fixture.worktree, &fixture.environment(&[]), || {})
@@ -504,7 +562,7 @@ async fn refresh_keeps_the_previous_generation_on_failure() {
             .to_string()
             .contains("cargo fetch failed")
     );
-    for outcome in [missing.0, versionless.0, unlinkable.0, unwritable] {
+    for outcome in [missing.0, versionless.0, unremovable.0, unwritable] {
         assert!(outcome.is_err());
     }
     assert_eq!(fixture.generation(), before);
@@ -585,13 +643,10 @@ async fn copy_into_copies_verified_archives_without_clobbering() {
         std::fs::read_to_string(session.join(LEAF_ENTRY)).expect("entry"),
         "leaf-entry"
     );
-    assert!(
-        !session
-            .join("registry/cache")
-            .join(REGISTRY)
-            .join("notes.txt")
-            .exists()
-    );
+    for registry in [MIRROR, AUTHENTICATED] {
+        assert!(!session.join("registry/cache").join(registry).exists());
+        assert!(!session.join("registry/index").join(registry).exists());
+    }
 }
 
 #[tokio::test]

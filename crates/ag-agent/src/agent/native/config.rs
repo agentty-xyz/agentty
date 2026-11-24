@@ -1141,7 +1141,7 @@ fn bash_environment(environment: &BTreeMap<String, String>) -> Vec<(&String, &St
 /// commands with network access could send anywhere: tokens, secrets, keys,
 /// passwords, credentials, and connection strings, plus every AWS, GitHub,
 /// and `GitLab` variable, whatever their case.
-pub(super) fn is_credential(name: &str) -> bool {
+fn is_credential(name: &str) -> bool {
     let name = name.to_ascii_uppercase();
 
     CREDENTIAL_PREFIXES

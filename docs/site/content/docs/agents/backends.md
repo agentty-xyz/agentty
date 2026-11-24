@@ -292,12 +292,13 @@ a key or sign-in is never chosen as the default.
   `Cargo.lock` naming crates.io packages the cache lacks, Agentty fetches them outside
   the sandbox in the background, when the session starts and before each turn, and shows
   a short note in the session. The fetch reads only the lockfile's crates.io entries,
-  never the worktree's manifest, Cargo configuration, or `rust-toolchain.toml`, so Git
-  dependencies, path dependencies, and other registries a session names are never
-  fetched; the fetch uses your default toolchain and your own Cargo configuration, but
-  no registry credentials. When that configuration replaces crates.io, for example with
-  a mirror or vendored sources, or includes other configuration files, Agentty does not
-  cache, since a mirror may serve crates only with your credentials. From the next turn,
+  never the worktree's manifest, so Git dependencies, path dependencies, and other
+  registries a session names are never fetched. It also reads none of your Cargo
+  configuration or credentials: it runs your default toolchain's `cargo` in a fresh
+  temporary directory with its own empty Cargo home, passing on only `PATH`, `HOME`, the
+  `rustup` settings, and proxy and certificate variables, and it keeps only archives
+  from crates.io itself. If your network reaches crates.io only through a mirror, the
+  fetch fails quietly and sessions keep downloading per session. From the next turn,
   Agentty copies the cached archives the session's lockfile names into its own
   `CARGO_HOME`, each checked against the lockfile's checksum, so locked builds download
   only what the cache misses. Sandboxed commands cannot read or write the cache, and

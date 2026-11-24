@@ -419,7 +419,8 @@ async fn prepare_links_the_host_cargo_configuration() {
 }
 
 #[tokio::test]
-/// Hides every project's Cargo cache from commands, which receive copies.
+/// Hides every project's Cargo cache from commands, which receive copies,
+/// creating its root first so that the sandbox masks a real directory.
 async fn prepare_hides_the_cargo_cache() {
     // Arrange
     let root = tempfile::tempdir().expect("root");
@@ -439,4 +440,8 @@ async fn prepare_hides_the_cargo_cache() {
 
     // Assert
     assert!(sandbox.hidden.contains(&root.path().join("cache")));
+    assert!(
+        root.path().join("cache").is_dir(),
+        "the hidden cache root exists before any sandbox starts"
+    );
 }

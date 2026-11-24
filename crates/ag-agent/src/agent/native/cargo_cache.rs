@@ -2,12 +2,13 @@
 //! without ever reaching its files through their own paths.
 //!
 //! Agentty fills the cache outside the sandbox with a fetch that runs no
-//! model output and reads no session-written manifest or configuration: it
+//! model output and reads no manifest, configuration, or credentials: it
 //! parses the worktree's `Cargo.lock` as data, keeps only its crates.io
 //! packages, and runs `cargo fetch` for a synthetic workspace that pins
-//! exactly those. Session commands cannot read the cache at all. The fetch
-//! records the archives it was asked for and stored only after it ends,
-//! and skips projects whose Cargo configuration replaces crates.io. Preparing
+//! exactly those, in a fresh directory, with a configuration-free
+//! `CARGO_HOME` and an allowlisted environment. Session commands cannot
+//! read the cache at all. The fetch records the canonical crates.io
+//! archives it was asked for and stored only after it ends. Preparing
 //! a session's sandbox then copies the recorded archives its own lockfile
 //! names into the session's `CARGO_HOME`, each verified against the
 //! lockfile's checksum, so a session that edits its copies, or runs without
@@ -24,44 +25,45 @@ use std::time::Duration;
 
 use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
 use sha2::{Digest as _, Sha256};
-use tokio::io::AsyncReadExt as _;
 
 use super::cargo_lockfile::{LockedPackage, Lockfile};
-use super::config::is_credential;
 use super::sandbox::CommandSandbox;
 
 /// Hexadecimal characters of the project key: the start of the SHA-256 of
 /// the project's main checkout path.
 const PROJECT_KEY_LENGTH: usize = 32;
-/// Hexadecimal characters of the toolchain and configuration variant.
+/// Hexadecimal characters of the toolchain variant.
 const VARIANT_LENGTH: usize = 16;
 /// Cache subdirectory that the fetch uses as `CARGO_HOME`, which sessions
 /// copy from.
 const HOME_DIRECTORY: &str = "home";
-/// Cache subdirectory hidden from session commands: the synthetic
-/// workspace and the fetch's target directory.
-const PRIVATE_DIRECTORY: &str = "private";
-/// Subdirectory of the private directory holding the synthetic workspace,
+/// Prefix of the temporary directory holding the synthetic workspace,
 /// where the fetch runs.
-const WORK_DIRECTORY: &str = "work";
-/// Subdirectory of the private directory that the fetch uses as
+const WORK_PREFIX: &str = "agentty-cargo-fetch-";
+/// Subdirectory of the work directory that the fetch uses as
 /// `CARGO_TARGET_DIR`, so that Cargo writes nothing elsewhere.
 const TARGET_DIRECTORY: &str = "target";
 /// Cache file naming the last finished fetch.
 const GENERATION_FILE: &str = "generation";
 /// First line of a generation file.
-const GENERATION_HEADER: &str = "agentty-cargo-cache 2";
+const GENERATION_HEADER: &str = "agentty-cargo-cache 3";
 /// File of a session's `CARGO_HOME` naming the generation and lockfile it
 /// last copied.
 const SESSION_GENERATION_FILE: &str = ".agentty-cache-generation";
 /// Suffix of a session copy until its checksum is verified.
 const PARTIAL_SUFFIX: &str = ".agentty-partial";
-/// Host Cargo configuration file name inside the cache `CARGO_HOME`.
-const CONFIG_FILE: &str = "config.toml";
-/// Cargo configuration file names in a `.cargo` directory, both read.
-const CARGO_CONFIG_FILES: [&str; 2] = ["config.toml", "config"];
-/// Largest Cargo configuration file read.
-const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+/// Files of a `CARGO_HOME` that Cargo reads as configuration or
+/// credentials, which the cache `CARGO_HOME` must not hold.
+const CARGO_HOME_CONFIGURATION: [&str; 4] =
+    ["config.toml", "config", "credentials.toml", "credentials"];
+/// Files above a working directory that Cargo reads as configuration, and
+/// that `rustup` reads to pick a toolchain.
+const ANCESTOR_CONFIGURATION: [&str; 4] = [
+    ".cargo/config.toml",
+    ".cargo/config",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+];
 /// Deadline for one Cargo run: the version check or the fetch.
 const CARGO_TIMEOUT: Duration = Duration::from_secs(300);
 /// Registry directories of a `CARGO_HOME` holding crate archives.
@@ -70,26 +72,30 @@ const REGISTRY_CACHE: &str = "registry/cache";
 const REGISTRY_INDEX: &str = "registry/index";
 /// Index file that names a sparse registry's download location.
 const INDEX_CONFIG: &str = "config.json";
-/// Host variables never passed to the fetch: agent sockets, prompts, and
-/// commands that could hand it credentials, and the variables it sets.
-const WITHHELD_VARIABLES: [&str; 8] = [
-    "CARGO_BUILD_TARGET_DIR",
-    "CARGO_HOME",
-    "CARGO_TARGET_DIR",
-    "GIT_ASKPASS",
-    "GIT_SSH",
-    "GIT_SSH_COMMAND",
-    "SSH_ASKPASS",
-    "SSH_AUTH_SOCK",
-];
-/// Prefixes of host variables never passed to the fetch: Git configuration
-/// and credential helpers, and Cargo registry credentials.
-const WITHHELD_PREFIXES: [&str; 5] = [
-    "CARGO_CREDENTIAL_",
-    "CARGO_REGISTRIES_",
-    "CARGO_REGISTRY_",
-    "GCM_",
-    "GIT_CONFIG",
+/// Largest index configuration read.
+const MAX_INDEX_CONFIG_BYTES: u64 = 64 * 1024;
+/// Prefix of the registry directories Cargo names after crates.io.
+const CRATES_IO_DIRECTORY_PREFIX: &str = "index.crates.io-";
+/// Download location crates.io's index configuration names.
+const CRATES_IO_DOWNLOADS: &str = "https://static.crates.io/crates";
+/// Host variables the fetch receives, all others withheld: the executable
+/// search path, the home and toolchain `rustup` needs, and the proxies and
+/// certificate authorities the network may require.
+const ALLOWED_VARIABLES: [&str; 14] = [
+    "CARGO_HTTP_CAINFO",
+    "CARGO_HTTP_PROXY",
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "PATH",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
 ];
 
 /// The Cargo download cache of one project.
@@ -118,17 +124,19 @@ impl TrustedCargoCache {
     ///
     /// Only the lockfile is read, as data. The fetch runs the host's
     /// `cargo` executable, which `environment`'s `PATH` resolves for a bare
-    /// name, with that environment minus credentials, agent sockets, and
-    /// Git configuration, the host's Cargo configuration, the cache as
-    /// `CARGO_HOME`, and a synthetic workspace that pins exactly those
-    /// packages, so that no path, Git, or other registry source is reached.
-    /// Cargo authenticates only with tokens, of which it gets none. A
-    /// change of Cargo version or host configuration fetches again.
-    ///
-    /// Nothing is fetched when the Cargo configuration the fetch would read
-    /// replaces crates.io, which could send it to a mirror that serves
-    /// crates by the user's credentials, or includes other configuration
-    /// files; such projects keep downloading per session.
+    /// name, for a synthetic workspace that pins exactly those packages, so
+    /// that no path, Git, or other registry source is reached. It reads no
+    /// Cargo configuration and no credentials at all: it runs in a fresh
+    /// directory under the host's temporary directory (`environment`'s
+    /// `TMPDIR`, else the system's), skipped when one of
+    /// its ancestors holds Cargo configuration or a toolchain file, with
+    /// the cache as a `CARGO_HOME` that holds neither, and with only the
+    /// allowed host variables: `PATH`, `HOME`, the `rustup` home and
+    /// toolchain, and proxies and certificate authorities. Only archives
+    /// from the canonical crates.io registry are recorded, so a host whose
+    /// network needs a crates.io mirror gets no shared cache, and its
+    /// sessions keep downloading per session. A new Cargo version fetches
+    /// again.
     ///
     /// # Errors
     /// Returns an error when the cache cannot be written, Cargo fails or
@@ -149,34 +157,36 @@ impl TrustedCargoCache {
             return Ok(());
         };
         let home = self.root.join(HOME_DIRECTORY);
-        let private = self.root.join(PRIVATE_DIRECTORY);
-        for directory in [
-            &home,
-            &private.join(WORK_DIRECTORY),
-            &private.join(TARGET_DIRECTORY),
-        ] {
-            tokio::fs::create_dir_all(directory).await?;
+        tokio::fs::create_dir_all(&home).await?;
+        for name in CARGO_HOME_CONFIGURATION {
+            match tokio::fs::remove_file(home.join(name)).await {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
         }
-        let host_config = CommandSandbox::host_cargo_config(&private, environment).await;
-        let work = private.join(WORK_DIRECTORY);
-        let configs = work
-            .ancestors()
-            .flat_map(|directory| {
-                CARGO_CONFIG_FILES.map(|name| directory.join(".cargo").join(name))
-            })
-            .chain(host_config.clone())
-            .collect::<Vec<_>>();
-        if tokio::task::spawn_blocking(move || Self::replaces_crates_io(&configs))
-            .await
-            .map_err(io::Error::other)?
-        {
-            tracing::debug!("Cargo configuration replaces crates.io; not caching dependencies");
+        let temporary = environment
+            .get("TMPDIR")
+            .map(PathBuf::from)
+            .filter(|directory| directory.is_absolute())
+            .unwrap_or_else(std::env::temp_dir);
+        let work = tokio::task::spawn_blocking(move || {
+            let work = tempfile::Builder::new()
+                .prefix(WORK_PREFIX)
+                .tempdir_in(temporary)?;
+            let configured = Self::reads_configuration(work.path());
+
+            io::Result::Ok((work, configured))
+        })
+        .await
+        .map_err(io::Error::other)??;
+        let (work, configured) = work;
+        if configured {
+            tracing::debug!("Cargo configuration above the fetch directory; not caching");
 
             return Ok(());
         }
-        let fetch_environment = self.fetch_environment(environment);
-        let variant =
-            Self::variant(cargo, &private, &fetch_environment, host_config.as_deref()).await?;
+        let fetch_environment = self.fetch_environment(environment, work.path());
+        let variant = Self::variant(cargo, work.path(), &fetch_environment).await?;
         let previous = Generation::load(&self.root).await;
         let covered = previous
             .as_ref()
@@ -191,8 +201,7 @@ impl TrustedCargoCache {
         }
 
         on_fetch();
-        self.fetch(cargo, &lockfile, &fetch_environment, host_config.as_deref())
-            .await?;
+        Self::fetch(cargo, &lockfile, work.path(), &fetch_environment).await?;
         let missing = Self::uncached(&home, &lockfile.packages, &[]).await;
         let scan_home = home.clone();
         let requested = lockfile.packages.clone();
@@ -307,77 +316,45 @@ impl TrustedCargoCache {
         let _ = Self::record_session_generation(cargo, &marker);
     }
 
-    /// Returns the host `environment` the fetch runs with: without
-    /// credentials, agent sockets, prompts, and Git configuration, and with
-    /// the cache as `CARGO_HOME` and target directory, Cargo's own Git
-    /// client, and no terminal prompts.
+    /// Returns the host `environment` the fetch runs with: only the allowed
+    /// variables, plus the cache as `CARGO_HOME` and a target directory in
+    /// `work`.
     fn fetch_environment(
         &self,
         environment: &BTreeMap<String, String>,
+        work: &Path,
     ) -> BTreeMap<String, String> {
-        let private = self.root.join(PRIVATE_DIRECTORY);
         let mut fetch_environment = environment
             .iter()
-            .filter(|(name, _)| {
-                !WITHHELD_VARIABLES.contains(&name.as_str())
-                    && !WITHHELD_PREFIXES
-                        .iter()
-                        .any(|prefix| name.starts_with(prefix))
-                    && !is_credential(name)
-            })
+            .filter(|(name, _)| ALLOWED_VARIABLES.contains(&name.as_str()))
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect::<BTreeMap<_, _>>();
-        for (name, value) in [
-            (
-                "CARGO_HOME",
-                self.root.join(HOME_DIRECTORY).display().to_string(),
-            ),
-            (
-                "CARGO_TARGET_DIR",
-                private.join(TARGET_DIRECTORY).display().to_string(),
-            ),
-            ("CARGO_NET_GIT_FETCH_WITH_CLI", "false".to_string()),
-            // Only tokens, from the cache's own `CARGO_HOME`, which holds
-            // none, or from variables, all withheld.
-            (
-                "CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS",
-                "cargo:token".to_string(),
-            ),
-            ("GIT_TERMINAL_PROMPT", "0".to_string()),
-        ] {
-            fetch_environment.insert(name.to_string(), value);
-        }
+        fetch_environment.insert(
+            "CARGO_HOME".to_string(),
+            self.root.join(HOME_DIRECTORY).display().to_string(),
+        );
+        fetch_environment.insert(
+            "CARGO_TARGET_DIR".to_string(),
+            work.join(TARGET_DIRECTORY).display().to_string(),
+        );
 
         fetch_environment
     }
 
-    /// Returns whether one of the Cargo configuration files `configs`
-    /// replaces crates.io or includes other files. A file that exists but
-    /// cannot be read or parsed counts as replacing it.
-    fn replaces_crates_io(configs: &[PathBuf]) -> bool {
-        configs.iter().any(|config| {
-            let Ok(file) = std::fs::File::open(config) else {
-                return config.exists();
-            };
-            let mut contents = String::new();
-            let parsed = std::io::Read::take(file, MAX_CONFIG_BYTES)
-                .read_to_string(&mut contents)
-                .ok()
-                .and_then(|_| contents.parse::<toml::Table>().ok());
-
-            parsed.is_none_or(|table| {
-                table.contains_key("include")
-                    || table
-                        .get("source")
-                        .and_then(|source| source.get("crates-io"))
-                        .is_some_and(|crates_io| crates_io.get("replace-with").is_some())
-            })
+    /// Returns whether `work` or one of its ancestors holds Cargo
+    /// configuration or a toolchain file, which Cargo or `rustup` would
+    /// read when run in `work`.
+    fn reads_configuration(work: &Path) -> bool {
+        work.ancestors().any(|directory| {
+            ANCESTOR_CONFIGURATION
+                .iter()
+                .any(|name| std::fs::symlink_metadata(directory.join(name)).is_ok())
         })
     }
 
-    /// Returns the variant that a fetch with `cargo`'s version and the
-    /// host's Cargo configuration `host_config` produces: Cargo names its
-    /// registry directories by version and configured sources.
+    /// Returns the variant that a fetch with `cargo`'s version produces:
+    /// Cargo has named its registry directories differently across
+    /// versions.
     ///
     /// # Errors
     /// Returns an error when `cargo -V` cannot run, fails, or times out.
@@ -385,29 +362,16 @@ impl TrustedCargoCache {
         cargo: &str,
         directory: &Path,
         environment: &BTreeMap<String, String>,
-        host_config: Option<&Path>,
     ) -> io::Result<String> {
         let version = Self::run_cargo(cargo, "-V", directory, environment).await?;
-        let mut hasher = Sha256::new();
-        hasher.update(&version);
-        if let Some(config) = host_config {
-            hasher.update(config.as_os_str().as_bytes());
-            let mut contents = Vec::new();
-            tokio::fs::File::open(config)
-                .await?
-                .take(MAX_CONFIG_BYTES)
-                .read_to_end(&mut contents)
-                .await?;
-            hasher.update(&contents);
-        }
 
-        Ok(hex::encode(hasher.finalize())[..VARIANT_LENGTH].to_string())
+        Ok(hex::encode(Sha256::digest(&version))[..VARIANT_LENGTH].to_string())
     }
 
     /// Returns the archive names of `packages` that `home` holds in no
-    /// registry directory, except those listed as `missing` already.
+    /// crates.io registry directory, except those listed as `missing`.
     async fn uncached(home: &Path, packages: &[LockedPackage], missing: &[String]) -> Vec<String> {
-        let registry_cache = home.join(REGISTRY_CACHE);
+        let home = home.to_path_buf();
         let wanted = packages
             .iter()
             .map(LockedPackage::archive_name)
@@ -415,13 +379,15 @@ impl TrustedCargoCache {
             .collect::<Vec<_>>();
 
         tokio::task::spawn_blocking(move || {
-            let registries = Generation::directories(&registry_cache);
+            let registries = Generation::crates_io_directories(&home);
             wanted
                 .into_iter()
                 .filter(|archive| {
                     !registries.iter().any(|registry| {
-                        std::fs::symlink_metadata(registry.join(archive))
-                            .is_ok_and(|metadata| metadata.is_file())
+                        std::fs::symlink_metadata(
+                            home.join(REGISTRY_CACHE).join(registry).join(archive),
+                        )
+                        .is_ok_and(|metadata| metadata.is_file())
                     })
                 })
                 .collect()
@@ -430,9 +396,8 @@ impl TrustedCargoCache {
         .unwrap_or_default()
     }
 
-    /// Writes the synthetic workspace for `lockfile` and runs `cargo fetch`
-    /// in it with the host's configuration `host_config` linked into the
-    /// cache `CARGO_HOME`.
+    /// Writes the synthetic workspace for `lockfile` into `work` and runs
+    /// `cargo fetch` there.
     ///
     /// The synthetic lockfile may still need updating, for example where
     /// the worktree enabled features the synthetic workspace does not, so
@@ -444,25 +409,16 @@ impl TrustedCargoCache {
     /// Returns an error when the workspace cannot be written, or Cargo
     /// cannot start, fails, or times out.
     async fn fetch(
-        &self,
         cargo: &str,
         lockfile: &Lockfile,
+        work: &Path,
         environment: &BTreeMap<String, String>,
-        host_config: Option<&Path>,
     ) -> io::Result<()> {
-        let work = self.root.join(PRIVATE_DIRECTORY).join(WORK_DIRECTORY);
         tokio::fs::write(work.join("Cargo.toml"), lockfile.synthetic_manifest()).await?;
         tokio::fs::write(work.join("Cargo.lock"), lockfile.synthetic_lockfile()).await?;
         tokio::fs::write(work.join("lib.rs"), "").await?;
-        let link = self.root.join(HOME_DIRECTORY).join(CONFIG_FILE);
-        match tokio::fs::remove_file(&link).await {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-            _ => {}
-        }
-        if let Some(config) = host_config {
-            tokio::fs::symlink(config, &link).await?;
-        }
-        Self::run_cargo(cargo, "fetch", &work, environment)
+
+        Self::run_cargo(cargo, "fetch", work, environment)
             .await
             .map(drop)
     }
@@ -675,20 +631,14 @@ impl Generation {
     /// plain relative paths.
     fn scan(home: &Path, requested: &[LockedPackage]) -> Vec<String> {
         let mut files = Vec::new();
-        for registry in Self::directories(&home.join(REGISTRY_CACHE)) {
-            files.extend(
-                requested
-                    .iter()
-                    .map(|package| registry.join(package.archive_name())),
-            );
-        }
-        for index in Self::directories(&home.join(REGISTRY_INDEX)) {
+        for registry in Self::crates_io_directories(home) {
+            let archives = home.join(REGISTRY_CACHE).join(&registry);
+            let index = home.join(REGISTRY_INDEX).join(&registry);
             files.push(index.join(INDEX_CONFIG));
-            files.extend(
-                requested
-                    .iter()
-                    .map(|package| index.join(package.index_entry())),
-            );
+            for package in requested {
+                files.push(archives.join(package.archive_name()));
+                files.push(index.join(package.index_entry()));
+            }
         }
         files.retain(|file| {
             std::fs::symlink_metadata(file).is_ok_and(|metadata| metadata.is_file())
@@ -705,14 +655,35 @@ impl Generation {
         relative
     }
 
-    /// Returns the subdirectories of `directory`, not following links.
-    fn directories(directory: &Path) -> Vec<PathBuf> {
-        std::fs::read_dir(directory)
+    /// Returns the names of the registry directories of `home` that hold
+    /// canonical crates.io: named as Cargo names crates.io's, with an index
+    /// configuration that downloads from crates.io and requires no
+    /// authentication. Every other registry is ignored.
+    fn crates_io_directories(home: &Path) -> Vec<String> {
+        std::fs::read_dir(home.join(REGISTRY_INDEX))
             .into_iter()
             .flatten()
             .flatten()
             .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
-            .map(|entry| entry.path())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| {
+                name.starts_with(CRATES_IO_DIRECTORY_PREFIX) && Self::is_relative_file(name)
+            })
+            .filter(|name| {
+                let config = home.join(REGISTRY_INDEX).join(name).join(INDEX_CONFIG);
+                let mut contents = Vec::new();
+                let read = std::fs::File::open(config)
+                    .and_then(|file| file.take(MAX_INDEX_CONFIG_BYTES).read_to_end(&mut contents));
+
+                read.is_ok()
+                    && serde_json::from_slice::<serde_json::Value>(&contents).is_ok_and(|config| {
+                        config.get("dl").and_then(serde_json::Value::as_str)
+                            == Some(CRATES_IO_DOWNLOADS)
+                            && config
+                                .get("auth-required")
+                                .is_none_or(|required| required == &serde_json::Value::Bool(false))
+                    })
+            })
             .collect()
     }
 

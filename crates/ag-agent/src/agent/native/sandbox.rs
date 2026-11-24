@@ -98,6 +98,11 @@ impl CommandSandbox {
         cargo_cache: Option<TrustedCargoCache>,
     ) -> Result<Self, String> {
         let host_config = Self::host_cargo_config(workspace, environment).await;
+        if let Some(cargo_cache) = &cargo_cache {
+            // The cache root must exist before the sandbox starts, so that
+            // Bubblewrap masks it even when a fetch creates it meanwhile.
+            let _ = tokio::fs::create_dir_all(cargo_cache.hidden_path()).await;
+        }
         let directory = temporary_directory.clone();
         let reused_cache = cargo_cache.clone();
         let worktree = workspace.to_path_buf();
@@ -285,7 +290,7 @@ impl CommandSandbox {
     /// anyway: it reads `.cargo/config.toml` in every ancestor of its
     /// working directory, which covers the default `~/.cargo` above a
     /// workspace inside the home directory.
-    pub(super) async fn host_cargo_config(
+    async fn host_cargo_config(
         workspace: &Path,
         environment: &BTreeMap<String, String>,
     ) -> Option<PathBuf> {

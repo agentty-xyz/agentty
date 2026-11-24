@@ -1212,7 +1212,7 @@ async fn session_sandbox_copies_from_the_project_cargo_cache() {
     std::fs::write(cache.join("home").join(archive), "crate").expect("archive");
     std::fs::write(
         cache.join("generation"),
-        format!("agentty-cargo-cache 2\n1\nvariant\nfile {archive}\n"),
+        format!("agentty-cargo-cache 3\n1\nvariant\nfile {archive}\n"),
     )
     .expect("generation");
     std::fs::write(
