@@ -20,9 +20,12 @@
 // after `revokedA`. B's pairing card stays as it was meanwhile.
 //
 // In `embed` mode the page is the one a web application serves at the
-// page address: the script first loads its files as a browser would, then
-// pastes A's link with a wrong code and then its real one; after
-// `awaiting` the Rust test approves. B's link opens at the page's address
+// page address, with links to its sections, so it pairs in the shell's
+// main pane: the script first loads its files as a browser would, then
+// pastes A's link with a wrong code and then its real one, cancels once,
+// and pairs; after `awaiting` the Rust test approves. `Pair another
+// Agentty` opens the flow beside A's sessions, which `Back to sessions`
+// and choosing a session leave. B's link opens at the page's address
 // without its relay; after `awaitingB` the Rust test signs the page out
 // of the directory and approves B.
 //
@@ -113,12 +116,58 @@ async function waitFor(label, condition) {
   }
 }
 
+// The full-screen pairing card, or the main pane's view inside the shell,
+// which is the pairing flow on a page a web application serves.
 function visibleView() {
   if (!byId("pair-view").hidden) {
     return "pair-view";
   }
 
-  return ["home-view", "session-view"].find((id) => !byId(id).hidden);
+  return ["pair-pane", "home-view", "session-view"].find((id) => !byId(id).hidden);
+}
+
+function isPairingShown() {
+  return ["pair-view", "pair-pane"].includes(visibleView());
+}
+
+// Whether `element` and every element around it show.
+function isShown(element) {
+  for (let node = element; node; node = node.parentElement) {
+    if (node.hidden) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// The texts of the page's top-level headings that show.
+function headings() {
+  return Array.from(document.querySelectorAll("h1"))
+    .filter(isShown)
+    .map((heading) => heading.textContent);
+}
+
+// Which parts of the sidebar show: the application's links, the theme
+// switch, and the account, then what follows the Agenttys paired here.
+function sidebarParts() {
+  const sidebar = byId("sidebar");
+
+  return {
+    account: isShown(sidebar.querySelector(".account")),
+    chips: isShown(byId("chips")),
+    device: isShown(byId("device")),
+    filter: isShown(byId("filter")),
+    sections: texts(sidebar, ".sections a").length,
+    sessionList: isShown(byId("sessions")),
+    slot: isShown(byId("instance-slot")),
+    theme: isShown(sidebar.querySelector("[data-theme]")),
+  };
+}
+
+// The text of `element` with its whitespace collapsed, as a browser shows it.
+function shownText(element) {
+  return element.textContent.replace(/\s+/g, " ").trim();
 }
 
 // Each Agentty's section of the list, when the page shows several.
@@ -163,7 +212,7 @@ function heads() {
 // Pairs through the page with the link in the address and waits for the
 // confirmation code.
 async function pairThroughPage() {
-  await waitFor("the pairing form", () => visibleView() === "pair-view" && !byId("pair-submit").hidden);
+  await waitFor("the pairing form", () => isPairingShown() && !byId("pair-submit").hidden);
   const code = byId("pair-code").value;
   byId("pair-name").value = "Node browser";
   byId("pair-submit").click();
@@ -174,11 +223,17 @@ async function pairThroughPage() {
 
 async function multiFlow() {
   const firstCode = await pairThroughPage();
+  // The relay's own page pairs on the full-screen card, as the link in
+  // the address says how.
   report({
     step: "awaiting",
     backHidden: byId("pair-back").hidden,
     code: firstCode,
     confirmation: byId("pair-confirmation").textContent,
+    headings: headings(),
+    hintsHidden: ["pair-hint-local", "pair-hint-relay", "pair-hint-paste"].map((id) => byId(id).hidden),
+    shellHidden: byId("shell").hidden,
+    view: visibleView(),
   });
 
   await waitFor("A's sessions", () => visibleView() === "home-view" && rows().length > 0);
@@ -317,7 +372,7 @@ function texts(root, selector) {
   return Array.from(root.querySelectorAll(selector), (node) => node.textContent);
 }
 
-// Puts `text` in the pairing card's link field, as a paste does.
+// Puts `text` in the pairing form's link field, as a paste does.
 function paste(text) {
   byId("pair-link").value = text;
   byId("pair-link").dispatchEvent(new FakeEvent("input"));
@@ -372,13 +427,22 @@ async function servedFiles() {
 async function embedFlow() {
   report({ step: "served", ...(await servedFiles()) });
 
-  // A link whose code does not work leaves the card ready for another.
-  await waitFor("the directory on the pairing card", () => !byId("pair-directory").hidden);
+  // With no Agentty paired, the page pairs in the shell's main pane: the
+  // sidebar keeps the application's links, the theme switch, and the
+  // account, and leaves out what has nothing to show yet.
+  await waitFor("the directory in the pairing flow", () => !byId("pair-directory").hidden);
   const firstCard = {
-    hintHidden: byId("pair-hint-paste").hidden,
+    cardHidden: byId("pair-view").hidden,
+    headings: headings(),
+    hint: shownText(byId("pair-hint-paste")),
+    hintsHidden: ["pair-hint-local", "pair-hint-relay", "pair-hint-paste"].map((id) => byId(id).hidden),
     linkHidden: byId("pair-link-field").hidden,
+    shellHidden: byId("shell").hidden,
+    sidebar: sidebarParts(),
     submitHidden: byId("pair-submit").hidden,
+    view: visibleView(),
   };
+  // A link whose code does not work leaves the flow ready for another.
   paste(withParameter(firstLink, "code", "WRONG-CODE"));
   byId("pair-submit").click();
   await waitFor("the refusal", () => byId("pair-error").textContent !== "" && byId("pair-cancel").hidden);
@@ -387,24 +451,46 @@ async function embedFlow() {
     card: firstCard,
     error: byId("pair-error").textContent,
     linkHidden: byId("pair-link-field").hidden,
+    view: visibleView(),
   });
 
   paste(firstLink);
   // The code is filled in, so the device name comes next.
   const focused = document.activeElement?.id ?? null;
+  // Cancel, which replaces Pair at once, stops the pairing before it
+  // reaches Agentty, so the link's code still works.
+  byId("pair-name").value = "Node browser";
+  byId("pair-submit").click();
+  const connecting = {
+    cancelHidden: byId("pair-cancel").hidden,
+    label: byId("pair-wait-label").textContent,
+    submitHidden: byId("pair-submit").hidden,
+  };
+  byId("pair-cancel").click();
+  const canceled = {
+    cancelHidden: byId("pair-cancel").hidden,
+    confirmHidden: byId("pair-confirm").hidden,
+    submitHidden: byId("pair-submit").hidden,
+    view: visibleView(),
+  };
   await pairThroughPage();
-  const card = byId("pair-view");
+  const sidebar = byId("sidebar");
   report({
     step: "awaiting",
-    focused: focused,
-    badge: card.querySelector(".brand .badge").textContent,
+    badge: sidebar.querySelector(".brand .badge").textContent,
+    canceled: canceled,
+    confirmation: byId("pair-confirmation").textContent !== "",
+    connecting: connecting,
     directory: texts(byId("pair-directory-list"), ".directory-name"),
-    sections: texts(card, ".sections a"),
+    focused: focused,
+    label: byId("pair-wait-label").textContent,
+    sections: texts(sidebar, ".sections a"),
+    sidebar: sidebarParts(),
+    view: visibleView(),
   });
 
   await waitFor("A's sessions", () => visibleView() === "home-view" && rows().length > 0);
   await waitFor("the sidebar's directory", () => byId("directory-list").children.length === 1);
-  const sidebar = byId("sidebar");
   const account = sidebar.querySelector(".account");
   report({
     step: "paired",
@@ -413,23 +499,31 @@ async function embedFlow() {
     directory: Array.from(byId("directory-list").children, (item) =>
       texts(item, "span").map((text) => text.replace(/\d+[smhd] ago$/, "N ago")),
     ),
+    headings: headings(),
     rows: rows(),
     sections: Array.from(sidebar.querySelectorAll(".sections a"), (link) => [
       link.textContent,
       link.getAttribute("href"),
       link.getAttribute("aria-current"),
     ]),
+    sidebar: sidebarParts(),
     stored: storedIds(),
   });
 
-  // The device menu opens the pairing card, which takes a link pasted from
-  // Agentty's Remote tab. Text that is not a link, and a link that names
-  // another relay, are refused: this page pairs only through its own.
+  // The device menu opens the pairing flow in the main pane beside the
+  // sessions, and it takes a link pasted from Agentty's Remote tab. Text
+  // that is not a link, and a link that names another relay, are refused:
+  // this page pairs only through its own.
   byId("device-more").click();
   byId("pair-another").click();
   const pairCard = {
+    backHidden: byId("pair-back").hidden,
+    focused: document.activeElement?.id ?? null,
+    headings: headings(),
     hintHidden: byId("pair-hint-paste").hidden,
     linkHidden: byId("pair-link-field").hidden,
+    rows: rows(),
+    sidebar: sidebarParts(),
     view: visibleView(),
   };
   paste("ABCD-EFGH");
@@ -443,6 +537,51 @@ async function embedFlow() {
     linkHidden: byId("pair-link-field").hidden,
     notLink: notLink,
     submitHidden: byId("pair-submit").hidden,
+  });
+
+  // The device menu stays beside the flow, so `Pair another Agentty` can
+  // reopen it while a pairing runs: that pairing stops, and the next one
+  // starts. Both stop before reaching Agentty, so B's code still works.
+  paste(secondLink);
+  byId("pair-submit").click();
+  const wasConnecting = !byId("pair-cancel").hidden;
+  byId("device-more").click();
+  byId("pair-another").click();
+  const restarted = {
+    cancelHidden: byId("pair-cancel").hidden,
+    confirmHidden: byId("pair-confirm").hidden,
+    linkHidden: byId("pair-link-field").hidden,
+    wasConnecting: wasConnecting,
+  };
+  paste(secondLink);
+  byId("pair-submit").click();
+  restarted.resubmitted = !byId("pair-cancel").hidden;
+  byId("pair-cancel").click();
+
+  // `Back to sessions` returns home, with focus on its heading, and a
+  // session chosen in the sidebar beside the flow opens in its place.
+  byId("pair-back").click();
+  const back = {
+    error: byId("pair-error").textContent,
+    focused: document.activeElement?.id ?? null,
+    headings: headings(),
+    view: visibleView(),
+  };
+  byId("device-more").click();
+  byId("pair-another").click();
+  const reopened = visibleView();
+  byId("sessions").querySelector('[data-session-id="session-1"]').click();
+  await waitFor("A's session", () => byId("heading").textContent === "Build it");
+  report({
+    step: "leftPairing",
+    back: back,
+    chosen: {
+      hash: labelled(window.location.hash),
+      headings: headings(),
+      view: visibleView(),
+    },
+    reopened: reopened,
+    restarted: restarted,
   });
 
   // A link to this page itself may leave the relay out.

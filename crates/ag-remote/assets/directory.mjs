@@ -104,7 +104,7 @@ export function renderDirectory(document, list, entries, nowSeconds) {
       item.append(
         name,
         element(document, "span", "directory-meta", lastConnectedText(entry.lastConnectedAt, nowSeconds)),
-        element(document, "span", "directory-hint", "To pair, use the pairing link from its Remote tab."),
+        element(document, "span", "directory-hint", "To pair, start remote control in its Platform tab and open the pairing link."),
       );
 
       return item;

@@ -130,8 +130,8 @@ test("each unpaired Agentty shows its name as text, when it last connected, and 
       Array.from(item.children, (part) => part.textContent),
     ]),
     [
-      ["a", [name, "Last connected 3h ago", "To pair, use the pairing link from its Remote tab."]],
-      ["b", ["server", "Never connected", "To pair, use the pairing link from its Remote tab."]],
+      ["a", [name, "Last connected 3h ago", "To pair, start remote control in its Platform tab and open the pairing link."]],
+      ["b", ["server", "Never connected", "To pair, start remote control in its Platform tab and open the pairing link."]],
     ],
   );
   assert.equal(list.querySelectorAll("img").length, 0);
