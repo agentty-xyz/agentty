@@ -218,9 +218,7 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
     // store, and only the granted branch and its reflog, then denies the
     // protected entries, packed references included.
     let reopened = profile
-        .find(
-            "(allow file-write* (regex #\"^/workspace/[.]git/((index|sharedindex[.][0-9a-f]+|HEAD|",
-        )
+        .find("(allow file-write* (regex #\"^/workspace/[.]git/((index|next-index-[0-9]+|")
         .expect("main worktree state");
     assert!(
         profile.contains(

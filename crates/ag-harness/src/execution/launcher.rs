@@ -456,13 +456,14 @@ const GIT_WORKTREE_PROTECTED: &str =
     "config[.]worktree|commondir|gitdir|rebase-merge|rebase-apply|sequencer";
 
 /// State files at the top of a main worktree's Git directory that the
-/// Git-writes grant opens, as a Seatbelt pattern: the index, `HEAD`, and the
-/// files merges, cherry-picks, reverts, commits, and bisection leave there.
+/// Git-writes grant opens, as a Seatbelt pattern: the index, the temporary
+/// index of a commit naming paths, `HEAD`, and the files merges,
+/// cherry-picks, reverts, commits, and bisection leave there.
 /// Every other top-level entry stays read-only, so commands cannot rename a
 /// directory of their own onto `logs` or a legacy `remotes` directory, or
 /// hold a lock file that blocks the host's next Git command.
 #[cfg(target_os = "macos")]
-const GIT_WORKTREE_STATE: &str = "index|sharedindex[.][0-9a-f]+|HEAD|ORIG_HEAD|FETCH_HEAD|\
+const GIT_WORKTREE_STATE: &str = "index|next-index-[0-9]+|sharedindex[.][0-9a-f]+|HEAD|ORIG_HEAD|FETCH_HEAD|\
                                   MERGE_HEAD|MERGE_MSG|MERGE_MODE|MERGE_RR|MERGE_AUTOSTASH|\
                                   AUTO_MERGE|CHERRY_PICK_HEAD|REVERT_HEAD|COMMIT_EDITMSG|\
                                   SQUASH_MSG|TAG_EDITMSG|BISECT_[A-Z_]+";

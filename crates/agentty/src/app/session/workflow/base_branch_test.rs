@@ -75,46 +75,62 @@ async fn harness_turns_refuse_to_run_on_a_base_that_does_not_resolve() {
 async fn harness_turns_that_retarget_head_fail_before_publishing() {
     // Arrange
     let db = session_database("main").await;
-    // Capture, then a `HEAD` pointing at `main`, then one that no longer
-    // resolves; the base stays in place throughout.
+    // Capture on the session branch, then a detached `HEAD`, one pointing at
+    // `main`, and one that no longer resolves; the base stays in place.
     let git_client = base_git(
         "main",
-        &[Some("base-1"), Some("base-1"), Some("base-1")],
-        &[Some(SESSION_HEAD), Some("refs/heads/main"), None],
+        &[Some("base-1"); 4],
+        &[
+            Some(SESSION_HEAD),
+            Some("HEAD"),
+            Some("refs/heads/main"),
+            None,
+        ],
     );
     let scope = scope(&db, &git_client, "worker");
-    let unresolved_git = base_git("main", &[Some("base-1")], &[None]);
+    // A `HEAD` an earlier turn retargeted keeps the next turn from starting.
+    let retargeted_git = base_git("main", &[Some("base-1")], &[Some("refs/heads/main")]);
 
     // Act
     let snapshot = BaseBranchSnapshot::capture(&scope, AgentKind::Harness)
         .await
         .expect("capture")
         .expect("base branch snapshot");
+    let detached = BaseBranchSnapshot::verify(Some(&snapshot), &scope, Ok(completed_turn())).await;
     let retargeted =
         BaseBranchSnapshot::verify(Some(&snapshot), &scope, Ok(completed_turn())).await;
     let unresolved =
         BaseBranchSnapshot::verify(Some(&snapshot), &scope, Ok(completed_turn())).await;
-    let unresolved_capture = BaseBranchSnapshot::capture(
-        &self::scope(&db, &unresolved_git, "worker"),
+    let retargeted_capture = BaseBranchSnapshot::capture(
+        &self::scope(&db, &retargeted_git, "worker"),
         AgentKind::Harness,
     )
     .await;
 
     // Assert
+    assert!(detached.is_ok());
     let retargeted = retargeted
         .expect_err("a retargeted HEAD fails the turn")
         .to_string();
     assert!(
-        retargeted.contains(&format!("no longer resolves to `{SESSION_HEAD}`")),
+        retargeted.contains(&format!(
+            "`HEAD` resolves to `refs/heads/main` instead of `{SESSION_HEAD}`"
+        )),
         "{retargeted}"
     );
-    assert!(unresolved.is_err());
-    let unresolved_capture = unresolved_capture
-        .expect_err("an unresolvable HEAD fails before the turn")
+    let unresolved = unresolved
+        .expect_err("an unresolvable HEAD fails the turn")
         .to_string();
     assert!(
-        unresolved_capture.contains("`HEAD` does not resolve"),
-        "{unresolved_capture}"
+        unresolved.contains("`HEAD` does not resolve"),
+        "{unresolved}"
+    );
+    let retargeted_capture = retargeted_capture
+        .expect_err("a retargeted HEAD fails before the turn")
+        .to_string();
+    assert!(
+        retargeted_capture.contains("resolves to `refs/heads/main`"),
+        "{retargeted_capture}"
     );
 }
 

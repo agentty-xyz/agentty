@@ -448,11 +448,13 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
     // Act
     let output = refusing_harness(&main)
         .turn(
-            "set -e; printf main > main-file; git add main-file; git -c user.name=Sandbox -c \
-             user.email=sandbox@example.com -c commit.gpgsign=false commit -q -m sandboxed; if \
-             /bin/mv .git \"$TMPDIR/moved\"; then exit 91; fi; if /bin/mv .git moved; then exit \
-             92; fi; if /bin/mv .git/hooks .git/objects/hooks; then exit 93; fi; if printf \
-             changed >> .git/config; then exit 94; fi; if printf x >> \
+            "set -e; export GIT_AUTHOR_NAME=Sandbox GIT_AUTHOR_EMAIL=sandbox@example.com \
+             GIT_COMMITTER_NAME=Sandbox GIT_COMMITTER_EMAIL=sandbox@example.com; printf main > \
+             main-file; git add main-file; git -c commit.gpgsign=false commit -q -m staged; \
+             printf more >> main-file; git -c commit.gpgsign=false commit -q -m sandboxed \
+             main-file; if /bin/mv .git \"$TMPDIR/moved\"; then exit 91; fi; if /bin/mv .git \
+             moved; then exit 92; fi; if /bin/mv .git/hooks .git/objects/hooks; then exit 93; fi; \
+             if printf changed >> .git/config; then exit 94; fi; if printf x >> \
              .git/logs/refs/heads/wt/session; then exit 95; fi; /bin/mkdir -p remotes; if /bin/mv \
              remotes .git/remotes; then exit 96; fi; if printf x > .git/packed-refs.lock; then \
              exit 97; fi; printf confined",
