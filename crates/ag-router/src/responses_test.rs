@@ -198,20 +198,11 @@ fn reasoning_view_reads_summaries_of_exactly_the_replayed_items() {
     let encrypted =
         json!([{"type": "reasoning", "encrypted_content": "gAAAA", "summary": []}]).to_string();
     let mixed = json!([{"type": "reasoning"}, {"type": "message"}]).to_string();
-    let clear = json!([{"type": "reasoning", "summary": [], "content": [
-        {"type": "reasoning_text", "text": "Read a.txt."},
-        {"type": "other", "text": "hidden"}
-    ]}])
-    .to_string();
 
     // Act / Assert
     assert_eq!(
         reasoning_view(&summarized),
         ReasoningView::Summary("Check a.txt.\n\nThen b.txt.".to_string())
-    );
-    assert_eq!(
-        reasoning_view(&clear),
-        ReasoningView::Summary("Read a.txt.".to_string())
     );
     assert_eq!(reasoning_view(&encrypted), ReasoningView::Opaque);
     assert_eq!(reasoning_view(&mixed), ReasoningView::Text(&mixed));

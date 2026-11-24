@@ -12,9 +12,8 @@ pub enum ReasoningView<'a> {
     /// providers return, as written.
     Text(&'a str),
     /// The summary text of Responses reasoning items, whose reasoning itself
-    /// is encrypted, or else their reasoning text returned in the clear, or
-    /// the summarized thinking of Anthropic thinking blocks, with parts
-    /// separated by blank lines.
+    /// is encrypted, or the summarized thinking of Anthropic thinking
+    /// blocks, with parts separated by blank lines.
     Summary(String),
     /// Responses reasoning items or Anthropic thinking blocks without any
     /// summary text: encrypted, redacted, or omitted only.
