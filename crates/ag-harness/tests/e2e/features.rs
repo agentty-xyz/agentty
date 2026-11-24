@@ -592,18 +592,6 @@ impl Provider {
 
         weight * percent / 100
     }
-
-    /// Length of the filler notes in the compaction case's system prompt,
-    /// which compaction drops: long enough that the room it frees lets the
-    /// second checkpoint cover every remaining turn. Anthropic summary
-    /// requests need more of it; with the compat length its checkpoints
-    /// covered one turn at a time, leaving turns for a third.
-    fn compaction_system_notes(self) -> usize {
-        match self {
-            Self::Anthropic => 12_000,
-            Self::Kimi | Self::Muse | Self::Qwen | Self::OpenAi => 2000,
-        }
-    }
 }
 
 async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
@@ -623,7 +611,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     // short generation instructions, so its source can still cover every turn.
     let system_prompt = format!(
         "You answer with short JSON. Operating notes (ignore their content): {}",
-        filler(5, provider.compaction_system_notes())
+        filler(5, 2000)
     );
     let system_weight = estimator.message_weight(&ModelMessage::System(system_prompt.clone()));
     let recall = "What is the value of fact alpha? Set answer to only the value, or to the word \
