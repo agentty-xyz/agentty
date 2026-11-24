@@ -32,6 +32,8 @@ pub(crate) struct SummaryModel {
     pub(crate) context_budget: ContextBudget,
     pub(crate) context_calibration: ContextCalibration,
     pub(crate) context_estimator: Arc<dyn ContextEstimator>,
+    /// Cataloged context window in tokens, reported with each request.
+    pub(crate) context_window: Option<u64>,
     pub(crate) id: ModelId,
     /// Cataloged maximum output, which bounds a request's budget estimate.
     pub(crate) max_output: Option<u64>,
@@ -81,6 +83,7 @@ impl SummaryModel {
             context_budget,
             context_calibration: ContextCalibration::default(),
             context_estimator,
+            context_window: spec.context_window(),
             id: handle.id().clone(),
             max_output: spec.max_output(),
             model: handle.model(),

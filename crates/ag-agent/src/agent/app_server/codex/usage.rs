@@ -241,12 +241,6 @@ impl UsageTracker {
 
     pub(super) fn record(&self) {
         ag_telemetry::current_attribute("agentty.usage.aggregate_known", self.totals().is_some());
-        if let Some(input) = self.latest_input {
-            ag_telemetry::current_attribute(
-                "agentty.context.last_request.input_tokens",
-                i64::try_from(input).unwrap_or(i64::MAX),
-            );
-        }
         if let Some(cached) = self.cached.turn.filter(|_| self.totals().is_some()) {
             ag_telemetry::current_attribute(
                 "gen_ai.usage.cache_read.input_tokens",

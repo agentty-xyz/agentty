@@ -7,11 +7,13 @@ use opentelemetry::trace::{SpanKind, Status, TraceContextExt, Tracer};
 use opentelemetry::{Array, Context, KeyValue, StringValue, Value, global};
 
 use crate::bash::CommandExit;
+use crate::catalog::PricingSource;
 use crate::lifecycle::{
     LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleOperationGuard,
 };
 use crate::model::{CompletionMetadata, ModelMetadata};
 use crate::telemetry;
+use crate::usage::Cost;
 
 const TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES: usize = 128;
 
@@ -21,6 +23,22 @@ const SPAN_CONTEXT_SUMMARY: &str = "agent.compaction";
 
 /// Why a context summary was requested.
 const ATTRIBUTE_SUMMARY_TRIGGER: &str = "agentty.compaction.trigger";
+
+/// Input tokens of a request, cache included: what the model saw.
+const ATTRIBUTE_CONTEXT_INPUT_TOKENS: &str = "agentty.context.input_tokens";
+
+/// Cataloged context window of the answering model.
+const ATTRIBUTE_CONTEXT_WINDOW_TOKENS: &str = "agentty.context.window_tokens";
+
+/// Where a request's estimated price came from: `list`, `host`, or `mixed`.
+const ATTRIBUTE_COST_BASIS: &str = "agentty.usage.cost.basis";
+
+/// Estimated price of a request in micro-USD.
+const ATTRIBUTE_COST_MICRO_USD: &str = "agentty.usage.cost.micro_usd";
+
+/// Whether a request's estimated price is an upper bound, its cache reads
+/// priced at the input price.
+const ATTRIBUTE_COST_UPPER_BOUND: &str = "agentty.usage.cost.upper_bound";
 
 /// Exit code of a `bash` command's shell (OpenTelemetry process
 /// semantic conventions).
@@ -141,12 +159,16 @@ impl TraceState {
             } => self.start_model(*model_call_id, model.as_ref(), *turn_id),
             LifecycleEventKind::ModelRequestCompleted {
                 completion,
+                context_window,
+                cost,
+                cost_upper_bound,
                 model_call_id,
                 ..
-            } => finish_span(
-                self.model_spans.remove(model_call_id),
-                None,
-                completion_attributes(completion.as_ref()),
+            } => self.complete_model(
+                *model_call_id,
+                completion.as_ref(),
+                cost.map(|cost| (cost, *cost_upper_bound)),
+                *context_window,
             ),
             LifecycleEventKind::ModelRequestFailed {
                 error_type,
@@ -219,6 +241,20 @@ impl TraceState {
                 ..
             } => self.finish_summary(*summary_id, Some(error_type.as_str())),
         }
+    }
+
+    /// Closes a completed model request's span with its completion metadata,
+    /// estimated cost, and context window.
+    fn complete_model(
+        &mut self,
+        model_call_id: LifecycleId,
+        completion: Option<&CompletionMetadata>,
+        cost: Option<(Cost, bool)>,
+        context_window: Option<u64>,
+    ) {
+        let mut attributes = completion_attributes(completion);
+        attributes.extend(estimate_attributes(cost, context_window));
+        finish_span(self.model_spans.remove(&model_call_id), None, attributes);
     }
 
     /// Closes a failed turn's span with `error_type`.
@@ -493,8 +529,18 @@ fn completion_attributes(completion: Option<&CompletionMetadata>) -> Vec<KeyValu
     if let Some(usage) = completion.usage() {
         push_token_attribute(
             &mut attributes,
+            telemetry::ATTRIBUTE_USAGE_CACHE_CREATION_INPUT_TOKENS,
+            usage.cache_write_tokens(),
+        );
+        push_token_attribute(
+            &mut attributes,
             telemetry::ATTRIBUTE_USAGE_CACHE_READ_INPUT_TOKENS,
             usage.cache_hit_tokens(),
+        );
+        push_token_attribute(
+            &mut attributes,
+            ATTRIBUTE_CONTEXT_INPUT_TOKENS,
+            usage.input_tokens(),
         );
         push_token_attribute(
             &mut attributes,
@@ -512,6 +558,36 @@ fn completion_attributes(completion: Option<&CompletionMetadata>) -> Vec<KeyValu
             usage.reasoning_tokens(),
         );
     }
+
+    attributes
+}
+
+/// Returns the attributes of a request's estimated `cost`, with whether it
+/// is an upper bound, and its model's `context_window`; an unknown cost is
+/// omitted, never reported as zero.
+fn estimate_attributes(cost: Option<(Cost, bool)>, context_window: Option<u64>) -> Vec<KeyValue> {
+    let mut attributes = Vec::new();
+    if let Some((cost, upper_bound)) = cost {
+        attributes.push(KeyValue::new(ATTRIBUTE_COST_UPPER_BOUND, upper_bound));
+        push_token_attribute(
+            &mut attributes,
+            ATTRIBUTE_COST_MICRO_USD,
+            Some(cost.micro_usd),
+        );
+        attributes.push(KeyValue::new(
+            ATTRIBUTE_COST_BASIS,
+            match cost.pricing {
+                PricingSource::BuiltIn => "list",
+                PricingSource::Host => "host",
+                PricingSource::Mixed => "mixed",
+            },
+        ));
+    }
+    push_token_attribute(
+        &mut attributes,
+        ATTRIBUTE_CONTEXT_WINDOW_TOKENS,
+        context_window,
+    );
 
     attributes
 }

@@ -1172,9 +1172,13 @@ the caller's OpenTelemetry context, including for `.start()`ed turns.
 `LifecycleTraceObserver::with_tool_attributes` repeats attributes a host derives from
 the turn's context, such as run identity, on its `execute_tool` spans. A failed turn's
 `LifecycleEventKind::TurnFailed` carries the `TurnReport` of what it did before failing:
-its reported requests, tool calls, and counts. Each fitted request reports the
-calibrated capacity it was fitted into (`budget_weight`) and its weight before
-(`unreduced_weight`) and after (`estimated_weight`) reduction.
+its reported requests, tool calls, and counts.
+`LifecycleEventKind::ModelRequestCompleted` carries the request's `Cost` at the
+answering catalog model's prices, unless the model is unpriced or the provider omitted a
+count, whether that cost is an upper bound because cache reads were priced at the input
+price, and that model's context window; `chat` spans export them. Each fitted request
+reports the calibrated capacity it was fitted into (`budget_weight`) and its weight
+before (`unreduced_weight`) and after (`estimated_weight`) reduction.
 
 ## Features
 

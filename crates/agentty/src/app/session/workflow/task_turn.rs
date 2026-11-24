@@ -105,6 +105,9 @@ async fn execute(
         client.submit(prepared, event_tx, cancellation.clone()),
         turn::relay_turn_events(context, permission_mode, relayed_rx, relay_tx),
     );
+    if let Ok(result) = &result {
+        ag_worker::record_turn_usage(&result.usage);
+    }
     let cleanup = client.shutdown().await;
     let activity = consumer.await.unwrap_or_default();
     activity.clear_live(&context.app_event_tx, &context.session_id);

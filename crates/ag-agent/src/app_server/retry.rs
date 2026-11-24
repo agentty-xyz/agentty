@@ -1,6 +1,6 @@
 //! Shared app-server restart and retry orchestration.
 
-use ag_contracts::TurnUsage;
+use ag_contracts::{ApiEquivalentCost, CostEstimate, TurnUsage};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
 use super::contract::{
@@ -310,7 +310,13 @@ where
             };
 
             match turn_outcome {
-                TurnAttemptOutcome::Completed(result) => result,
+                TurnAttemptOutcome::Completed(result) => {
+                    if let Ok((_, usage)) = &result {
+                        record_attempt_usage(usage);
+                    }
+
+                    result
+                }
                 TurnAttemptOutcome::Interrupted => {
                     shutdown_runtime(runtime).await;
 
@@ -324,6 +330,57 @@ where
         },
     )
     .await
+}
+
+/// Records what the provider requests of one completed attempt cost and saw
+/// on the current `agent.attempt` span: prompt-cache writes, the estimated
+/// charge and API equivalent when every model's cost is known, and the
+/// latest request's input with
+/// its model's context window. Unknown figures are omitted, never zero.
+fn record_attempt_usage(usage: &TurnUsage) {
+    let Some(total) = usage.total() else {
+        return;
+    };
+    let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+    if let Some(cache_write) = total.cache_write_tokens {
+        ag_telemetry::current_attribute(
+            "gen_ai.usage.cache_creation.input_tokens",
+            count(cache_write),
+        );
+    }
+    // A charge and an API equivalent are never summed into one figure.
+    let charge = total.cost.and_then(CostEstimate::charge);
+    let equivalent = total.cost.and_then(CostEstimate::api_equivalent);
+    if let Some(charge) = charge {
+        ag_telemetry::current_attribute("agentty.usage.cost.micro_usd", count(charge.micro_usd));
+        ag_telemetry::current_attribute("agentty.usage.cost.basis", charge.basis.as_str());
+        ag_telemetry::current_attribute("agentty.usage.cost.upper_bound", charge.upper_bound);
+    }
+    if let Some(ApiEquivalentCost { cost, login }) = equivalent {
+        ag_telemetry::current_attribute(
+            "agentty.usage.api_equivalent.micro_usd",
+            count(cost.micro_usd),
+        );
+        ag_telemetry::current_attribute("agentty.usage.api_equivalent.basis", cost.basis.as_str());
+        ag_telemetry::current_attribute(
+            "agentty.usage.api_equivalent.upper_bound",
+            cost.upper_bound,
+        );
+        if let Some(login) = login {
+            ag_telemetry::current_attribute("agentty.usage.api_equivalent.login", login.as_str());
+        }
+    }
+    // The latest request's own fill, not the summed one, which would pair
+    // its input with another model's window.
+    if let Some(context) = usage.context() {
+        ag_telemetry::current_attribute(
+            "agentty.context.input_tokens",
+            count(context.last_input_tokens),
+        );
+        if let Some(window) = context.window_tokens {
+            ag_telemetry::current_attribute("agentty.context.window_tokens", count(window));
+        }
+    }
 }
 
 /// Result of racing one app-server turn against cancellation.

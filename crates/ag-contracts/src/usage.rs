@@ -447,6 +447,17 @@ impl TurnUsage {
         }
     }
 
+    /// Returns the usage of every model summed into one entry named after
+    /// the first, as [`ModelUsage::add`] sums them, or `None` without any
+    /// model.
+    pub fn total(&self) -> Option<ModelUsage> {
+        self.models.iter().cloned().reduce(|mut total, next| {
+            total.add(&next);
+
+            total
+        })
+    }
+
     /// Returns the context fill of the most recent request that reported
     /// its input.
     pub fn context(&self) -> Option<ContextFill> {

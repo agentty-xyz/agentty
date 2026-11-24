@@ -108,6 +108,9 @@ pub(crate) struct Engine<'a> {
     pub(crate) context_calibration: &'a ContextCalibration,
     pub(crate) context_estimator: &'a Arc<dyn ContextEstimator>,
     pub(crate) context_summaries: ContextSummaryPolicy,
+    /// Cataloged context window of the model in tokens, reported with each
+    /// of its requests.
+    pub(crate) context_window: Option<u64>,
     /// Control that receives the report of a turn dropped before it
     /// finished, such as a cancelled one.
     pub(crate) control: Option<&'a TurnControl>,
@@ -517,6 +520,7 @@ impl Engine<'_> {
             context_budget: self.context_budget,
             context_calibration: self.context_calibration,
             context_estimator: self.context_estimator.as_ref(),
+            context_window: self.context_window,
             id: self.model_id,
             max_output: self.max_output,
             model: self.model,
@@ -536,6 +540,7 @@ impl Engine<'_> {
                 context_budget: summary.context_budget,
                 context_calibration: &summary.context_calibration,
                 context_estimator: summary.context_estimator.as_ref(),
+                context_window: summary.context_window,
                 id: Some(&summary.id),
                 max_output: summary.max_output,
                 model: &summary.model,
@@ -1138,13 +1143,7 @@ impl Engine<'_> {
             reservation: Some(reservation),
         };
         let completed = self
-            .complete_model_request(
-                answerer.model,
-                request,
-                model_request_index,
-                turn_id,
-                streamed,
-            )
+            .complete_model_request(answerer, request, model_request_index, turn_id, streamed)
             .await;
         drop(permit);
         let activity = match &completed {
@@ -1206,21 +1205,24 @@ impl Engine<'_> {
         estimate.with_cost(Cost::of(&usage, pricing))
     }
 
-    /// Sends `request` to `model`, reporting it to the lifecycle under that
-    /// model's metadata and its streamed deltas into `streamed`, and
+    /// Sends `request` to `answerer`'s model, reporting it to the lifecycle
+    /// under that model's metadata, prices, and context window and its
+    /// streamed deltas into `streamed`, and
     /// validates an output against the request.
     async fn complete_model_request(
         &self,
-        model: &Arc<dyn Model>,
+        answerer: Answerer<'_>,
         request: &ModelRequest,
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
         streamed: Option<&Arc<StreamedItems>>,
     ) -> Result<CompletedRequest, RequestFailure> {
         let started_at = Instant::now();
-        let model_lifecycle =
-            self.lifecycle
-                .start_model_request(model.metadata(), model_request_index, turn_id);
+        let model = answerer.model;
+        let model_lifecycle = self
+            .lifecycle
+            .start_model_request(model.metadata(), model_request_index, turn_id)
+            .map(|lifecycle| lifecycle.with_model_spec(answerer.pricing, answerer.context_window));
         let operation = event::with_request_events(
             self.events.clone(),
             streamed.cloned(),
@@ -1400,6 +1402,8 @@ struct Answerer<'a> {
     context_budget: context::ContextBudget,
     context_calibration: &'a ContextCalibration,
     context_estimator: &'a dyn ContextEstimator,
+    /// Cataloged context window in tokens, reported with each request.
+    context_window: Option<u64>,
     id: Option<&'a ModelId>,
     max_output: Option<u64>,
     model: &'a Arc<dyn Model>,

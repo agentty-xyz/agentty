@@ -11,6 +11,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::usage_telemetry;
+
 /// Worker-owned execution handle for one session's runtime.
 ///
 /// Hosts retain this handle rather than a raw runtime adapter. Submit turns
@@ -172,14 +174,7 @@ impl SessionRunClient {
         let outcome = match &result {
             Ok(result) => {
                 ag_telemetry::milestone("agent.completed");
-                span.attribute(
-                    "gen_ai.usage.input_tokens",
-                    i64::try_from(result.usage.input_tokens()).unwrap_or(i64::MAX),
-                );
-                span.attribute(
-                    "gen_ai.usage.output_tokens",
-                    i64::try_from(result.usage.output_tokens()).unwrap_or(i64::MAX),
-                );
+                usage_telemetry::record_run_usage(&span, &result.usage);
                 span.attribute("agentty.context_reset", result.context_reset);
                 Outcome::Completed
             }

@@ -237,6 +237,29 @@ fn turn_usage_orders_models_by_latest_request() {
 }
 
 #[test]
+fn total_sums_every_model_and_needs_one() {
+    // Arrange
+    let mut usage = TurnUsage::single(detailed("main", 100, 3));
+    usage.record(&ModelUsage {
+        input_tokens: 40,
+        requests: 2,
+        unreported_requests: 1,
+        ..ModelUsage::new("local")
+    });
+
+    // Act
+    let total = usage.total().expect("usage of two models has a total");
+
+    // Assert
+    assert_eq!(TurnUsage::default().total(), None);
+    assert_eq!(total.input_tokens, 140);
+    assert_eq!(total.requests, 3);
+    assert_eq!(total.unreported_requests, 1);
+    assert_eq!(total.cache_write_tokens, None);
+    assert_eq!(total.cost, None);
+}
+
+#[test]
 fn merging_keeps_the_latest_checkpoint() {
     // Arrange
     let cases = [

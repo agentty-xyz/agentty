@@ -20,13 +20,16 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::bash::CommandExit;
+use crate::catalog::Pricing;
 use crate::limit::LimitKind;
 use crate::model::{CompletionMetadata, ModelErrorType, ModelMetadata};
+use crate::run::Usage;
 #[cfg(feature = "otel")]
 pub use crate::telemetry::LifecycleMetrics;
 #[cfg(feature = "otel")]
 pub use crate::trace::LifecycleTraceObserver;
 use crate::turn::TurnReport;
+use crate::usage::Cost;
 
 /// Stream-local identifier that correlates lifecycle events for one operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -106,6 +109,18 @@ pub enum LifecycleEventKind {
     ModelRequestCompleted {
         /// Normalized provider completion metadata, when available.
         completion: Option<CompletionMetadata>,
+        /// Cataloged context window of the answering model in tokens, or
+        /// `None` for a model without a cataloged profile.
+        context_window: Option<u64>,
+        /// Estimated price of this request at the answering model's prices,
+        /// or `None` when the model is unpriced or the provider reported no
+        /// input or output count.
+        cost: Option<Cost>,
+        /// Whether `cost` is an upper bound:
+        /// the request read cached input, which its prices declare no
+        /// separate cache-read price for, so it was priced at the input
+        /// price.
+        cost_upper_bound: bool,
         /// Elapsed model-request time.
         duration: Duration,
         /// Identifier shared by this request's lifecycle events.
@@ -683,8 +698,10 @@ impl LifecycleEmitter {
 
         Some(ModelRequestLifecycle {
             active: true,
+            context_window: None,
             emitter: self.clone(),
             model_call_id,
+            pricing: None,
             started_at: Instant::now(),
             turn_id,
         })
@@ -937,13 +954,32 @@ impl Drop for TurnLifecycle {
 
 pub(crate) struct ModelRequestLifecycle {
     active: bool,
+    /// Cataloged context window of the answering model.
+    context_window: Option<u64>,
     emitter: LifecycleEmitter,
     model_call_id: LifecycleId,
+    /// Prices of the answering model, which give the completed request its
+    /// cost.
+    pricing: Option<Pricing>,
     started_at: Instant,
     turn_id: Option<LifecycleId>,
 }
 
 impl ModelRequestLifecycle {
+    /// Describes the answering model's `pricing` and `context_window`, so
+    /// the completion event carries the request's cost and window.
+    #[must_use]
+    pub(crate) fn with_model_spec(
+        mut self,
+        pricing: Option<Pricing>,
+        context_window: Option<u64>,
+    ) -> Self {
+        self.context_window = context_window;
+        self.pricing = pricing;
+
+        self
+    }
+
     pub(crate) fn scope<F>(&self, future: F) -> impl Future<Output = F::Output>
     where
         F: Future,
@@ -957,9 +993,19 @@ impl ModelRequestLifecycle {
         response_type: ModelResponseType,
     ) {
         self.active = false;
+        // A request without both counts has an unknown charge, not zero.
+        let usage = Usage::from_request(completion.as_ref().and_then(CompletionMetadata::usage));
+        let pricing = self.pricing.filter(|_| usage.unreported_requests == 0);
+        let cost = pricing.map(|pricing| Cost::of(&usage, pricing));
+        let cost_upper_bound = pricing.is_some_and(|pricing| {
+            usage.cache_read > 0 && !pricing.for_prompt(usage.input).declares_cache_read()
+        });
         self.emitter
             .emit(LifecycleEventKind::ModelRequestCompleted {
                 completion,
+                context_window: self.context_window,
+                cost,
+                cost_upper_bound,
                 duration: self.started_at.elapsed(),
                 model_call_id: self.model_call_id,
                 response_type,
