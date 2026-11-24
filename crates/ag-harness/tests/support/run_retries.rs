@@ -15,6 +15,7 @@ use ag_harness::{
 };
 use futures_core::Stream;
 use serde_json::json;
+use tokio::net::TcpListener;
 use tokio::time::timeout;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -142,9 +143,17 @@ async fn streams_each_retry_before_the_run_completes() -> Result<(), Box<dyn Err
 #[tokio::test]
 async fn streams_a_connection_retry_before_the_failed_completion() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let refused = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    // The listener keeps its port from concurrent tests' servers, and closes
+    // every connection before it answers.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let closing = listener.local_addr()?;
+    tokio::spawn(async move {
+        while let Ok((connection, _)) = listener.accept().await {
+            drop(connection);
+        }
+    });
     let retry = RetryPolicy::default().with_base_delay(Duration::from_millis(1));
-    let harness = harness(format!("http://{refused}/v1"), retry)?;
+    let harness = harness(format!("http://{closing}/v1"), retry)?;
 
     // Act
     let (stream, handle) = harness.run(request()?).into_parts();

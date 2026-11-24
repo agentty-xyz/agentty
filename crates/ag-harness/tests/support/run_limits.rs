@@ -431,8 +431,24 @@ async fn runs_within_their_limits_behave_like_unlimited_runs() -> Result<(), Box
         );
         assert_eq!((outcome.usage.input, outcome.usage.output), (20, 10));
     }
+    // A tool call's summary ends with its measured duration, which differs
+    // between runs under load, so each summary is compared without it.
     let kinds = |events: &[RunEvent]| -> Vec<RunEventKind> {
-        events.iter().map(|event| event.kind.clone()).collect()
+        events
+            .iter()
+            .map(|event| {
+                let mut kind = event.kind.clone();
+                if let RunEventKind::ItemCompleted {
+                    item: Item::ToolCall(call),
+                    ..
+                } = &mut kind
+                {
+                    call.summary.truncate(call.summary.rfind(';').unwrap_or(0));
+                }
+
+                kind
+            })
+            .collect()
     };
     assert_eq!(kinds(&limited_events), kinds(&unlimited_events));
     assert_eq!(
