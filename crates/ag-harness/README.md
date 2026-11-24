@@ -757,13 +757,14 @@ support tool calls. A server that supports more opts in through
 `ModelProvider::OpenAi` serves `OpenAI` models such as `GPT_6_1_SOL` through the
 Responses API with `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL` (default
 `https://api.openai.com/v1`). Requests are streamed and stateless (`store: false`): each
-resends its history, encrypted reasoning from earlier responses is replayed verbatim,
-and output is constrained by a native JSON Schema format. `declared_profile` returns
-each cataloged model's documented window under the default estimator with a 50% margin,
-as it does for the Qwen flash models. For the Muse and Kimi models it returns the
-documented window under an estimator fitted to the provider's reported tokens, and
-`None` for other models and the remaining Qwen models, whose hosts declare their own.
-Kimi defaults to `https://api.moonshot.ai/v1` (override with `KIMI_BASE_URL`):
+resends its history, encrypted reasoning from earlier responses is replayed verbatim
+while events and transcripts show only its summary text, and output is constrained by a
+native JSON Schema format. `declared_profile` returns each cataloged model's documented
+window under the default estimator with a 50% margin, as it does for the Qwen flash
+models. For the Muse and Kimi models it returns the documented window under an estimator
+fitted to the provider's reported tokens, and `None` for other models and the remaining
+Qwen models, whose hosts declare their own. Kimi defaults to
+`https://api.moonshot.ai/v1` (override with `KIMI_BASE_URL`):
 
 ```rust
 use ag_harness::provider::{GPT_6_1_SOL, ModelConfiguration, ModelProvider};

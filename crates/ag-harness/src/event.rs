@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ag_router::ReasoningView;
 use futures_core::Stream;
 use schemars::JsonSchema;
 use serde::de::Error as _;
@@ -448,13 +449,31 @@ pub enum Item {
         /// The run's output, as in [`crate::RunOutcome::result`].
         output: RunOutput,
     },
-    /// Provider reasoning returned with a model response.
+    /// Provider reasoning returned with a model response: its plain text,
+    /// or the summary of encrypted or signed reasoning. Reasoning without
+    /// readable text, such as encrypted reasoning with an empty summary,
+    /// emits no item.
     Reasoning {
         /// The reasoning text.
         text: String,
     },
     /// A tool call and its result.
     ToolCall(ToolCallItem),
+}
+
+impl Item {
+    /// Returns the readable text of the provider-neutral
+    /// `reasoning_content` a model response carried for replay: plain
+    /// reasoning as written, or the summary of encrypted Responses
+    /// reasoning items or Anthropic thinking blocks, or `None` when those
+    /// carry no summary, so opaque replay data never reaches a transcript.
+    pub(crate) fn reasoning_text(reasoning_content: &str) -> Option<String> {
+        match ag_router::reasoning_view(reasoning_content) {
+            ReasoningView::Text(text) => Some(text.to_string()),
+            ReasoningView::Summary(summary) => Some(summary),
+            ReasoningView::Opaque => None,
+        }
+    }
 }
 
 /// A tool call the model made and the result it was answered with.

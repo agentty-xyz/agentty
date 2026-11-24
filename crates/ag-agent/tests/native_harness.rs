@@ -1293,7 +1293,7 @@ async fn openai_turn_streams_responses_and_replays_reasoning_with_tool_results()
     );
 
     // Act
-    let (result, _) = run_turn(
+    let (result, events) = run_turn(
         &channel,
         "session-openai",
         turn_request(worktree.path(), "gpt-6.1-sol", "Read the notes"),
@@ -1303,6 +1303,10 @@ async fn openai_turn_streams_responses_and_replays_reasoning_with_tool_results()
     // Assert
     let result = result.expect("OpenAI turn should succeed");
     assert_eq!(result.assistant_message.answer, "Notes read");
+    // Encrypted reasoning without a summary replays but is never shown.
+    let shown = format!("{events:?}");
+    assert!(shown.contains("Notes read"));
+    assert!(!shown.contains("gAAAA-encrypted-turn-reasoning"));
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|request| {

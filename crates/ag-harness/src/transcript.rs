@@ -247,12 +247,18 @@ impl TurnRecord {
                 content,
                 reasoning_content,
             } => {
-                self.items.push(Item::Reasoning {
-                    text: reasoning_content,
-                });
+                self.push_reasoning(Some(&reasoning_content));
                 self.push_output(content, text_output);
             }
             ModelMessage::System(_) => {}
+        }
+    }
+
+    /// Adds the readable text of a response's `reasoning_content`, if it
+    /// has any; see [`Item::reasoning_text`].
+    fn push_reasoning(&mut self, reasoning_content: Option<&str>) {
+        if let Some(text) = reasoning_content.and_then(Item::reasoning_text) {
+            self.items.push(Item::Reasoning { text });
         }
     }
 
@@ -260,11 +266,7 @@ impl TurnRecord {
     /// travel with its first call, then every call, still unanswered.
     fn push_calls(&mut self, calls: &[ToolCall]) {
         let first = calls.first();
-        if let Some(text) = first.and_then(ToolCall::reasoning_content) {
-            self.items.push(Item::Reasoning {
-                text: text.to_string(),
-            });
-        }
+        self.push_reasoning(first.and_then(ToolCall::reasoning_content));
         if let Some(text) = first.and_then(ToolCall::assistant_text) {
             self.items.push(Item::Message {
                 text: text.to_string(),
