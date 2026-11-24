@@ -187,15 +187,18 @@ async fn a_staged_draft_keeps_its_images_when_starting_it_fails() {
     .expect("draft session should be created");
     let files = Arc::new(ImageFiles::default());
     app.services.set_fs_client(Arc::new(files.filesystem()));
-    app.project_sync_status = Some(ProjectSyncStatus {
-        context: ProjectSyncContext {
-            default_branch: "main".to_string(),
-            operation_id: 1,
-            project_id,
-            project_name: "agentty".to_string(),
+    app.project_sync_statuses.insert(
+        project_id,
+        ProjectSyncStatus {
+            context: ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id,
+                project_name: "agentty".to_string(),
+            },
+            phase: ProjectSyncPhase::Running,
         },
-        phase: ProjectSyncPhase::Running,
-    });
+    );
 
     // Act
     let failed =
