@@ -281,7 +281,7 @@ async fn test_structured_output() -> Result<(), DynError> {
 /// turns replay it verbatim; a provider that rejects the replayed blocks
 /// fails the follow-up turns.
 async fn reasoning_replay(provider: Provider) -> Result<String, DynError> {
-    let (_workspace, repository) = notes_repository()?;
+    let (_workspace, repository) = notes_repository().await?;
     let harness = provider
         .harness(&provider.model())?
         .store(Arc::new(MemoryStore::new()))
