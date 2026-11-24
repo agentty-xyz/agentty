@@ -19,8 +19,9 @@ use super::{
     BaseComparisonCache, CommitPair, FETCH_MAX_BACKOFF_PASSES, FailureBackoff, ProjectSyncContext,
     ProjectSyncPhase, ProjectSyncStatus, REVIEW_SYNC_MAX_BACKOFF_PASSES, ReviewPass,
     ReviewRequestPassUpdate, ReviewRequestSyncTarget, SessionGitStatusTarget, SyncContext,
-    SyncHandle, SyncMainCompletion, SyncMainRequest, SyncOrchestrator, review_request_repo_url,
-    sync_review_request_status, sync_task_result_from_summary,
+    SyncHandle, SyncMainCompletion, SyncMainFinished, SyncMainRequest, SyncMainTasks,
+    SyncOrchestrator, review_request_repo_url, sync_review_request_status,
+    sync_task_result_from_summary,
 };
 use crate::app::core::SyncReviewRequestTaskResult;
 use crate::app::review_watch_config::ReviewWatchConfig;
@@ -202,6 +203,7 @@ fn orchestrator_for(
         review_pass_index: 0,
         review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
+        sync_main_tasks: SyncMainTasks::default(),
         tick_index: 0,
     };
 
@@ -555,13 +557,9 @@ async fn unstarted_orchestrator_first_pass_reads_context_published_before_spawn(
     ));
 }
 
-#[tokio::test]
-/// Successful manual syncs preserve their captured review results, emit
-/// them only with the matching project operation, and clear the project's
-/// fetch backoff.
-async fn run_sync_main_emits_captured_review_updates_after_success() {
-    // Arrange
-    let working_dir = PathBuf::from("/tmp/project");
+/// Builds a Git client whose clean checkout pulls one remote commit and
+/// pushes one local commit, with no forge remote for review refreshes.
+fn successful_sync_main_git_client(working_dir: &Path) -> Arc<dyn GitClient> {
     let mut mock_git_client = MockGitClient::new();
     mock_git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async {
@@ -571,7 +569,7 @@ async fn run_sync_main_emits_captured_review_updates_after_success() {
             })
         })
     });
-    let repo_root = working_dir.clone();
+    let repo_root = working_dir.to_path_buf();
     mock_git_client
         .expect_find_git_repo_root()
         .once()
@@ -613,7 +611,18 @@ async fn run_sync_main_emits_captured_review_updates_after_success() {
         .expect_push_current_branch()
         .once()
         .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
-    let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
+
+    Arc::new(mock_git_client)
+}
+
+#[tokio::test]
+/// Successful manual syncs preserve their captured review results, emit
+/// them only with the matching project operation, and clear the project's
+/// fetch backoff.
+async fn run_sync_main_emits_captured_review_updates_after_success() {
+    // Arrange
+    let working_dir = PathBuf::from("/tmp/project");
+    let git_client = successful_sync_main_git_client(&working_dir);
     let sync_context = SyncContext {
         git_client: Arc::clone(&git_client),
         review_request_sync_targets: vec![review_request_sync_target("session-1", None)],
@@ -639,10 +648,21 @@ async fn run_sync_main_emits_captured_review_updates_after_success() {
             sync_context,
         })
         .await;
+    let was_running = orchestrator
+        .sync_main_tasks
+        .running_project_ids
+        .contains(&1);
     let event = app_event_rx
         .recv()
         .await
         .expect("manual sync should emit a completion");
+    let finished = orchestrator
+        .sync_main_tasks
+        .finished_rx
+        .recv()
+        .await
+        .expect("manual sync should report to the orchestrator");
+    orchestrator.finish_sync_main(&finished);
 
     // Assert
     assert!(matches!(
@@ -658,7 +678,9 @@ async fn run_sync_main_emits_captured_review_updates_after_success() {
             && review_request_updates[0].session_id.as_str() == "session-1"
             && review_request_updates[0].result.is_err()
     ));
+    assert!(was_running);
     assert!(orchestrator.fetch_failures.is_empty());
+    assert!(orchestrator.sync_main_tasks.running_project_ids.is_empty());
 }
 
 #[tokio::test]
@@ -684,10 +706,12 @@ async fn run_sync_main_traces_its_phases_beneath_one_failed_root() {
         })
         .await;
 
+    let event = app_event_rx.recv().await;
+
     // Assert
     assert!(matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::SyncMainCompleted {
+        event,
+        Some(AppEvent::SyncMainCompleted {
             completion: SyncMainCompletion { result: Err(_), .. }
         })
     ));
@@ -728,6 +752,7 @@ fn emit_review_request_pass_updates_preserves_batch_routing() {
         review_pass_index: 0,
         review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
+        sync_main_tasks: SyncMainTasks::default(),
         tick_index: 0,
     };
     let updates = vec![
@@ -853,6 +878,55 @@ fn same_polling_inputs_detects_linked_state_change() {
     assert!(!same_inputs);
 }
 
+#[tokio::test]
+/// A project whose explicit sync is still running skips its background
+/// fetch, so the fetch cannot race the sync's pull and push, and fetches
+/// again once that sync reports back.
+async fn refresh_pass_defers_fetch_while_project_sync_runs() {
+    // Arrange
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .times(2)
+        .returning(|_| Box::pin(async { None }));
+    mock_git_client
+        .expect_fetch_remote()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+    let context = SyncContext {
+        git_client: Arc::new(mock_git_client),
+        ..sync_context_fixture(0, Vec::new())
+    };
+    let project_id = context.project_id;
+    let (_context_tx, context_rx) = watch::channel(context);
+    let (mut orchestrator, mut app_event_rx) = orchestrator_for(context_rx);
+    orchestrator
+        .sync_main_tasks
+        .running_project_ids
+        .insert(project_id);
+
+    // Act
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+    orchestrator.finish_sync_main(&SyncMainFinished {
+        project_id,
+        succeeded: false,
+    });
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+
+    // Assert
+    for _ in 0..2 {
+        assert!(matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::GitStatusUpdated { .. })
+        ));
+    }
+    assert!(orchestrator.sync_main_tasks.running_project_ids.is_empty());
+}
+
 #[test]
 /// Backoff windows grow exponentially with consecutive failures and stay
 /// capped so failing targets are retried within a bounded interval.
@@ -889,6 +963,7 @@ async fn record_review_sync_outcome_backs_off_and_notifies_after_threshold() {
         review_pass_index: 0,
         review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
+        sync_main_tasks: SyncMainTasks::default(),
         tick_index: 0,
     };
     let target = review_request_sync_target("session-1", None);
@@ -938,6 +1013,7 @@ async fn record_review_sync_outcome_success_resets_backoff() {
         review_pass_index: 0,
         review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
+        sync_main_tasks: SyncMainTasks::default(),
         tick_index: 0,
     };
     let target = review_request_sync_target("session-1", None);
@@ -1841,6 +1917,7 @@ async fn collect_review_request_pass_updates_skips_backed_off_and_stale_targets(
         review_pass_index: 0,
         review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
+        sync_main_tasks: SyncMainTasks::default(),
         tick_index: 0,
     };
     let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
@@ -2217,6 +2294,7 @@ async fn collect_review_request_pass_updates_loads_configuration_only_for_watche
         review_pass_index: 0,
         review_sync_cadences: HashMap::new(),
         review_sync_failures: HashMap::new(),
+        sync_main_tasks: SyncMainTasks::default(),
         tick_index: 0,
     };
 

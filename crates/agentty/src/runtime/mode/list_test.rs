@@ -1341,7 +1341,7 @@ async fn test_handle_sync_key_shows_failure_when_upstream_is_missing() {
     assert!(matches!(event_result, EventResult::Continue));
     assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(ProjectSyncPhase::Running)
     ));
 
@@ -1351,7 +1351,7 @@ async fn test_handle_sync_key_shows_failure_when_upstream_is_missing() {
     // Assert
     assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(ProjectSyncPhase::Failed { message }) if message == "missing upstream"
     ));
 }
@@ -1377,7 +1377,7 @@ async fn test_handle_sync_key_is_case_insensitive() {
     assert!(matches!(event_result, EventResult::Continue));
     assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(ProjectSyncPhase::Running)
     ));
 
@@ -1387,7 +1387,7 @@ async fn test_handle_sync_key_is_case_insensitive() {
     // Assert
     assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(ProjectSyncPhase::Failed { message }) if message == "missing upstream"
     ));
 }
@@ -1409,8 +1409,7 @@ async fn test_handle_sync_key_coalesces_duplicate_running_requests() {
         .await
         .expect("failed to handle first sync key");
     let operation_id = app
-        .project_sync_status
-        .as_ref()
+        .active_project_sync_status()
         .expect("sync should be running")
         .context
         .operation_id;
@@ -1420,8 +1419,7 @@ async fn test_handle_sync_key_coalesces_duplicate_running_requests() {
 
     // Assert
     assert_eq!(
-        app.project_sync_status
-            .as_ref()
+        app.active_project_sync_status()
             .expect("sync should remain running")
             .context
             .operation_id,
@@ -1474,8 +1472,7 @@ async fn test_handle_sync_key_uses_captured_project_name_and_branch() {
 
     // Assert
     let status = app
-        .project_sync_status
-        .as_ref()
+        .active_project_sync_status()
         .expect("sync status should remain visible");
     assert_eq!(status.context.default_branch, "develop");
     assert_eq!(status.context.project_name, expected_project_name);
@@ -1515,7 +1512,7 @@ async fn test_handle_sync_key_shows_blocked_status_for_uncommitted_main() {
     // Assert
     assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(ProjectSyncPhase::Blocked { message })
             if message.contains("cannot run while `main` has uncommitted changes")
     ));

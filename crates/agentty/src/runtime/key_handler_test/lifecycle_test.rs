@@ -23,15 +23,18 @@ async fn test_session_creation_rejection_stays_in_terminal_ui() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
     let project_id = app.active_project_id();
-    app.project_sync_status = Some(crate::app::ProjectSyncStatus {
-        context: crate::app::test_support::ProjectSyncContext {
-            default_branch: "main".to_string(),
-            operation_id: 1,
-            project_id,
-            project_name: "agentty".to_string(),
+    app.project_sync_statuses.insert(
+        project_id,
+        crate::app::ProjectSyncStatus {
+            context: crate::app::test_support::ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id,
+                project_name: "agentty".to_string(),
+            },
+            phase: crate::app::ProjectSyncPhase::Running,
         },
-        phase: crate::app::ProjectSyncPhase::Running,
-    });
+    );
     app.mode = AppMode::SessionCreation {
         selected_option_index: 0,
     };

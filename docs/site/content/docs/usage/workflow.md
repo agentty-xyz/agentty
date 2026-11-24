@@ -69,7 +69,8 @@ Detached processes are excluded.
 New worktrees start from the local base branch. Press `s` from a list tab to pull remote
 changes first. Sync runs in the background; until it finishes, creating or starting
 sessions, merging, and rebasing against that project's base checkout must be retried.
-Progress appears in the top status bar.
+Other projects can sync at the same time. The top status bar shows the current project's
+sync progress.
 
 Ahead/behind counts come from a background `git fetch` about every 30 seconds. When
 fetches keep failing, for example because the remote is unreachable or rejects your

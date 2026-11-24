@@ -58,6 +58,7 @@ pub(crate) struct AppViewSnapshot<'a> {
     /// Latest totals for the Agentty process and all of its descendants.
     pub(crate) process_resources: Option<SessionResources>,
     pub(crate) project_selected_index: Option<usize>,
+    /// Explicit sync state of the active project only.
     pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     pub(crate) projects: &'a [ProjectListItem],
     /// Remote-control listener and paired-device state, or `None` unless
@@ -119,7 +120,7 @@ impl App {
             }),
             process_resources: sessions.process_resources,
             project_selected_index: project.selected_index,
-            project_sync_status: self.project_sync_status.as_ref(),
+            project_sync_status: self.active_project_sync_status(),
             projects: project.project_items,
             remote_control: self
                 .remote_control

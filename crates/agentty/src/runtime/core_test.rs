@@ -1027,7 +1027,7 @@ async fn run_cycle_advances_the_remote_revision_once_for_a_change_made_by_a_key(
             Ok(EventResult::Continue)
         ));
     }
-    let is_sync_started = main_loop_state.app.project_sync_status.is_some();
+    let is_sync_started = main_loop_state.app.active_project_sync_status().is_some();
     let after_key_cycle = *revisions.borrow_and_update();
     event_tx
         .send(Event::FocusGained)

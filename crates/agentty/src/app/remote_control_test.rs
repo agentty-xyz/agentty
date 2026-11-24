@@ -892,15 +892,18 @@ impl ReportedChange {
 
         match self {
             Self::ProjectSyncPhase => {
-                app.project_sync_status = Some(ProjectSyncStatus {
-                    context: ProjectSyncContext {
-                        default_branch: "main".to_string(),
-                        operation_id: 1,
-                        project_id: app.active_project_id(),
-                        project_name: "project".to_string(),
+                app.project_sync_statuses.insert(
+                    app.active_project_id(),
+                    ProjectSyncStatus {
+                        context: ProjectSyncContext {
+                            default_branch: "main".to_string(),
+                            operation_id: 1,
+                            project_id: app.active_project_id(),
+                            project_name: "project".to_string(),
+                        },
+                        phase: ProjectSyncPhase::Running,
                     },
-                    phase: ProjectSyncPhase::Running,
-                });
+                );
             }
             Self::ProposalReplyDecision => {
                 app.services

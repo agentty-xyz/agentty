@@ -1586,19 +1586,15 @@ impl App {
 
     /// Replaces the matching running status with a compact terminal phase.
     fn set_project_sync_terminal_status(&mut self, completion: &SyncMainCompletion) {
-        let status = self
-            .project_sync_status
-            .get_or_insert_with(|| ProjectSyncStatus {
-                context: completion.operation.clone(),
-                phase: ProjectSyncPhase::Running,
-            });
-        if status.context.operation_id != completion.operation.operation_id
-            || status.context.project_id != completion.operation.project_id
+        if self
+            .project_sync_statuses
+            .get(&completion.operation.project_id)
+            .is_some_and(|status| status.context.operation_id != completion.operation.operation_id)
         {
             return;
         }
 
-        status.phase = match &completion.result {
+        let phase = match &completion.result {
             Ok(outcome) => ProjectSyncPhase::Complete {
                 pulled_commits: outcome.pulled_commits,
                 pushed_commits: outcome.pushed_commits,
@@ -1613,7 +1609,10 @@ impl App {
                 message: Self::sync_failure_message(error),
             },
         };
-        self.schedule_project_sync_status_expiry();
+        self.set_project_sync_status(ProjectSyncStatus {
+            context: completion.operation.clone(),
+            phase,
+        });
     }
 
     /// Applies completed linked-session comment loads only while the matching
@@ -1946,13 +1945,10 @@ impl App {
         operation: &ProjectSyncContext,
         conflicted_files: &[String],
     ) {
-        let Some(status) = self.project_sync_status.as_mut() else {
+        let Some(status) = self.project_sync_statuses.get_mut(&operation.project_id) else {
             return;
         };
-        if status.context.operation_id != operation.operation_id
-            || status.context.project_id != operation.project_id
-            || !status.is_running()
-        {
+        if status.context.operation_id != operation.operation_id || !status.is_running() {
             return;
         }
 

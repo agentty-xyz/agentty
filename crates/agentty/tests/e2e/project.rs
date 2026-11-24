@@ -198,7 +198,7 @@ async fn test_non_repository_launch_stays_out_of_project_switcher()
 }
 
 /// Configures two local upstreams and delays `git pull` long enough to prove
-/// navigation and cross-project sync queueing remain non-modal.
+/// navigation and concurrent syncs of two projects remain non-modal.
 async fn seed_delayed_project_sync(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_second_project(env).await?;
 
@@ -447,7 +447,8 @@ fn assert_active_project_centered(frame: &TerminalFrame, project_name: &str) {
 }
 
 /// Verify explicit project sync reports progress in the status bar while tab
-/// navigation remains available, then runs a queued sync for another project.
+/// navigation remains available, then syncs another project without showing
+/// the first project's sync there.
 #[tokio::test]
 async fn test_project_sync_non_modal() {
     // Arrange
@@ -491,10 +492,10 @@ async fn test_project_sync_non_modal() {
                     .press_key("Enter")
                     .wait_for_text("~/zeta-project", 5000)
                     .press_key("s")
-                    .wait_for_text("Syncing zeta-project/main...", 15_000)
+                    .wait_for_text("Syncing zeta-project/main...", 5000)
                     .capture_labeled(
-                        "queued_project_sync",
-                        "Second project sync starts after the first finishes",
+                        "other_project_sync",
+                        "Another project syncs and shows only its own status",
                     )
                     .wait_for_text("Synced zeta-project/main", 15_000)
                     .wait_for_stable_frame(300, 5000)
@@ -624,14 +625,19 @@ fn assert_project_sync_non_modal(
 
     verify_session_creation_blocked(report)?;
 
-    let queued_capture = report
+    let other_project_capture = report
         .captures
         .iter()
-        .find(|capture| capture.label == "queued_project_sync")
-        .ok_or("missing queued project sync capture")?;
-    let queued_frame = common::frame_from_capture(queued_capture);
-    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-    assertion::assert_text_in_region(&queued_frame, "Syncing zeta-project/main...", &queued_full);
+        .find(|capture| capture.label == "other_project_sync")
+        .ok_or("missing other project sync capture")?;
+    let other_project_frame = common::frame_from_capture(other_project_capture);
+    let other_project_full = Region::full(other_project_frame.cols(), other_project_frame.rows());
+    assertion::assert_text_in_region(
+        &other_project_frame,
+        "Syncing zeta-project/main...",
+        &other_project_full,
+    );
+    assertion::assert_not_visible(&other_project_frame, "test-project/main");
 
     Ok(())
 }

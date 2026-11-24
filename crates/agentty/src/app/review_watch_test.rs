@@ -1679,15 +1679,18 @@ async fn attention_retries_follow_ups_that_cannot_start_and_reports_them_once() 
     app.enable_review_watch(&session_id).await;
     // A running project sync blocks the conflict sync, and a waiting
     // generated turn rejects the review-comment turn.
-    app.project_sync_status = Some(ProjectSyncStatus {
-        context: ProjectSyncContext {
-            default_branch: "main".to_string(),
-            operation_id: 1,
-            project_id: app.active_project_id(),
-            project_name: "agentty".to_string(),
+    app.project_sync_statuses.insert(
+        app.active_project_id(),
+        ProjectSyncStatus {
+            context: ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id: app.active_project_id(),
+                project_name: "agentty".to_string(),
+            },
+            phase: ProjectSyncPhase::Running,
         },
-        phase: ProjectSyncPhase::Running,
-    });
+    );
     app.sessions
         .queue_generated_turn(&session_id, 0, "earlier follow-up".to_string());
 
@@ -1829,21 +1832,24 @@ async fn conflict_follow_up_blocked_by_a_project_sync_starts_on_the_next_report(
         .execute(&pool)
         .await
         .expect("drop watch table");
-    app.project_sync_status = Some(ProjectSyncStatus {
-        context: ProjectSyncContext {
-            default_branch: "main".to_string(),
-            operation_id: 1,
-            project_id: app.active_project_id(),
-            project_name: "agentty".to_string(),
+    app.project_sync_statuses.insert(
+        app.active_project_id(),
+        ProjectSyncStatus {
+            context: ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id: app.active_project_id(),
+                project_name: "agentty".to_string(),
+            },
+            phase: ProjectSyncPhase::Running,
         },
-        phase: ProjectSyncPhase::Running,
-    });
+    );
 
     // Act
     app.apply_review_request_attention(&session_id, conflict_attention())
         .await;
     let blocked_keys = app.review_watch.handled_keys.get(&session_id).cloned();
-    app.project_sync_status = None;
+    app.project_sync_statuses.clear();
     app.apply_review_request_attention(&session_id, conflict_attention())
         .await;
 

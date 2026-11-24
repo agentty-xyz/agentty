@@ -811,35 +811,27 @@ impl App {
     /// the latest background fetch, and the explicit sync the status bar
     /// shows for it. A sync of another project is left out.
     pub(super) fn api_project_status(&self) -> HostProjectStatus {
-        let project_id = self.active_project_id();
         let project = self.projects.render_parts();
 
         HostProjectStatus {
             ahead_behind: project.git_status,
             branch: project.git_branch.map(str::to_string),
             project_name: self.projects.project_name().to_string(),
-            sync: self
-                .project_sync_status
-                .as_ref()
-                .filter(|status| status.context.project_id == project_id)
-                .map(api_project_sync),
+            sync: self.active_project_sync_status().map(api_project_sync),
         }
     }
 
-    /// Starts or queues a sync of the active project's branch through the
+    /// Starts a sync of the active project's branch through the
     /// same workflow as the terminal's `s`, and reports a sync that the
     /// project policy refused to start.
     pub(super) fn sync_api_project(&mut self) -> Result<(), ApiSessionError> {
-        let project_id = self.active_project_id();
         self.start_sync_main();
-        let blocked_message = self
-            .project_sync_status
-            .as_ref()
-            .filter(|status| status.context.project_id == project_id)
-            .and_then(|status| match &status.phase {
-                ProjectSyncPhase::Blocked { message } => Some(message),
-                _ => None,
-            });
+        let blocked_message =
+            self.active_project_sync_status()
+                .and_then(|status| match &status.phase {
+                    ProjectSyncPhase::Blocked { message } => Some(message),
+                    _ => None,
+                });
         if let Some(message) = blocked_message {
             return Err(ApiSessionError::Operation(format!(
                 "Sync is blocked: {message}"

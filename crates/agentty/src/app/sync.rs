@@ -3,8 +3,10 @@
 //! One [`SyncOrchestrator`] task per app owns all recurring remote
 //! interaction for the active project: the periodic read-only status pass
 //! (`git fetch`, branch tracking statuses, review-request refreshes) and the
-//! user-triggered mutating main-branch sync. Routing both through one command
-//! queue serializes git operations without explicit locking.
+//! user-triggered mutating main-branch sync. Commands arrive through one
+//! queue. Each main-branch sync runs its Git work in its own task, so syncs
+//! of different projects proceed independently, and the background fetch of
+//! a syncing project pauses until its sync finishes.
 //!
 //! The app publishes versioned [`SyncContext`] snapshots through a
 //! `tokio::sync::watch` channel, so target changes (new sessions, linked
@@ -12,7 +14,7 @@
 //! restarting the task. Emitted status events carry the context generation so
 //! the reducer can discard completions computed from stale targets.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -142,6 +144,7 @@ impl SyncHandle {
             review_pass_index: 0,
             review_sync_cadences: HashMap::new(),
             review_sync_failures: HashMap::new(),
+            sync_main_tasks: SyncMainTasks::default(),
             tick_index: 0,
         };
 
@@ -447,8 +450,10 @@ fn review_target_polling_keys(
 ///
 /// Driven by a command queue plus one tick interval. Periodic passes stay
 /// read-only (fetch and forge queries); the mutating main-branch sync runs
-/// only for explicit [`SyncCommand::SyncMain`] requests and serializes with
-/// the periodic passes through the same queue.
+/// only for explicit [`SyncCommand::SyncMain`] requests. Each such sync runs
+/// its Git phases in a detached task, so later commands and periodic passes
+/// keep running alongside it. Only the syncing project's background fetch is
+/// skipped until the task reports back on the finished channel.
 pub(crate) struct SyncOrchestrator {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_comparison_cache: BaseComparisonCache,
@@ -459,6 +464,7 @@ pub(crate) struct SyncOrchestrator {
     review_pass_index: u64,
     review_sync_cadences: HashMap<SessionId, ReviewSyncCadenceState>,
     review_sync_failures: HashMap<SessionId, FailureBackoff>,
+    sync_main_tasks: SyncMainTasks,
     tick_index: u64,
 }
 
@@ -475,9 +481,10 @@ impl SyncOrchestrator {
 
     /// Runs the command/tick loop until the command channel closes.
     ///
-    /// Commands take priority over ticks, and every command-triggered pass
-    /// resets the tick timer so one refresh is never immediately duplicated
-    /// by the periodic cadence.
+    /// Reports from finished syncs come first, so a sync requested in
+    /// reaction to one finishing stays marked running. Commands take priority
+    /// over ticks, and every command-triggered pass resets the tick timer so
+    /// one refresh is never immediately duplicated by the periodic cadence.
     async fn run(mut self) {
         let mut tick = tokio::time::interval(Duration::from_secs(SYNC_TICK_INTERVAL_SECONDS));
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -485,6 +492,9 @@ impl SyncOrchestrator {
         loop {
             tokio::select! {
                 biased;
+                Some(finished) = self.sync_main_tasks.finished_rx.recv() => {
+                    self.finish_sync_main(&finished);
+                }
                 command = self.command_rx.recv() => {
                     let Some(command) = command else {
                         break;
@@ -611,11 +621,13 @@ impl SyncOrchestrator {
         outcome
     }
 
-    /// Fetches the project remote in one `git.fetch` phase unless repeated
-    /// failures put the project in backoff.
+    /// Fetches the project remote in one `git.fetch` phase unless the
+    /// project's explicit sync is running or repeated failures put the
+    /// project in backoff.
     ///
     /// Every call counts as one fetch pass, whether periodic or requested.
     /// A skipped fetch starts no phase, marks the enclosing trace with
+    /// `agentty.sync.fetch_deferred_for_sync` or
     /// `agentty.sync.fetch_backed_off`, and completes. A failed fetch extends
     /// the project's backoff window exponentially and ends its phase with
     /// the bounded [`ag_git::GitError::failure_class`] as `error.type` plus
@@ -627,6 +639,15 @@ impl SyncOrchestrator {
     ) -> Outcome {
         let fetch_pass_index = self.fetch_pass_index;
         self.fetch_pass_index = self.fetch_pass_index.wrapping_add(1);
+        if self
+            .sync_main_tasks
+            .running_project_ids
+            .contains(&context.project_id)
+        {
+            ag_telemetry::current_attribute("agentty.sync.fetch_deferred_for_sync", true);
+
+            return Outcome::Completed;
+        }
         if self
             .fetch_failures
             .get(&context.project_id)
@@ -829,13 +850,17 @@ impl SyncOrchestrator {
         }
     }
 
-    /// Runs one user-triggered main-branch sync.
+    /// Starts one user-triggered main-branch sync.
     ///
     /// Review-request state is refreshed before the mutating git phases, but
     /// successful terminal updates are emitted only after the main branch
     /// sync succeeds. That keeps externally merged session finalization behind
-    /// the updated local default branch for the manual `s` workflow. A
-    /// successful sync also clears the project's background fetch backoff.
+    /// the updated local default branch for the manual `s` workflow.
+    ///
+    /// The Git phases, which can wait minutes on assisted conflict
+    /// resolution, run in their own task so periodic passes and syncs of
+    /// other projects continue. The project's background fetch pauses until
+    /// that task reports back to [`Self::finish_sync_main`].
     ///
     /// Both phases and any conflict-assistance utilities nest beneath one
     /// independent `project.sync_main` trace, which fails with the sync.
@@ -847,69 +872,92 @@ impl SyncOrchestrator {
             sync_context,
         } = request;
         let trace = Span::root("project.sync_main", Vec::new());
-
-        let (review_request_updates, result) = async {
-            let review_request_updates = self
-                .collect_review_request_pass_updates(&sync_context, false, true)
-                .await;
-            // Scoping inside the trace parents conflict assistance beneath it.
-            let run_client = ag_worker::scoped_client(
-                Arc::clone(&sync_context.run_client),
-                ag_worker::RunScope {
-                    project_id: Some(sync_context.project_id),
-                    parent_id: Some(format!(
-                        "sync-{}-{}",
-                        operation.project_id, operation.operation_id
-                    )),
-                    purpose: Some("sync conflict assistance".to_string()),
-                    ..ag_worker::RunScope::default()
-                },
-            );
-            let result = session::SessionManager::sync_main_for_project(
-                sync_context.project_branch_name.clone(),
-                sync_context.working_dir.clone(),
-                Some(SyncMainEventContext {
-                    app_event_tx: app_event_tx.clone(),
-                    operation: operation.clone(),
-                }),
-                Arc::clone(&sync_context.git_client),
-                session_model,
-                run_client,
-            )
+        let review_request_updates = self
+            .collect_review_request_pass_updates(&sync_context, false, true)
+            .with_context(trace.context())
             .await;
+        self.sync_main_tasks
+            .running_project_ids
+            .insert(sync_context.project_id);
+        let finished_tx = self.sync_main_tasks.finished_tx.clone();
 
-            (review_request_updates, result)
-        }
-        .with_context(trace.context())
-        .await;
-        trace.finish(if result.is_ok() {
-            Outcome::Completed
-        } else {
-            Outcome::Failed
-        });
-        if result.is_ok() {
-            // A completed explicit sync shows the remote is reachable again,
-            // so the next status pass fetches instead of waiting out backoff.
-            self.fetch_failures.remove(&sync_context.project_id);
-        }
-        let review_request_updates = result.is_ok().then(|| {
-            review_request_updates
-                .into_iter()
-                .map(|update| SyncMainReviewUpdate {
-                    result: update.result,
-                    session_id: update.target.session_id,
-                })
-                .collect()
-        });
+        spawn::spawn_detached(async move {
+            let result = async {
+                // Scoping inside the trace parents conflict assistance beneath
+                // it.
+                let run_client = ag_worker::scoped_client(
+                    Arc::clone(&sync_context.run_client),
+                    ag_worker::RunScope {
+                        project_id: Some(sync_context.project_id),
+                        parent_id: Some(format!(
+                            "sync-{}-{}",
+                            operation.project_id, operation.operation_id
+                        )),
+                        purpose: Some("sync conflict assistance".to_string()),
+                        ..ag_worker::RunScope::default()
+                    },
+                );
 
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = app_event_tx.send(AppEvent::SyncMainCompleted {
-            completion: SyncMainCompletion {
-                operation,
-                result,
-                review_request_updates: review_request_updates.unwrap_or_default(),
-            },
+                session::SessionManager::sync_main_for_project(
+                    sync_context.project_branch_name.clone(),
+                    sync_context.working_dir.clone(),
+                    Some(SyncMainEventContext {
+                        app_event_tx: app_event_tx.clone(),
+                        operation: operation.clone(),
+                    }),
+                    Arc::clone(&sync_context.git_client),
+                    session_model,
+                    run_client,
+                )
+                .await
+            }
+            .with_context(trace.context())
+            .await;
+            trace.finish(if result.is_ok() {
+                Outcome::Completed
+            } else {
+                Outcome::Failed
+            });
+            let review_request_updates = if result.is_ok() {
+                review_request_updates
+                    .into_iter()
+                    .map(|update| SyncMainReviewUpdate {
+                        result: update.result,
+                        session_id: update.target.session_id,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            // Fire-and-forget: the orchestrator and the app may stop at
+            // shutdown. The orchestrator hears first so a sync requested in
+            // reaction to this completion cannot be marked finished early.
+            let _ = finished_tx.send(SyncMainFinished {
+                project_id: sync_context.project_id,
+                succeeded: result.is_ok(),
+            });
+            let _ = app_event_tx.send(AppEvent::SyncMainCompleted {
+                completion: SyncMainCompletion {
+                    operation,
+                    result,
+                    review_request_updates,
+                },
+            });
         });
+    }
+
+    /// Resumes the project's background fetch after its explicit sync.
+    ///
+    /// A successful sync shows the remote is reachable again, so it also
+    /// clears the fetch backoff and the next status pass fetches at once.
+    fn finish_sync_main(&mut self, finished: &SyncMainFinished) {
+        self.sync_main_tasks
+            .running_project_ids
+            .remove(&finished.project_id);
+        if finished.succeeded {
+            self.fetch_failures.remove(&finished.project_id);
+        }
     }
 
     /// Returns whether the app published a newer context since this pass
@@ -1061,6 +1109,35 @@ impl SyncOrchestrator {
         self.review_sync_failures
             .retain(|session_id, _| is_active(session_id));
     }
+}
+
+/// Explicit project syncs whose Git work runs beside the orchestrator loop.
+struct SyncMainTasks {
+    /// Reports from finished sync tasks, read by the orchestrator loop.
+    finished_rx: mpsc::UnboundedReceiver<SyncMainFinished>,
+    /// Sender cloned into each spawned sync task.
+    finished_tx: mpsc::UnboundedSender<SyncMainFinished>,
+    /// Projects whose sync is still running, so their background fetch
+    /// cannot race the sync's own pull and push.
+    running_project_ids: HashSet<i64>,
+}
+
+impl Default for SyncMainTasks {
+    fn default() -> Self {
+        let (finished_tx, finished_rx) = mpsc::unbounded_channel();
+
+        Self {
+            finished_rx,
+            finished_tx,
+            running_project_ids: HashSet::new(),
+        }
+    }
+}
+
+/// Report one spawned project sync sends back to the orchestrator.
+struct SyncMainFinished {
+    project_id: i64,
+    succeeded: bool,
 }
 
 /// Review-request work included in one read-only refresh pass.

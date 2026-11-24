@@ -127,7 +127,7 @@ async fn superseded_project_sync_completions_do_not_reconcile_session_state() {
         .expect("failed to create session dir");
     app.refresh_sessions_now().await;
     app.latest_project_sync_operation_ids.insert(project_id, 2);
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: sync::ProjectSyncContext {
             default_branch: "main".to_string(),
             operation_id: 2,
@@ -166,7 +166,7 @@ async fn superseded_project_sync_completions_do_not_reconcile_session_state() {
         .expect("session should remain loaded");
     assert_eq!(session.status, Status::Review);
     assert!(matches!(
-        app.project_sync_status.as_ref(),
+        app.active_project_sync_status(),
         Some(sync::ProjectSyncStatus {
             context,
             phase: sync::ProjectSyncPhase::Running,
@@ -387,8 +387,7 @@ async fn project_sync_reports_undetected_default_branch() {
 
     // Assert
     assert_eq!(
-        app.project_sync_status
-            .as_ref()
+        app.active_project_sync_status()
             .map(|status| status.context.default_branch.as_str()),
         Some("not detected")
     );
@@ -453,7 +452,7 @@ async fn project_sync_completion_preserves_the_active_navigation_mode() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let project_id = app.active_project_id();
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: sync::ProjectSyncContext {
             default_branch: "main".to_string(),
             operation_id: 1,
@@ -478,13 +477,16 @@ async fn project_sync_completion_preserves_the_active_navigation_mode() {
         }
     ));
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(sync::ProjectSyncPhase::Complete {
             pulled_commits: Some(2),
             ..
         })
     ));
-    assert!(app.project_sync_status_expires_at.is_some());
+    assert!(
+        app.project_sync_status_expirations
+            .contains_key(&project_id)
+    );
 }
 
 #[tokio::test]
@@ -492,7 +494,7 @@ async fn project_sync_terminal_status_expires_at_its_deadline() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let project_id = app.active_project_id();
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: sync::ProjectSyncContext {
             default_branch: "main".to_string(),
             operation_id: 1,
@@ -505,8 +507,9 @@ async fn project_sync_terminal_status_expires_at_its_deadline() {
     app.apply_app_events(successful_manual_sync(project_id, "main", 2))
         .await;
     let after_completion = app.services.clock().now_instant();
-    let expires_at = app
-        .project_sync_status_expires_at
+    let expires_at = *app
+        .project_sync_status_expirations
+        .get(&project_id)
         .expect("terminal sync status should have an expiry");
 
     // Assert
@@ -523,15 +526,15 @@ async fn project_sync_terminal_status_expires_at_its_deadline() {
     );
 
     // Assert
-    assert!(app.project_sync_status.is_some());
+    assert!(app.active_project_sync_status().is_some());
 
     // Act
     app.clear_redraw();
     app.expire_project_sync_status(expires_at);
 
     // Assert
-    assert!(app.project_sync_status.is_none());
-    assert!(app.project_sync_status_expires_at.is_none());
+    assert!(app.project_sync_statuses.is_empty());
+    assert!(app.project_sync_status_expirations.is_empty());
     assert!(app.needs_redraw());
 }
 
@@ -553,10 +556,10 @@ async fn project_sync_running_status_has_no_expiry() {
 
     // Assert
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(sync::ProjectSyncPhase::Running)
     ));
-    assert!(app.project_sync_status_expires_at.is_none());
+    assert!(app.project_sync_status_expirations.is_empty());
 }
 
 #[tokio::test]
@@ -570,7 +573,7 @@ async fn project_sync_completion_applies_captured_review_updates() {
         project_id,
         project_name: "agentty".to_string(),
     };
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: operation.clone(),
         phase: sync::ProjectSyncPhase::Running,
     });
@@ -591,7 +594,7 @@ async fn project_sync_completion_applies_captured_review_updates() {
 
     // Assert
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(sync::ProjectSyncPhase::Complete { .. })
     ));
 }
@@ -605,7 +608,7 @@ async fn project_sync_blocks_only_base_checkout_operations_for_its_project() {
         .await
         .expect("session should be created before sync");
     let project_id = app.active_project_id();
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: sync::ProjectSyncContext {
             default_branch: "main".to_string(),
             operation_id: 1,
@@ -684,7 +687,7 @@ async fn project_sync_completion_reconciles_after_switching_back_to_its_project(
     )
     .await
     .expect("failed to build app");
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: sync::ProjectSyncContext {
             default_branch: "main".to_string(),
             operation_id: 1,
@@ -703,18 +706,20 @@ async fn project_sync_completion_reconciles_after_switching_back_to_its_project(
     let was_deferred = app
         .pending_project_sync_completions
         .contains_key(&first_project_id);
+    let is_shown_in_other_project = app.active_project_sync_status().is_some();
     app.switch_project(first_project_id)
         .await
         .expect("failed to switch back to synced project");
 
     // Assert
     assert!(was_deferred);
+    assert!(!is_shown_in_other_project);
     assert!(
         !app.pending_project_sync_completions
             .contains_key(&first_project_id)
     );
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(sync::ProjectSyncPhase::Complete {
             pulled_commits: Some(3),
             ..
@@ -723,7 +728,7 @@ async fn project_sync_completion_reconciles_after_switching_back_to_its_project(
 }
 
 #[tokio::test]
-async fn project_sync_queues_other_project_and_coalesces_duplicate_request() {
+async fn project_syncs_run_concurrently_across_projects_and_coalesce_duplicates() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
     let first_project_id = app.active_project_id();
@@ -751,25 +756,31 @@ async fn project_sync_queues_other_project_and_coalesces_duplicate_request() {
     // Act
     app.start_sync_main();
     app.start_sync_main();
-    let queued_request_count = app.pending_project_sync_requests.len();
+    let second_checkout_result = app.ensure_project_checkout_available(second_project_id);
     app.apply_app_events(successful_manual_sync(first_project_id, "main", 1))
         .await;
 
     // Assert
-    assert_eq!(queued_request_count, 1);
-    assert!(app.pending_project_sync_requests.is_empty());
     assert_eq!(
         *started_project_ids
             .lock()
             .expect("started project ids lock should remain available"),
         vec![first_project_id, second_project_id]
     );
+    assert!(second_checkout_result.is_err());
     assert!(matches!(
-        app.project_sync_status.as_ref(),
+        app.active_project_sync_status(),
         Some(sync::ProjectSyncStatus {
             context,
+            phase: sync::ProjectSyncPhase::Complete { .. },
+        }) if context.project_id == first_project_id
+    ));
+    assert!(matches!(
+        app.project_sync_statuses.get(&second_project_id),
+        Some(sync::ProjectSyncStatus {
             phase: sync::ProjectSyncPhase::Running,
-        }) if context.project_id == second_project_id
+            ..
+        })
     ));
 }
 
@@ -777,6 +788,7 @@ async fn project_sync_queues_other_project_and_coalesces_duplicate_request() {
 async fn project_sync_is_blocked_while_merge_work_is_pending() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
     let mut sync_main_runner = crate::app::test_support::MockSyncMainRunner::new();
     sync_main_runner.expect_start_sync_main().times(0);
     app.sync_main_runner = Arc::new(sync_main_runner);
@@ -788,11 +800,14 @@ async fn project_sync_is_blocked_while_merge_work_is_pending() {
     // Assert
     assert!(app.merge_queue.is_queued_or_active("pending-merge"));
     assert!(matches!(
-        app.project_sync_status.as_ref().map(|status| &status.phase),
+        app.active_project_sync_status().map(|status| &status.phase),
         Some(sync::ProjectSyncPhase::Blocked { message })
             if message.contains("merge is active or queued")
     ));
-    assert!(app.project_sync_status_expires_at.is_some());
+    assert!(
+        app.project_sync_status_expirations
+            .contains_key(&project_id)
+    );
 }
 
 #[tokio::test]
@@ -814,42 +829,37 @@ async fn terminal_project_sync_steps_advance_the_remote_revision() {
     };
     let initial_revision = revision(&mut app);
     let first_project_context = app.sync_handle.context_snapshot();
+    let second_project_id = app.active_project_id() + 1;
 
     // Act: a started sync, a duplicate, and a sync of another project that
-    // waits for the first.
+    // devices do not see.
     app.start_sync_main();
     let after_start = revision(&mut app);
     app.start_sync_main();
     let after_duplicate = revision(&mut app);
     let mut second_project_context = first_project_context.clone();
-    second_project_context.project_id = app.active_project_id() + 1;
+    second_project_context.project_id = second_project_id;
     second_project_context.project_name = "second-project".to_string();
     app.sync_handle.publish_context(second_project_context);
     app.start_sync_main();
-    let after_queued = revision(&mut app);
-    // The first sync ends, so the queued one starts; devices see only the
-    // active project's sync, which is gone.
-    app.project_sync_status = None;
-    app.start_next_project_sync_from_queue();
-    let after_queued_start = revision(&mut app);
+    let after_other_start = revision(&mut app);
     // A merge now blocks a new sync of the second project, which devices do
     // not see, and then one of the active project, which they do.
-    app.project_sync_status = None;
+    app.project_sync_statuses.remove(&second_project_id);
     app.merge_queue.enqueue("pending-merge".into());
     app.start_sync_main();
     let after_other_blocked = revision(&mut app);
     app.sync_handle.publish_context(first_project_context);
-    app.project_sync_status = None;
+    app.project_sync_statuses.clear();
     app.start_sync_main();
     let after_active_blocked = revision(&mut app);
 
     // Assert
     assert_eq!(after_start, initial_revision + 1);
     assert_eq!(after_duplicate, after_start);
-    assert_eq!(after_queued, after_start);
-    assert_eq!(after_queued_start, after_start + 1);
-    assert_eq!(after_other_blocked, after_queued_start);
-    assert_eq!(after_active_blocked, after_queued_start + 1);
+    assert_eq!(after_other_start, after_start);
+    assert_eq!(after_other_blocked, after_start);
+    assert_eq!(after_active_blocked, after_start + 1);
 }
 
 #[tokio::test]
@@ -894,37 +904,25 @@ async fn programmatic_project_sync_is_refused_while_merge_work_is_pending() {
 }
 
 #[tokio::test]
-async fn project_sync_scheduler_keeps_requests_queued_while_slots_are_occupied() {
+async fn merge_queue_drain_ignores_syncs_of_other_projects() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-    let mut sync_main_runner = crate::app::test_support::MockSyncMainRunner::new();
-    sync_main_runner
-        .expect_start_sync_main()
-        .times(1)
-        .returning(|_, _, _, _| {
-            // Keep the first operation running so the queued request can be
-            // inspected.
-        });
-    app.sync_main_runner = Arc::new(sync_main_runner);
-    app.start_sync_main();
-    let mut second_project_context = app.sync_handle.context_snapshot();
-    second_project_context.project_id = app.active_project_id() + 1;
-    second_project_context.project_name = "second-project".to_string();
-    app.sync_handle.publish_context(second_project_context);
-    app.start_sync_main();
+    app.set_project_sync_status(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id: app.active_project_id() + 1,
+            project_name: "second-project".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.merge_queue.enqueue("missing-merge".into());
 
     // Act
-    app.start_next_project_sync_from_queue();
-    app.resume_base_checkout_work().await;
-    let queued_during_sync = app.pending_project_sync_requests.len();
-    app.project_sync_status = None;
-    app.merge_queue.set_active("active-merge".into());
     app.resume_base_checkout_work().await;
 
     // Assert
-    assert_eq!(queued_during_sync, 1);
-    assert_eq!(app.pending_project_sync_requests.len(), 1);
-    assert!(app.merge_queue.has_active());
+    assert!(!app.merge_queue.is_queued_or_active("missing-merge"));
 }
 
 #[tokio::test]
@@ -1177,7 +1175,7 @@ async fn complete_externally_merged_session_ignores_invalid_done_transition() {
 async fn merge_queue_drain_waits_for_active_project_sync() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: sync::ProjectSyncContext {
             default_branch: "main".to_string(),
             operation_id: 1,
@@ -1503,7 +1501,7 @@ async fn apply_app_events_sync_conflicts_updates_non_modal_status() {
         project_id: app.active_project_id(),
         project_name: "agentty".to_string(),
     };
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: operation.clone(),
         phase: sync::ProjectSyncPhase::Running,
     });
@@ -1519,7 +1517,7 @@ async fn apply_app_events_sync_conflicts_updates_non_modal_status() {
     // Assert
     assert!(matches!(app.mode, AppMode::List));
     assert!(matches!(
-        app.project_sync_status,
+        app.active_project_sync_status(),
         Some(sync::ProjectSyncStatus {
             phase: sync::ProjectSyncPhase::ResolvingConflicts {
                 conflicted_file_count: 2
@@ -1539,7 +1537,7 @@ async fn apply_app_events_stale_sync_conflict_does_not_replace_live_status() {
         project_id: app.active_project_id(),
         project_name: "agentty".to_string(),
     };
-    app.project_sync_status = Some(sync::ProjectSyncStatus {
+    app.set_project_sync_status(sync::ProjectSyncStatus {
         context: live_operation.clone(),
         phase: sync::ProjectSyncPhase::Running,
     });
@@ -1555,7 +1553,7 @@ async fn apply_app_events_stale_sync_conflict_does_not_replace_live_status() {
 
     // Assert
     assert!(matches!(
-        app.project_sync_status,
+        app.active_project_sync_status(),
         Some(sync::ProjectSyncStatus {
             phase: sync::ProjectSyncPhase::Running,
             ..
@@ -1582,7 +1580,7 @@ async fn apply_app_events_sync_conflict_without_running_status_is_ignored() {
     .await;
 
     // Assert
-    assert!(app.project_sync_status.is_none());
+    assert!(app.project_sync_statuses.is_empty());
 }
 
 #[tokio::test]
