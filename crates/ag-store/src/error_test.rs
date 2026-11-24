@@ -36,23 +36,23 @@ fn open_failures_keep_their_category() {
     // Arrange
     let io_error = ag_sqlite::Error::Io(io::Error::other("disk"));
     let query_error = ag_sqlite::Error::Sqlx {
-        operation: "connect to database",
+        operation: "open app database",
         source: sqlx::Error::PoolTimedOut,
     };
     let migration_error = ag_sqlite::Error::Migrate {
-        operation: "migrate database",
+        operation: "migrate app database",
         source: MigrateError::VersionMissing(7),
     };
 
     // Act
-    let errors = [io_error, query_error, migration_error].map(DbError::from);
+    let errors = [io_error, query_error, migration_error].map(DbError::from_open);
 
     // Assert
     assert!(matches!(errors[0], DbError::Io(_)));
     assert!(matches!(
         errors[1],
         DbError::QueryContext {
-            operation: "connect to database",
+            operation: "open app database",
             source: sqlx::Error::PoolTimedOut,
         }
     ));

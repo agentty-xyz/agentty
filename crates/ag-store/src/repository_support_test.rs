@@ -5,13 +5,15 @@
 //! fixture deserializes that snapshot instead of replaying every migration.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteOwnedBuf, SqlitePoolOptions};
 
-use crate::connection::{Database, MIGRATOR, in_memory_connect_options, open_in_memory_pool};
+use crate::connection::{
+    Database, INTERACTIVE_BUSY_TIMEOUT, MIGRATOR, open_in_memory_pool, open_options,
+};
 use crate::repository::{AppRepositories, RepositorySet};
 use crate::timestamp::{TimestampSource, system_timestamp_source};
 
@@ -194,7 +196,7 @@ async fn open_snapshot_pool() -> Result<SqlitePool, crate::DbError> {
                 connection.deserialize(None, data, false).await
             })
         })
-        .connect_with(in_memory_connect_options())
+        .connect_with(open_options(INTERACTIVE_BUSY_TIMEOUT).connect_options(Path::new(":memory:")))
         .await?;
 
     Ok(pool)
@@ -209,7 +211,7 @@ async fn load_or_create_snapshot() -> Result<Vec<u8>, crate::DbError> {
     {
         return Ok(snapshot);
     }
-    let pool = open_in_memory_pool(1).await?;
+    let pool = open_in_memory_pool().await?;
     let snapshot = pool.acquire().await?.serialize(None).await?.to_vec();
     let staging = path.with_extension(format!("{}.tmp", std::process::id()));
     tokio::fs::write(&staging, &snapshot).await?;

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ag_sqlite::OpenOptions;
+use ag_sqlite::{OpenOptions, OperationLabels};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,9 +51,16 @@ pub const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 /// Harness connection policy: `FULL` durability, so a committed turn survives
-/// power loss, and at most four pooled connections.
+/// power loss, at most four pooled connections, and labels naming the
+/// persistent session database.
 const OPEN_OPTIONS: OpenOptions = OpenOptions {
     busy_timeout: SQLITE_BUSY_TIMEOUT,
+    labels: OperationLabels {
+        check_migrations: "check persistent session migrations",
+        connect: "open persistent session database",
+        create: "create persistent session database",
+        migrate: "migrate persistent session database",
+    },
     max_connections: 4,
     synchronous: SqliteSynchronous::Full,
 };

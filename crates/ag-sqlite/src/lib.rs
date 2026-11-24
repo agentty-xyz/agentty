@@ -1,9 +1,9 @@
 //! Opening, migrating, and beginning transactions on `SQLite` databases that
 //! several processes and pools share.
 //!
-//! Each store keeps its own schema, busy timeout, and durability; this crate
-//! owns the parts that depend on `SQLite` and `SQLx` internals, so an `SQLx`
-//! upgrade is rechecked in one place.
+//! Each store keeps its own schema, busy timeout, durability, and error
+//! labels; this crate owns the parts that depend on `SQLite` and `SQLx`
+//! internals, so an `SQLx` upgrade is rechecked in one place.
 
 use std::io::{self, ErrorKind};
 use std::path::Path;
@@ -19,6 +19,8 @@ pub struct OpenOptions {
     /// How long a connection waits for another connection's lock, and a
     /// caller for a pooled connection, before failing.
     pub busy_timeout: Duration,
+    /// Labels that name the store in open failures.
+    pub labels: OperationLabels,
     /// Maximum pooled connections to an on-disk database.
     pub max_connections: u32,
     /// Durability of commits in WAL mode.
@@ -37,6 +39,20 @@ impl OpenOptions {
             .synchronous(self.synchronous)
             .foreign_keys(true)
     }
+}
+
+/// Stable operation labels a store gives its open failures, so a failure
+/// names the database it concerns.
+#[derive(Clone, Copy, Debug)]
+pub struct OperationLabels {
+    /// Label of a failure while checking for pending migrations.
+    pub check_migrations: &'static str,
+    /// Label of a failure while connecting the pool.
+    pub connect: &'static str,
+    /// Label of a failure while creating a missing database file.
+    pub create: &'static str,
+    /// Label of a failure while applying or validating migrations.
+    pub migrate: &'static str,
 }
 
 /// Failure to open or migrate a database.
@@ -67,18 +83,6 @@ pub enum Error {
         source: MigrateError,
     },
 }
-
-/// Label of a failure while creating a missing database file.
-const CREATE_OPERATION: &str = "create database";
-
-/// Label of a failure while connecting the pool.
-const CONNECT_OPERATION: &str = "connect to database";
-
-/// Label of a failure while checking for pending migrations.
-const CHECK_MIGRATIONS_OPERATION: &str = "check database migrations";
-
-/// Label of a failure while applying or validating migrations.
-const MIGRATE_OPERATION: &str = "migrate database";
 
 /// Opens the database at `path` with `options` and applies `migrator`.
 ///
@@ -119,60 +123,11 @@ pub async fn open(
     let pool = pool_options
         .connect_with(options.connect_options(path))
         .await
-        .context(CONNECT_OPERATION)?;
+        .context(options.labels.connect)?;
 
-    migrate(&pool, migrator).await?;
+    migrate(&pool, migrator, &options.labels).await?;
 
     Ok(pool)
-}
-
-/// Applies `migrator`'s pending migrations while holding the database write
-/// lock, and only validates applied ones when none is pending.
-///
-/// `SQLx` does not lock `SQLite` migrations (its `Migrate::lock` for `SQLite`
-/// is a no-op), so concurrent opens would each list the same pending
-/// migrations and apply them twice. `BEGIN IMMEDIATE` serializes them: later
-/// openers wait (up to the busy timeout) for the lock, then find every
-/// migration applied. An up-to-date database is checked with reads alone, so
-/// opening it never waits behind another writer.
-///
-/// # Errors
-/// Returns an error if a migration opts out of transactions, the write lock
-/// cannot be taken within the busy timeout, or a migration fails to apply or
-/// validate.
-pub async fn migrate(pool: &SqlitePool, migrator: &Migrator) -> Result<(), Error> {
-    // A migration opting out of transactions would silently run inside the
-    // lock below, where `VACUUM` fails and `PRAGMA foreign_keys` is ignored.
-    if let Some(migration) = migrator.iter().find(|migration| migration.no_tx) {
-        return Err(MigrateError::Source(
-            format!(
-                "migration {} opts out of transactions, which the locked migration path cannot \
-                 apply",
-                migration.version
-            )
-            .into(),
-        ))
-        .context(MIGRATE_OPERATION);
-    }
-    if !has_pending_migration(pool, migrator).await? {
-        return migrator.run(pool).await.context(MIGRATE_OPERATION);
-    }
-
-    let mut transaction = begin_write(pool).await.context(MIGRATE_OPERATION)?;
-    // `run_direct` is hidden from `SQLx`'s docs and semver. The public
-    // `migrator.run(&mut *transaction)` does not compile here: its `Acquire`
-    // bound trips rust-lang/rust#100013 in this `Send` future, and `SQLx`
-    // keeps `run_direct` for exactly that error. Inside the transaction,
-    // `SQLx`'s `SQLite` `Migrate::apply` nests each migration in a
-    // `SAVEPOINT`. Recheck both assumptions, and whether `Migrate::lock`
-    // still does nothing for `SQLite`, when upgrading `SQLx`; this crate's
-    // contention tests fail if either breaks.
-    migrator
-        .run_direct(None, &mut *transaction, false)
-        .await
-        .context(MIGRATE_OPERATION)?;
-
-    transaction.commit().await.context(MIGRATE_OPERATION)
 }
 
 /// Begins a transaction that takes the database write lock up front.
@@ -241,10 +196,10 @@ async fn create_wal_database(path: &Path, options: &OpenOptions) -> Result<(), E
         .into_temp_path();
     SqliteConnection::connect_with(&options.connect_options(&staged))
         .await
-        .context(CREATE_OPERATION)?
+        .context(options.labels.create)?
         .close()
         .await
-        .context(CREATE_OPERATION)?;
+        .context(options.labels.create)?;
 
     match staged.persist_noclobber(path).map_err(|error| error.error) {
         Err(error) if error.kind() != ErrorKind::AlreadyExists => Err(error.into()),
@@ -252,10 +207,62 @@ async fn create_wal_database(path: &Path, options: &OpenOptions) -> Result<(), E
     }
 }
 
+/// Applies `migrator`'s pending migrations while holding the database write
+/// lock, and only validates applied ones when none is pending.
+///
+/// `SQLx` does not lock `SQLite` migrations (its `Migrate::lock` for `SQLite`
+/// is a no-op), so concurrent opens would each list the same pending
+/// migrations and apply them twice. `BEGIN IMMEDIATE` serializes them: later
+/// openers wait (up to the busy timeout) for the lock, then find every
+/// migration applied. An up-to-date database is checked with reads alone, so
+/// opening it never waits behind another writer.
+async fn migrate(
+    pool: &SqlitePool,
+    migrator: &Migrator,
+    labels: &OperationLabels,
+) -> Result<(), Error> {
+    // A migration opting out of transactions would silently run inside the
+    // lock below, where `VACUUM` fails and `PRAGMA foreign_keys` is ignored.
+    if let Some(migration) = migrator.iter().find(|migration| migration.no_tx) {
+        return Err(MigrateError::Source(
+            format!(
+                "migration {} opts out of transactions, which the locked migration path cannot \
+                 apply",
+                migration.version
+            )
+            .into(),
+        ))
+        .context(labels.migrate);
+    }
+    if !has_pending_migration(pool, migrator, labels).await? {
+        return migrator.run(pool).await.context(labels.migrate);
+    }
+
+    let mut transaction = begin_write(pool).await.context(labels.migrate)?;
+    // `run_direct` is hidden from `SQLx`'s docs and semver. The public
+    // `migrator.run(&mut *transaction)` does not compile here: its `Acquire`
+    // bound trips rust-lang/rust#100013 in this `Send` future, and `SQLx`
+    // keeps `run_direct` for exactly that error. Inside the transaction,
+    // `SQLx`'s `SQLite` `Migrate::apply` nests each migration in a
+    // `SAVEPOINT`. Recheck both assumptions, and whether `Migrate::lock`
+    // still does nothing for `SQLite`, when upgrading `SQLx`; this crate's
+    // contention tests fail if either breaks.
+    migrator
+        .run_direct(None, &mut *transaction, false)
+        .await
+        .context(labels.migrate)?;
+
+    transaction.commit().await.context(labels.migrate)
+}
+
 /// Returns whether `migrator` has a migration the database has not applied
 /// successfully, using reads only.
-async fn has_pending_migration(pool: &SqlitePool, migrator: &Migrator) -> Result<bool, Error> {
-    let mut connection = pool.acquire().await.context(CHECK_MIGRATIONS_OPERATION)?;
+async fn has_pending_migration(
+    pool: &SqlitePool,
+    migrator: &Migrator,
+    labels: &OperationLabels,
+) -> Result<bool, Error> {
+    let mut connection = pool.acquire().await.context(labels.check_migrations)?;
     // Unchecked queries: the migrations table belongs to `SQLx`, not to the
     // store's schema, and may not exist yet.
     let has_table = sqlx::query_scalar::<_, bool>(
@@ -264,7 +271,7 @@ async fn has_pending_migration(pool: &SqlitePool, migrator: &Migrator) -> Result
     )
     .fetch_one(&mut *connection)
     .await
-    .context(CHECK_MIGRATIONS_OPERATION)?;
+    .context(labels.check_migrations)?;
     if !has_table {
         return Ok(true);
     }
@@ -273,7 +280,7 @@ async fn has_pending_migration(pool: &SqlitePool, migrator: &Migrator) -> Result
         sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations WHERE success")
             .fetch_all(&mut *connection)
             .await
-            .context(CHECK_MIGRATIONS_OPERATION)?;
+            .context(labels.check_migrations)?;
 
     Ok(migrator.iter().any(|migration| {
         !migration.migration_type.is_down_migration() && !applied.contains(&migration.version)
