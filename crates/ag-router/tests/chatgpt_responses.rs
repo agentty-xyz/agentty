@@ -1,6 +1,6 @@
 //! External-consumer checks for `OpenAI` models billed to a `ChatGPT` plan:
 //! the router asks the host credential for a bearer token before every
-//! Responses request.
+//! Responses request, and keeps a session's requests on its cached prefix.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_router::{
     Completion, CredentialSource, ErrorClass, JsonSchemaFormat, ModelError, ModelMessage,
-    ModelRequest, OutputSchema, Router, preset,
+    ModelRequest, OutputSchema, Router, ToolDefinition, preset,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -133,6 +133,174 @@ async fn authenticates_each_request_with_a_token_from_the_credential() -> Result
             Completion::Output { ref value, .. } if *value == json!({"name": "Ada"})
         ));
     }
+
+    Ok(())
+}
+
+/// Returns a stream answering with `reasoning` and one `read` call.
+fn call_stream(reasoning: &str, call_id: &str, file: &str) -> String {
+    stream(&[
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "reasoning",
+                "id": reasoning,
+                "summary": [],
+                "encrypted_content": format!("gAAAA-{reasoning}")
+            }
+        }),
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": format!("fc_{call_id}"),
+                "call_id": call_id,
+                "name": "read",
+                "arguments": json!({"path": file}).to_string(),
+                "status": "completed"
+            }
+        }),
+        json!({
+            "type": "response.completed",
+            "response": {"id": "resp_calls", "model": "gpt-6-luna", "output": [], "status": "completed"}
+        }),
+    ])
+}
+
+/// Returns a request of the session keyed `ag-session-1` over `messages`,
+/// advertising one `read` tool.
+fn session_request(messages: Vec<ModelMessage>) -> Result<ModelRequest, Box<dyn Error>> {
+    let format = request()?
+        .response_format
+        .ok_or("response format expected")?;
+    let read = ToolDefinition::new(
+        "read",
+        "Read one file.",
+        json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+    );
+    let mut request = ModelRequest::chat("chatgpt/gpt-6-luna", messages, vec![read], format);
+    request.options.prompt_cache_key = Some("ag-session-1".to_string());
+
+    Ok(request)
+}
+
+/// Appends the turn of `completion`'s calls, each answered with its path.
+fn answer_calls(
+    messages: &mut Vec<ModelMessage>,
+    completion: Completion,
+) -> Result<(), Box<dyn Error>> {
+    let Completion::ToolCalls { calls, .. } = completion else {
+        return Err("tool calls expected".into());
+    };
+    let results = calls
+        .iter()
+        .map(|call| ModelMessage::ToolResult {
+            call_id: call.id().to_string(),
+            content: format!("contents of {}", call.arguments_json()),
+            name: call.name().to_string(),
+        })
+        .collect::<Vec<_>>();
+    messages.push(ModelMessage::AssistantToolCalls(calls));
+    messages.extend(results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn keeps_each_session_request_a_byte_prefix_of_the_next_on_one_session_id()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    for (reasoning, call_id, file) in [("rs_1", "call_1", "a.txt"), ("rs_2", "call_2", "b.txt")] {
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(call_stream(reasoning, call_id, file), "text/event-stream"),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(completed_stream(), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+    let router = router(&server, ScriptedCredential::new(&["plan-token"; 3]));
+    let mut messages = vec![ModelMessage::User("Extract the name".to_string())];
+
+    // Act
+    let first = router.execute(session_request(messages.clone())?).await?;
+    answer_calls(&mut messages, first)?;
+    let second = router.execute(session_request(messages.clone())?).await?;
+    answer_calls(&mut messages, second)?;
+    router.execute(session_request(messages)?).await?;
+
+    // Assert
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or("request recording disabled")?;
+    assert_eq!(requests.len(), 3);
+    for request in &requests {
+        assert!(
+            request
+                .headers
+                .get("session-id")
+                .is_some_and(|value| value == "ag-session-1")
+        );
+        let body = serde_json::from_slice::<Value>(&request.body)?;
+        assert_eq!(body["prompt_cache_key"], "ag-session-1");
+    }
+    // Everything up to the end of a request's input, which the model field
+    // follows, is sent again byte for byte, so the cached prefix holds.
+    for pair in requests.windows(2) {
+        let earlier = std::str::from_utf8(&pair[0].body)?;
+        let later = std::str::from_utf8(&pair[1].body)?;
+        let input_end = earlier
+            .rfind(r#"],"model":"#)
+            .ok_or("the model field follows the input")?;
+        assert!(later.starts_with(&earlier[..input_end]));
+        assert!(later.len() > earlier.len());
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sends_no_session_id_without_a_key_that_fits_a_header() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(completed_stream(), "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+    let router = router(&server, ScriptedCredential::new(&["plan-token"; 2]));
+    let mut multiline = request()?;
+    multiline.options.prompt_cache_key = Some("session\nkey".to_string());
+
+    // Act
+    router.execute(request()?).await?;
+    router.execute(multiline).await?;
+
+    // Assert
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or("request recording disabled")?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key("session-id"))
+    );
+    let multiline = serde_json::from_slice::<Value>(&requests[1].body)?;
+    assert_eq!(multiline["prompt_cache_key"], "session\nkey");
 
     Ok(())
 }

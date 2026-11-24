@@ -137,7 +137,9 @@ pub fn anthropic(
 
 /// `OpenAI` models billed to the user's `ChatGPT` plan through "Sign in with
 /// `ChatGPT`": the Responses API authenticated by a refreshing `credential`,
-/// without an output-token bound, which the plan backend rejects.
+/// without an output-token bound, which the plan backend rejects, and with
+/// the prompt cache key also sent as the `session-id` header the plan
+/// backend derives cache affinity from.
 pub fn chatgpt(
     base_url: impl Into<String>,
     credential: Arc<dyn CredentialSource>,
@@ -146,6 +148,7 @@ pub fn chatgpt(
     openai_responses("chatgpt", "ChatGPT plan", base_url, model)
         .with_auth(Auth::Credential(credential))
         .with_max_tokens_field(None)
+        .with_session_id_header(true)
 }
 
 /// Moonshot AI Kimi through its Chat Completions API: JSON Object mode,

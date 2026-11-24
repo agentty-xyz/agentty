@@ -264,6 +264,7 @@ pub struct ProviderSpec {
     pub(crate) replay: HistoryReplay,
     pub(crate) response_format_with_tools: bool,
     pub(crate) retry: RetryPolicy,
+    pub(crate) session_header: SessionHeader,
     pub(crate) stream_usage: StreamUsage,
     pub(crate) structured_output: StructuredOutputMode,
     pub(crate) thinking_binding: ThinkingBinding,
@@ -301,6 +302,16 @@ pub(crate) enum CacheBreakpoints {
     Marked,
     /// Send no `cache_control`.
     Unmarked,
+}
+
+/// Whether a Responses request carrying a prompt cache key also sends it as
+/// the `session-id` header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionHeader {
+    /// Send the key as the `session-id` header too.
+    Sent,
+    /// Send the key in the body only.
+    Unsent,
 }
 
 /// Whether a streamed Chat Completions request asks for its usage.
@@ -350,6 +361,7 @@ impl fmt::Debug for ProviderSpec {
             .field("image_input", &self.image_input)
             .field("instruction_placement", &self.instruction_placement)
             .field("prompt_cache_key", &self.prompt_cache_key)
+            .field("session_header", &self.session_header)
             .field("cache_breakpoints", &self.cache_breakpoints)
             .field(
                 "response_format_with_tools",
@@ -435,6 +447,7 @@ impl ProviderSpec {
             replay: HistoryReplay::default(),
             response_format_with_tools: false,
             retry: RetryPolicy::default(),
+            session_header: SessionHeader::Unsent,
             stream_usage: if chat {
                 StreamUsage::Requested
             } else {
@@ -597,6 +610,22 @@ impl ProviderSpec {
     #[must_use]
     pub fn with_prompt_cache_key(mut self, prompt_cache_key: bool) -> Self {
         self.prompt_cache_key = prompt_cache_key;
+
+        self
+    }
+
+    /// Sets whether a Responses request that carries a prompt cache key also
+    /// sends it as the `session-id` header, from which a provider such as
+    /// the `ChatGPT` plan backend routes the request to the machine holding
+    /// its cached prefix, as Codex CLI sends it. Off by default; other
+    /// protocols cannot express it.
+    #[must_use]
+    pub fn with_session_id_header(mut self, session_id_header: bool) -> Self {
+        self.session_header = if session_id_header {
+            SessionHeader::Sent
+        } else {
+            SessionHeader::Unsent
+        };
 
         self
     }
@@ -886,6 +915,11 @@ impl ProviderSpec {
     /// Rejects an option the protocol cannot express.
     fn validate_protocol(&self) -> Result<(), ModelError> {
         let unsupported = match self.protocol {
+            WireProtocol::AnthropicMessages | WireProtocol::ChatCompletions
+                if self.session_header == SessionHeader::Sent =>
+            {
+                Some("the `session-id` header")
+            }
             WireProtocol::AnthropicMessages => self.unsupported_by_anthropic(),
             _ if self.fallback_max_tokens.is_some() => Some("a fallback `max_tokens`"),
             _ if self.cache_breakpoints == CacheBreakpoints::Marked => {

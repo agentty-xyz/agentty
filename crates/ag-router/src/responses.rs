@@ -8,13 +8,14 @@
 //! travel as one JSON array in the provider-neutral reasoning content of its
 //! first call or output, and are replayed before that assistant turn; other
 //! reasoning content, such as text the caller cleared to save context or
-//! another provider's reasoning, is omitted.
+//! another provider's reasoning, is omitted. A provider that routes by the
+//! `session-id` header also receives the prompt cache key there.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -23,7 +24,7 @@ use crate::http::{
     deserialize_optional,
 };
 use crate::model::GeneratedResponse;
-use crate::provider_spec::{ProviderSpec, ReasoningMapping};
+use crate::provider_spec::{ProviderSpec, ReasoningMapping, SessionHeader};
 use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
 use crate::stream::{DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
@@ -37,6 +38,9 @@ const TERMINAL_EVENTS: [&str; 3] = [
 ];
 /// Path of the Responses endpoint under a provider base URL.
 pub(crate) const ENDPOINT_PATH: &str = "responses";
+/// Header carrying the prompt cache key to a provider that routes requests
+/// to the machine holding their cached prefix by it, as Codex CLI sends it.
+const SESSION_ID_HEADER: HeaderName = HeaderName::from_static("session-id");
 
 /// Structured-output backend for the `OpenAI` Responses API, applying the
 /// request policy of one [`ProviderSpec`].
@@ -78,17 +82,18 @@ impl<'spec> ResponsesBackend<'spec> {
     ) -> Result<GeneratedResponse, model::ModelError> {
         self.policy
             .validate_inputs(&self.model, request.messages())?;
+        let prompt_cache_key = self
+            .policy
+            .prompt_cache_key
+            .then_some(request.options.prompt_cache_key.as_deref())
+            .flatten();
         let payload = ResponsesPayload {
             include: ["reasoning.encrypted_content"],
             input: Self::input(request),
             max_output_tokens: request.options.max_output_tokens.map(NonZeroU32::get),
             model: &self.model,
             parallel_tool_calls: true,
-            prompt_cache_key: self
-                .policy
-                .prompt_cache_key
-                .then_some(request.options.prompt_cache_key.as_deref())
-                .flatten(),
+            prompt_cache_key,
             reasoning: match &self.policy.reasoning {
                 ReasoningMapping::Effort(names) => {
                     request
@@ -116,7 +121,7 @@ impl<'spec> ResponsesBackend<'spec> {
         };
         let payload = serde_json::to_value(payload).map_err(model::ModelError::request)?;
         let request_body = ProviderRequest::new(
-            self.headers.clone(),
+            self.request_headers(prompt_cache_key),
             self.policy.endpoint(ENDPOINT_PATH),
             payload,
         )
@@ -126,6 +131,22 @@ impl<'spec> ResponsesBackend<'spec> {
         })?;
 
         Ok(self.decode(response))
+    }
+
+    /// Returns the request headers, adding the sent `prompt_cache_key` as
+    /// the `session-id` header when the provider derives cache affinity
+    /// from it. A key that cannot be a header value is sent in the body
+    /// only, since affinity merely improves cache hits.
+    fn request_headers(&self, prompt_cache_key: Option<&str>) -> HeaderMap {
+        let mut headers = self.headers.clone();
+        let session_id = prompt_cache_key
+            .filter(|_| self.policy.session_header == SessionHeader::Sent)
+            .and_then(|key| HeaderValue::from_str(key).ok());
+        if let Some(session_id) = session_id {
+            headers.insert(SESSION_ID_HEADER, session_id);
+        }
+
+        headers
     }
 
     async fn create(&self, request: &ProviderRequest) -> Result<ResponsesResponse, TransportError> {

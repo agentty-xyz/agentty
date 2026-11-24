@@ -190,7 +190,10 @@ deltas were already reported.
 `chatgpt` sends the same Responses requests billed to the user's ChatGPT plan through
 OpenAI's "Sign in with ChatGPT" instead of API credits. Its preset authenticates with
 `Auth::Credential`, a `CredentialSource` the router asks for a token before each
-request. `chatgpt::ChatGptLogin` runs the browser sign-in (PKCE against
+request. It also sends the prompt cache key as the `session-id` header
+(`ProviderSpec::with_session_id_header`), from which the plan backend derives
+prompt-cache affinity; without it, a session's requests reach machines that do not hold
+their cached prefix. `chatgpt::ChatGptLogin` runs the browser sign-in (PKCE against
 `auth.openai.com`, registering the app as "Agentty" on first use and reusing that
 `client_id` afterwards) and `chatgpt::ChatGptAuth` reads the stored
 `chatgpt::ChatGptCredentials`, refreshing the one-hour access token five minutes before

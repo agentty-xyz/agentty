@@ -660,6 +660,7 @@ pub fn ag_router::ProviderSpec::with_reasoning(self, ag_router::ReasoningMapping
 pub fn ag_router::ProviderSpec::with_reasoning_text_replay(self, bool) -> Self
 pub fn ag_router::ProviderSpec::with_response_format_with_tools(self, bool) -> Self
 pub fn ag_router::ProviderSpec::with_retry(self, ag_router::RetryPolicy) -> Self
+pub fn ag_router::ProviderSpec::with_session_id_header(self, bool) -> Self
 pub fn ag_router::ProviderSpec::with_stream_usage(self, bool) -> Self
 pub fn ag_router::ProviderSpec::with_structured_output(self, ag_router::StructuredOutputMode) -> Self
 pub fn ag_router::ProviderSpec::with_tool_result_name(self, bool) -> Self
