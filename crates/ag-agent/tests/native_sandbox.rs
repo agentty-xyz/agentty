@@ -258,8 +258,8 @@ async fn session_gets_verified_copies_and_cannot_reach_the_cache() -> TestResult
     let command = format!(
         "cat \"$CARGO_HOME\"/registry/cache/index.crates.io-*/leaf-1.0.0.crate > /dev/null && \
          echo copied; printf x >> '{archive}' && echo wrote-cache; touch '{}' && echo \
-         planted-cache; cat '{archive}' > /dev/null && echo read-cache; ls '{}' > /dev/null && \
-         echo listed-cache",
+         planted-cache; cat '{archive}' > /dev/null && echo read-cache; [ -z \"$(ls -A '{}' 2> \
+         /dev/null)\" ] && echo cache-hidden",
         planted.display(),
         cache_root.display(),
         archive = archive.display(),
@@ -296,7 +296,8 @@ async fn session_gets_verified_copies_and_cannot_reach_the_cache() -> TestResult
     assert_eq!(result?.assistant_message.answer, "Done");
     let bash_result = bash_result(&server, "Use the cache").await?;
     assert!(
-        bash_result.contains(r#"\"stdout\":\"copied\\n\""#),
+        // macOS denies listing the hidden cache; Linux shows it empty.
+        bash_result.contains(r#"\"stdout\":\"copied\\ncache-hidden\\n\""#),
         "{bash_result}"
     );
     let copy = fixture.session_copy(&archive)?;
