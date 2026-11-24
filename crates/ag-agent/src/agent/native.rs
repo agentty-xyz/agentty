@@ -9,6 +9,7 @@ mod output;
 mod run_projector;
 mod sandbox;
 mod sign_in;
+mod tool_description;
 mod turn;
 mod turn_error;
 

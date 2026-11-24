@@ -4,8 +4,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
-use ag_contracts::{ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus, TurnEvent};
+use ag_contracts::{ActivityEvent, ActivityFacts, ActivityFailure, ActivityStatus, TurnEvent};
+use ag_harness::bash::CommandExit;
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver, ToolErrorType};
+
+use super::tool_description::ToolDescription;
 
 /// Lifecycle observer that reports model waits, and optionally tool
 /// activity, for one harness attempt.
@@ -40,7 +43,8 @@ impl ActivityBridge {
     }
 
     /// Emits one tool snapshot, remembering the requested name for later
-    /// updates of the same call.
+    /// updates of the same call. Lifecycle events carry no arguments, so the
+    /// row is classified by the tool's name.
     fn tool(&self, tool_call_id: u64, requested_name: Option<&str>, update: ToolUpdate) {
         let name = {
             let mut tool_names = self
@@ -53,18 +57,16 @@ impl ActivityBridge {
 
             tool_names.get(&tool_call_id).cloned().unwrap_or_default()
         };
+        let id = tool_call_id.to_string();
+        let description = ToolDescription::new(&id, &name, None);
 
         (self.sink)(TurnEvent::Activity(ActivityEvent {
             attempt_id: self.attempt_id.clone(),
             exit_code: update.exit_code,
-            facts: Box::new(ActivityFacts {
-                duration: update.duration,
-                pipe_status: update.pipe_status,
-                ..ActivityFacts::default()
-            }),
-            id: tool_call_id.to_string(),
+            facts: Box::new(update.facts),
+            id,
             input: None,
-            kind: activity_kind(&name),
+            kind: description.kind,
             name,
             observed_at: SystemTime::now(),
             output: None,
@@ -97,35 +99,23 @@ impl LifecycleObserver for ActivityBridge {
             ),
             LifecycleEventKind::ToolCompleted {
                 duration,
-                exit_code,
-                pipe_status,
+                exit,
                 tool_call_id,
                 ..
             } => self.tool(
                 tool_call_id.get(),
                 None,
-                ToolUpdate {
-                    duration: Some(*duration),
-                    exit_code: exit_code.map(i64::from),
-                    pipe_status: pipe_status.iter().copied().map(i64::from).collect(),
-                    status: ActivityStatus::Completed,
-                },
+                ToolUpdate::completed(*duration, exit.as_ref()),
             ),
             LifecycleEventKind::ToolFailed {
                 error_type,
                 tool_call_id,
                 ..
-            } => self.tool(
-                tool_call_id.get(),
-                None,
-                ToolUpdate::status(failure_status(*error_type)),
-            ),
+            } => self.tool(tool_call_id.get(), None, ToolUpdate::failed(*error_type)),
             LifecycleEventKind::ToolDenied { tool_call_id, .. } => {
-                self.tool(
-                    tool_call_id.get(),
-                    None,
-                    ToolUpdate::status(ActivityStatus::Failed),
-                );
+                let mut update = ToolUpdate::status(ActivityStatus::Failed);
+                update.facts.failure = Some(ActivityFailure::Unavailable);
+                self.tool(tool_call_id.get(), None, update);
             }
             _ => {}
         }
@@ -134,9 +124,8 @@ impl LifecycleObserver for ActivityBridge {
 
 /// What one tool lifecycle event reports about its call.
 struct ToolUpdate {
-    duration: Option<Duration>,
     exit_code: Option<i64>,
-    pipe_status: Vec<i64>,
+    facts: ActivityFacts,
     status: ActivityStatus,
 }
 
@@ -144,29 +133,44 @@ impl ToolUpdate {
     /// Reports only a lifecycle state.
     fn status(status: ActivityStatus) -> Self {
         Self {
-            duration: None,
             exit_code: None,
-            pipe_status: Vec::new(),
+            facts: ActivityFacts::default(),
             status,
         }
     }
-}
 
-/// Returns the state of a call that failed with `error_type`: a cancelled
-/// call was interrupted.
-fn failure_status(error_type: ToolErrorType) -> ActivityStatus {
-    match error_type {
-        ToolErrorType::Cancelled => ActivityStatus::Interrupted,
-        _ => ActivityStatus::Failed,
+    /// Reports a call that completed after `duration`, with how a command
+    /// exited.
+    fn completed(duration: Duration, exit: Option<&CommandExit>) -> Self {
+        let mut update = Self::status(ActivityStatus::Completed);
+        update.facts.duration = Some(duration);
+        if let Some(exit) = exit {
+            update.exit_code = exit.exit_code.map(i64::from);
+            update.facts.pipe_status = exit.pipe_status.iter().copied().map(i64::from).collect();
+            update.facts.signal = exit.signal.map(i64::from);
+        }
+
+        update
     }
-}
 
-/// Classifies one built-in harness tool.
-fn activity_kind(tool_name: &str) -> ActivityKind {
-    match tool_name {
-        "bash" => ActivityKind::Command,
-        "write" => ActivityKind::FileChange,
-        _ => ActivityKind::Tool,
+    /// Reports a call that failed with `error_type`: a cancelled call was
+    /// interrupted, and any other failed for the reason the type names.
+    fn failed(error_type: ToolErrorType) -> Self {
+        if error_type == ToolErrorType::Cancelled {
+            return Self::status(ActivityStatus::Interrupted);
+        }
+        let mut update = Self::status(ActivityStatus::Failed);
+        update.facts.failure = Some(
+            [
+                (ToolErrorType::ApprovalDenied, ActivityFailure::Denied),
+                (ToolErrorType::ApprovalTimeout, ActivityFailure::TimedOut),
+            ]
+            .into_iter()
+            .find_map(|(known, failure)| (known == error_type).then_some(failure))
+            .unwrap_or(ActivityFailure::Error),
+        );
+
+        update
     }
 }
 

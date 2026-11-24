@@ -39,7 +39,9 @@ fn codex_lifecycle_deduplicates_snapshots_and_settles_unfinished_calls() {
     let events = events.lock().expect("test fixture should succeed");
     assert_eq!(events.len(), 5);
     assert_eq!(events[0].name, "shell");
-    assert_eq!(events[1].status, ActivityStatus::Failed);
+    // A nonzero exit leaves the item completed for its outcome to judge.
+    assert_eq!(events[1].status, ActivityStatus::Completed);
+    assert_eq!(events[1].outcome(), ActivityStatus::Failed);
     assert_eq!(events[1].exit_code, Some(1));
     assert_eq!(events[2].status, ActivityStatus::Completed);
     assert_eq!(events[4].status, ActivityStatus::Interrupted);
@@ -437,7 +439,7 @@ fn antigravity_projects_tool_steps_with_commands_output_and_failures() {
 }
 
 #[test]
-fn antigravity_emits_failed_status_for_completed_nonzero_exits_without_errors() {
+fn antigravity_completed_nonzero_exits_without_errors_have_a_failed_outcome() {
     for (state, info, expected) in [
         ("DONE", json!({"exit_code":1}), ActivityStatus::Failed),
         (
@@ -482,7 +484,7 @@ fn antigravity_emits_failed_status_for_completed_nonzero_exits_without_errors() 
         // Assert
         let events = events.lock().expect("events lock");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].status, expected, "state={state}, info={info}");
+        assert_eq!(events[0].outcome(), expected, "state={state}, info={info}");
         assert_eq!(events[0].kind, ActivityKind::Command);
         assert_eq!(events[0].exit_code, info["exit_code"].as_i64());
     }
@@ -601,7 +603,10 @@ fn codex_command_actions_report_exploration_kinds_and_durations() {
         call("mixed"),
         (ActivityKind::Command, Some("cat a.rs | rg x"))
     );
-    assert_eq!(call("build"), (ActivityKind::Command, Some("cargo build")));
+    assert_eq!(
+        call("build"),
+        (ActivityKind::Command, Some("cargo build --release"))
+    );
     assert_eq!(observer.calls["build"].facts.duration, None);
 }
 

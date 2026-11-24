@@ -1,8 +1,10 @@
 //! Bounded, terminal-safe previews of provider tool content.
 
-use ag_contracts::{ActivityEvent, ActivityFacts};
+use ag_contracts::{ActivityEvent, ActivityFacts, LineRange};
 use serde_json::Value;
 
+/// Longest text one activity fact keeps, in characters.
+const FACT_LIMIT: usize = 240;
 const PREVIEW_LIMIT: usize = 4096;
 const TRUNCATED: &str = "\n… [truncated]";
 /// Argument keys naming what an operation acts on, most specific first: a
@@ -83,8 +85,41 @@ impl ActivityDetails {
     }
 }
 
-/// Returns the bounded first line of what an operation's arguments act on,
-/// or of the arguments themselves when they are a plain string.
+/// Returns the first nonblank line of `text` as a bounded fact, such as a
+/// failure's reason, or `None` when `text` is blank.
+pub(super) fn first_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .and_then(bounded_fact)
+}
+
+/// Returns `text` with its whitespace runs, line breaks included, joined by
+/// single spaces as a bounded fact, such as a multi-line command's target,
+/// or `None` when `text` is blank.
+pub(super) fn one_line(text: &str) -> Option<String> {
+    bounded_fact(&text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Returns the line range a read starting at one-based line `offset` and
+/// reading at most `limit` lines covers, or `None` when the read named
+/// neither and covered the whole file. A zero counts as absent.
+pub(super) fn line_range(offset: Option<u64>, limit: Option<u64>) -> Option<LineRange> {
+    let offset = offset.filter(|offset| *offset > 0);
+    let limit = limit.filter(|limit| *limit > 0);
+    if offset.is_none() && limit.is_none() {
+        return None;
+    }
+    let first = offset.unwrap_or(1);
+
+    Some(LineRange {
+        first,
+        last: limit.map(|limit| first.saturating_add(limit - 1)),
+    })
+}
+
+/// Returns what an operation's arguments act on, or the arguments
+/// themselves when they are a plain string, as a one-line fact.
 fn target(input: &Value) -> Option<String> {
     let value = if input.is_object() {
         TARGET_KEYS.iter().find_map(|key| input.get(*key))?
@@ -92,7 +127,19 @@ fn target(input: &Value) -> Option<String> {
         input
     };
 
-    value.as_str().and_then(ActivityFacts::bounded_line)
+    value.as_str().and_then(one_line)
+}
+
+/// Strips control characters from one line and cuts it to [`FACT_LIMIT`]
+/// characters with a trailing `…`; `None` when nothing is left.
+fn bounded_fact(line: &str) -> Option<String> {
+    let mut characters = line.chars().filter(|character| !character.is_control());
+    let mut bounded: String = characters.by_ref().take(FACT_LIMIT).collect();
+    if characters.next().is_some() {
+        bounded.push('…');
+    }
+
+    (!bounded.is_empty()).then_some(bounded)
 }
 
 /// Appends a streamed chunk without growing beyond the preview limit.

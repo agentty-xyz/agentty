@@ -40,32 +40,44 @@ pub struct ActivityEvent {
 }
 
 impl ActivityEvent {
+    /// Exit status of a pipeline stage that `SIGPIPE` ended because a later
+    /// stage stopped reading, as `git log | head` reports for `git log`.
+    const SIGPIPE_STATUS: i64 = 128 + 13;
+
     /// Returns the state to display: the provider's [`Self::status`], except
-    /// that a completed command whose own exit status is nonzero, or that a
-    /// signal terminated, failed.
+    /// that a completed operation whose own exit status is nonzero, or that
+    /// a signal terminated, failed.
     ///
-    /// A search command such as `grep` or `rg` that found no match exits
-    /// with 1 and counts as failed too; a host that wants to soften it can
-    /// compare [`Self::effective_exit_code`] with 1.
+    /// A [`ActivityKind::Search`] that exits with 1 found no match and stays
+    /// completed. Every other exit status, including 1 from a search run as
+    /// an [`ActivityKind::Command`], is judged as is.
     pub fn outcome(&self) -> ActivityStatus {
-        let command_failed =
-            self.facts.signal.is_some() || self.effective_exit_code().is_some_and(|code| code != 0);
-        if self.status == ActivityStatus::Completed && command_failed {
+        let exit_code = self.effective_exit_code();
+        let found_nothing = self.kind == ActivityKind::Search && exit_code == Some(1);
+        let failed = self.facts.signal.is_some()
+            || (!found_nothing && exit_code.is_some_and(|code| code != 0));
+        if self.status == ActivityStatus::Completed && failed {
             ActivityStatus::Failed
         } else {
             self.status
         }
     }
 
-    /// Returns the command's own exit status: the first nonzero status of
+    /// Returns the operation's own exit status: the first nonzero status of
     /// its final pipeline's stages, so `cargo test | tail` reports the
-    /// status of `cargo test`, else [`Self::exit_code`].
+    /// status of `cargo test`, else [`Self::exit_code`]. A stage before the
+    /// last that exited with 141 (`SIGPIPE`) only stopped because a later
+    /// stage stopped reading, so it is skipped.
     pub fn effective_exit_code(&self) -> Option<i64> {
-        self.facts
-            .pipe_status
+        let stages = &self.facts.pipe_status;
+        let last = stages.len().saturating_sub(1);
+        stages
             .iter()
-            .copied()
-            .find(|status| *status != 0)
+            .enumerate()
+            .find(|(index, status)| {
+                **status != 0 && !(*index < last && **status == Self::SIGPIPE_STATUS)
+            })
+            .map(|(_, status)| *status)
             .or(self.exit_code)
     }
 }
@@ -78,38 +90,40 @@ pub struct ActivityFacts {
     pub diff_stat: Option<DiffStat>,
     /// Time the operation took.
     pub duration: Option<Duration>,
+    /// Why a failed operation failed, when the provider says.
+    pub failure: Option<ActivityFailure>,
     /// Line range a file read covered.
     pub lines: Option<LineRange>,
     /// Exit statuses of each stage of a command's final pipeline, first
     /// stage first, when it had more than one. Display-only: the command can
     /// influence it.
     pub pipe_status: Vec<i64>,
-    /// First line of why the operation was rejected or failed.
+    /// First line of the provider's explanation of a failure, such as
+    /// `hunk 1 context mismatch at line 1216`.
     pub reason: Option<String>,
     /// Signal that terminated a command.
     pub signal: Option<i64>,
-    /// What the operation acted on: a path, a search query, or a command's
-    /// first line.
+    /// What the operation acted on: a path, a search query, or a command
+    /// flattened to one line.
     pub target: Option<String>,
 }
 
-impl ActivityFacts {
-    /// Longest text a bounded fact keeps, in characters.
-    pub const TEXT_LIMIT: usize = 240;
-
-    /// Returns the first nonblank line of `text` without control
-    /// characters, cut to [`Self::TEXT_LIMIT`] characters with a trailing
-    /// `…`, or `None` when `text` is blank.
-    pub fn bounded_line(text: &str) -> Option<String> {
-        let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-        let mut characters = line.chars().filter(|character| !character.is_control());
-        let mut bounded: String = characters.by_ref().take(Self::TEXT_LIMIT).collect();
-        if characters.next().is_some() {
-            bounded.push('…');
-        }
-
-        Some(bounded)
-    }
+/// Why an operation failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActivityFailure {
+    /// The user or an approval policy denied it, so it did not run.
+    Denied,
+    /// It ran, or tried to, and failed, such as an execution error or a run
+    /// that ended in an error while it was open.
+    Error,
+    /// The tool refused the call, such as malformed arguments, a path
+    /// outside the repository, or a patch that does not apply.
+    Rejected,
+    /// It took too long: a command hit its deadline, or an approval was not
+    /// decided in time.
+    TimedOut,
+    /// The tool does not exist or the turn does not offer it.
+    Unavailable,
 }
 
 /// Lines a file change added and removed.
@@ -128,25 +142,6 @@ pub struct LineRange {
     pub first: u64,
     /// Last line read, when the read was limited.
     pub last: Option<u64>,
-}
-
-impl LineRange {
-    /// Returns the range a read starting at one-based line `offset` and
-    /// reading at most `limit` lines covers, or `None` when the read named
-    /// neither and covered the whole file. A zero is treated as absent.
-    pub fn from_window(offset: Option<u64>, limit: Option<u64>) -> Option<Self> {
-        let offset = offset.filter(|offset| *offset > 0);
-        let limit = limit.filter(|limit| *limit > 0);
-        if offset.is_none() && limit.is_none() {
-            return None;
-        }
-        let first = offset.unwrap_or(1);
-
-        Some(Self {
-            first,
-            last: limit.map(|limit| first.saturating_add(limit - 1)),
-        })
-    }
 }
 
 /// Category of explicitly observed activity.

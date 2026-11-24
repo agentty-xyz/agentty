@@ -11,7 +11,7 @@ use ag_agent::{
     NativeHarnessConfig, RealOneShotClient, create_agent_channel, instruction_bootstrap_key,
 };
 use ag_contracts::{
-    ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
+    ActivityFailure, ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
     AgentRequestKind, ContextCompaction, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient,
     OneShotRequest, OutputEvent, OutputKind, PermissionMode, ProviderCallBudget, ReasoningLevel,
     ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
@@ -1019,15 +1019,27 @@ async fn rejected_write_reports_a_failed_row_with_its_reason_after_its_narration
             )
         })
         .expect("the narration should stream");
-    let (row_index, row) = events
-        .iter()
-        .enumerate()
-        .find_map(|(index, event)| match event {
-            TurnEvent::Activity(row) if row.status == ActivityStatus::Failed => Some((index, row)),
-            _ => None,
-        })
-        .expect("the rejected write should report a failed row");
-    assert!(narration < row_index, "{events:?}");
+    let row_in = |status: ActivityStatus| {
+        events
+            .iter()
+            .enumerate()
+            .find_map(|(index, event)| match event {
+                TurnEvent::Activity(row) if row.status == status => Some((index, row)),
+                _ => None,
+            })
+            .expect("the write should report its row")
+    };
+    let (running_index, running) = row_in(ActivityStatus::Running);
+    let (row_index, row) = row_in(ActivityStatus::Failed);
+    assert!(
+        narration < running_index && running_index < row_index,
+        "{events:?}"
+    );
+    assert_eq!(
+        (&running.attempt_id, &running.id),
+        (&row.attempt_id, &row.id)
+    );
+    assert_eq!(row.facts.failure, Some(ActivityFailure::Rejected));
     assert_eq!(row.name, "write");
     assert_eq!(row.kind, ActivityKind::FileChange);
     assert_eq!(row.facts.target.as_deref(), Some("notes.txt"));

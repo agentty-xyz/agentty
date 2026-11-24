@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use super::{ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus, LineRange};
+use super::{ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus};
 
 /// Returns a command snapshot in `status` with `exit_code` and `facts`.
 fn command(status: ActivityStatus, exit_code: Option<i64>, facts: ActivityFacts) -> ActivityEvent {
@@ -124,59 +124,59 @@ fn outcome_keeps_provider_states_other_than_completed() {
 }
 
 #[test]
-fn bounded_line_keeps_the_first_nonblank_line_within_the_limit() {
+fn outcome_skips_upstream_stages_that_a_closed_pipe_ended() {
     // Arrange
-    let long = format!(
-        "  \n {}\u{7}x\nsecond",
-        "a".repeat(ActivityFacts::TEXT_LIMIT)
-    );
+    let head = ActivityFacts {
+        pipe_status: vec![141, 0],
+        ..ActivityFacts::default()
+    };
+    let last_stage = ActivityFacts {
+        pipe_status: vec![0, 141],
+        ..ActivityFacts::default()
+    };
+    let behind_a_failure = ActivityFacts {
+        pipe_status: vec![141, 2, 0],
+        ..ActivityFacts::default()
+    };
 
     // Act
-    let short = ActivityFacts::bounded_line("\n  hunk 1 context mismatch \nmore");
-    let bounded = ActivityFacts::bounded_line(&long);
-    let blank = ActivityFacts::bounded_line(" \n\t");
+    let events = [
+        command(ActivityStatus::Completed, Some(0), head),
+        command(ActivityStatus::Completed, Some(141), last_stage),
+        command(ActivityStatus::Completed, Some(0), behind_a_failure),
+    ];
 
     // Assert
-    assert_eq!(short.as_deref(), Some("hunk 1 context mismatch"));
-    assert_eq!(
-        bounded,
-        Some(format!("{}…", "a".repeat(ActivityFacts::TEXT_LIMIT)))
-    );
-    assert_eq!(blank, None);
+    assert_eq!(events[0].effective_exit_code(), Some(0));
+    assert_eq!(events[0].outcome(), ActivityStatus::Completed);
+    assert_eq!(events[1].effective_exit_code(), Some(141));
+    assert_eq!(events[1].outcome(), ActivityStatus::Failed);
+    assert_eq!(events[2].effective_exit_code(), Some(2));
 }
 
 #[test]
-fn from_window_covers_the_lines_a_read_selects() {
+fn outcome_keeps_a_search_that_found_nothing_completed() {
     // Arrange
-    let windows = [
-        (Some(1129), Some(100)),
-        (None, Some(20)),
-        (Some(7), None),
-        (None, None),
-        (Some(0), Some(0)),
-    ];
+    let mut search = command(ActivityStatus::Completed, Some(1), ActivityFacts::default());
+    search.kind = ActivityKind::Search;
+    let mut broken_search = search.clone();
+    broken_search.exit_code = Some(2);
+    let command_search = command(ActivityStatus::Completed, Some(1), ActivityFacts::default());
 
     // Act
-    let ranges = windows.map(|(offset, limit)| LineRange::from_window(offset, limit));
+    let outcomes = [
+        search.outcome(),
+        broken_search.outcome(),
+        command_search.outcome(),
+    ];
 
     // Assert
     assert_eq!(
-        ranges,
+        outcomes,
         [
-            Some(LineRange {
-                first: 1129,
-                last: Some(1228)
-            }),
-            Some(LineRange {
-                first: 1,
-                last: Some(20)
-            }),
-            Some(LineRange {
-                first: 7,
-                last: None
-            }),
-            None,
-            None,
+            ActivityStatus::Completed,
+            ActivityStatus::Failed,
+            ActivityStatus::Failed
         ]
     );
 }

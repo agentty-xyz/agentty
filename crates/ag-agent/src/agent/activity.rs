@@ -3,13 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
-use ag_contracts::{
-    ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus, DiffStat, LineRange,
-};
+use ag_contracts::{ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus, DiffStat};
 use ag_session::AgentKind;
 use serde_json::Value;
 
-use super::activity_content::{ActivityDetails, append_output};
+use super::activity_content::{ActivityDetails, append_output, line_range, one_line};
 
 const MAX_ACTIVITIES: usize = 512;
 
@@ -91,6 +89,9 @@ impl ActivityObserver {
         let Some(id) = item.get("id").and_then(Value::as_str) else {
             return;
         };
+        // A nonzero exit code alone leaves the item completed for the
+        // event's outcome to judge, so a search that found nothing stays
+        // completed.
         let status = if !completed {
             ActivityStatus::Running
         } else if matches!(
@@ -102,10 +103,6 @@ impl ActivityObserver {
             item.get("status").and_then(Value::as_str),
             Some("failed" | "declined" | "denied")
         ) || item.get("success").and_then(Value::as_bool) == Some(false)
-            || item
-                .get("exitCode")
-                .and_then(Value::as_i64)
-                .is_some_and(|code| code != 0)
             || item.get("error").is_some_and(|value| !value.is_null())
         {
             ActivityStatus::Failed
@@ -145,7 +142,7 @@ impl ActivityObserver {
                 details.facts.target = item
                     .pointer("/changes/0/path")
                     .and_then(Value::as_str)
-                    .and_then(ActivityFacts::bounded_line);
+                    .and_then(one_line);
 
                 kind
             }
@@ -174,7 +171,7 @@ impl ActivityObserver {
         let target = actions[0]
             .get(target_key)
             .and_then(Value::as_str)
-            .and_then(ActivityFacts::bounded_line);
+            .and_then(one_line);
 
         Some((kind, target))
     }
@@ -265,9 +262,8 @@ impl ActivityObserver {
             .and_then(Value::as_str)
             .is_some_and(|state| state.eq_ignore_ascii_case("DONE"));
         let exit_code = info.get("exit_code").and_then(Value::as_i64);
-        let status = if info.get("error").is_some_and(|error| !error.is_null())
-            || (completed && exit_code.is_some_and(|code| code != 0))
-        {
+        // As for Codex, the event's outcome judges a nonzero exit code.
+        let status = if info.get("error").is_some_and(|error| !error.is_null()) {
             ActivityStatus::Failed
         } else if completed {
             ActivityStatus::Completed
@@ -428,7 +424,7 @@ impl ActivityObserver {
             }
             "Read" => {
                 let number = |key: &str| input.get(key).and_then(Value::as_u64);
-                facts.lines = LineRange::from_window(number("offset"), number("limit"));
+                facts.lines = line_range(number("offset"), number("limit"));
             }
             _ => {}
         }

@@ -391,7 +391,11 @@ fn compact_rows_hide_successful_output_and_flatten_multiline_commands() {
     let event = ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
-        facts: Box::default(),
+        // Adapters flatten a command onto one line for its target.
+        facts: Box::new(ActivityFacts {
+            target: Some("cargo test --workspace".into()),
+            ..ActivityFacts::default()
+        }),
         id: "call".into(),
         input: Some("  cargo\n test\t --workspace  ".into()),
         kind: ActivityKind::Command,
@@ -618,7 +622,12 @@ fn command_previews_preserve_shell_syntax_while_running() {
     ] {
         // Arrange
         let mut activity = TurnActivity::default();
+        // Adapters flatten a command onto one line for its target.
         let event = ActivityEvent {
+            facts: Box::new(ActivityFacts {
+                target: Some(expected.into()),
+                ..ActivityFacts::default()
+            }),
             input: Some(input.into()),
             ..activity_event()
         };

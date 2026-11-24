@@ -2,23 +2,23 @@
 //! session turn reports: notices, streamed output, and tool rows.
 
 use std::collections::BTreeMap;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use ag_contracts::{
-    ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus, DiffStat, LineRange, OutputEvent,
+    ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
     TurnEvent,
 };
-use ag_harness::RunEventKind;
-use ag_harness::event::{Item, ToolCallItem, ToolCallStatus};
+use ag_harness::event::{Item, RunSummary, ToolCallItem, ToolCallOutcome, ToolCallStatus};
+use ag_harness::{ErrorKind, RunEventKind};
 use serde_json::Value;
 
 use super::output::{OutputProjector, turn_notice};
 use super::sandbox::notice as sandbox_notice;
+use super::tool_description::ToolDescription;
+use crate::agent::activity_content::first_line;
 
 /// Most result lines a failed call's output preview keeps.
 const FAILURE_TAIL_LINES: usize = 3;
-/// Longest command a tool row's input preview keeps, in characters.
-const INPUT_LIMIT: usize = 4096;
 
 /// Turns one run's events into [`TurnEvent`]s in stream order, so tool rows
 /// stay ordered with the narration around them.
@@ -49,19 +49,13 @@ impl RunProjector {
         if let Some(notice) = turn_notice(&event).or_else(|| sandbox_notice(&event)) {
             events.push(TurnEvent::Notice(notice));
         }
-        let run_completed = matches!(event, RunEventKind::Completed(_));
-        let mut rows = self.tool_rows.project(&event);
-        for output in self.output.project(event) {
-            if let OutputEvent::Discard { ids } = &output {
-                self.tool_rows.discard(ids);
-            }
-            events.push(TurnEvent::Output(output));
-        }
-        // A finished run never answers the calls it left open; the rows of
-        // void items are gone already.
-        if run_completed {
-            rows = self.tool_rows.interrupt_open();
-        }
+        let rows = self.tool_rows.project(&event);
+        events.extend(
+            self.output
+                .project(event)
+                .into_iter()
+                .map(TurnEvent::Output),
+        );
         events.extend(rows.into_iter().map(TurnEvent::Activity));
 
         events
@@ -76,16 +70,17 @@ struct ToolRows {
 }
 
 impl ToolRows {
-    /// Returns the rows `event` starts or finishes.
+    /// Returns the rows `event` starts, finishes, or closes.
     fn project(&mut self, event: &RunEventKind) -> Vec<ActivityEvent> {
         match event {
             RunEventKind::ToolCallRequested {
                 arguments,
+                call_id,
                 id,
                 name,
                 ..
             } => {
-                let row = self.requested(id.get(), name, arguments);
+                let row = self.requested(id.get(), call_id, name, arguments);
                 self.open.insert(id.get(), row.clone());
 
                 vec![row]
@@ -95,77 +90,33 @@ impl ToolRows {
                 item: Item::ToolCall(call),
                 ..
             } => {
-                let row = self
-                    .open
-                    .remove(&id.get())
-                    .unwrap_or_else(|| self.requested(id.get(), &call.name, &call.arguments));
+                let row = self.open.remove(&id.get()).unwrap_or_else(|| {
+                    self.requested(id.get(), &call.call_id, &call.name, &call.arguments)
+                });
 
                 vec![Self::answered(row, call)]
             }
+            RunEventKind::Completed(summary) => self.close_open(summary),
             _ => Vec::new(),
         }
     }
 
-    /// Interrupts every open row.
-    fn interrupt_open(&mut self) -> Vec<ActivityEvent> {
-        std::mem::take(&mut self.open)
-            .into_values()
-            .map(|mut row| {
-                row.status = ActivityStatus::Interrupted;
-                row.observed_at = SystemTime::now();
-
-                row
-            })
-            .collect()
-    }
-
-    /// Forgets the rows of void items.
-    fn discard(&mut self, ids: &[u64]) {
-        for id in ids {
-            self.open.remove(id);
-        }
-    }
-
     /// Describes a call that starts running, from its name and its
-    /// arguments, which need not be valid JSON.
-    fn requested(&self, id: u64, name: &str, arguments: &str) -> ActivityEvent {
-        let arguments = serde_json::from_str::<Value>(arguments).ok();
-        let field = |key: &str| {
-            arguments
-                .as_ref()
-                .and_then(|arguments| arguments.get(key))
-                .and_then(Value::as_str)
-        };
-        let (kind, target, lines) = match name {
-            "bash" => (ActivityKind::Command, field("command"), None),
-            "write" => (ActivityKind::FileChange, field("path"), None),
-            "read" => match field("action") {
-                Some("search") => (ActivityKind::Search, field("query"), None),
-                Some("list") => (ActivityKind::List, field("path"), None),
-                _ => (
-                    ActivityKind::Read,
-                    field("path"),
-                    arguments.as_ref().and_then(Self::line_range),
-                ),
-            },
-            _ => (ActivityKind::Tool, None, None),
-        };
-        let input = (kind == ActivityKind::Command)
-            .then(|| field("command"))
-            .flatten()
-            .map(|command| command.chars().take(INPUT_LIMIT).collect());
+    /// arguments, which need not be valid.
+    fn requested(&self, id: u64, call_id: &str, name: &str, arguments: &str) -> ActivityEvent {
+        let description = ToolDescription::new(call_id, name, Some(arguments));
 
         ActivityEvent {
             attempt_id: self.attempt_id.clone(),
             exit_code: None,
             facts: Box::new(ActivityFacts {
-                lines,
-                target: target.and_then(ActivityFacts::bounded_line),
+                lines: description.lines,
+                target: description.target,
                 ..ActivityFacts::default()
             }),
             id: id.to_string(),
-            input,
-            kind,
+            input: description.input,
+            kind: description.kind,
             name: name.chars().take(128).collect(),
             observed_at: SystemTime::now(),
             output: None,
@@ -174,31 +125,20 @@ impl ToolRows {
         }
     }
 
-    /// Returns the line range a file read's `offset` and `limit` select,
-    /// either of which may be a decimal string.
-    fn line_range(arguments: &Value) -> Option<LineRange> {
-        let number = |key: &str| {
-            let value = arguments.get(key)?;
-            value
-                .as_u64()
-                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        };
-
-        LineRange::from_window(number("offset"), number("limit"))
-    }
-
     /// Finishes `row` with how `call` was answered.
     fn answered(mut row: ActivityEvent, call: &ToolCallItem) -> ActivityEvent {
-        row.status = match call.status {
+        let (status, failure) = match call.status {
             ToolCallStatus::Completed | ToolCallStatus::Skipped | ToolCallStatus::Answered => {
-                ActivityStatus::Completed
+                (ActivityStatus::Completed, None)
             }
-            ToolCallStatus::Unanswered => ActivityStatus::Interrupted,
-            _ => ActivityStatus::Failed,
+            ToolCallStatus::Unanswered => (ActivityStatus::Interrupted, None),
+            status => (ActivityStatus::Failed, Some(Self::failure_of(status))),
         };
+        row.status = status;
+        row.facts.failure = failure;
         Self::record_outcome(&mut row, call);
         if row.status == ActivityStatus::Failed {
-            row.facts.reason = ActivityFacts::bounded_line(&call.output);
+            row.facts.reason = first_line(&call.output);
         }
         if row.outcome() == ActivityStatus::Failed {
             row.output = Self::failure_tail(row.kind, &call.output);
@@ -208,33 +148,56 @@ impl ToolRows {
         row
     }
 
+    /// Returns why a call answered with the failing `status` failed; a
+    /// status this projector does not know is an error.
+    fn failure_of(status: ToolCallStatus) -> ActivityFailure {
+        [
+            (ToolCallStatus::Denied, ActivityFailure::Denied),
+            (ToolCallStatus::Rejected, ActivityFailure::Rejected),
+            (ToolCallStatus::Unavailable, ActivityFailure::Unavailable),
+        ]
+        .into_iter()
+        .find_map(|(known, failure)| (known == status).then_some(failure))
+        .unwrap_or(ActivityFailure::Error)
+    }
+
     /// Copies the structured outcome the harness reported for `call`: its
     /// duration, a command's exit, and a write's line counts.
     fn record_outcome(row: &mut ActivityEvent, call: &ToolCallItem) {
-        row.exit_code = call.exit_code.map(i64::from);
-        row.facts.diff_stat =
-            (call.lines_added.is_some() || call.lines_removed.is_some()).then(|| DiffStat {
-                added: call.lines_added.unwrap_or_default(),
-                removed: call.lines_removed.unwrap_or_default(),
-            });
-        row.facts.duration = call.duration_ms.map(Duration::from_millis);
-        row.facts.pipe_status = call.pipe_status.iter().copied().map(i64::from).collect();
-        row.facts.signal = call.signal.map(i64::from);
+        row.facts.duration = call.duration;
+        match &call.outcome {
+            Some(ToolCallOutcome::Command(exit)) => {
+                row.exit_code = exit.exit_code.map(i64::from);
+                row.facts.pipe_status = exit.pipe_status.iter().copied().map(i64::from).collect();
+                row.facts.signal = exit.signal.map(i64::from);
+            }
+            Some(ToolCallOutcome::Write {
+                lines_added,
+                lines_removed,
+                ..
+            }) => {
+                row.facts.diff_stat = Some(DiffStat {
+                    added: *lines_added,
+                    removed: *lines_removed,
+                });
+            }
+            _ => {}
+        }
     }
 
     /// Returns the last lines of a failed call's result: a command's
-    /// standard error, or its standard output when that is empty, and for
-    /// another tool the lines after the first, which is the row's reason.
+    /// standard error, or its standard output when that is empty. A result
+    /// that is not a command outcome skips its first line, which is the
+    /// row's reason.
     fn failure_tail(kind: ActivityKind, output: &str) -> Option<String> {
-        let text = if kind == ActivityKind::Command {
-            Self::command_output(output).unwrap_or_else(|| output.to_string())
-        } else {
-            output.lines().skip(1).collect::<Vec<_>>().join("\n")
-        };
+        let text = (kind == ActivityKind::Command)
+            .then(|| Self::command_output(output))
+            .flatten()
+            .unwrap_or_else(|| output.lines().skip(1).collect::<Vec<_>>().join("\n"));
         let mut lines = text
             .lines()
             .rev()
-            .filter_map(ActivityFacts::bounded_line)
+            .filter_map(first_line)
             .take(FAILURE_TAIL_LINES)
             .collect::<Vec<_>>();
         lines.reverse();
@@ -262,6 +225,37 @@ impl ToolRows {
             .or_else(|| stream("stdout"))
             .map(str::to_string)
             .or_else(|| outcome.is_object().then(String::new))
+    }
+
+    /// Closes the rows a finished run never answered: interrupted when the
+    /// run succeeded or was cancelled, and failed with the run's error
+    /// otherwise.
+    fn close_open(&mut self, summary: &RunSummary) -> Vec<ActivityEvent> {
+        let error = summary
+            .error
+            .as_ref()
+            .filter(|error| error.kind != ErrorKind::Cancelled);
+        let failure = error.map(|error| match error.kind {
+            ErrorKind::ApprovalTimeout => ActivityFailure::TimedOut,
+            _ => ActivityFailure::Error,
+        });
+        let reason = error.and_then(|error| first_line(&error.message));
+
+        std::mem::take(&mut self.open)
+            .into_values()
+            .map(|mut row| {
+                row.status = if failure.is_some() {
+                    ActivityStatus::Failed
+                } else {
+                    ActivityStatus::Interrupted
+                };
+                row.facts.failure = failure;
+                row.facts.reason.clone_from(&reason);
+                row.observed_at = SystemTime::now();
+
+                row
+            })
+            .collect()
     }
 }
 

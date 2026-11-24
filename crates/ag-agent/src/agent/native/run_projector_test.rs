@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use ag_contracts::{
-    ActivityEvent, ActivityKind, ActivityStatus, DiffStat, LineRange, OutputEvent, OutputKind,
-    TurnEvent, TurnNotice,
+    ActivityEvent, ActivityFailure, ActivityKind, ActivityStatus, DiffStat, OutputEvent,
+    OutputKind, TurnEvent, TurnNotice,
 };
 use ag_harness::RunEventKind;
 use serde_json::{Value, json};
@@ -44,12 +44,45 @@ fn answered(id: u64, name: &str, status: &str, output: &str, extra: &Value) -> R
     event(json!({"type": "item_completed", "id": id, "item": item}))
 }
 
-/// Returns the `completed` event that ends a run.
-fn run_completed() -> RunEventKind {
+/// Returns the `outcome` field of a `bash` call that exited with
+/// `exit_code` and `pipe_status`.
+fn command_exit(exit_code: Option<i32>, pipe_status: &[i32], signal: Option<i32>) -> Value {
+    json!({
+        "outcome": {
+            "type": "command",
+            "exit_code": exit_code,
+            "pipe_status": pipe_status,
+            "signal": signal
+        }
+    })
+}
+
+/// Returns the result text the harness sends the model for a `bash` call.
+fn command_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
+    json!({
+        "cleanup_failed": false,
+        "cleanup_scope": "process_group_best_effort",
+        "execution_failure": null,
+        "exit_code": exit_code,
+        "signal": null,
+        "stderr": stderr,
+        "stderr_omitted_bytes": 0,
+        "stderr_tail": "",
+        "stdout": stdout,
+        "stdout_omitted_bytes": 0,
+        "stdout_tail": "",
+        "termination": "completed",
+        "truncated": false
+    })
+    .to_string()
+}
+
+/// Returns the `completed` event that ends a run with `error`.
+fn run_completed(error: &Value) -> RunEventKind {
     event(json!({
         "type": "completed",
         "cost": null,
-        "error": null,
+        "error": error,
         "usage": {
             "input": 0,
             "output": 0,
@@ -111,6 +144,19 @@ fn answered_row(
     rows(&events)[1].clone()
 }
 
+/// Returns the rows a run that ends with `error` closes while a `bash`
+/// call is still open.
+fn rows_closed_by(error: &Value) -> Vec<ActivityEvent> {
+    let mut projector = RunProjector::new();
+    project(
+        &mut projector,
+        [requested(1, "bash", r#"{"command": "sleep 30"}"#)],
+    );
+    let events = project(&mut projector, [run_completed(error)]);
+
+    rows(&events).into_iter().cloned().collect()
+}
+
 #[test]
 fn tool_rows_follow_the_narration_that_precedes_them() {
     // Arrange
@@ -123,19 +169,25 @@ fn tool_rows_follow_the_narration_that_precedes_them() {
             "item": {"type": "message", "text": "Checking the build"}
         })),
     ];
+    let mut exit = command_exit(Some(0), &[], None);
+    exit["duration_ms"] = json!(36_000);
 
     // Act
     let events = project(
         &mut projector,
         narration.into_iter().chain([
             event(json!({"type": "item_started", "id": 2, "item_kind": "tool_call"})),
-            requested(2, "bash", r#"{"command": "cargo check\n--tests"}"#),
+            requested(
+                2,
+                "bash",
+                r#"{"command": "cargo check -p agentty\n  --tests"}"#,
+            ),
             answered(
                 2,
                 "bash",
                 "completed",
-                "{}",
-                &json!({"exit_code": 0, "duration_ms": 36000}),
+                &command_result(Some(0), "", ""),
+                &exit,
             ),
         ]),
     );
@@ -158,8 +210,14 @@ fn tool_rows_follow_the_narration_that_precedes_them() {
     assert_eq!(running.id, "2");
     assert_eq!(running.status, ActivityStatus::Running);
     assert_eq!(running.kind, ActivityKind::Command);
-    assert_eq!(running.facts.target.as_deref(), Some("cargo check"));
-    assert_eq!(running.input.as_deref(), Some("cargo check\n--tests"));
+    assert_eq!(
+        running.facts.target.as_deref(),
+        Some("cargo check -p agentty --tests")
+    );
+    assert_eq!(
+        running.input.as_deref(),
+        Some("cargo check -p agentty\n  --tests")
+    );
     assert_eq!(finished.attempt_id, running.attempt_id);
     assert_eq!(finished.status, ActivityStatus::Completed);
     assert_eq!(finished.outcome(), ActivityStatus::Completed);
@@ -171,20 +229,19 @@ fn tool_rows_follow_the_narration_that_precedes_them() {
 #[test]
 fn piped_command_fails_on_its_first_failing_stage_with_its_output_tail() {
     // Arrange
-    let outcome = json!({
-        "stdout": "running 58 tests\ntest a ... ok\n\nfailures:\n    a\n    b\ntest result: FAILED",
-        "stderr": "",
-        "exit_code": 0
-    })
-    .to_string();
+    let result = command_result(
+        Some(0),
+        "running 58 tests\ntest a ... ok\n\nfailures:\n    a\n    b\ntest result: FAILED",
+        "",
+    );
 
     // Act
     let row = answered_row(
         "bash",
         r#"{"command": "cargo test 2>&1 | tail -20"}"#,
         "completed",
-        &outcome,
-        &json!({"exit_code": 0, "pipe_status": [101, 0]}),
+        &result,
+        &command_exit(Some(0), &[101, 0], None),
     );
 
     // Assert
@@ -192,41 +249,33 @@ fn piped_command_fails_on_its_first_failing_stage_with_its_output_tail() {
     assert_eq!(row.outcome(), ActivityStatus::Failed);
     assert_eq!(row.facts.pipe_status, [101, 0]);
     assert_eq!(row.effective_exit_code(), Some(101));
+    assert_eq!(row.facts.failure, None);
     assert_eq!(row.output.as_deref(), Some("a\nb\ntest result: FAILED"));
 }
 
 #[test]
 fn failed_command_previews_the_end_of_its_standard_error() {
     // Arrange
-    let outcome = json!({
-        "stdout": "compiling",
-        "stderr": "start",
-        "stderr_tail": "error[E0063]: missing field\n  --> src/lib.rs:4:5\nerror: aborting",
-        "exit_code": 101
-    })
-    .to_string();
+    let mut tailed =
+        serde_json::from_str::<Value>(&command_result(Some(101), "compiling", "start"))
+            .expect("command result");
+    tailed["stderr_tail"] =
+        json!("error[E0063]: missing field\n  --> src/lib.rs:4:5\nerror: aborting");
 
     // Act
     let killed = answered_row(
         "bash",
         r#"{"command": "sleep 30"}"#,
         "completed",
-        r#"{"exit_code": null}"#,
-        &json!({"signal": 9}),
+        &command_result(None, "", ""),
+        &command_exit(None, &[], Some(9)),
     );
     let failed = answered_row(
         "bash",
         r#"{"command": "cargo build"}"#,
         "completed",
-        &outcome,
-        &json!({"exit_code": 101}),
-    );
-    let unstructured = answered_row(
-        "bash",
-        r#"{"command": "cargo build"}"#,
-        "completed",
-        "command failed",
-        &json!({"exit_code": 2}),
+        &tailed.to_string(),
+        &command_exit(Some(101), &[], None),
     );
 
     // Assert
@@ -237,33 +286,53 @@ fn failed_command_previews_the_end_of_its_standard_error() {
         failed.output.as_deref(),
         Some("error[E0063]: missing field\n--> src/lib.rs:4:5\nerror: aborting")
     );
-    assert_eq!(unstructured.output.as_deref(), Some("command failed"));
+}
+
+#[test]
+fn rejected_command_tail_leaves_out_its_reason() {
+    // Arrange
+    let output = "malformed bash arguments: missing field `command`";
+
+    // Act
+    let short = answered_row("bash", "{}", "rejected", output, &json!({}));
+    let long = answered_row(
+        "bash",
+        "{}",
+        "rejected",
+        "malformed bash arguments\nexpected an object\nwith a command",
+        &json!({}),
+    );
+
+    // Assert
+    assert_eq!(short.facts.failure, Some(ActivityFailure::Rejected));
+    assert_eq!(short.facts.reason.as_deref(), Some(output));
+    assert_eq!(short.output, None);
+    assert_eq!(
+        long.output.as_deref(),
+        Some("expected an object\nwith a command")
+    );
 }
 
 #[test]
 fn rejected_write_fails_with_its_reason() {
     // Arrange
     let output = "hunk 1 context mismatch at line 1216\nexpected: fn render\nfound: fn draw";
+    let arguments = r#"{"path": "src/composer.rs", "patch": "@@ -1 +1 @@\n-a\n+b\n"}"#;
 
     // Act
-    let rejected = answered_row(
-        "write",
-        r#"{"path": "src/composer.rs", "patch": "@@"}"#,
-        "rejected",
-        output,
-        &json!({}),
-    );
+    let rejected = answered_row("write", arguments, "rejected", output, &json!({}));
     let written = answered_row(
         "write",
-        r#"{"path": "src/composer.rs", "patch": "@@"}"#,
+        arguments,
         "completed",
-        "wrote src/composer.rs",
-        &json!({"lines_added": 38, "lines_removed": 4}),
+        "Wrote src/composer.rs",
+        &json!({"outcome": {"type": "write", "lines_added": 38, "lines_removed": 4}}),
     );
 
     // Assert
     assert_eq!(rejected.kind, ActivityKind::FileChange);
     assert_eq!(rejected.status, ActivityStatus::Failed);
+    assert_eq!(rejected.facts.failure, Some(ActivityFailure::Rejected));
     assert_eq!(rejected.facts.target.as_deref(), Some("src/composer.rs"));
     assert_eq!(
         rejected.facts.reason.as_deref(),
@@ -283,94 +352,37 @@ fn rejected_write_fails_with_its_reason() {
         })
     );
     assert_eq!(written.facts.reason, None);
-    assert_eq!(written.input, None);
+    assert_eq!(written.facts.failure, None);
 }
 
 #[test]
-fn answer_statuses_map_onto_row_states() {
+fn answer_statuses_map_onto_row_states_and_failures() {
     // Arrange
     let statuses = [
-        ("skipped", ActivityStatus::Completed),
-        ("answered", ActivityStatus::Completed),
-        ("unanswered", ActivityStatus::Interrupted),
-        ("denied", ActivityStatus::Failed),
-        ("unavailable", ActivityStatus::Failed),
+        ("skipped", ActivityStatus::Completed, None),
+        ("answered", ActivityStatus::Completed, None),
+        ("unanswered", ActivityStatus::Interrupted, None),
+        (
+            "denied",
+            ActivityStatus::Failed,
+            Some(ActivityFailure::Denied),
+        ),
+        (
+            "unavailable",
+            ActivityStatus::Failed,
+            Some(ActivityFailure::Unavailable),
+        ),
     ];
 
     // Act
-    let states = statuses.map(|(status, _)| {
-        answered_row("read", r#"{"path": "a.rs"}"#, status, "", &json!({})).status
+    let states = statuses.map(|(status, _, _)| {
+        let row = answered_row("read", r#"{"path": "a.rs"}"#, status, "", &json!({}));
+
+        (row.status, row.facts.failure)
     });
 
     // Assert
-    assert_eq!(states, statuses.map(|(_, state)| state));
-}
-
-#[test]
-fn read_actions_project_onto_exploration_kinds_and_targets() {
-    // Arrange
-    let mut projector = RunProjector::new();
-    let calls = [
-        requested(
-            1,
-            "read",
-            r#"{"path": "src/a.rs", "offset": "1129", "limit": 100}"#,
-        ),
-        requested(
-            2,
-            "read",
-            r#"{"action": "search", "query": "fn render", "path": "src"}"#,
-        ),
-        requested(3, "read", r#"{"action": "list", "path": "crates"}"#),
-        requested(
-            4,
-            "read",
-            r#"{"action": "show", "path": "src/b.rs", "side": "base"}"#,
-        ),
-        requested(5, "lookup", r#"{"path": "src/c.rs"}"#),
-    ];
-
-    // Act
-    let events = project(&mut projector, calls);
-
-    // Assert
-    let projected = rows(&events)
-        .into_iter()
-        .map(|row| (row.kind, row.facts.target.as_deref(), row.facts.lines))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        projected,
-        [
-            (
-                ActivityKind::Read,
-                Some("src/a.rs"),
-                Some(LineRange {
-                    first: 1129,
-                    last: Some(1228)
-                })
-            ),
-            (ActivityKind::Search, Some("fn render"), None),
-            (ActivityKind::List, Some("crates"), None),
-            (ActivityKind::Read, Some("src/b.rs"), None),
-            (ActivityKind::Tool, None, None),
-        ]
-    );
-}
-
-#[test]
-fn arguments_that_are_not_json_still_show_the_call() {
-    // Arrange
-    let mut projector = RunProjector::new();
-
-    // Act
-    let events = project(&mut projector, [requested(1, "bash", "cargo test")]);
-
-    // Assert
-    let row = only_row(&events);
-    assert_eq!(row.kind, ActivityKind::Command);
-    assert_eq!(row.name, "bash");
-    assert_eq!(row.facts.target, None);
-    assert_eq!(row.input, None);
+    assert_eq!(states, statuses.map(|(_, state, failure)| (state, failure)));
 }
 
 #[test]
@@ -398,66 +410,64 @@ fn an_answer_without_a_request_still_finishes_a_row() {
 }
 
 #[test]
-fn rows_left_open_when_the_run_ends_are_interrupted() {
+fn rows_left_open_by_a_finished_or_cancelled_run_are_interrupted() {
     // Arrange
-    let mut projector = RunProjector::new();
-    let opened = project(
-        &mut projector,
-        [
-            requested(1, "bash", r#"{"command": "sleep 30"}"#),
-            requested(2, "read", r#"{"path": "a.rs"}"#),
-            answered(2, "read", "completed", "1: fn main() {}", &json!({})),
-        ],
-    );
+    let cancelled =
+        json!({"kind": "cancelled", "message": "the run was cancelled", "retryable": false});
 
     // Act
-    let finished = project(&mut projector, [run_completed()]);
+    let finished = rows_closed_by(&Value::Null);
+    let stopped = rows_closed_by(&cancelled);
 
     // Assert
-    assert_eq!(rows(&opened).len(), 3);
-    let row = only_row(&finished);
-    assert_eq!(row.id, "1");
-    assert_eq!(row.status, ActivityStatus::Interrupted);
+    for rows in [&finished, &stopped] {
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "1");
+        assert_eq!(rows[0].status, ActivityStatus::Interrupted);
+        assert_eq!(rows[0].facts.failure, None);
+        assert_eq!(rows[0].facts.reason, None);
+    }
 }
 
 #[test]
-fn rows_of_discarded_items_are_dropped() {
+fn rows_left_open_by_a_failed_run_fail_with_its_error() {
     // Arrange
-    let mut projector = RunProjector::new();
-    let streamed = project(
-        &mut projector,
-        [
-            event(json!({"type": "item_started", "id": 1, "item_kind": "tool_call"})),
-            event(json!({
-                "type": "item_delta",
-                "id": 1,
-                "delta": {"type": "tool_arguments", "arguments": "{"}
-            })),
-            requested(1, "bash", r#"{"command": "true"}"#),
-        ],
-    );
+    let timed_out = json!({
+        "kind": "approval_timeout",
+        "message": "the approval handler did not decide in time\ncall-1",
+        "retryable": false
+    });
+    let failed =
+        json!({"kind": "tool_failed", "message": "bash cleanup failed", "retryable": false});
 
     // Act
-    let finished = project(&mut projector, [run_completed()]);
+    let approval = rows_closed_by(&timed_out);
+    let tool = rows_closed_by(&failed);
 
     // Assert
-    assert_eq!(rows(&streamed).len(), 1);
+    assert_eq!(approval[0].status, ActivityStatus::Failed);
+    assert_eq!(approval[0].facts.failure, Some(ActivityFailure::TimedOut));
     assert_eq!(
-        finished,
-        [TurnEvent::Output(OutputEvent::Discard { ids: vec![1] })]
+        approval[0].facts.reason.as_deref(),
+        Some("the approval handler did not decide in time")
     );
+    assert_eq!(tool[0].status, ActivityStatus::Failed);
+    assert_eq!(tool[0].facts.failure, Some(ActivityFailure::Error));
+    assert_eq!(tool[0].facts.reason.as_deref(), Some("bash cleanup failed"));
 }
 
 #[test]
 fn notices_come_before_the_output_of_the_same_event() {
     // Arrange
     let mut projector = RunProjector::new();
+    let mut extra = command_exit(Some(1), &[], None);
+    extra["likely_sandbox_denial"] = json!(true);
     let denial = answered(
         1,
         "bash",
         "completed",
-        "{}",
-        &json!({"exit_code": 1, "likely_sandbox_denial": true}),
+        &command_result(Some(1), "", ""),
+        &extra,
     );
 
     // Act

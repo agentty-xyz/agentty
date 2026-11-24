@@ -15,7 +15,8 @@ mod reasoning;
 mod session;
 
 pub use activity::{
-    ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus, DiffStat, LineRange,
+    ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
+    LineRange,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::MockAgentChannel;
