@@ -1,6 +1,6 @@
 //! App state definitions and workflow glue for the app core module.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -270,9 +270,6 @@ pub struct App {
     /// Retains completed sync reconciliation until its owning project is
     /// active.
     pub(crate) pending_project_sync_completions: HashMap<i64, SyncMainCompletion>,
-    /// Retains explicit sync requests for other projects while one sync or a
-    /// base-checkout merge owns the foreground mutation slot.
-    pub(crate) pending_project_sync_requests: VecDeque<SyncMainRequest>,
     /// Pending creation responses, completed only after foreground refresh.
     pub(crate) pending_session_creations:
         HashMap<String, crate::app::session_creation::PendingSessionCreation>,
@@ -281,10 +278,11 @@ pub struct App {
     pub(crate) pending_session_diff_requests: HashMap<u64, PendingSessionDiffRequest>,
     /// Owns the Platform tab's sign-in, account, and access token.
     pub(crate) platform: crate::app::platform::Platform,
-    /// Latest non-modal explicit project-sync lifecycle state.
-    pub(crate) project_sync_status: Option<ProjectSyncStatus>,
-    /// Deadline after which the terminal project-sync result is removed.
-    pub(crate) project_sync_status_expires_at: Option<Instant>,
+    /// Deadlines after which each project's terminal sync result is removed.
+    pub(crate) project_sync_status_expirations: HashMap<i64, Instant>,
+    /// Latest non-modal explicit sync lifecycle state of each project, so
+    /// one project's sync neither blocks nor shows up in another project.
+    pub(crate) project_sync_statuses: HashMap<i64, ProjectSyncStatus>,
     /// Owns project selection state, project metadata, and git status
     /// snapshots.
     pub(crate) project_catalog: Box<crate::app::project_catalog::ProjectCatalog>,
@@ -1804,40 +1802,28 @@ impl App {
 
     /// Starts selected-project branch sync without changing the active mode.
     ///
-    /// Duplicate requests are coalesced while the same project operation is
-    /// running. The immutable sync context prevents later navigation or a
-    /// project switch from redirecting queued Git and review work.
+    /// Duplicate requests are coalesced while the same project's sync is
+    /// running; syncs of other projects run independently. The immutable sync
+    /// context prevents later navigation or a project switch from redirecting
+    /// the Git and review work.
     pub(crate) fn start_sync_main(&mut self) {
         let sync_context = self.sync_handle.context_snapshot();
-        if self.project_sync_status.as_ref().is_some_and(|status| {
-            status.is_running() && status.context.project_id == sync_context.project_id
-        }) || self
-            .pending_project_sync_requests
-            .iter()
-            .any(|request| request.operation.project_id == sync_context.project_id)
+        if self
+            .project_sync_statuses
+            .get(&sync_context.project_id)
+            .is_some_and(ProjectSyncStatus::is_running)
         {
             return;
         }
 
         let request = self.new_sync_main_request(sync_context);
-        if self
-            .project_sync_status
-            .as_ref()
-            .is_some_and(ProjectSyncStatus::is_running)
-        {
-            self.pending_project_sync_requests.push_back(request);
-
-            return;
-        }
         if self.merge_queue.has_work() {
-            self.project_sync_status = Some(ProjectSyncStatus {
+            self.set_project_sync_status(ProjectSyncStatus {
                 context: request.operation,
                 phase: ProjectSyncPhase::Blocked {
                     message: "a merge is active or queued; try again after it finishes".to_string(),
                 },
             });
-            self.schedule_project_sync_status_expiry();
-            self.mark_dirty();
 
             return;
         }
@@ -1871,14 +1857,19 @@ impl App {
         }
     }
 
-    /// Starts one request after the foreground mutation slot is reserved.
+    /// Returns the explicit sync state of the active project, leaving syncs
+    /// of other projects out.
+    pub(crate) fn active_project_sync_status(&self) -> Option<&ProjectSyncStatus> {
+        self.project_sync_statuses
+            .get(&self.projects.active_project_id())
+    }
+
+    /// Marks the request's project as syncing and starts its work.
     fn dispatch_sync_main_request(&mut self, request: SyncMainRequest) {
-        self.project_sync_status_expires_at = None;
-        self.project_sync_status = Some(ProjectSyncStatus {
+        self.set_project_sync_status(ProjectSyncStatus {
             context: request.operation.clone(),
             phase: ProjectSyncPhase::Running,
         });
-        self.mark_dirty();
 
         self.sync_main_runner.start_sync_main(
             request.app_event_tx,
@@ -1888,72 +1879,60 @@ impl App {
         );
     }
 
-    /// Keeps the current terminal sync result visible for a short period.
-    pub(super) fn schedule_project_sync_status_expiry(&mut self) {
-        self.project_sync_status_expires_at =
-            Some(self.services.clock().now_instant() + PROJECT_SYNC_STATUS_VISIBLE_DURATION);
-    }
-
-    /// Clears a terminal sync result once its visibility deadline is reached.
-    pub(crate) fn expire_project_sync_status(&mut self, now: Instant) {
-        if self
-            .project_sync_status_expires_at
-            .is_none_or(|expires_at| now < expires_at)
-        {
-            return;
+    /// Replaces one project's sync status, keeping a terminal result visible
+    /// for a short period and a running one until it finishes.
+    pub(super) fn set_project_sync_status(&mut self, status: ProjectSyncStatus) {
+        let project_id = status.context.project_id;
+        if status.is_running() {
+            self.project_sync_status_expirations.remove(&project_id);
+        } else {
+            self.project_sync_status_expirations.insert(
+                project_id,
+                self.services.clock().now_instant() + PROJECT_SYNC_STATUS_VISIBLE_DURATION,
+            );
         }
-
-        self.project_sync_status = None;
-        self.project_sync_status_expires_at = None;
+        self.project_sync_statuses.insert(project_id, status);
         self.mark_dirty();
     }
 
-    /// Starts the oldest queued project sync when base-checkout mutation is
-    /// idle.
-    fn start_next_project_sync_from_queue(&mut self) {
-        if self
-            .project_sync_status
-            .as_ref()
-            .is_some_and(ProjectSyncStatus::is_running)
-            || self.merge_queue.has_work()
-        {
+    /// Clears terminal sync results whose visibility deadline is reached.
+    pub(crate) fn expire_project_sync_status(&mut self, now: Instant) {
+        let expired_project_ids = self
+            .project_sync_status_expirations
+            .iter()
+            .filter(|(_, expires_at)| now >= **expires_at)
+            .map(|(project_id, _)| *project_id)
+            .collect::<Vec<_>>();
+        if expired_project_ids.is_empty() {
             return;
         }
-        let Some(request) = self.pending_project_sync_requests.pop_front() else {
-            return;
-        };
 
-        self.dispatch_sync_main_request(request);
+        for project_id in expired_project_ids {
+            self.project_sync_status_expirations.remove(&project_id);
+            self.project_sync_statuses.remove(&project_id);
+        }
+        self.mark_dirty();
     }
 
-    /// Gives pending merges priority, then resumes queued project sync work.
+    /// Starts the next queued merge once its project's checkout is free.
     pub(super) async fn resume_base_checkout_work(&mut self) {
-        if self
-            .project_sync_status
-            .as_ref()
-            .is_some_and(ProjectSyncStatus::is_running)
-        {
-            return;
-        }
         if self.merge_queue.has_work() {
             // Best-effort: merge queue progression failures are surfaced in
             // session output.
             let _ = self.start_next_merge_from_queue(false).await;
         }
-
-        self.start_next_project_sync_from_queue();
     }
 
-    /// Rejects base-checkout operations that could race the active project
+    /// Rejects base-checkout operations that could race the project's own
     /// sync.
     pub(crate) fn ensure_project_checkout_available(
         &self,
         project_id: i64,
     ) -> Result<(), AppError> {
         let Some(sync_status) = self
-            .project_sync_status
-            .as_ref()
-            .filter(|status| status.is_running() && status.context.project_id == project_id)
+            .project_sync_statuses
+            .get(&project_id)
+            .filter(|status| status.is_running())
         else {
             return Ok(());
         };

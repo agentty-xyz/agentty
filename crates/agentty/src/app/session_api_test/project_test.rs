@@ -32,8 +32,7 @@ fn accept_project_syncs(app: &mut App, expected_starts: usize) {
 
 /// Returns the operation of the project sync `app` shows.
 fn shown_sync_operation(app: &App) -> ProjectSyncContext {
-    app.project_sync_status
-        .as_ref()
+    app.active_project_sync_status()
         .map(|status| status.context.clone())
         .expect("a project sync should be shown")
 }
@@ -119,8 +118,9 @@ async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
     .await;
     let completion_changed = revision_changed(&mut app);
     let complete = request_project_status(&mut app).await;
-    let expires_at = app
-        .project_sync_status_expires_at
+    let expires_at = *app
+        .project_sync_status_expirations
+        .get(&app.active_project_id())
         .expect("a finished sync should expire");
     app.expire_project_sync_status(expires_at);
     let expiry_changed = revision_changed(&mut app);
@@ -197,25 +197,38 @@ async fn runtime_backend_reports_a_failed_project_sync() {
 async fn runtime_backend_leaves_out_the_sync_of_another_project() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    accept_project_syncs(&mut app, 0);
-    app.project_sync_status = Some(ProjectSyncStatus {
-        context: ProjectSyncContext {
-            default_branch: "develop".to_string(),
-            operation_id: 1,
-            project_id: app.active_project_id() + 1,
-            project_name: "other".to_string(),
+    accept_project_syncs(&mut app, 1);
+    let other_project_id = app.active_project_id() + 1;
+    app.project_sync_statuses.insert(
+        other_project_id,
+        ProjectSyncStatus {
+            context: ProjectSyncContext {
+                default_branch: "develop".to_string(),
+                operation_id: 1,
+                project_id: other_project_id,
+                project_name: "other".to_string(),
+            },
+            phase: ProjectSyncPhase::Running,
         },
-        phase: ProjectSyncPhase::Running,
-    });
+    );
 
     // Act
-    let queued = request_project_sync(&mut app).await;
-    let project = request_project_status(&mut app).await;
+    let before_sync = request_project_status(&mut app).await;
+    let synced = request_project_sync(&mut app).await;
+    let after_sync = request_project_status(&mut app).await;
 
     // Assert
-    assert_eq!(queued, Ok(()));
-    assert_eq!(project.map(|project| project.sync), Ok(None));
-    assert_eq!(app.pending_project_sync_requests.len(), 1);
+    assert_eq!(before_sync.map(|project| project.sync), Ok(None));
+    assert_eq!(synced, Ok(()));
+    assert_eq!(
+        after_sync.map(|project| project.sync.map(|sync| sync.phase)),
+        Ok(Some(HostProjectSyncPhase::Running))
+    );
+    assert!(
+        app.project_sync_statuses
+            .get(&other_project_id)
+            .is_some_and(ProjectSyncStatus::is_running)
+    );
 }
 
 #[tokio::test]

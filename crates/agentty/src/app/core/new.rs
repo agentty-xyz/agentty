@@ -169,7 +169,6 @@ impl App {
             role_review_suppression: std::collections::HashMap::new(),
             latest_project_sync_operation_ids: std::collections::HashMap::new(),
             pending_project_sync_completions: std::collections::HashMap::new(),
-            pending_project_sync_requests: std::collections::VecDeque::new(),
             pending_focused_review_persistence: std::collections::HashMap::new(),
             pending_session_creations: std::collections::HashMap::new(),
             pending_session_diff_requests: std::collections::HashMap::new(),
@@ -192,8 +191,8 @@ impl App {
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
             next_sync_operation_id: 1,
             open_diff_refresh: crate::app::session_diff::OpenDiffRefresh::default(),
-            project_sync_status: None,
-            project_sync_status_expires_at: None,
+            project_sync_status_expirations: std::collections::HashMap::new(),
+            project_sync_statuses: std::collections::HashMap::new(),
             session_progress_messages: std::collections::HashMap::new(),
             update_status: None,
             // Build the runner before `sync_handle` moves into the struct.

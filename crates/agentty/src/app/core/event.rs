@@ -494,8 +494,11 @@ pub(super) struct AppEventBatch {
     /// Whether this batch should reload session list snapshots from
     /// persistence.
     pub(super) should_reload_sessions: bool,
-    pub(super) sync_main_completion: Option<SyncMainCompletion>,
-    pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
+    /// Retains every sync result, because projects sync concurrently and
+    /// several can finish within one batch.
+    pub(super) sync_main_completions: Vec<SyncMainCompletion>,
+    /// Retains every conflict phase in arrival order for the same reason.
+    pub(super) sync_main_conflicts: Vec<(ProjectSyncContext, Vec<String>)>,
     pub(super) update_status: Option<UpdateStatus>,
     project_discovery_completions: Vec<crate::app::project_catalog::ProjectDiscoveryCompletion>,
 }
@@ -567,8 +570,8 @@ impl AppEventBatch {
             || !self.session_diff_updates.is_empty()
             || !self.session_title_generation_finished.is_empty()
             || !self.session_workflow_notice_updates.is_empty()
-            || self.sync_main_conflict.is_some()
-            || self.sync_main_completion.is_some();
+            || !self.sync_main_conflicts.is_empty()
+            || !self.sync_main_completions.is_empty();
         let mut after_snapshot_effects = (!self.review_updates.is_empty())
             .then(|| AppEventEffect::ApplyReviewUpdates(std::mem::take(&mut self.review_updates)))
             .into_iter()
@@ -1024,22 +1027,22 @@ impl AppEventBatch {
             });
     }
 
-    /// Stores the latest default-branch sync result for this reducer batch.
+    /// Stores one default-branch sync result for this reducer batch.
     fn collect_sync_main_completed(&mut self, completion: SyncMainCompletion) {
         if completion.result.is_ok() {
             self.should_refresh_git_status = true;
         }
 
-        self.sync_main_completion = Some(completion);
+        self.sync_main_completions.push(completion);
     }
 
-    /// Stores the latest explicit sync conflict phase for this reducer batch.
+    /// Stores one explicit sync conflict phase for this reducer batch.
     fn collect_sync_main_conflict(
         &mut self,
         operation: ProjectSyncContext,
         conflicted_files: Vec<String>,
     ) {
-        self.sync_main_conflict = Some((operation, conflicted_files));
+        self.sync_main_conflicts.push((operation, conflicted_files));
     }
 
     /// Stores one branch-publish action result for this reducer batch.
@@ -1308,8 +1311,8 @@ impl App {
                 .await;
         }
 
-        if let Some((operation, conflicted_files)) = event_batch.sync_main_conflict.as_ref() {
-            self.apply_sync_main_conflict_resolution_started(operation, conflicted_files);
+        for (operation, conflicted_files) in std::mem::take(&mut event_batch.sync_main_conflicts) {
+            self.apply_sync_main_conflict_resolution_started(&operation, &conflicted_files);
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
@@ -1508,7 +1511,7 @@ impl App {
             self.publish_sync_context();
         }
 
-        if let Some(completion) = event_batch.sync_main_completion.take() {
+        for completion in std::mem::take(&mut event_batch.sync_main_completions) {
             self.apply_sync_main_completion(completion).await;
         }
     }
@@ -1586,19 +1589,15 @@ impl App {
 
     /// Replaces the matching running status with a compact terminal phase.
     fn set_project_sync_terminal_status(&mut self, completion: &SyncMainCompletion) {
-        let status = self
-            .project_sync_status
-            .get_or_insert_with(|| ProjectSyncStatus {
-                context: completion.operation.clone(),
-                phase: ProjectSyncPhase::Running,
-            });
-        if status.context.operation_id != completion.operation.operation_id
-            || status.context.project_id != completion.operation.project_id
+        if self
+            .project_sync_statuses
+            .get(&completion.operation.project_id)
+            .is_some_and(|status| status.context.operation_id != completion.operation.operation_id)
         {
             return;
         }
 
-        status.phase = match &completion.result {
+        let phase = match &completion.result {
             Ok(outcome) => ProjectSyncPhase::Complete {
                 pulled_commits: outcome.pulled_commits,
                 pushed_commits: outcome.pushed_commits,
@@ -1613,7 +1612,10 @@ impl App {
                 message: Self::sync_failure_message(error),
             },
         };
-        self.schedule_project_sync_status_expiry();
+        self.set_project_sync_status(ProjectSyncStatus {
+            context: completion.operation.clone(),
+            phase,
+        });
     }
 
     /// Applies completed linked-session comment loads only while the matching
@@ -1946,13 +1948,10 @@ impl App {
         operation: &ProjectSyncContext,
         conflicted_files: &[String],
     ) {
-        let Some(status) = self.project_sync_status.as_mut() else {
+        let Some(status) = self.project_sync_statuses.get_mut(&operation.project_id) else {
             return;
         };
-        if status.context.operation_id != operation.operation_id
-            || status.context.project_id != operation.project_id
-            || !status.is_running()
-        {
+        if status.context.operation_id != operation.operation_id || !status.is_running() {
             return;
         }
 

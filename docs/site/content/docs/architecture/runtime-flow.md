@@ -330,8 +330,9 @@ never discards worktree changes to fit a prompt.
 <a id="architecture-runtime-flow-git-workflows"></a> Git and forge effects stay behind
 `GitClient` and `ReviewRequestClient`:
 
-- **Project sync** serializes project requests, coalesces duplicates, and blocks
-  conflicting base mutations without blocking navigation or isolated session turns.
+- **Project sync** runs each project independently, coalesces duplicate requests for one
+  project, pauses that project's background fetch, and blocks its conflicting base
+  mutations without blocking navigation, other projects, or isolated session turns.
 - **Local merge** rebases and squash-merges an unlinked session, preserving its commit
   message.
 - **Session sync** rebases onto the local or remote base. Agent assistance resolves
