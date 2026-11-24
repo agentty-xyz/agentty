@@ -289,6 +289,46 @@ fn failed_command_previews_the_end_of_its_standard_error() {
 }
 
 #[test]
+fn commands_that_did_not_run_to_their_end_are_judged_by_their_termination() {
+    // Arrange
+    let terminated = |termination: &str, signal: Option<i32>| {
+        let mut extra = command_exit(None, &[], signal);
+        extra["outcome"]["termination"] = json!(termination);
+
+        answered_row(
+            "bash",
+            r#"{"command": "sleep 600"}"#,
+            "completed",
+            &command_result(None, "", "still waiting"),
+            &extra,
+        )
+    };
+
+    // Act
+    let timed_out = terminated("deadline", Some(9));
+    let failed = terminated("failed", None);
+    let cancelled = terminated("cancelled", None);
+    let completed = terminated("completed", None);
+
+    // Assert
+    assert_eq!(timed_out.status, ActivityStatus::Failed);
+    assert_eq!(timed_out.facts.failure, Some(ActivityFailure::TimedOut));
+    assert_eq!(
+        timed_out.facts.reason.as_deref(),
+        Some("timed out, signal 9")
+    );
+    assert_eq!(timed_out.output.as_deref(), Some("still waiting"));
+    assert_eq!(failed.status, ActivityStatus::Failed);
+    assert_eq!(failed.facts.failure, Some(ActivityFailure::Error));
+    assert_eq!(failed.facts.reason.as_deref(), Some("failed to run"));
+    assert_eq!(cancelled.status, ActivityStatus::Interrupted);
+    assert_eq!(cancelled.facts.failure, None);
+    assert_eq!(cancelled.facts.reason, None);
+    assert_eq!(completed.status, ActivityStatus::Completed);
+    assert_eq!(completed.facts.failure, None);
+}
+
+#[test]
 fn rejected_command_tail_leaves_out_its_reason() {
     // Arrange
     let output = "malformed bash arguments: missing field `command`";
