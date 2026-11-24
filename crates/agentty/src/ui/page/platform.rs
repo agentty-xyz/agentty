@@ -19,10 +19,13 @@ use crate::ui::style::palette;
 use crate::ui::{Page, layout, style};
 
 /// Explains what signing in gives, while signed out.
-const SIGN_IN_PITCH: &str = "Sign in to let devices you pair reach this Agentty through the \
-                             platform's relay, without a tunnel or a relay of your own. Signing \
+const SIGN_IN_PITCH: &str = "Sign in to connect this Agentty to the platform's relay, so devices \
+                             you pair reach it without a tunnel or a relay of your own. Signing \
                              in grants no device any access: each one still pairs with a one-time \
                              code that you approve here, and its traffic is encrypted end to end.";
+/// Explains what keep on does, under its state.
+const KEEP_ON_HINT: &str =
+    "With keep on, remote control through the platform's relay starts whenever Agentty starts.";
 
 /// Renders the Platform tab.
 pub struct PlatformPage<'a> {
@@ -113,8 +116,8 @@ impl<'a> PlatformPage<'a> {
         lines
     }
 
-    /// Returns the signed-in account and, while registered, remote control
-    /// through the platform's relay.
+    /// Returns the signed-in account, its keep-on state, and, while
+    /// registered, remote control through the platform's relay.
     fn account_lines(
         &self,
         account: &PlatformAccountView,
@@ -123,19 +126,20 @@ impl<'a> PlatformPage<'a> {
     ) -> Vec<Line<'static>> {
         let login = account.login.as_deref().unwrap_or("Signed in");
         let mut lines = vec![field_line("Account", login, palette::text())];
+        if let PlatformAccess::Registered { name } = &account.access {
+            lines.push(field_line("Name", name, palette::text()));
+        }
+        lines.extend(keep_on_lines(account));
+        lines.push(Line::from(""));
         let (status, color) = match &account.access {
             PlatformAccess::Checking => ("Checking the account...", palette::warning()),
-            PlatformAccess::ExplicitRelay => (
-                "Remote control uses the relay `--remote-relay` names, not the platform's.",
-                palette::text_muted(),
-            ),
             PlatformAccess::NoRelay => (
                 "The platform offers this account no relay. Press Enter to check again.",
                 palette::text_muted(),
             ),
             PlatformAccess::Unavailable { message } => {
-                lines.push(Line::from(""));
                 lines.push(colored_line(message, palette::danger()));
+                lines.push(Line::from(""));
                 ("Press Enter to try again.", palette::text_muted())
             }
             PlatformAccess::Waitlisted => (
@@ -143,15 +147,12 @@ impl<'a> PlatformPage<'a> {
                  Agentty does not use the platform's relay. Press Enter to check again.",
                 palette::warning(),
             ),
-            PlatformAccess::Registered { name } => {
-                lines.push(field_line("Name", name, palette::text()));
-                lines.push(Line::from(""));
+            PlatformAccess::Registered { .. } => {
                 lines.extend(self.remote_lines(width, qr_code));
 
                 return lines;
             }
         };
-        lines.push(Line::from(""));
         lines.push(colored_line(status, color));
 
         lines
@@ -212,6 +213,25 @@ impl Page for PlatformPage<'_> {
 
         frame.render_widget(paragraph, main_area);
     }
+}
+
+/// Returns the keep-on state, what it does, and a warning when its last
+/// change could not be saved.
+fn keep_on_lines(account: &PlatformAccountView) -> Vec<Line<'static>> {
+    let (state, color) = if account.keep_on {
+        ("On", palette::success())
+    } else {
+        ("Off", palette::text_muted())
+    };
+    let mut lines = vec![
+        field_line("Keep on", state, color),
+        muted_line(KEEP_ON_HINT),
+    ];
+    if let Some(notice) = &account.keep_on_notice {
+        lines.push(colored_line(notice, palette::warning()));
+    }
+
+    lines
 }
 
 /// Builds one row of `text` in `color`.

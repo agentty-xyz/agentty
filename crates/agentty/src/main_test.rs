@@ -115,7 +115,7 @@ fn host_name_reads_this_computer_name_as_text() {
 }
 
 #[test]
-fn cli_gates_remote_control_behind_experimental_remote() {
+fn cli_gates_remote_control_behind_experimental_remote_or_a_relay() {
     // Arrange / Act
     let disabled = Cli::try_parse_from(["agentty"]).expect("default arguments");
     let enabled = Cli::try_parse_from([
@@ -125,11 +125,6 @@ fn cli_gates_remote_control_behind_experimental_remote() {
         "0",
     ])
     .expect("--experimental-remote with a port should parse");
-    let port_without_flag = Cli::try_parse_from(["agentty", "--remote-control-port", "0"])
-        .expect_err("a port needs --experimental-remote");
-    let host_without_flag =
-        Cli::try_parse_from(["agentty", "--remote-control-host", "box.tailnet.ts.net"])
-            .expect_err("a host needs --experimental-remote");
     let with_hosts = Cli::try_parse_from([
         "agentty",
         "--experimental-remote",
@@ -139,37 +134,111 @@ fn cli_gates_remote_control_behind_experimental_remote() {
         "localhost.example",
     ])
     .expect("repeated hosts should parse");
-    let relay_without_flag =
-        Cli::try_parse_from(["agentty", "--remote-relay", "wss://relay.example"])
-            .expect_err("a relay needs --experimental-remote");
+    let relay_alone = Cli::try_parse_from(["agentty", "--remote-relay", "wss://relay.example"])
+        .expect("a relay alone should parse");
+    let relay_with_port_and_host = Cli::try_parse_from([
+        "agentty",
+        "--remote-relay",
+        "wss://relay.example",
+        "--remote-control-port",
+        "0",
+        "--remote-control-host",
+        "box.tailnet.ts.net",
+    ])
+    .expect("a relay accepts a port and a host");
     let with_relay = Cli::try_parse_from([
         "agentty",
         "--experimental-remote",
         "--remote-relay",
         "wss://relay.example",
     ])
-    .expect("a relay should parse");
+    .expect("a relay with --experimental-remote should parse");
+    let port_without_flag = Cli::try_parse_from(["agentty", "--remote-control-port", "0"])
+        .expect_err("a port needs --experimental-remote or --remote-relay");
+    let host_without_flag =
+        Cli::try_parse_from(["agentty", "--remote-control-host", "box.tailnet.ts.net"])
+            .expect_err("a host needs --experimental-remote or --remote-relay");
+    let port_with_platform = Cli::try_parse_from([
+        "agentty",
+        "--experimental-platform",
+        "--remote-control-port",
+        "0",
+    ])
+    .expect_err("--experimental-platform does not accept a port");
 
     // Assert
+    assert!(!disabled.experimental.remote);
+    assert_eq!(disabled.remote_control_port, DEFAULT_REMOTE_CONTROL_PORT);
+    assert!(enabled.experimental.remote);
+    assert_eq!(enabled.remote_control_port, 0);
+    assert_eq!(enabled.remote_relay, None);
     assert_eq!(
-        relay_without_flag.kind(),
-        ErrorKind::MissingRequiredArgument
+        with_hosts.remote_control_host,
+        ["box.tailnet.ts.net", "localhost.example"]
+    );
+    assert!(!relay_alone.experimental.remote);
+    assert_eq!(
+        relay_alone.remote_relay.as_deref(),
+        Some("wss://relay.example")
+    );
+    assert_eq!(relay_with_port_and_host.remote_control_port, 0);
+    assert_eq!(
+        relay_with_port_and_host.remote_control_host,
+        ["box.tailnet.ts.net"]
     );
     assert_eq!(
         with_relay.remote_relay.as_deref(),
         Some("wss://relay.example")
     );
-    assert_eq!(enabled.remote_relay, None);
-    assert!(!disabled.experimental.remote);
-    assert_eq!(disabled.remote_control_port, DEFAULT_REMOTE_CONTROL_PORT);
-    assert!(enabled.experimental.remote);
-    assert_eq!(enabled.remote_control_port, 0);
-    assert_eq!(port_without_flag.kind(), ErrorKind::MissingRequiredArgument);
-    assert_eq!(host_without_flag.kind(), ErrorKind::MissingRequiredArgument);
-    assert_eq!(
-        with_hosts.remote_control_host,
-        ["box.tailnet.ts.net", "localhost.example"]
-    );
+    for error in [port_without_flag, host_without_flag, port_with_platform] {
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+}
+
+#[test]
+fn cli_offers_the_tabs_its_flags_name_and_a_relay_keeps_the_platform_out() {
+    // Arrange: arguments, then whether remote control and the platform are
+    // offered.
+    let relay = ["--remote-relay", "wss://relay.example"];
+    let cases: [(Vec<&str>, bool, bool); 7] = [
+        (vec![], false, false),
+        (vec!["--experimental-remote"], true, false),
+        (relay.to_vec(), true, false),
+        (vec!["--experimental-platform"], false, true),
+        (
+            vec!["--experimental-platform", "--experimental-remote"],
+            true,
+            true,
+        ),
+        (
+            [&["--experimental-platform"][..], &relay].concat(),
+            true,
+            false,
+        ),
+        (
+            [
+                &["--experimental-platform", "--experimental-remote"][..],
+                &relay,
+            ]
+            .concat(),
+            true,
+            false,
+        ),
+    ];
+
+    for (args, offers_remote_control, offers_platform) in cases {
+        // Act
+        let cli = Cli::try_parse_from(std::iter::once("agentty").chain(args.iter().copied()))
+            .expect("arguments should parse");
+
+        // Assert
+        assert_eq!(
+            cli.offers_remote_control(),
+            offers_remote_control,
+            "{args:?}"
+        );
+        assert_eq!(cli.offers_platform(), offers_platform, "{args:?}");
+    }
 }
 
 #[test]

@@ -95,11 +95,51 @@ fn polling_client(answers: Vec<Result<SignIn, PlatformError>>) -> MockPlatformCl
     client
 }
 
-/// Builds an app offering the Platform tab over `client`, with remote
-/// control behind `launcher` and link actions through `browser` and
-/// `clipboard`.
-async fn platform_app_with(
-    client: impl PlatformClient + 'static,
+/// Builds a client whose account offers the relay `account_checks` times,
+/// registering this Agentty under its own name each time.
+fn registering_client(account_checks: usize) -> MockPlatformClient {
+    let mut client = MockPlatformClient::new();
+    client
+        .expect_account()
+        .times(account_checks)
+        .returning(|_| Ok(account(true)));
+    client
+        .expect_register_instance()
+        .times(account_checks)
+        .returning(|_, instance_id, name| {
+            Ok(RegisteredInstance {
+                instance_id: instance_id.to_string(),
+                name: name.to_string(),
+            })
+        });
+
+    client
+}
+
+/// Builds a launcher that starts `starts` listeners on a free port, each
+/// linked to the platform's relay.
+fn platform_relay_launcher(starts: usize) -> MockRemoteControlLauncher {
+    let mut launcher = MockRemoteControlLauncher::new();
+    launcher
+        .expect_start()
+        .withf(|port, _, relay, _| {
+            *port == 0
+                && relay
+                    .as_ref()
+                    .is_some_and(|relay| relay.url == service().relay_url)
+        })
+        .times(starts)
+        .returning(
+            |_, _, _, _| Ok(Box::new(StubServer::default()) as Box<dyn RemoteControlServer>),
+        );
+
+    launcher
+}
+
+/// Builds an app whose remote control starts listeners through `launcher`
+/// and whose link actions go through `browser` and `clipboard`, with the
+/// platform not yet enabled.
+async fn app_with_fakes(
     launcher: MockRemoteControlLauncher,
     browser: MockBrowserClient,
     clipboard: MockTerminalClipboard,
@@ -110,14 +150,48 @@ async fn platform_app_with(
     app.platform = Platform::new(browser.clone(), clipboard.clone());
     app.remote_control =
         RemoteControl::new(Arc::new(launcher), browser, clipboard, app.services.db());
+
+    (app, base_dir)
+}
+
+/// Enables the Platform tab of `app` over `client`, as a launch does.
+async fn enable(app: &mut App, client: impl PlatformClient + 'static) {
     app.enable_platform(
         Arc::new(client),
         PLATFORM_URL.to_string(),
         INSTANCE_NAME.to_string(),
     )
     .await;
+}
+
+/// Builds an app offering the Platform tab over `client`, with remote
+/// control behind `launcher` and link actions through `browser` and
+/// `clipboard`.
+async fn platform_app_with(
+    client: impl PlatformClient + 'static,
+    launcher: MockRemoteControlLauncher,
+    browser: MockBrowserClient,
+    clipboard: MockTerminalClipboard,
+) -> (App, tempfile::TempDir) {
+    let (mut app, base_dir) = app_with_fakes(launcher, browser, clipboard).await;
+    enable(&mut app, client).await;
 
     (app, base_dir)
+}
+
+/// Builds an app offering the Platform tab over `client`, with remote
+/// control behind `launcher`.
+async fn platform_app_with_launcher(
+    client: impl PlatformClient + 'static,
+    launcher: MockRemoteControlLauncher,
+) -> (App, tempfile::TempDir) {
+    platform_app_with(
+        client,
+        launcher,
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    )
+    .await
 }
 
 /// Builds an app offering the Platform tab over `client`, with no remote
@@ -132,9 +206,30 @@ async fn platform_app(client: impl PlatformClient + 'static) -> (App, tempfile::
     .await
 }
 
-/// Stores a sign-in issued by `platform_url`.
+/// Stores a sign-in issued by `platform_url`, saved before keep on existed.
 async fn store_sign_in(app: &App, platform_url: &str) {
-    let stored = serde_json::json!({ "access_token": TOKEN, "platform_url": platform_url });
+    store_sign_in_value(
+        app,
+        serde_json::json!({ "access_token": TOKEN, "platform_url": platform_url }),
+    )
+    .await;
+}
+
+/// Stores a sign-in issued by `platform_url` with `keep_on`.
+async fn store_sign_in_keeping_on(app: &App, platform_url: &str, keep_on: bool) {
+    store_sign_in_value(
+        app,
+        serde_json::json!({
+            "access_token": TOKEN,
+            "keep_on": keep_on,
+            "platform_url": platform_url,
+        }),
+    )
+    .await;
+}
+
+/// Stores `stored` as the saved sign-in.
+async fn store_sign_in_value(app: &App, stored: serde_json::Value) {
     app.services
         .db()
         .settings()
@@ -153,13 +248,44 @@ async fn stored_sign_in(app: &App) -> Option<String> {
         .expect("setting should load")
 }
 
-/// Signs `app` in with the test token, still checking the account.
+/// Reads keep on from the stored sign-in, or `None` without one.
+async fn stored_keep_on(app: &App) -> Option<bool> {
+    let stored: serde_json::Value = serde_json::from_str(&stored_sign_in(app).await?).ok()?;
+
+    stored["keep_on"].as_bool()
+}
+
+/// Returns whether the remote-control listener runs.
+fn is_remote_control_running(app: &App) -> bool {
+    app.remote_control.view().listener.is_some()
+}
+
+/// Returns whether the signed-in account keeps remote control on.
+fn is_kept_on(app: &App) -> bool {
+    account_view(app).is_some_and(|account| account.keep_on)
+}
+
+/// Signs `app` in with the test token and `access`, with keep on off.
 fn sign_in_directly(app: &mut App, login: Option<&str>, access: PlatformAccess) {
     app.platform.token = Some(token());
     app.platform.view.state = PlatformState::SignedIn(PlatformAccountView {
         access,
-        login: login.map(str::to_string),
+        ..PlatformAccountView::checking(login.map(str::to_string))
     });
+}
+
+/// Signs `app` in as registered with the platform's relay, keep on off.
+async fn sign_in_registered(app: &mut App) {
+    sign_in_directly(app, Some("octocat"), PlatformAccess::Checking);
+    app.apply_platform_update(PlatformUpdate::Refreshed {
+        request_id: 0,
+        login: None,
+        result: Ok(Access::Registered {
+            name: INSTANCE_NAME.to_string(),
+            service: service(),
+        }),
+    })
+    .await;
 }
 
 /// Applies background app events until `is_done` holds, failing after five
@@ -314,11 +440,9 @@ async fn polling_ends_on_denial_expiry_or_an_unexpected_error() {
 }
 
 #[tokio::test]
-async fn account_check_registers_only_when_a_relay_is_offered_and_none_is_explicit() {
+async fn account_check_registers_only_when_a_relay_is_offered() {
     // Arrange
-    let instance = Some(("a".repeat(64), INSTANCE_NAME.to_string()));
-    let mut explicit = MockPlatformClient::new();
-    explicit.expect_account().returning(|_| Ok(account(true)));
+    let instance = ("a".repeat(64), INSTANCE_NAME.to_string());
     let mut no_relay = MockPlatformClient::new();
     no_relay.expect_account().returning(|_| Ok(account(false)));
     let mut registering = MockPlatformClient::new();
@@ -346,7 +470,6 @@ async fn account_check_registers_only_when_a_relay_is_offered_and_none_is_explic
         .returning(|_| Err(PlatformError::Waitlisted));
 
     // Act
-    let explicit = check_account(&explicit, &token(), None).await;
     let no_relay = check_account(&no_relay, &token(), instance.clone()).await;
     let registered = check_account(&registering, &token(), instance.clone()).await;
     let limited = check_account(&limited, &token(), instance.clone()).await;
@@ -354,7 +477,6 @@ async fn account_check_registers_only_when_a_relay_is_offered_and_none_is_explic
 
     // Assert
     let login = Some("octocat".to_string());
-    assert_eq!(explicit, (login.clone(), Ok(Access::ExplicitRelay)));
     assert_eq!(no_relay, (login.clone(), Ok(Access::NoRelay)));
     assert_eq!(
         registered,
@@ -372,9 +494,10 @@ async fn account_check_registers_only_when_a_relay_is_offered_and_none_is_explic
 
 #[tokio::test]
 async fn enabling_without_a_sign_in_for_this_platform_shows_signed_out_and_calls_nothing() {
-    // Arrange: a sign-in from another platform must never reach this one.
+    // Arrange: a sign-in from another platform, and its keep on, must never
+    // reach this one.
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    store_sign_in(&app, "https://other.example").await;
+    store_sign_in_keeping_on(&app, "https://other.example", true).await;
 
     // Act
     app.enable_platform(
@@ -406,57 +529,27 @@ async fn nothing_happens_without_a_client_a_token_or_a_matching_state() {
     let without_client = app.platform.view().state.clone();
     app.platform.view.state = PlatformState::SignedIn(PlatformAccountView {
         access: PlatformAccess::NoRelay,
-        login: None,
+        ..PlatformAccountView::checking(None)
     });
     app.activate_platform().await;
+    app.toggle_platform_keep_on().await;
     let without_token = account_view(&app).cloned();
     app.platform.view.state = PlatformState::SignedOut { notice: None };
     app.set_platform_access(PlatformAccess::Waitlisted);
     app.set_platform_link_notice(Some("Link copied.".to_string()));
+    app.toggle_platform_keep_on().await;
 
     // Assert
     assert!(hidden);
     assert_eq!(without_client, PlatformState::SignedOut { notice: None });
     assert_eq!(
-        without_token.map(|account| account.access),
-        Some(PlatformAccess::NoRelay)
+        without_token.map(|account| (account.access, account.keep_on)),
+        Some((PlatformAccess::NoRelay, false))
     );
     assert_eq!(
         app.platform.view().state,
         PlatformState::SignedOut { notice: None }
     );
-}
-
-#[tokio::test]
-async fn an_explicit_relay_keeps_the_platform_from_registering_this_agentty() {
-    // Arrange
-    let mut client = MockPlatformClient::new();
-    client
-        .expect_account()
-        .times(1)
-        .returning(|_| Ok(account(true)));
-    client.expect_register_instance().times(0);
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    app.enable_remote_control(0, Vec::new(), Some("wss://relay.example".to_string()))
-        .await;
-    store_sign_in(&app, PLATFORM_URL).await;
-
-    // Act
-    app.enable_platform(
-        Arc::new(client),
-        PLATFORM_URL.to_string(),
-        INSTANCE_NAME.to_string(),
-    )
-    .await;
-    apply_events_until(&mut app, |app| {
-        account_view(app).is_some_and(|account| account.access == PlatformAccess::ExplicitRelay)
-    })
-    .await;
-
-    // Assert
-    assert!(app.view_snapshot().platform.is_some());
-    assert!(app.remote_control.has_explicit_relay());
-    assert!(!app.platform.view().is_registered());
 }
 
 #[tokio::test]
@@ -511,63 +604,102 @@ async fn a_sign_in_that_cannot_be_saved_lasts_until_agentty_quits() {
     })
     .await;
 
-    // Assert
+    // Assert: the `Enter` that uses it anyway is to connect.
     assert!(app.platform.token.is_some());
     assert!(matches!(
         account_view(&app).map(|account| &account.access),
         Some(PlatformAccess::Unavailable { message }) if message.starts_with("Could not save")
     ));
+    assert!(app.platform.connects_on_next_check);
 }
 
 #[tokio::test]
-async fn a_saved_sign_in_is_checked_and_registers_this_agentty_at_launch() {
-    // Arrange
-    let mut client = MockPlatformClient::new();
-    client
-        .expect_account()
-        .withf(|token| token.expose() == TOKEN)
-        .times(1)
-        .returning(|_| Ok(account(true)));
-    client
-        .expect_register_instance()
-        .with(always(), always(), eq(INSTANCE_NAME))
-        .times(1)
-        .returning(|_, instance_id, name| {
-            Ok(RegisteredInstance {
-                instance_id: instance_id.to_string(),
-                name: name.to_string(),
-            })
-        });
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    store_sign_in(&app, PLATFORM_URL).await;
+async fn using_an_unsaved_sign_in_anyway_ends_connected_once() {
+    // Arrange: the state a sign-in that could not be saved leaves.
+    let (mut app, _base_dir) =
+        platform_app_with_launcher(registering_client(1), platform_relay_launcher(1)).await;
+    sign_in_directly(
+        &mut app,
+        Some("octocat"),
+        PlatformAccess::Unavailable {
+            message: "Could not save the sign-in.".to_string(),
+        },
+    );
+    app.platform.connects_on_next_check = true;
 
     // Act
-    app.enable_platform(
-        Arc::new(client),
-        PLATFORM_URL.to_string(),
-        INSTANCE_NAME.to_string(),
-    )
-    .await;
-    let checking = account_view(&app).cloned();
-    apply_events_until(&mut app, |app| app.platform.view().is_registered()).await;
+    app.activate_platform().await;
+    let connects_again = app.platform.connects_on_next_check;
+    apply_events_until(&mut app, is_remote_control_running).await;
 
     // Assert
-    assert_eq!(
-        checking,
-        Some(PlatformAccountView {
-            access: PlatformAccess::Checking,
-            login: None,
-        })
-    );
-    assert_eq!(
-        account_view(&app).cloned(),
-        Some(PlatformAccountView {
-            access: PlatformAccess::Registered {
-                name: INSTANCE_NAME.to_string(),
-            },
-            login: Some("octocat".to_string()),
-        })
-    );
+    assert!(!connects_again);
+    assert!(app.platform.view().is_registered());
+}
+
+#[tokio::test]
+async fn a_saved_sign_in_is_checked_at_launch_and_connects_only_with_keep_on() {
+    // Arrange: keep on as saved with the sign-in, if at all. Remote control
+    // that ran when Agentty quit leaves nothing behind.
+    let cases = [(None, false), (Some(false), false), (Some(true), true)];
+
+    for (keep_on, reconnects) in cases {
+        let mut client = MockPlatformClient::new();
+        client
+            .expect_account()
+            .withf(|token| token.expose() == TOKEN)
+            .times(1)
+            .returning(|_| Ok(account(true)));
+        client
+            .expect_register_instance()
+            .with(always(), always(), eq(INSTANCE_NAME))
+            .times(1)
+            .returning(|_, instance_id, name| {
+                Ok(RegisteredInstance {
+                    instance_id: instance_id.to_string(),
+                    name: name.to_string(),
+                })
+            });
+        let launcher = platform_relay_launcher(usize::from(reconnects));
+        let (mut app, _base_dir) = app_with_fakes(
+            launcher,
+            MockBrowserClient::new(),
+            MockTerminalClipboard::new(),
+        )
+        .await;
+        match keep_on {
+            Some(keep_on) => store_sign_in_keeping_on(&app, PLATFORM_URL, keep_on).await,
+            None => store_sign_in(&app, PLATFORM_URL).await,
+        }
+
+        // Act
+        enable(&mut app, client).await;
+        let checking = account_view(&app).cloned();
+        let was_running_before_check = is_remote_control_running(&app);
+        apply_events_until(&mut app, |app| app.platform.view().is_registered()).await;
+
+        // Assert
+        let keep_on = keep_on.unwrap_or_default();
+        assert_eq!(
+            checking,
+            Some(PlatformAccountView {
+                keep_on,
+                ..PlatformAccountView::checking(None)
+            })
+        );
+        assert_eq!(
+            account_view(&app).cloned(),
+            Some(PlatformAccountView {
+                access: PlatformAccess::Registered {
+                    name: INSTANCE_NAME.to_string(),
+                },
+                keep_on,
+                ..PlatformAccountView::checking(Some("octocat".to_string()))
+            })
+        );
+        assert!(!was_running_before_check);
+        assert_eq!(is_remote_control_running(&app), reconnects, "{keep_on}");
+    }
 }
 
 #[tokio::test]
@@ -740,19 +872,44 @@ async fn approved_sign_in_saves_the_token_and_a_waitlisted_account_keeps_it() {
     let stored: serde_json::Value =
         serde_json::from_str(&stored_sign_in(&app).await.expect("sign-in should be saved"))
             .expect("stored sign-in should parse");
+    // A fresh sign-in starts with keep on off, and nothing starts without
+    // a registration; the launcher has no listener to give.
     assert_eq!(
         stored,
-        serde_json::json!({ "access_token": TOKEN, "platform_url": PLATFORM_URL })
+        serde_json::json!({ "access_token": TOKEN, "keep_on": false, "platform_url": PLATFORM_URL })
     );
     assert_eq!(
         waitlisted,
         Some(PlatformAccountView {
             access: PlatformAccess::Waitlisted,
-            login: Some("octocat".to_string()),
+            ..PlatformAccountView::checking(Some("octocat".to_string()))
         })
     );
     assert_eq!(rechecking, Some(PlatformAccess::Checking));
     assert!(app.platform.token.is_some());
+    assert!(!is_remote_control_running(&app));
+}
+
+#[tokio::test]
+async fn an_approved_sign_in_ends_with_remote_control_running_through_the_relay() {
+    // Arrange
+    let (mut app, _base_dir) =
+        platform_app_with_launcher(registering_client(1), platform_relay_launcher(1)).await;
+
+    // Act
+    app.apply_platform_update(PlatformUpdate::SignInFinished {
+        request_id: 0,
+        result: Ok(signed_in()),
+    })
+    .await;
+    let is_running_before_check = is_remote_control_running(&app);
+    apply_events_until(&mut app, is_remote_control_running).await;
+
+    // Assert: connected for this launch only.
+    assert!(!is_running_before_check);
+    assert!(app.platform.view().is_registered());
+    assert!(!is_kept_on(&app));
+    assert_eq!(stored_keep_on(&app).await, Some(false));
 }
 
 #[tokio::test]
@@ -764,7 +921,7 @@ async fn a_revoked_token_signs_this_agentty_out_and_forgets_the_token() {
         .times(1)
         .returning(|_| Err(PlatformError::InvalidToken));
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    store_sign_in(&app, PLATFORM_URL).await;
+    store_sign_in_keeping_on(&app, PLATFORM_URL, true).await;
     app.enable_platform(
         Arc::new(client),
         PLATFORM_URL.to_string(),
@@ -775,18 +932,21 @@ async fn a_revoked_token_signs_this_agentty_out_and_forgets_the_token() {
     // Act
     apply_events_until(&mut app, |app| signed_out_notice(app).is_some()).await;
 
-    // Assert
+    // Assert: the revoked sign-in never reached remote control, and keep
+    // on went with it.
     assert_eq!(signed_out_notice(&app), Some(SIGNED_OUT_BY_PLATFORM));
     assert_eq!(stored_sign_in(&app).await, Some(String::new()));
     assert!(app.platform.token.is_none());
+    assert!(!is_remote_control_running(&app));
 }
 
 #[tokio::test]
-async fn account_outcomes_show_what_this_agentty_may_use() {
-    // Arrange
+async fn account_outcomes_show_what_this_agentty_may_use_and_start_nothing_unregistered() {
+    // Arrange: each check is to connect, yet without a registration the
+    // launcher, which has no listener to give, is never asked.
     let cases = [
-        (Ok(Access::ExplicitRelay), PlatformAccess::ExplicitRelay),
         (Ok(Access::NoRelay), PlatformAccess::NoRelay),
+        (Err(PlatformError::Waitlisted), PlatformAccess::Waitlisted),
         (
             Err(PlatformError::InstanceLimit),
             PlatformAccess::Unavailable {
@@ -798,6 +958,8 @@ async fn account_outcomes_show_what_this_agentty_may_use() {
     sign_in_directly(&mut app, None, PlatformAccess::Checking);
 
     for (result, expected) in cases {
+        app.platform.starts_remote_control_after_check = true;
+
         // Act
         app.apply_platform_update(PlatformUpdate::Refreshed {
             request_id: 0,
@@ -811,46 +973,155 @@ async fn account_outcomes_show_what_this_agentty_may_use() {
             account_view(&app).map(|account| &account.access),
             Some(&expected)
         );
+        assert!(!is_remote_control_running(&app));
     }
+}
+
+#[tokio::test]
+async fn checking_again_after_an_unregistered_answer_connects_only_with_keep_on() {
+    for keep_on in [false, true] {
+        // Arrange: the platform offered no relay at the last check.
+        let (mut app, _base_dir) = platform_app_with_launcher(
+            registering_client(1),
+            platform_relay_launcher(usize::from(keep_on)),
+        )
+        .await;
+        sign_in_directly(&mut app, Some("octocat"), PlatformAccess::NoRelay);
+        if let PlatformState::SignedIn(account) = &mut app.platform.view.state {
+            account.keep_on = keep_on;
+        }
+
+        // Act
+        app.activate_platform().await;
+        apply_events_until(&mut app, |app| app.platform.view().is_registered()).await;
+
+        // Assert
+        assert_eq!(is_remote_control_running(&app), keep_on, "{keep_on}");
+    }
+}
+
+#[tokio::test]
+async fn turning_keep_on_on_while_registered_connects_and_off_leaves_it_running() {
+    // Arrange
+    let (mut app, _base_dir) =
+        platform_app_with_launcher(registering_client(1), platform_relay_launcher(1)).await;
+    store_sign_in(&app, PLATFORM_URL).await;
+    sign_in_registered(&mut app).await;
+
+    // Act
+    app.toggle_platform_keep_on().await;
+    let checking = account_view(&app).map(|account| account.access.clone());
+    apply_events_until(&mut app, is_remote_control_running).await;
+    let saved_on = stored_keep_on(&app).await;
+    app.toggle_platform_keep_on().await;
+
+    // Assert
+    assert_eq!(checking, Some(PlatformAccess::Checking));
+    assert_eq!(saved_on, Some(true));
+    assert!(!is_kept_on(&app));
+    assert_eq!(stored_keep_on(&app).await, Some(false));
+    assert!(is_remote_control_running(&app));
+}
+
+#[tokio::test]
+async fn stopping_with_enter_while_kept_on_stays_stopped_for_this_launch() {
+    // Arrange: keep on is on and remote control runs.
+    let (mut app, _base_dir) =
+        platform_app_with_launcher(registering_client(1), platform_relay_launcher(1)).await;
+    store_sign_in(&app, PLATFORM_URL).await;
+    sign_in_registered(&mut app).await;
+    app.toggle_platform_keep_on().await;
+    apply_events_until(&mut app, is_remote_control_running).await;
+
+    // Act
+    app.activate_platform().await;
+    // A late answer to the check that connected starts nothing again.
+    let request_id = app.platform.request_id;
+    app.apply_platform_update(PlatformUpdate::Refreshed {
+        request_id,
+        login: None,
+        result: Ok(Access::Registered {
+            name: INSTANCE_NAME.to_string(),
+            service: service(),
+        }),
+    })
+    .await;
+
+    // Assert
+    assert!(!is_remote_control_running(&app));
+    assert!(is_kept_on(&app));
+    assert_eq!(stored_keep_on(&app).await, Some(true));
+}
+
+#[tokio::test]
+async fn keep_on_waits_for_the_check_and_starting_or_stopping_never_changes_it() {
+    // Arrange
+    let (mut app, _base_dir) =
+        platform_app_with_launcher(MockPlatformClient::new(), platform_relay_launcher(1)).await;
+    store_sign_in(&app, PLATFORM_URL).await;
+    sign_in_directly(&mut app, Some("octocat"), PlatformAccess::Checking);
+
+    // Act
+    app.toggle_platform_keep_on().await;
+    let while_checking = is_kept_on(&app);
+    sign_in_registered(&mut app).await;
+    app.toggle_remote_control().await;
+    let started = is_remote_control_running(&app);
+    app.toggle_remote_control().await;
+
+    // Assert
+    assert!(!while_checking);
+    assert!(started);
+    assert!(!is_kept_on(&app));
+    assert_eq!(stored_keep_on(&app).await, None);
+}
+
+#[tokio::test]
+async fn a_keep_on_change_that_cannot_be_saved_lasts_until_agentty_quits() {
+    // Arrange
+    let (mut app, _base_dir, pool) = test_support::new_git_test_app_with_pool().await;
+    enable(&mut app, MockPlatformClient::new()).await;
+    sign_in_directly(&mut app, Some("octocat"), PlatformAccess::NoRelay);
+    pool.close().await;
+
+    // Act
+    app.toggle_platform_keep_on().await;
+
+    // Assert
+    assert_eq!(
+        account_view(&app).map(|account| (account.keep_on, account.keep_on_notice.as_deref())),
+        Some((
+            true,
+            Some("Could not save keep on, so the change lasts only until Agentty quits.")
+        ))
+    );
+}
+
+#[tokio::test]
+async fn sign_out_stops_remote_control_and_clears_keep_on() {
+    // Arrange
+    let mut client = registering_client(1);
+    client.expect_remove_instance().returning(|_, _| Ok(()));
+    client.expect_revoke_token().returning(|_| Ok(()));
+    let (mut app, _base_dir) = platform_app_with_launcher(client, platform_relay_launcher(1)).await;
+    store_sign_in(&app, PLATFORM_URL).await;
+    sign_in_registered(&mut app).await;
+    app.toggle_platform_keep_on().await;
+    apply_events_until(&mut app, is_remote_control_running).await;
+
+    // Act
+    app.sign_out_platform().await;
+
+    // Assert
+    assert!(!is_remote_control_running(&app));
+    assert_eq!(stored_sign_in(&app).await, Some(String::new()));
 }
 
 #[tokio::test]
 async fn a_registered_agentty_checks_the_account_then_starts_remote_control_through_its_relay() {
     // Arrange: without `--experimental-remote`, a free port is enough.
-    let mut client = MockPlatformClient::new();
-    client
-        .expect_account()
-        .times(1)
-        .returning(|_| Ok(account(true)));
-    client
-        .expect_register_instance()
-        .times(1)
-        .returning(|_, instance_id, name| {
-            Ok(RegisteredInstance {
-                instance_id: instance_id.to_string(),
-                name: name.to_string(),
-            })
-        });
-    let mut launcher = MockRemoteControlLauncher::new();
-    launcher
-        .expect_start()
-        .withf(|port, _, relay, _| {
-            *port == 0
-                && relay
-                    .as_ref()
-                    .is_some_and(|relay| relay.url == service().relay_url)
-        })
-        .times(1)
-        .returning(
-            |_, _, _, _| Ok(Box::new(StubServer::default()) as Box<dyn RemoteControlServer>),
-        );
-    let (mut app, _base_dir) = platform_app_with(
-        client,
-        launcher,
-        MockBrowserClient::new(),
-        MockTerminalClipboard::new(),
-    )
-    .await;
+    let (mut app, _base_dir) =
+        platform_app_with_launcher(registering_client(1), platform_relay_launcher(1)).await;
     sign_in_directly(&mut app, None, PlatformAccess::Checking);
     app.activate_platform().await;
     app.apply_platform_update(PlatformUpdate::Refreshed {
@@ -869,7 +1140,7 @@ async fn a_registered_agentty_checks_the_account_then_starts_remote_control_thro
     let tab = app.tabs.current();
     app.activate_platform().await;
     let checking = account_view(&app).map(|account| account.access.clone());
-    apply_events_until(&mut app, |app| app.remote_control.view().listener.is_some()).await;
+    apply_events_until(&mut app, is_remote_control_running).await;
     let link = app
         .remote_control
         .view()

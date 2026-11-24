@@ -189,7 +189,8 @@ agentty --version    # Show the installed Agentty version
   [workflow guide](https://agentty.xyz/docs/usage/workflow/).
 - **Remote control**: `--experimental-remote` adds a preview `Remote` tab that pairs a
   phone or browser to start, follow, reply to, and merge sessions through a tunnel you
-  provide. See [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
+  provide, and `--remote-relay <URL>` adds it to work through a relay. See
+  [Remote Control](https://agentty.xyz/docs/usage/remote-control/).
   `--experimental-platform` adds a preview `Platform` tab that signs in to the Agentty
   Platform, so paired devices reach Agentty through its hosted relay. See
   [Agentty Platform](https://agentty.xyz/docs/usage/platform/).

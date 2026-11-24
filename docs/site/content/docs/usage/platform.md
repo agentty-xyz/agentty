@@ -12,7 +12,8 @@ end to end. Signing in grants no device any access.
 
 The platform is a preview feature. Start Agentty with `--experimental-platform` to add
 the `Platform` tab after the other tabs. The flag works with or without
-`--experimental-remote`.
+`--experimental-remote`, but not with `--remote-relay`; see
+[Relay Precedence](#usage-platform-relay-precedence).
 
 <!-- more -->
 
@@ -33,8 +34,9 @@ the code expires. Press `Enter` while it waits to cancel.
 Once signed in, the tab shows your account and the name this Agentty has on the
 platform: `Agentty on` and the computer's name. When the platform offers a relay,
 Agentty registers itself each time it checks the account, at sign-in and when it starts,
-so the relay admits it. If the account check fails, the tab says why; press `Enter` to
-try again.
+so the relay admits it, and the sign-in ends with remote control running through the
+platform's relay. If the account check fails, the tab says why; press `Enter` to try
+again.
 
 ## Use Remote Control Through the Platform
 
@@ -46,6 +48,9 @@ platform's pairing page, a QR code of the link when the terminal is large enough
 pairing requests to approve with `y` or deny with `x`, and the paired devices, which `d`
 removes. See [Keybindings](@/docs/usage/keybindings.md#platform) for every key.
 
+`Enter` controls only the current launch: remote control is off each time Agentty
+starts, unless you turn on [keep on](#usage-platform-keep-on).
+
 Remote control is the same one as in the `Remote` tab, with the same paired devices.
 With `--experimental-remote` as well, both tabs show it, and it also listens on its
 loopback port as usual. Without that flag, it listens on a free loopback port that only
@@ -55,15 +60,32 @@ When the relay shows `Not admitted`, the platform's relay refused this Agentty, 
 example because its registration was removed elsewhere. Agentty keeps retrying and
 connects once the platform admits it again; signing in again registers it again.
 
+## Keep Remote Control On
+
+<a id="usage-platform-keep-on"></a> Press `a` in the `Platform` tab, once the account
+check has answered, to turn keep on on or off; the `Keep on` field shows which. With
+keep on, remote control through the platform's relay starts whenever Agentty starts,
+after the account check confirms the registration. Turning it on while this Agentty is
+registered and remote control is off also starts remote control now; turning it off
+leaves running remote control alone and only affects later launches. With keep on,
+pressing `Enter` in a tab that is not registered checks the account again and connects
+once the platform registers this Agentty.
+
+Keep on is saved with the sign-in: a new sign-in starts with it off, and signing out, or
+the platform revoking the token, clears it. If it cannot be saved, the tab says so, and
+the change lasts only until Agentty quits.
+
 ## Relay Precedence
 
 <a id="usage-platform-relay-precedence"></a> A relay named with `--remote-relay` always
-wins. With it, Agentty does not register with the platform and does not use the
-platform's relay; the `Platform` tab only shows the account. Neither relay ever receives
-the platform's access token.
+wins. A launch with it does not offer the `Platform` tab and does not contact the
+platform, even with `--experimental-platform`: Agentty neither checks the account nor
+registers with the platform, and leaves the saved sign-in for a later launch. Neither
+relay ever receives the platform's access token.
 
 Use `--platform-url <URL>` to sign in to another platform; it defaults to
-`https://platform.agentty.xyz`. Plain `http://` is accepted only for this computer.
+`https://platform.agentty.xyz`. Plain `http://` is accepted only for this computer. A
+sign-in saved for another platform, with its keep on, is ignored.
 
 ## Accounts Without Access
 
@@ -74,11 +96,11 @@ platform's relay. Press `Enter` to check again.
 ## Sign Out
 
 <a id="usage-platform-sign-out"></a> Press `l` in the `Platform` tab to sign out.
-Agentty forgets the token at once and stops remote control through the platform's relay,
-then asks the platform to remove this Agentty's registration and revoke the token; you
-can sign in again once it answers. If the platform does not confirm, or the saved
-sign-in cannot be removed from this computer, the tab says so. When the platform revokes
-the token itself, the tab returns to signed out.
+Agentty forgets the token and keep on at once and stops remote control through the
+platform's relay, then asks the platform to remove this Agentty's registration and
+revoke the token; you can sign in again once it answers. If the platform does not
+confirm, or the saved sign-in cannot be removed from this computer, the tab says so.
+When the platform revokes the token itself, the tab returns to signed out.
 
 Agentty keeps the token in its database, as it does its relay key, together with the
 platform that issued it, and never sends it to another platform or to any relay.

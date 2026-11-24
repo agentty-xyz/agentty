@@ -18,7 +18,7 @@ fn only_a_signed_in_view_has_an_account_and_only_a_registered_one_uses_the_relay
     let signed_in = |access| {
         view(PlatformState::SignedIn(PlatformAccountView {
             access,
-            login: Some("octocat".to_string()),
+            ..PlatformAccountView::checking(Some("octocat".to_string()))
         }))
     };
     let views = [
@@ -60,4 +60,20 @@ fn only_a_signed_in_view_has_an_account_and_only_a_registered_one_uses_the_relay
         assert_eq!(account.is_some(), has_account);
         assert_eq!(view.is_registered(), is_registered);
     }
+}
+
+#[test]
+fn a_checked_account_offers_keep_on_starting_off() {
+    // Arrange
+    let checking = PlatformAccountView::checking(Some("octocat".to_string()));
+    let answered = PlatformAccountView {
+        access: PlatformAccess::NoRelay,
+        ..checking.clone()
+    };
+
+    // Act, Assert
+    assert!(!checking.keep_on);
+    assert_eq!(checking.keep_on_notice, None);
+    assert!(!checking.offers_keep_on());
+    assert!(answered.offers_keep_on());
 }

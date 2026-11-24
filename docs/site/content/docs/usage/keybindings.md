@@ -82,7 +82,7 @@ Claude or Codex, speed. See [Settings Scope](@/docs/usage/workflow.md#settings-s
 
 ## Remote
 
-Appears only with `agentty --experimental-remote`. See
+Appears only with `agentty --experimental-remote` or `--remote-relay <URL>`. See
 [Remote Control](@/docs/usage/remote-control.md).
 
 | Key                 | Action                                         |
@@ -102,23 +102,26 @@ Appears only with `agentty --experimental-remote`. See
 
 ## Platform
 
-Appears only with `agentty --experimental-platform`. See
+Appears only with `agentty --experimental-platform`, and not with `--remote-relay`. See
 [Agentty Platform](@/docs/usage/platform.md).
 
-| Key                 | Action                                                 |
-| ------------------- | ------------------------------------------------------ |
-| `q`                 | Quit after confirmation                                |
-| `s`                 | Sync active project branch                             |
-| `Enter`             | Sign in, cancel a sign-in, or check the account again  |
-| `o`                 | Open the sign-in page in this browser while signing in |
-| `c`                 | Copy the sign-in page link while signing in            |
-| `l`                 | Sign out                                               |
-| `Tab` / `Shift+Tab` | Switch to next / previous tab                          |
-| `?`                 | Help                                                   |
+| Key                 | Action                                                            |
+| ------------------- | ----------------------------------------------------------------- |
+| `q`                 | Quit after confirmation                                           |
+| `s`                 | Sync active project branch                                        |
+| `Enter`             | Sign in and connect, cancel a sign-in, or check the account again |
+| `o`                 | Open the sign-in page in this browser while signing in            |
+| `c`                 | Copy the sign-in page link while signing in                       |
+| `a`                 | Turn keep on on or off once the account check has answered        |
+| `l`                 | Sign out                                                          |
+| `Tab` / `Shift+Tab` | Switch to next / previous tab                                     |
+| `?`                 | Help                                                              |
 
 Once this Agentty is registered, `Enter` starts or stops remote control through the
-platform's relay, and the [Remote](#remote) keys `y`, `x`, `n`, `o`, `c`, `j` / `k`, and
-`d` act on its pairing link, pairing requests, and devices.
+platform's relay for this launch, and the [Remote](#remote) keys `y`, `x`, `n`, `o`,
+`c`, `j` / `k`, and `d` act on its pairing link, pairing requests, and devices. With
+keep on, remote control through the platform starts whenever Agentty starts; see
+[Keep Remote Control On](@/docs/usage/platform.md#usage-platform-keep-on).
 
 ## Session View
 

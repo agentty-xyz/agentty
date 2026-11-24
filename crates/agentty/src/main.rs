@@ -22,11 +22,15 @@ use agentty::infra::db::{
     timestamp_source_from_environment as environment_timestamp_source,
 };
 use agentty::infra::platform::{DEFAULT_PLATFORM_URL, HttpPlatformClient};
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 
 /// Command-line options for launching Agentty.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(
+    version,
+    about,
+    group(ArgGroup::new("remote_control").args(["remote", "remote_relay"]).multiple(true))
+)]
 struct Cli {
     /// Disables `PostHog` usage telemetry; OTLP export to `--otlp-endpoint` is
     /// unaffected.
@@ -46,7 +50,8 @@ struct Cli {
     #[arg(long, value_name = "URL")]
     otlp_endpoint: Option<String>,
     /// Agentty Platform the Platform tab signs in to. Plain `http://` is
-    /// accepted only for this computer.
+    /// accepted only for this computer. A launch with `--remote-relay`
+    /// contacts no platform.
     #[arg(
         long,
         value_name = "URL",
@@ -60,27 +65,44 @@ struct Cli {
         long,
         value_name = "PORT",
         default_value_t = DEFAULT_REMOTE_CONTROL_PORT,
-        requires = "remote"
+        requires = "remote_control"
     )]
     remote_control_port: u16,
     /// Host name a tunnel uses to reach remote control, such as a
     /// Tailscale machine name; repeat for several. Loopback names are always
     /// accepted.
-    #[arg(long, value_name = "HOST", requires = "remote")]
+    #[arg(long, value_name = "HOST", requires = "remote_control")]
     remote_control_host: Vec<String>,
     /// Relay that remote control registers with, such as
     /// `wss://relay.example`, so devices can pair and connect without a
-    /// tunnel. Traffic through it is encrypted end to end. It wins over a
-    /// platform's relay, and no platform credential is ever sent to it.
-    #[arg(long, value_name = "URL", requires = "remote", value_parser = parse_relay_url)]
+    /// tunnel. Traffic through it is encrypted end to end. It offers the
+    /// Remote tab on its own, and the launch then contacts no platform, even
+    /// with `--experimental-platform`.
+    #[arg(long, value_name = "URL", value_parser = parse_relay_url)]
     remote_relay: Option<String>,
+}
+
+impl Cli {
+    /// Returns whether this launch offers remote control and the Remote tab:
+    /// with `--experimental-remote` or `--remote-relay`.
+    fn offers_remote_control(&self) -> bool {
+        self.experimental.remote || self.remote_relay.is_some()
+    }
+
+    /// Returns whether this launch offers the Platform tab: with
+    /// `--experimental-platform` unless `--remote-relay` names a relay, which
+    /// keeps the platform out of the launch and its saved sign-in untouched.
+    fn offers_platform(&self) -> bool {
+        self.experimental.platform && self.remote_relay.is_none()
+    }
 }
 
 /// Opt-in preview features, disabled unless their launch flags are present.
 #[derive(Debug, Default, clap::Args)]
 struct ExperimentalFeatures {
     /// Offers the Platform tab, which signs in to an Agentty Platform so
-    /// paired devices can reach this Agentty through its relay.
+    /// paired devices can reach this Agentty through its relay. Ignored with
+    /// `--remote-relay`.
     #[arg(long = "experimental-platform")]
     platform: bool,
     /// Offers the Remote tab, which lets a paired phone or browser follow
@@ -249,7 +271,8 @@ async fn run_application(
             startup.finish(app.as_ref().map_or(Outcome::Failed, |_| Outcome::Completed));
             let mut app = app?;
             app.set_analytics(analytics.clone());
-            if cli.experimental.remote {
+            let offers_platform = cli.offers_platform();
+            if cli.offers_remote_control() {
                 app.enable_remote_control(
                     cli.remote_control_port,
                     cli.remote_control_host,
@@ -257,7 +280,7 @@ async fn run_application(
                 )
                 .await;
             }
-            if cli.experimental.platform {
+            if offers_platform {
                 let client = HttpPlatformClient::new(&cli.platform_url)?;
                 app.enable_platform(
                     Arc::new(client),

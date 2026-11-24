@@ -68,21 +68,32 @@ async fn platform_keys_follow_the_sign_in_state() {
         login: None,
         result: Ok(Access::Registered {
             name: "Agentty on box".to_string(),
+            // Nothing listens there, so the signed-in Agentty stays local.
             service: RemoteControlService {
                 pairing_url: "https://platform.example/sessions/".to_string(),
-                relay_url: "wss://relay.platform.example".to_string(),
+                relay_url: "ws://127.0.0.1:9".to_string(),
             },
         }),
     })
     .await;
     let is_registered = app.platform.view().is_registered();
+    let is_connected = app.remote_control.view().listener.is_some();
     handle(&mut app, key('n')).await;
+    handle(&mut app, key('a')).await;
+    let is_kept_on = app
+        .platform
+        .view()
+        .account()
+        .is_some_and(|account| account.keep_on);
     handle(&mut app, key('l')).await;
 
     // Assert
     assert_eq!(signed_out, PlatformState::SignedOut { notice: None });
     assert!(signing_in);
     assert!(is_registered);
+    assert!(is_connected);
+    assert!(is_kept_on);
+    assert_eq!(app.remote_control.view().listener, None);
     assert_eq!(
         app.platform.view().state,
         PlatformState::SigningOut { notice: None }

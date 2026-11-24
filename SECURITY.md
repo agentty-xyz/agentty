@@ -127,8 +127,9 @@ Report these as vulnerabilities:
 - a platform access token, device code, or sign-in code reaching a relay, another
   platform, a log, or a paired device;
 - a device gaining access to a session because Agentty is signed in, without pairing;
-- Agentty dialling the platform's relay while `--remote-relay` names another relay, or
-  before it registered with the platform; and
+- Agentty contacting a platform, or dialling its relay, in a launch with
+  `--remote-relay`, or dialling the platform's relay before it registered with the
+  platform; and
 - an answer from a platform making the terminal run control sequences, or making Agentty
   open anything but a web page.
 

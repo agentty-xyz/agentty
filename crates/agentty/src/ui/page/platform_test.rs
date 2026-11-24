@@ -26,7 +26,7 @@ fn platform(state: PlatformState) -> PlatformView {
 fn signed_in(access: PlatformAccess) -> PlatformView {
     platform(PlatformState::SignedIn(PlatformAccountView {
         access,
-        login: Some("octocat".to_string()),
+        ..PlatformAccountView::checking(Some("octocat".to_string()))
     }))
 }
 
@@ -85,10 +85,11 @@ fn signed_out_page_explains_what_signing_in_gives_and_offers_it() {
     assert!(text.contains("'agentty' on the platform"));
     assert!(text.contains("Address https://platform.example"));
     assert!(text.contains("Account Signed out"));
+    assert!(text.contains("Sign in to connect this Agentty to the platform's relay"));
     assert!(text.contains("without a tunnel or a relay of your own"));
     assert!(text.contains("grants no device any access"));
     assert!(text.contains("Signed out."));
-    assert!(text.contains("Enter: sign in"));
+    assert!(text.contains("Enter: sign in and connect"));
 }
 
 #[test]
@@ -145,11 +146,6 @@ fn signed_in_page_says_what_the_account_may_use_in_plain_words() {
     let cases = [
         (PlatformAccess::Checking, "Checking the account...", false),
         (
-            PlatformAccess::ExplicitRelay,
-            "uses the relay `--remote-relay` names",
-            true,
-        ),
-        (
             PlatformAccess::NoRelay,
             "offers this account no relay",
             true,
@@ -167,23 +163,41 @@ fn signed_in_page_says_what_the_account_may_use_in_plain_words() {
             true,
         ),
     ];
-    let checking = platform(PlatformState::SignedIn(PlatformAccountView {
-        access: PlatformAccess::Checking,
-        login: None,
-    }));
+    let checking = platform(PlatformState::SignedIn(PlatformAccountView::checking(None)));
     let checking_text = rendered_text(&checking, &RemoteControlView::default(), 200, 30);
 
-    for (access, expected, can_check_again) in cases {
+    for (access, expected, has_answered) in cases {
         // Act
         let text = rendered_text(&signed_in(access), &RemoteControlView::default(), 200, 30);
 
-        // Assert
+        // Assert: keep on is offered once the check answered.
         assert!(text.contains("Account octocat"));
+        assert!(text.contains("Keep on Off"));
         assert!(text.contains(expected));
-        assert_eq!(text.contains("Enter: check again"), can_check_again);
+        assert_eq!(text.contains("Enter: check again"), has_answered);
+        assert_eq!(text.contains("a: keep on"), has_answered);
         assert!(text.contains("l: sign out"));
     }
     assert!(checking_text.contains("Account Signed in"));
+}
+
+#[test]
+fn keep_on_shows_its_state_what_it_does_and_an_unsaved_change() {
+    // Arrange
+    let kept_on = platform(PlatformState::SignedIn(PlatformAccountView {
+        access: PlatformAccess::NoRelay,
+        keep_on: true,
+        keep_on_notice: Some("Could not save keep on.".to_string()),
+        login: None,
+    }));
+
+    // Act
+    let text = rendered_text(&kept_on, &RemoteControlView::default(), 200, 30);
+
+    // Assert
+    assert!(text.contains("Keep on On"));
+    assert!(text.contains("starts whenever Agentty starts"));
+    assert!(text.contains("Could not save keep on."));
 }
 
 #[test]
