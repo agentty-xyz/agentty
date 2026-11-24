@@ -139,7 +139,9 @@ fn superseded_results_stay_elided_and_new_staleness_waits_for_the_next_fit() {
 
     // Act
     // Re-reading `a.txt` makes its result stale, but this request still
-    // fits, so the shared prefix is kept.
+    // fits and the stale result is a small share of it, so the shared prefix
+    // is kept.
+    record_read_round(&mut request, "e", 2000);
     record(&mut request, &read_call_of("a2", "a.txt"), "z".repeat(10));
     let (second, second_activity) = fit_owned(&mut fit, budget_weight, &request);
     for index in 0..3 {
@@ -159,6 +161,67 @@ fn superseded_results_stay_elided_and_new_staleness_waits_for_the_next_fit() {
     assert_eq!(notice["superseded_by"], json!("a2"));
     assert_eq!(third_activity.superseded_results(), 2);
     assert_eq!(third.messages().last(), request.messages().last());
+}
+
+#[test]
+fn stale_results_are_cleared_within_the_budget_once_they_are_a_quarter_of_the_request() {
+    // Arrange
+    // `src/lib.rs` is read whole, rewritten, and read again around another
+    // file, so its first read shows text from before the write.
+    let file_read = read_of("r1", &json!({"path": "src/lib.rs"}));
+    let write = write_call(
+        "w1",
+        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n",
+    );
+    let applied = json!({"bytes_written": 2, "path": "src/lib.rs", "status": "applied"});
+    let mut request = request(Vec::new(), Vec::new(), "edit");
+    record(&mut request, &file_read, "x".repeat(2000));
+    record(&mut request, &write, applied.to_string());
+    record_read_round(&mut request, "other", 400);
+    let roomy_budget = weigh(&request) * 10;
+    let mut fit = ContextFit::default();
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut fit, roomy_budget, &request);
+    record_read_round(&mut request, "next", 100);
+    let (next, next_activity) = fit_owned(&mut fit, roomy_budget, &request);
+
+    // Assert
+    let notice = result_json(&fitted.messages()[2]);
+    assert_eq!(notice["superseded_by"], json!("w1"));
+    assert!(
+        notice["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("a later write, named in superseded_by, changed the file it showed")
+    );
+    assert_eq!(fitted.messages()[3..], request.messages()[3..7]);
+    assert_eq!(activity.superseded_results(), 1);
+    assert_eq!(
+        next.messages()[..fitted.messages().len()],
+        *fitted.messages()
+    );
+    assert_eq!(next_activity.superseded_results(), 1);
+}
+
+#[test]
+fn stale_results_below_a_quarter_of_the_request_wait_while_it_fits() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(500));
+    record_read_round(&mut request, "big", 3000);
+    record(&mut request, &read_call_of("a2", "a.txt"), "y".repeat(500));
+    record_read_round(&mut request, "latest", 100);
+    let roomy_budget = weigh(&request) * 10;
+
+    // Act
+    let step = ContextFit::default()
+        .fit(&ByteEstimator, budget(roomy_budget), &request, None)
+        .map(sent)
+        .expect("request fits");
+
+    // Assert
+    assert_eq!(step, (None, ContextActivity::default()));
 }
 
 #[test]

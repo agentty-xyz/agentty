@@ -140,9 +140,13 @@ call. Fitting works on a copy: canonical messages, the journal, and replayed his
 keep the original content.
 
 - **Append-only requests.** A request within budget is the previous request plus new
-  messages, so provider prompt caches reuse the shared prefix. Only an over-budget
-  request is reduced, and then deeply, so several later rounds append again before the
-  next reduction. A reduced message is never rewritten twice.
+  messages, so provider prompt caches reuse the shared prefix. An over-budget request is
+  reduced, and then deeply, so several later rounds append again before the next
+  reduction. A request within budget is reduced only to drop stale tool results: once
+  the results later calls superseded (a file read before the model rewrote it, a
+  repeated read, a rerun command) weigh a quarter of the request, they all become
+  notices naming the newer call, so the model stops acting on outdated text. A reduced
+  message is never rewritten twice.
 - **Reduction order.** Superseded tool results are cleared first, then the latest
   round's oversized results are cut, then older results become tool-aware notices and
   older assistant messages lose reasoning and patches. Recent rounds and their reasoning

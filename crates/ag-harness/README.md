@@ -429,31 +429,32 @@ async fn review(
   the schema is committed in `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
-  traffic grows a request past the budget. That request is sent as a reduced copy
-  without an extra model call, reduced deeply once so several later requests append to
-  it unchanged. First, older tool results that a later call superseded (a re-read of the
-  same target, an applied write to the file read, or a rerun of the same command) become
-  notices naming that call. Then the new round's results above 25% of the input budget
-  are cut (a `read` result by whole lines or items, any other to a head and tail
-  excerpt), and its largest results are cut to one common size while together they
-  exceed 50%. Then, down to 50% of the budget and oldest first, the other older tool
-  results become notices (`read` notices name the target and say its content is not
-  available until read again; `bash`/`write` notices keep the outcome and say not to
-  repeat), then older reasoning and `write` patches are cleared (the text a model wrote
-  beside its calls, `ToolCall::assistant_text`, is kept); the rounds holding the newest
-  five results are reduced only after everything older, and the newest rounds'
-  reasoning, within 10% of the input budget, is kept after their results are cleared, so
-  a model's notes in reasoning outlive the results they describe (it is cleared before a
-  replayed turn would be dropped, and those rounds are dropped below only when the
-  request would not fit otherwise). If that is not enough, the oldest replayed turns and
-  then the current turn's oldest tool rounds are dropped whole, down to 70%, behind an
-  appended note listing the files they modified and read, the commands they ran, and
-  their other reads, whose results are not available until read again. Only as a last
-  resort are the latest tool round's results cut further and its `write` patches
-  replaced by their recorded outcome. Every reduced message keeps that form in later
-  requests. Stored messages are never changed; `ModelRequestActivity::context` reports
-  each reduction. A request that still cannot fit fails with
-  `TurnError::ContextBudgetExceeded`.
+  traffic grows a request past the budget, or until older results that later calls
+  superseded weigh a quarter of a request, which then sends them all as notices naming
+  the newer call. An over-budget request is sent as a reduced copy without an extra
+  model call, reduced deeply once so several later requests append to it unchanged.
+  First, older tool results that a later call superseded (a re-read of the same target,
+  an applied write to the file read, or a rerun of the same command) become notices
+  naming that call. Then the new round's results above 25% of the input budget are cut
+  (a `read` result by whole lines or items, any other to a head and tail excerpt), and
+  its largest results are cut to one common size while together they exceed 50%. Then,
+  down to 50% of the budget and oldest first, the other older tool results become
+  notices (`read` notices name the target and say its content is not available until
+  read again; `bash`/`write` notices keep the outcome and say not to repeat), then older
+  reasoning and `write` patches are cleared (the text a model wrote beside its calls,
+  `ToolCall::assistant_text`, is kept); the rounds holding the newest five results are
+  reduced only after everything older, and the newest rounds' reasoning, within 10% of
+  the input budget, is kept after their results are cleared, so a model's notes in
+  reasoning outlive the results they describe (it is cleared before a replayed turn
+  would be dropped, and those rounds are dropped below only when the request would not
+  fit otherwise). If that is not enough, the oldest replayed turns and then the current
+  turn's oldest tool rounds are dropped whole, down to 70%, behind an appended note
+  listing the files they modified and read, the commands they ran, and their other
+  reads, whose results are not available until read again. Only as a last resort are the
+  latest tool round's results cut further and its `write` patches replaced by their
+  recorded outcome. Every reduced message keeps that form in later requests. Stored
+  messages are never changed; `ModelRequestActivity::context` reports each reduction. A
+  request that still cannot fit fails with `TurnError::ContextBudgetExceeded`.
 - **Earlier rounds can be summarized instead.** `Harness::context_summaries` with
   `ContextSummaryPolicy::Enabled` lets a request that still exceeds 50% of the budget
   after superseded results are cleared and oversized results capped first ask the model,

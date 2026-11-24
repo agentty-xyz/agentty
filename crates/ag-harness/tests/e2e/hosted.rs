@@ -1,5 +1,6 @@
 //! Live checks for hosted Anthropic and `OpenAI` models: streaming,
-//! structured output, reasoning replay, prompt caching, history trimming,
+//! structured output, reasoning replay, stale reads cleared after a write,
+//! prompt caching, history trimming,
 //! automatic compaction on a cheaper summary model, usage and cost, and
 //! authentication failures. Models come from the environment catalog, so
 //! runs are priced. `AG_LIVE_PROVIDERS` selects `anthropic` and `openai`;
@@ -351,6 +352,64 @@ async fn reasoning_replay(provider: Provider) -> Result<String, DynError> {
 async fn test_reasoning_replay() -> Result<(), DynError> {
     // Act & Assert
     run_case("hosted_reasoning_replay", reasoning_replay).await
+}
+
+// ---------------------------------------------------------------------------
+// Stale reads
+// ---------------------------------------------------------------------------
+
+/// A large file read and then rewritten leaves a stale read that the next
+/// request clears within the budget; the provider must accept the request
+/// with that result replaced by its notice, and the model must answer from
+/// the file as rewritten.
+async fn stale_read_cleared(provider: Provider) -> Result<String, DynError> {
+    let (workspace, repository) = notes_repository()?;
+    let notes = (0..60)
+        .map(|line| format!("{}\n", filler(line, 120)))
+        .chain(["The code word is lantern-58.\n".to_string()])
+        .collect::<String>();
+    std::fs::write(workspace.path().join("notes.txt"), notes)?;
+    let harness = provider
+        .harness(&provider.model())?
+        .store(Arc::new(MemoryStore::new()))
+        .repository(repository)
+        .tools(ToolSet::empty().with_read().with_write())
+        .model_reasoning_effort(ReasoningEffort::Low)
+        .build()?;
+    let session = harness.session("stale", answer_schema()?).create().await?;
+    let (output, report) = send(
+        &session,
+        "Read all of notes.txt with the read tool. Then use the write tool to change only its \
+         last line so the code word is lantern-99. Then read notes.txt again from line 55 to the \
+         end and set answer to the code word its last line names now.",
+    )
+    .await?;
+    let superseded = report
+        .model_requests()
+        .iter()
+        .map(|request| request.context().superseded_results())
+        .max()
+        .unwrap_or_default();
+    let summary = format!(
+        "requests={} superseded={superseded} answer={}",
+        report.model_requests().len(),
+        answer(&output)
+    );
+    if superseded == 0 {
+        return Err(format!("no stale read was cleared: {summary}").into());
+    }
+    if !answer(&output).contains("lantern-99") {
+        return Err(format!("the rewritten code word was not reported: {summary}").into());
+    }
+
+    Ok(summary)
+}
+
+#[tokio::test]
+#[ignore = "requires live Anthropic or OpenAI credentials"]
+async fn test_stale_read_cleared() -> Result<(), DynError> {
+    // Act & Assert
+    run_case("hosted_stale_read_cleared", stale_read_cleared).await
 }
 
 // ---------------------------------------------------------------------------
