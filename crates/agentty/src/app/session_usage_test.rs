@@ -371,6 +371,76 @@ async fn test_recorded_usage_reloads_only_the_open_panel_of_its_session() {
     assert!(matches!(app.mode, AppMode::List));
 }
 
+/// Returns the input tokens of the readout totals' first record of `sess`.
+fn readout_input_tokens(app: &App) -> Option<u64> {
+    app.session_usage_totals
+        .get(&SessionId::from("sess"))
+        .and_then(|usage| usage.records.first())
+        .map(|record| record.input_tokens)
+}
+
+#[tokio::test]
+async fn test_visible_session_usage_loads_once_for_the_readout_after_a_restart() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app).await;
+
+    // Act: nothing is visible from the list, then the session view loads
+    // its stored totals once.
+    app.load_visible_session_usage().await;
+    let list_totals = app.session_usage_totals.len();
+    app.mode = AppMode::View {
+        scroll_offset: None,
+        session_id: "sess".into(),
+    };
+    app.load_visible_session_usage().await;
+    let loaded_tokens = readout_input_tokens(&app);
+    record_turn_usage(&app, 5).await;
+    app.load_visible_session_usage().await;
+
+    // Assert
+    assert_eq!(list_totals, 0);
+    assert_eq!(loaded_tokens, Some(100));
+    assert_eq!(
+        readout_input_tokens(&app),
+        Some(100),
+        "a loaded session reloads only when the store reports new usage"
+    );
+}
+
+#[tokio::test]
+async fn test_recorded_usage_reloads_the_readout_totals_of_shown_sessions() {
+    // Arrange
+    let (mut app, _directory) = new_test_app().await;
+    seed_session(&mut app).await;
+    app.mode = AppMode::View {
+        scroll_offset: None,
+        session_id: "sess".into(),
+    };
+    app.load_visible_session_usage().await;
+    record_turn_usage(&app, 5).await;
+
+    // Act
+    app.apply_live_usage_ops(vec![
+        LiveUsageOp::Recorded {
+            run: Some(LiveUsageRun::SessionTurn),
+            session_id: "sess".into(),
+        },
+        LiveUsageOp::Recorded {
+            run: None,
+            session_id: "never-shown".into(),
+        },
+    ])
+    .await;
+
+    // Assert
+    assert_eq!(readout_input_tokens(&app), Some(105));
+    assert!(
+        !app.session_usage_totals
+            .contains_key(&SessionId::from("never-shown"))
+    );
+}
+
 #[tokio::test]
 async fn test_usage_reporting_run_repository_delegates_and_reports_recorded_usage() {
     // Arrange

@@ -1,11 +1,15 @@
-//! The per-session usage panel, opened with `u` and `/usage`, and its marks
-//! for upper bounds and plan-billed API equivalents.
+//! The per-session usage panel, opened with `u` and `/usage`, its marks for
+//! upper bounds and plan-billed API equivalents, and the live usage readout
+//! beside the composer timer.
 
+use std::io::Write as _;
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use ag_contracts::{CostBasis, CostEstimate, ModelUsage, PricedCost, TurnUsage, UsagePurpose};
 use ag_session::test_support as model_fixture;
+use serde_json::json;
 use testty::assertion;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
@@ -13,10 +17,11 @@ use testty::scenario::Scenario;
 
 use super::fixture::{E2eResult, seed_project_settings, seed_review_ready_session};
 use super::harness::{
-    HARNESS_ANSWER, NO_LOCAL_SERVER, scripted_provider, switch_to_harness_muse_model,
+    HARNESS_ANSWER, NO_LOCAL_SERVER, TITLE_PROMPT, read_request_body, scripted_provider,
+    switch_to_harness_muse_model,
 };
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest};
+use crate::common::{BuilderEnv, FeatureTest, ReleaseGate};
 
 /// Row that closes the usage table.
 const SESSION_TOTAL: &str = "Session total";
@@ -262,6 +267,202 @@ async fn test_usage_panel_marks_chatgpt_plan_costs_as_api_equivalents() -> E2eRe
         .await?;
 
     Ok(())
+}
+
+/// Prompt of the live-readout scenario.
+const READOUT_PROMPT: &str = "Write two notes";
+
+/// Answer of the live-readout scenario's last request.
+const READOUT_ANSWER: &str = "Wrote both notes.";
+
+/// Turn tokens the readout shows after the first model request.
+const FIRST_REQUEST_TOKENS: &str = "↑12.0k ↓200";
+
+/// Turn tokens the readout shows after the second model request.
+const SECOND_REQUEST_TOKENS: &str = "↑27.0k ↓500";
+
+#[tokio::test]
+async fn test_usage_readout_updates_after_each_model_request() -> E2eResult {
+    // Arrange
+    let second_request = ReleaseGate::new()?;
+    let third_request = ReleaseGate::new()?;
+    let server = gated_readout_provider(second_request.clone(), third_request.clone())?;
+
+    // Act, Assert
+    FeatureTest::new("usage_readout")
+        .with_git()
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
+                    .write_text(READOUT_PROMPT)
+                    .wait_for_text(READOUT_PROMPT, 3000)
+                    .press_key("Enter")
+                    // The provider holds the second request, so the turn
+                    // runs with the first request's usage.
+                    .wait_for_text(FIRST_REQUEST_TOKENS, 30000)
+                    .capture_labeled("readout_first_request", "Readout after one request")
+                    .compose(&second_request.release())
+                    .wait_for_text(SECOND_REQUEST_TOKENS, 30000)
+                    .capture_labeled("readout_second_request", "Readout after two requests")
+                    .compose(&third_request.release())
+                    .wait_for_text(READOUT_ANSWER, 30000)
+                    .step(common::wait_for_frame_text(
+                        &[" session │ Timer:"],
+                        &[SECOND_REQUEST_TOKENS],
+                    ))
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    for (capture, tokens, absent) in [
+                        (0, FIRST_REQUEST_TOKENS, SECOND_REQUEST_TOKENS),
+                        (1, SECOND_REQUEST_TOKENS, FIRST_REQUEST_TOKENS),
+                    ] {
+                        let running = common::frame_from_capture(&report.captures[capture]);
+                        let full = Region::full(running.cols(), running.rows());
+                        for text in [tokens, "ctx ", " turn · ", " session │ Timer:"] {
+                            assertion::assert_text_in_region(&running, text, &full);
+                        }
+                        assertion::assert_not_visible(&running, absent);
+                    }
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "ctx ", &full);
+                    assertion::assert_not_visible(frame, " turn · ");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Serves Chat Completions for the live-readout scenario on a local port
+/// and returns its base URL.
+///
+/// The session turn's first request gets a write call; the request carrying
+/// its result waits for `second_request` and gets a second write call; the
+/// request carrying that result waits for `third_request` and gets the
+/// answer. Each request reports cached input, so the turn's tokens grow
+/// only after a request completes. The commit-message utility gets its own
+/// answer and every other request `404 Not Found`.
+fn gated_readout_provider(
+    second_request: ReleaseGate,
+    third_request: ReleaseGate,
+) -> std::io::Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let (second_request, third_request) = (second_request.clone(), third_request.clone());
+            std::thread::spawn(move || {
+                serve_gated_readout(stream, &second_request, &third_request);
+            });
+        }
+    });
+
+    Ok(format!("http://{address}"))
+}
+
+/// Answers one provider connection for [`gated_readout_provider`].
+fn serve_gated_readout(
+    mut stream: TcpStream,
+    second_request: &ReleaseGate,
+    third_request: &ReleaseGate,
+) {
+    let Some(body) = read_request_body(&mut stream) else {
+        return;
+    };
+    let response = if body.contains("Generate the canonical session commit message") {
+        answer_completion(&json!({"answer": "Add two notes"}), (100, 0, 10))
+    } else if body.contains(r#""tool_call_id":"call-second""#) {
+        // A scenario that never opens the gate sees the request fail.
+        if !third_request.wait_blocking(Duration::from_secs(60)) {
+            return;
+        }
+
+        answer_completion(
+            &json!({"answer": READOUT_ANSWER, "questions": []}),
+            (20_000, 15_000, 100),
+        )
+    } else if body.contains(r#""tool_call_id":"call-first""#) {
+        if !second_request.wait_blocking(Duration::from_secs(60)) {
+            return;
+        }
+
+        write_call_completion("call-second", "second.txt", (15_000, 12_000, 300))
+    } else if body.contains(READOUT_PROMPT) && !body.contains(TITLE_PROMPT) {
+        write_call_completion("call-first", "first.txt", (12_000, 9_000, 200))
+    } else {
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+        return;
+    };
+    let body = response.to_string();
+    let _ = stream.write_all(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+             {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .as_bytes(),
+    );
+}
+
+/// Returns a completion calling `write` on `path` as `call_id`, reporting
+/// `(prompt, cached, completion)` tokens.
+fn write_call_completion(call_id: &str, path: &str, tokens: (u64, u64, u64)) -> serde_json::Value {
+    json!({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {
+                "content": null,
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "write",
+                        "arguments": json!({
+                            "path": path,
+                            "patch": format!("--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+note\n")
+                        }).to_string()
+                    }
+                }]
+            }
+        }],
+        "usage": completion_usage(tokens)
+    })
+}
+
+/// Returns a terminal completion with `content`, reporting
+/// `(prompt, cached, completion)` tokens.
+fn answer_completion(content: &serde_json::Value, tokens: (u64, u64, u64)) -> serde_json::Value {
+    json!({
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"content": content.to_string()}
+        }],
+        "usage": completion_usage(tokens)
+    })
+}
+
+/// Returns Chat Completions usage of `(prompt, cached, completion)` tokens.
+fn completion_usage((prompt, cached, completion): (u64, u64, u64)) -> serde_json::Value {
+    json!({
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "prompt_tokens_details": {"cached_tokens": cached}
+    })
 }
 
 /// Installs a Codex app-server stub signed in with a `ChatGPT` plan account,

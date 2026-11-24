@@ -359,6 +359,10 @@ pub struct App {
     /// Tracks per-session thinking text rendered while background work is
     /// active.
     pub(crate) session_progress_messages: HashMap<SessionId, String>,
+    /// Recorded usage of each session the live readout has shown, loaded
+    /// when the session first becomes visible and reloaded whenever the store
+    /// records usage for it.
+    pub(crate) session_usage_totals: HashMap<SessionId, crate::domain::session_usage::SessionUsage>,
     /// Owns session state, worker coordination, and the bounded control
     /// mailbox used by frontend-neutral callers.
     pub(crate) sessions: SessionRuntime,

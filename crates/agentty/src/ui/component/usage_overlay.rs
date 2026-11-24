@@ -4,15 +4,14 @@
 use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::presentation::help_action::HelpAction;
 use crate::ui::style::palette;
 use crate::ui::usage_format::{
-    self, CONTEXT_GAUGE_CELLS, ContextSummary, UsageColumn, UsageFigure, UsagePanelContent,
-    UsageTableRow,
+    self, ContextSummary, UsageColumn, UsageFigure, UsagePanelContent, UsageTableRow, context_tone,
 };
 use crate::ui::{Component, help_format, overlay};
 
@@ -44,12 +43,6 @@ const EMPTY_USAGE_MESSAGE: &str = "No usage recorded for this session yet.";
 
 /// Header of the model column.
 const MODEL_HEADER: &str = "Model";
-
-/// Context fill from which the gauge turns to the warning tone.
-const CONTEXT_WARNING_PERCENT: u64 = 75;
-
-/// Context fill from which the gauge turns to the danger tone.
-const CONTEXT_DANGER_PERCENT: u64 = 90;
 
 /// Centered popup overlay with the per-session usage panel.
 ///
@@ -371,15 +364,8 @@ fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
 fn context_spans(context: &ContextSummary) -> Vec<Span<'static>> {
     let mut spans = vec![summary_label("Context")];
     if let Some(filled) = context.gauge_filled {
-        let gauge = format!(
-            "{}{} ",
-            "▰".repeat(usize::try_from(filled).unwrap_or_default()),
-            "▱".repeat(
-                usize::try_from(CONTEXT_GAUGE_CELLS.saturating_sub(filled)).unwrap_or_default()
-            )
-        );
         spans.push(Span::styled(
-            gauge,
+            format!("{} ", usage_format::context_gauge(filled)),
             Style::default().fg(context_tone(context.now_percent)),
         ));
     }
@@ -397,16 +383,6 @@ fn context_spans(context: &ContextSummary) -> Vec<Span<'static>> {
     }
 
     spans
-}
-
-/// Returns the gauge tone for a context fill: muted, then warning, then
-/// danger; the percentage label always accompanies it.
-fn context_tone(percent: Option<u64>) -> Color {
-    match percent {
-        Some(percent) if percent >= CONTEXT_DANGER_PERCENT => palette::danger(),
-        Some(percent) if percent >= CONTEXT_WARNING_PERCENT => palette::warning(),
-        _ => palette::text_muted(),
-    }
 }
 
 /// Returns one figure's span in the panel's spelling and style.

@@ -3,13 +3,15 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use ratatui::widgets::{Paragraph, TableState};
 
 use super::{
     DiffSurfaceInput, FrameResources, RouteSharedContext, SessionSurfaceMode, Surface, SurfaceKind,
-    active_project_name, render_diff_surface, render_list_background, render_mode_overlay,
-    render_session_surface, render_surface, surface_for_help_context, surface_for_mode,
+    UsageSources, active_project_name, render_diff_surface, render_list_background,
+    render_mode_overlay, render_session_surface, render_surface, surface_for_help_context,
+    surface_for_mode,
 };
 use crate::app::Tab;
 use crate::app::session_state::SessionGitStatus;
@@ -18,8 +20,9 @@ use crate::domain::harness::HarnessAvailability;
 use crate::domain::input::InputState;
 use crate::domain::project::{Project, ProjectListItem};
 use crate::domain::question::{QuestionAttachmentState, QuestionItem};
-use crate::domain::session::{Session, Status};
+use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::session_usage::{ContextNow, LiveUsageKey, SessionUsage, UsageRecord};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffCommentTarget, DiffFocus,
     DiffLineComments, DiffPreview, DiffReviewComments, DiffSidebarFocus, HelpContext,
@@ -37,6 +40,160 @@ use crate::presentation::setting::{
 };
 use crate::test_support::SessionFixtureBuilder;
 use crate::ui::{component, markdown, page, style};
+
+/// Returns readout sources with no recorded or live usage.
+fn no_usage() -> UsageSources<'static> {
+    static LIVE: LazyLock<HashMap<LiveUsageKey, ag_contracts::TurnUsage>> =
+        LazyLock::new(HashMap::new);
+    static TOTALS: LazyLock<HashMap<SessionId, SessionUsage>> = LazyLock::new(HashMap::new);
+
+    UsageSources {
+        live: &LIVE,
+        local_models: &[],
+        totals: &TOTALS,
+    }
+}
+
+/// Renders `session` in view mode at 100 columns with `usage`, returning
+/// the buffer text.
+fn render_session_with_usage(session: Session, usage: UsageSources<'_>) -> String {
+    let backend = ratatui::backend::TestBackend::new(100, 20);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let session_id = session.id.to_string();
+    let sessions = vec![session];
+    let cache = markdown::MarkdownRenderCache::default();
+    let diff_layout_cache = page::diff::DiffLayoutCache::default();
+    let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+
+    terminal
+        .draw(|frame| {
+            render_session_surface(
+                frame,
+                frame.area(),
+                SessionSurfaceMode::View,
+                None,
+                &session_id,
+                &sessions,
+                FrameResources {
+                    active_prompt_outputs: &HashMap::new(),
+                    color_support: style::ColorSupport::Enabled,
+                    diff_layout_cache: &diff_layout_cache,
+                    greeting_animated: &Cell::new(false),
+                    markdown_render_cache: &cache,
+                    output_layout_cache: &output_layout_cache,
+                    review_snapshot: None,
+                    session_git_statuses: &HashMap::new(),
+                    session_progress_messages: &HashMap::new(),
+                    session_update_versions: &HashMap::new(),
+                    usage,
+                    frame_time: FrameTime::new(0, 0, 0),
+                    graph_chat: None,
+                },
+            );
+        })
+        .expect("failed to draw");
+
+    buffer_text(terminal.backend().buffer())
+}
+
+/// Returns stored usage of one turn on `model` with a 38% context fill,
+/// priced at `cost_micro_usd` when given.
+fn stored_usage(model: &str, cost_micro_usd: Option<u64>) -> SessionUsage {
+    SessionUsage {
+        context: Some(ContextNow {
+            tokens: 380_000,
+            window_tokens: Some(1_000_000),
+        }),
+        records: vec![UsageRecord {
+            api_equivalent_login: None,
+            api_equivalent_micro_usd: None,
+            api_equivalent_upper_bound: false,
+            cache_read_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            context_peak_tokens: Some(380_000),
+            context_window_tokens: Some(1_000_000),
+            cost_basis: cost_micro_usd.map(|_| ag_contracts::CostBasis::ListPrice),
+            cost_micro_usd,
+            cost_upper_bound: false,
+            detailed_invocation_count: 1,
+            input_tokens: 380_000,
+            invocation_count: 1,
+            model: model.to_string(),
+            output_tokens: 1_000,
+            purpose: ag_contracts::UsagePurpose::Turn,
+            reasoning_tokens: Some(0),
+            request_count: 1,
+            unpriced_invocation_count: u64::from(cost_micro_usd.is_none()),
+            unreported_request_count: 0,
+        }],
+        turn_count: 1,
+    }
+}
+
+#[test]
+fn render_session_surface_shows_recorded_usage_beside_the_timer() {
+    // Arrange
+    let session = session_fixture("session-usage");
+    let totals = HashMap::from([(
+        session.id.clone(),
+        stored_usage("claude-opus-5-5", Some(3_270_000)),
+    )]);
+    let usage = UsageSources {
+        totals: &totals,
+        ..no_usage()
+    };
+
+    // Act
+    let text = render_session_with_usage(session, usage);
+
+    // Assert
+    assert!(text.contains("ctx 38% · $3.27 session │ Timer:"), "{text}");
+}
+
+#[test]
+fn render_session_surface_reads_local_for_an_unpriced_local_model() {
+    // Arrange
+    let session = session_fixture("session-local");
+    let model = session.agent.model();
+    let totals = HashMap::from([(session.id.clone(), stored_usage("qwen", None))]);
+    let local_models = [model];
+    let usage = UsageSources {
+        local_models: &local_models,
+        totals: &totals,
+        ..no_usage()
+    };
+    let remote_usage = UsageSources {
+        totals: &totals,
+        ..no_usage()
+    };
+
+    // Act
+    let local_text = render_session_with_usage(session, usage);
+    let remote_text = render_session_with_usage(session_fixture("session-local"), remote_usage);
+
+    // Assert
+    assert!(
+        local_text.contains("ctx 38% · local │ Timer:"),
+        "{local_text}"
+    );
+    assert!(
+        remote_text.contains("ctx 38% · $? session │ Timer:"),
+        "{remote_text}"
+    );
+}
+
+#[test]
+fn render_session_surface_hides_the_readout_before_any_usage() {
+    // Arrange
+    let session = session_fixture("session-fresh");
+
+    // Act
+    let text = render_session_with_usage(session, no_usage());
+
+    // Assert
+    assert!(!text.contains("ctx"), "{text}");
+    assert!(text.contains("Timer:"), "{text}");
+}
 
 /// Builds one deterministic session fixture for router render tests.
 fn session_fixture(session_id: &str) -> Session {
@@ -222,6 +379,7 @@ fn render_list_backed_mode_with_live_usage(
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &session_progress_messages,
                     session_update_versions: &session_update_versions,
+                    usage: no_usage(),
                     frame_time: FrameTime::new(90, 90_000, -28_800),
                     graph_chat: None,
                 },
@@ -242,6 +400,7 @@ fn render_list_backed_mode_with_live_usage(
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &session_progress_messages,
                     session_update_versions: &session_update_versions,
+                    usage: no_usage(),
                     frame_time: FrameTime::new(90, 90_000, -28_800),
                     graph_chat: None,
                 },
@@ -681,6 +840,7 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
                 session_git_statuses: &HashMap::new(),
                 session_progress_messages: &HashMap::new(),
                 session_update_versions: &HashMap::new(),
+                usage: no_usage(),
                 frame_time: FrameTime::new(0, 0, 0),
                 graph_chat: None,
             };
@@ -1001,6 +1161,7 @@ fn render_session_surface_renders_view_session_content() {
                     session_git_statuses: &session_git_statuses,
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
+                    usage: no_usage(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: Some(&graph_chat),
                 },
@@ -1055,6 +1216,7 @@ fn render_session_surface_keeps_background_when_session_is_missing() {
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
+                    usage: no_usage(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },
@@ -1114,6 +1276,7 @@ fn render_diff_surface_renders_page_for_matching_session() {
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
+                    usage: no_usage(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },
@@ -1169,6 +1332,7 @@ fn render_diff_surface_preserves_frame_for_missing_session() {
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &HashMap::new(),
                     session_update_versions: &HashMap::new(),
+                    usage: no_usage(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },
@@ -1229,6 +1393,7 @@ fn render_diff_surface_renders_linked_comments_for_matching_session() {
                     session_git_statuses: &HashMap::new(),
                     session_progress_messages: &progress_messages,
                     session_update_versions: &session_update_versions,
+                    usage: no_usage(),
                     frame_time: FrameTime::new(0, 0, 0),
                     graph_chat: None,
                 },

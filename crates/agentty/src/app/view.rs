@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{App, ProjectSyncStatus, Tab, UpdateStatus, session};
-use crate::domain::agent::{AgentCliInfo, AgentKind, ReasoningLevel};
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::ProjectListItem;
 use crate::domain::resource::SessionResources;
@@ -50,6 +50,9 @@ pub(crate) struct AppViewSnapshot<'a> {
     /// Whether loaded archived rows extend beyond the first page.
     pub(crate) is_archive_expanded: bool,
     pub(crate) latest_available_version: Option<&'a str>,
+    /// Listed harness models a local server runs, whose usage the live
+    /// readout shows as `local`.
+    pub(crate) local_harness_models: Vec<AgentModel>,
     pub(crate) mode: &'a AppMode,
     pub(crate) mru_project_order: &'a [usize],
     /// Platform sign-in and remote-control state, or `None` unless the
@@ -73,6 +76,9 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) session_review: Option<SessionReviewView<'a>>,
     pub(crate) session_selected_index: Option<usize>,
     pub(crate) session_update_versions: &'a HashMap<SessionId, u64>,
+    /// Recorded usage of each session the live readout has shown.
+    pub(crate) session_usage_totals:
+        &'a HashMap<SessionId, crate::domain::session_usage::SessionUsage>,
     pub(crate) sessions: &'a [Session],
     pub(crate) settings_screen: Option<SettingsScreenSnapshot>,
     pub(crate) stats_activity: &'a [DailyActivity],
@@ -114,6 +120,7 @@ impl App {
             has_more_archived_sessions: self.sessions.has_more_archived_sessions(),
             is_archive_expanded: self.sessions.is_archive_expanded(),
             latest_available_version: self.latest_available_version.as_deref(),
+            local_harness_models: self.services.harness_models().local_models(),
             mode: &self.mode,
             mru_project_order: project.mru_project_order,
             platform: self.platform.is_enabled().then(|| PlatformTabView {
@@ -136,6 +143,7 @@ impl App {
             session_review,
             session_selected_index: sessions.selected_index,
             session_update_versions: &self.last_seen_session_update_versions,
+            session_usage_totals: &self.session_usage_totals,
             sessions: sessions.sessions,
             settings_screen,
             stats_activity: sessions.stats_activity,

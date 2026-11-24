@@ -6,9 +6,9 @@ use std::ops::{Deref, DerefMut};
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{Session, Status};
@@ -17,7 +17,7 @@ use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::prompt::{PromptAtMentionState, PromptSlashCommandSet};
-use crate::ui::component::chat_input::{ChatInput, SuggestionList};
+use crate::ui::component::chat_input::{self, ChatInput, SuggestionList};
 use crate::ui::component::nerpa_greeting::NerpaGreeting;
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
@@ -29,6 +29,7 @@ use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, panel_inner_height, suggestion_dropdown_height,
 };
 use crate::ui::page::graph_chat;
+use crate::ui::usage_readout::UsageReadout;
 use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format, style,
 };
@@ -160,6 +161,12 @@ impl SessionChatLayoutPlan {
     }
 }
 
+/// Timing label and live usage readout of a composer's bottom border.
+struct TimingFooter {
+    label: String,
+    readout: Option<Line<'static>>,
+}
+
 /// Borrowed inputs needed to construct one session chat page renderer.
 #[derive(Clone, Copy)]
 pub struct SessionChatPageInput<'a> {
@@ -204,6 +211,7 @@ pub struct SessionChatPage<'a> {
     graph_chat: Option<&'a GraphChatSnapshot>,
     /// Borrowed render state shared with page construction.
     input: SessionChatPageInput<'a>,
+    usage_readout: Option<&'a UsageReadout>,
 }
 
 impl<'a> SessionChatPage<'a> {
@@ -212,12 +220,20 @@ impl<'a> SessionChatPage<'a> {
         Self {
             graph_chat: None,
             input,
+            usage_readout: None,
         }
     }
 
     /// Supplies the current graph proposal and execution status.
     pub(crate) fn graph_chat(mut self, snapshot: Option<&'a GraphChatSnapshot>) -> Self {
         self.graph_chat = snapshot;
+
+        self
+    }
+
+    /// Supplies the session's live usage readout, shown beside the timer.
+    pub(crate) fn usage_readout(mut self, readout: Option<&'a UsageReadout>) -> Self {
+        self.usage_readout = readout;
 
         self
     }
@@ -315,21 +331,43 @@ impl<'a> SessionChatPage<'a> {
         } else {
             4
         };
-        let timing_label = session_format::session_timing_label(
+        let timing = self.timing_footer(
             session,
-            self.frame_time,
             layout_plan
                 .areas
                 .bottom_area
                 .width
                 .saturating_sub(timing_padding),
         );
-        self.render_bottom_panel(frame, session, &layout_plan, &timing_label);
+        self.render_bottom_panel(frame, session, &layout_plan, &timing);
         Self::render_session_header(
             frame,
             layout_plan.areas.header_area,
             layout_plan.header_lines,
         );
+    }
+
+    /// Fits the timing label and the live usage readout into `width`
+    /// columns. The timer keeps priority over the readout, which keeps
+    /// priority over the session age.
+    fn timing_footer(&self, session: &Session, width: u16) -> TimingFooter {
+        let readout = self.usage_readout.and_then(|usage_readout| {
+            let timer_width = session_format::session_timing_label(session, self.frame_time, 0)
+                .width()
+                + chat_input::FOOTER_SEPARATOR.width();
+
+            usage_readout.line(usize::from(width).saturating_sub(timer_width))
+        });
+        let readout_width = readout.as_ref().map_or(0, |readout| {
+            readout.width() + chat_input::FOOTER_SEPARATOR.width()
+        });
+        let label = session_format::session_timing_label(
+            session,
+            self.frame_time,
+            width.saturating_sub(u16::try_from(readout_width).unwrap_or(u16::MAX)),
+        );
+
+        TimingFooter { label, readout }
     }
 
     /// Renders the header above the output panel border.
@@ -347,24 +385,23 @@ impl<'a> SessionChatPage<'a> {
     /// interactive question panel. Archived sessions keep only a timing row.
     ///
     /// Every composer right-aligns timing in its bottom border, prioritizing
-    /// the active-work timer when the session age does not fit alongside it.
+    /// the active-work timer when the session age does not fit alongside it,
+    /// after the live usage readout when the session has one.
     fn render_bottom_panel(
         &self,
         frame: &mut Frame,
         session: &Session,
         layout_plan: &SessionChatLayoutPlan,
-        timing_label: &str,
+        timing: &TimingFooter,
     ) {
         let bottom_area = layout_plan.areas.bottom_area;
+        let timing_label = timing.label.as_str();
+        let usage_readout = timing.readout.as_ref();
 
         if matches!(session.status, Status::Done | Status::Canceled) {
             frame.render_widget(
                 Paragraph::new(
-                    Line::styled(
-                        timing_label,
-                        Style::default().fg(style::palette::text_muted()),
-                    )
-                    .right_aligned(),
+                    chat_input::footer_line(usage_readout, timing_label).right_aligned(),
                 ),
                 bottom_area,
             );
@@ -377,13 +414,7 @@ impl<'a> SessionChatPage<'a> {
         if let AppMode::Prompt { input, .. } = self.mode
             && let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref()
         {
-            self.render_prompt_composer(
-                frame,
-                bottom_area,
-                prepared_prompt_panel,
-                input,
-                timing_label,
-            );
+            self.render_prompt_composer(frame, bottom_area, prepared_prompt_panel, input, timing);
 
             return;
         }
@@ -413,6 +444,7 @@ impl<'a> SessionChatPage<'a> {
                     selected_option_index: *selected_option_index,
                     spinner_frame: Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
                     timing_label,
+                    usage_readout,
                 },
             );
 
@@ -424,6 +456,7 @@ impl<'a> SessionChatPage<'a> {
         ChatInput::new(&title, "", 0)
             .status(&status)
             .footer(timing_label)
+            .footer_readout(usage_readout)
             .active(false)
             .render(frame, bottom_area);
     }
@@ -438,12 +471,13 @@ impl<'a> SessionChatPage<'a> {
         bottom_area: Rect,
         prepared_prompt_panel: &PreparedPromptPanel,
         input: &input::InputState,
-        timing_label: &str,
+        timing: &TimingFooter,
     ) {
         let mut chat_input =
             ChatInput::new(&prepared_prompt_panel.title, input.text(), input.cursor)
                 .placeholder(prepared_prompt_panel.placeholder)
-                .footer(timing_label)
+                .footer(&timing.label)
+                .footer_readout(timing.readout.as_ref())
                 .active(!prepared_prompt_panel.is_chat_focused)
                 .status(&prepared_prompt_panel.status);
 
@@ -684,6 +718,7 @@ struct QuestionPanelState<'a> {
     selected_option_index: Option<usize>,
     spinner_frame: usize,
     timing_label: &'a str,
+    usage_readout: Option<&'a Line<'static>>,
 }
 
 /// Renders the question-mode bottom panel with question text, options, input,
@@ -704,6 +739,7 @@ fn render_question_panel(
         selected_option_index,
         spinner_frame,
         timing_label,
+        usage_readout,
     } = *state;
     let question_item = questions.get(current_index);
     let question = question_item.map_or("", |item| item.text.as_str());
@@ -765,6 +801,7 @@ fn render_question_panel(
     let chat_input = ChatInput::new("Answer", display_text, display_cursor)
         .placeholder(input_placeholder)
         .footer(timing_label)
+        .footer_readout(usage_readout)
         .active(is_free_text_mode && !is_chat_focused);
     if panel_areas.input_area.height > 0 {
         chat_input.render(frame, panel_areas.input_area);

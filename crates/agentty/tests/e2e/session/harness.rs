@@ -1942,7 +1942,7 @@ const STREAM_ANSWER_HEAD: &str = "Streaming part one";
 /// Answer text the gated provider streams after its gate opens.
 const STREAM_ANSWER_TAIL: &str = " and part two.";
 /// Heading of the title-generation prompt, which repeats the session request.
-const TITLE_PROMPT: &str = "Generate a concise, commit-style title";
+pub(super) const TITLE_PROMPT: &str = "Generate a concise, commit-style title";
 
 /// Serves Chat Completions on a local port and returns its base URL.
 ///
@@ -2019,7 +2019,7 @@ fn sse_chunks(chunks: &[serde_json::Value]) -> String {
 
 /// Reads one HTTP request from `stream` and returns its body, or `None`
 /// when the connection closes first.
-fn read_request_body(stream: &mut TcpStream) -> Option<String> {
+pub(super) fn read_request_body(stream: &mut TcpStream) -> Option<String> {
     let mut request = Vec::new();
     let mut chunk = [0; 8192];
     let header_end = loop {

@@ -35,6 +35,8 @@ pub(crate) mod session_output_line;
 pub mod style;
 /// Usage figures, honesty marks, and the usage panel's content.
 pub(crate) mod usage_format;
+/// Live usage readout beside the session timer, fitted by width priority.
+pub(crate) mod usage_readout;
 
 pub(crate) use app_render::render_app;
 /// A trait for UI components that enforces a standard rendering interface.

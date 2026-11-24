@@ -11,8 +11,8 @@ use ratatui::widgets::Paragraph;
 
 use super::{
     CHAT_INPUT_MAX_PANEL_HEIGHT, QuestionPanelState, SessionChatLayoutInput, SessionChatLayoutPlan,
-    SessionChatPage, SessionChatPageInput, non_prompt_bottom_height, render_question_panel,
-    session_composer_title, transcript_view_height,
+    SessionChatPage, SessionChatPageInput, TimingFooter, non_prompt_bottom_height,
+    render_question_panel, session_composer_title, transcript_view_height,
 };
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
@@ -814,6 +814,7 @@ fn test_render_question_panel_preserves_frame_without_prepared_areas() {
         selected_option_index: None,
         spinner_frame: 0,
         timing_label: "",
+        usage_readout: None,
     };
 
     // Act
@@ -1052,6 +1053,7 @@ fn test_render_question_lookup_requires_space_for_a_complete_result_row() {
             selected_option_index: None,
             spinner_frame: 0,
             timing_label: "",
+            usage_readout: None,
         };
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, height))
             .expect("failed to create terminal");
@@ -1400,7 +1402,16 @@ fn prompt_composer_keeps_its_border_when_only_one_row_is_available() {
     // Act
     terminal
         .draw(|frame| {
-            page.render_prompt_composer(frame, frame.area(), &panel, &input, "Timer: 0s");
+            page.render_prompt_composer(
+                frame,
+                frame.area(),
+                &panel,
+                &input,
+                &TimingFooter {
+                    label: "Timer: 0s".to_string(),
+                    readout: None,
+                },
+            );
         })
         .expect("render short composer");
     let text = buffer_text(terminal.backend().buffer());

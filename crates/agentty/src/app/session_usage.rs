@@ -1,6 +1,6 @@
-//! Per-session usage panel: loads recorded usage, keeps each running turn's
-//! live usage, and refreshes the open panel whenever the store records new
-//! usage for its session.
+//! Per-session usage panel and live readout: loads recorded usage, keeps
+//! each running turn's live usage, and refreshes the open panel and the
+//! readout totals whenever the store records new usage for their session.
 //!
 //! The panel only reads the store and the live usage the turn-event
 //! consumer reports; it never starts model work.
@@ -13,6 +13,7 @@ use ag_worker::{RunInfo, RunRepository, RunState};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+use super::view::visible_review_session_id;
 use super::{App, AppEvent};
 use crate::domain::session::SessionId;
 use crate::domain::session_usage::{
@@ -56,8 +57,24 @@ impl App {
         }));
     }
 
+    /// Loads the recorded usage of the visible session for the live readout
+    /// the first time it becomes visible, so totals persisted before a
+    /// restart show before its next turn.
+    pub(crate) async fn load_visible_session_usage(&mut self) {
+        let Some(session_id) = visible_review_session_id(&self.mode) else {
+            return;
+        };
+        if self.session_usage_totals.contains_key(session_id) {
+            return;
+        }
+        let session_id = SessionId::from(session_id);
+        let usage = load_session_usage(self.services.db().usage(), &session_id).await;
+        self.session_usage_totals.insert(session_id, usage);
+    }
+
     /// Applies one batch's live usage changes in order, then reloads the
-    /// open panel when the store recorded usage for its session.
+    /// readout totals of each session it has shown and the open panel when
+    /// the store recorded usage for their session.
     pub(super) async fn apply_live_usage_ops(&mut self, ops: Vec<LiveUsageOp>) {
         let mut recorded_session_ids = HashSet::new();
         for op in ops {
@@ -77,6 +94,12 @@ impl App {
             }
         }
         let db = self.services.db().clone();
+        for session_id in &recorded_session_ids {
+            if self.session_usage_totals.contains_key(session_id) {
+                let usage = load_session_usage(db.usage(), session_id).await;
+                self.session_usage_totals.insert(session_id.clone(), usage);
+            }
+        }
         let AppMode::Usage(panel) = &mut self.mode else {
             return;
         };
