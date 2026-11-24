@@ -354,6 +354,9 @@ async function pairFlow() {
     connecting: connecting,
     label: byId("pair-wait-label").textContent,
     connection: byId("connection").textContent,
+    // The listener's page pairs on the full-screen card with a code.
+    hintsHidden: ["pair-hint-local", "pair-hint-relay", "pair-hint-paste"].map((id) => byId(id).hidden),
+    shellHidden: byId("shell").hidden,
     submitHidden: byId("pair-submit").hidden,
     view: visibleView(),
   });

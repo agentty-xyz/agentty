@@ -639,6 +639,8 @@ async fn web_client_app_shows_the_confirmation_code_then_the_denial_through_the_
             },
             "label": "Waiting for approval in Agentty",
             "connection": "Waiting for approval",
+            "hintsHidden": [false, true, true],
+            "shellHidden": true,
             "submitHidden": true,
             "view": "pair-view",
         })
@@ -732,6 +734,17 @@ fn link_of(
     Ok(pairing_link(&relay_url, instance.public(), &code))
 }
 
+/// Checks the step where the relay's own page, which has no sections,
+/// waits for the first approval on the full-screen card in place of the
+/// shell, with no way back yet and no hint, since the link says how.
+fn assert_awaiting_on_the_card(awaiting: &Value) {
+    assert_eq!(awaiting["backHidden"], true);
+    assert_eq!(awaiting["headings"], json!(["Pair this device"]));
+    assert_eq!(awaiting["hintsHidden"], json!([true, true, true]));
+    assert_eq!(awaiting["shellHidden"], true);
+    assert_eq!(awaiting["view"], "pair-view");
+}
+
 #[tokio::test]
 async fn web_client_app_shows_two_agenttys_through_one_relay_and_keeps_them_apart() -> TestResult {
     // Arrange: both servers list the same session ids.
@@ -761,7 +774,7 @@ async fn web_client_app_shows_two_agenttys_through_one_relay_and_keeps_them_apar
     let succeeded = app.succeeded().await?;
 
     // Assert
-    assert_eq!(awaiting["backHidden"], true);
+    assert_awaiting_on_the_card(&awaiting);
     assert_eq!(
         paired,
         json!({
@@ -970,10 +983,28 @@ fn served(content_type: &str, body: String, page_headers: &axum::http::HeaderMap
     response
 }
 
+/// What the sidebar shows beside the pairing flow before any Agentty is
+/// paired, or with `paired` once one is: the application's links, the
+/// theme switch, and the account always, the session tools and the device
+/// only with an Agentty to show.
+fn sidebar_parts(paired: bool) -> Value {
+    json!({
+        "account": true,
+        "chips": paired,
+        "device": paired,
+        "filter": paired,
+        "sections": 2,
+        "sessionList": paired,
+        "slot": paired,
+        "theme": true,
+    })
+}
+
 /// Checks that the page another web application serves loads every file
-/// the client needs with a policy that reaches `relay`, that a first link
-/// whose code does not work leaves the card ready for another link, and
-/// that the pasted real link moves on to the device name.
+/// the client needs with a policy that reaches `relay`, that it pairs in
+/// the shell's main pane, that a first link whose code does not work
+/// leaves the flow ready for another link, and that the pasted real link
+/// moves on to the device name and can be canceled before it pairs.
 fn assert_first_pairing_by_paste(
     served: &Value,
     wrong_code: &Value,
@@ -993,9 +1024,22 @@ fn assert_first_pairing_by_paste(
         wrong_code,
         &json!({
             "step": "wrongCode",
-            "card": {"hintHidden": false, "linkHidden": false, "submitHidden": true},
+            "card": {
+                "cardHidden": true,
+                "headings": ["Pair this device"],
+                "hint": "Start remote control in Agentty's Platform tab and open the pairing \
+                         link it shows, or scan its QR code. A pairing link from the Remote \
+                         tab can be pasted here.",
+                "hintsHidden": [true, true, false],
+                "linkHidden": false,
+                "shellHidden": false,
+                "sidebar": sidebar_parts(false),
+                "submitHidden": true,
+                "view": "pair-pane",
+            },
             "error": "Invalid or expired pairing code",
             "linkHidden": false,
+            "view": "pair-pane",
         })
     );
     assert_eq!(
@@ -1003,9 +1047,71 @@ fn assert_first_pairing_by_paste(
         &json!({
             "step": "awaiting",
             "badge": "cloud",
+            "canceled": {
+                "cancelHidden": true,
+                "confirmHidden": true,
+                "submitHidden": false,
+                "view": "pair-pane",
+            },
+            "confirmation": true,
+            "connecting": {
+                "cancelHidden": false,
+                "label": "Connecting to Agentty",
+                "submitHidden": true,
+            },
             "directory": ["laptop", "server"],
             "focused": "pair-name",
+            "label": "Waiting for approval in Agentty",
             "sections": ["Dashboard", "Sessions2"],
+            "sidebar": sidebar_parts(false),
+            "view": "pair-pane",
+        })
+    );
+}
+
+/// Checks that `Pair another Agentty` opens the pairing flow in the main
+/// pane beside A's sessions, and that `Back to sessions` and a session
+/// chosen in the sidebar leave it.
+fn assert_another_pairing_beside_the_sessions(other_relay: &Value, left: &Value) {
+    // Agentty's link from the Remote tab opens the relay's page, so this
+    // page takes it pasted.
+    assert_eq!(
+        other_relay,
+        &json!({
+            "step": "otherRelay",
+            "card": {
+                "backHidden": false,
+                "focused": "pair-title",
+                "headings": ["Pair this device"],
+                "hintHidden": false,
+                "linkHidden": false,
+                "rows": ["A/session-1", "A/session-2"],
+                "sidebar": sidebar_parts(true),
+                "view": "pair-pane",
+            },
+            "error": "This pairing link is for another relay. Open it from the address it names.",
+            "fieldsHidden": true,
+            "linkHidden": false,
+            "notLink": "Paste the whole pairing link from the Remote tab.",
+            "submitHidden": true,
+        })
+    );
+    assert_eq!(
+        left,
+        &json!({
+            "step": "leftPairing",
+            "back": {
+                "error": "",
+                "focused": "heading",
+                "headings": ["agentty"],
+                "view": "home-view",
+            },
+            "chosen": {
+                "hash": "#i=A&s=session-1",
+                "headings": ["Build it"],
+                "view": "session-view",
+            },
+            "reopened": "pair-pane",
         })
     );
 }
@@ -1083,6 +1189,7 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
     approve_first_request(&first).await?;
     let paired = app.next_step().await?;
     let other_relay = app.next_step().await?;
+    let left = app.next_step().await?;
     let awaiting_second = app.next_step().await?;
     // The page reads the directory again only when it shows later.
     signed_in.store(false, Ordering::SeqCst);
@@ -1104,27 +1211,17 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
                 "Never connected",
                 "To pair, use the pairing link from its Remote tab.",
             ]],
+            "headings": ["agentty"],
             "rows": ["A/session-1", "A/session-2"],
             "sections": [
                 ["Dashboard", "/dashboard", null],
                 ["Sessions2", "/sessions/", "page"],
             ],
+            "sidebar": sidebar_parts(true),
             "stored": ["A"],
         })
     );
-    // Agentty's link opens the relay's page, so this page takes it pasted.
-    assert_eq!(
-        other_relay,
-        json!({
-            "step": "otherRelay",
-            "card": {"hintHidden": false, "linkHidden": false, "view": "pair-view"},
-            "error": "This pairing link is for another relay. Open it from the address it names.",
-            "fieldsHidden": true,
-            "linkHidden": false,
-            "notLink": "Paste the whole pairing link from the Remote tab.",
-            "submitHidden": true,
-        })
-    );
+    assert_another_pairing_beside_the_sessions(&other_relay, &left);
     assert_eq!(
         awaiting_second,
         json!({"step": "awaitingB", "linkHidden": true, "pasted": ""})
