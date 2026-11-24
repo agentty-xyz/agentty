@@ -14,13 +14,13 @@ use ag_remote::{
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     ExecutionGraphStatus, ForgeKind, HostContext, HostProjectStatus, HostProjectSync,
-    HostProjectSyncPhase, HostSessionMode, QuestionItem, ReviewRequest, ReviewRequestState,
-    ReviewRequestSummary, Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
-    SessionError, SessionFileEntry, SessionFocusedReview, SessionGraphActionRequest,
-    SessionGraphApproval, SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs,
-    SessionGraphsRequest, SessionId, SessionListEntry, SessionListStats, SessionMessage,
-    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
-    SessionStatus, SessionSummary,
+    HostProjectSyncPhase, HostSessionMode, MessageImage, QuestionItem, ReviewRequest,
+    ReviewRequestState, ReviewRequestSummary, Session, SessionBackend, SessionDiffFile,
+    SessionDiffFileStatus, SessionError, SessionFileEntry, SessionFocusedReview,
+    SessionGraphActionRequest, SessionGraphApproval, SessionGraphProposalPhase,
+    SessionGraphSummary, SessionGraphs, SessionGraphsRequest, SessionId, SessionListEntry,
+    SessionListStats, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
+    SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
 };
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -694,6 +694,22 @@ impl SessionBackend for RecordingBackend {
         if message == "panic" {
             std::panic::resume_unwind(Box::new("the test backend fails this message"));
         }
+
+        Ok(())
+    }
+
+    // Records the message with each image's extension and size.
+    async fn send_message_with_images(
+        &self,
+        session_id: &SessionId,
+        message: String,
+        images: Vec<MessageImage>,
+    ) -> Result<(), SessionError> {
+        let images: Vec<String> = images
+            .iter()
+            .map(|image| format!("{}={}", image.format().extension(), image.data().len()))
+            .collect();
+        self.record(format!("send:{session_id}:{message}:{}", images.join(",")));
 
         Ok(())
     }

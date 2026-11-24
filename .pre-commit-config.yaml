@@ -127,6 +127,13 @@ repos:
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/benchmark/.*\.rs))$
         pass_filenames: false
+      - id: clippy-ag-harness-e2e
+        name: clippy ag-harness e2e
+        description: Lint the manual ag-harness live E2E suite without executing it.
+        entry: cargo clippy -q --locked -p ag-harness --test e2e -- -D warnings
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/(e2e|support)/.*\.rs))$
+        pass_filenames: false
       - id: clippy-agentty-e2e
         name: clippy agentty e2e
         description: Lint Agentty PTY suites when Agentty or its dependencies change; shared files select them conservatively.

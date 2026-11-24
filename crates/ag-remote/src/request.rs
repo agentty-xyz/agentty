@@ -4,15 +4,18 @@
 use std::str::FromStr;
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, GenerateGraphProposalRequest, QuestionAnswer,
-    SessionError, SessionGraphsRequest, SessionOperation, SessionService, SessionSettingsChange,
+    AnswerQuestionsRequest, CreateSessionRequest, GenerateGraphProposalRequest, MessageImage,
+    QuestionAnswer, SessionError, SessionGraphsRequest, SessionOperation, SessionService,
+    SessionSettingsChange,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
 use crate::entropy::{Entropy, random_hex};
 use crate::protocol::{
-    RemoteGraphActionRequest, RemoteProject, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
-    RequestedSessionId,
+    RemoteGraphActionRequest, RemoteImage, RemoteProject, RemoteQuestionAnswer, RemoteRequest,
+    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary, RequestedSessionId,
 };
 
 /// Error returned for a request method this server does not know, and for
@@ -35,10 +38,26 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::Graphs, "graphs"),
     (SessionOperation::GraphActions, "graph_actions"),
     (SessionOperation::GenerateGraphProposal, "graph_proposal"),
+    (SessionOperation::MessageImages, "images"),
 ];
 /// Capabilities that extend the request another one offers, each listed
 /// with it: `settings_agent` says `set_session_settings` takes an `agent`.
 const EXTENSIONS: &[(&str, &str)] = &[("settings", "settings_agent")];
+/// Most images one message carries.
+const MAX_MESSAGE_IMAGES: usize = 8;
+/// Most image bytes one message carries, decoded. Their base64 text must
+/// fit in one frame, `MAX_MESSAGE_SIZE` in `crate::server`.
+const MAX_MESSAGE_IMAGE_BYTES: usize = 6 << 20;
+// Base64 grows the images by a third; the rest of the frame stays for the
+// text.
+const _: () =
+    assert!(MAX_MESSAGE_IMAGE_BYTES.div_ceil(3) * 4 + (1 << 20) <= crate::server::MAX_MESSAGE_SIZE);
+/// Error returned for a message with more images than it may carry.
+const TOO_MANY_IMAGES: &str = "A message carries at most 8 images";
+/// Error returned for a message whose images are larger than allowed.
+const IMAGES_TOO_LARGE: &str = "A message's images are at most 6 MB together";
+/// Error returned for an image that is not valid base64.
+const INVALID_IMAGE_ENCODING: &str = "Image data is not valid base64";
 /// Random bytes in the delivery identity of a graph proposal a device asks
 /// for.
 const PROPOSAL_ID_BYTES: usize = 16;
@@ -109,6 +128,12 @@ impl<'request> RequestPolicy<'request> {
             RemoteRequest::ActOnSessionGraph(request) => (
                 Some(SessionOperation::GraphActions),
                 RequestOrder::Queued(&request.session_id),
+            ),
+            RemoteRequest::SendMessage {
+                images, session_id, ..
+            } if !images.is_empty() => (
+                Some(SessionOperation::MessageImages),
+                RequestOrder::Queued(session_id),
             ),
             RemoteRequest::AnswerQuestions { session_id, .. }
             | RemoteRequest::CancelSession { session_id }
@@ -258,14 +283,10 @@ async fn respond(
             publish_listed_session(sessions, session_id).await
         }
         RemoteRequest::SendMessage {
+            images,
             message,
             session_id,
-        } => {
-            let session_id = session_id.listed(sessions).await?;
-            sessions.send_message(&session_id, message).await?;
-
-            Ok(RemoteResponse::Accepted)
-        }
+        } => send_listed_message(sessions, session_id, message, images).await,
         RemoteRequest::StopTurn { session_id } => {
             let session_id = session_id.listed(sessions).await?;
             sessions.stop_turn(&session_id).await?;
@@ -348,6 +369,51 @@ async fn answer_listed_questions(
     sessions.answer_questions(&session_id, request).await?;
 
     Ok(RemoteResponse::Accepted)
+}
+
+/// Sends a message, with its images when it has any, only when the host
+/// lists the session.
+async fn send_listed_message(
+    sessions: &SessionService,
+    session_id: RequestedSessionId,
+    message: String,
+    images: Vec<RemoteImage>,
+) -> Result<RemoteResponse, SessionError> {
+    let session_id = session_id.listed(sessions).await?;
+    if images.is_empty() {
+        sessions.send_message(&session_id, message).await?;
+    } else {
+        sessions
+            .send_message_with_images(&session_id, message, decode_images(images)?)
+            .await?;
+    }
+
+    Ok(RemoteResponse::Accepted)
+}
+
+/// Decodes the images of one message, refusing more than
+/// [`MAX_MESSAGE_IMAGES`], more than [`MAX_MESSAGE_IMAGE_BYTES`] together,
+/// and any that is not a PNG or JPEG file.
+fn decode_images(images: Vec<RemoteImage>) -> Result<Vec<MessageImage>, SessionError> {
+    if images.len() > MAX_MESSAGE_IMAGES {
+        return Err(SessionError::Operation(TOO_MANY_IMAGES.to_string()));
+    }
+    let mut total_bytes = 0;
+
+    images
+        .into_iter()
+        .map(|image| {
+            let data = STANDARD
+                .decode(image.data)
+                .map_err(|_| SessionError::Operation(INVALID_IMAGE_ENCODING.to_string()))?;
+            total_bytes += data.len();
+            if total_bytes > MAX_MESSAGE_IMAGE_BYTES {
+                return Err(SessionError::Operation(IMAGES_TOO_LARGE.to_string()));
+            }
+
+            MessageImage::new(data)
+        })
+        .collect()
 }
 
 /// Creates a session in the host's active project, the only project the

@@ -1,8 +1,8 @@
 //! Typed mutation requests and transport-independent admission metadata.
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReviewRequest,
-    SessionError, SessionId,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, MessageImage,
+    ReviewRequest, SessionError, SessionId,
 };
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -197,8 +197,9 @@ pub(crate) enum SessionMutation {
     StartStaged {
         session_id: SessionId,
     },
-    /// Sends one user message.
+    /// Sends one user message, with the images a remote device sent.
     SendMessage {
+        images: Vec<MessageImage>,
         message: String,
         session_id: SessionId,
     },
@@ -297,7 +298,8 @@ impl SessionMutation {
     ///
     /// Payloads count too: a device sends no attachments, which name files
     /// on this computer, so a question answer or graph proposal request that
-    /// carries any is not served.
+    /// carries any is not served. A message's images are bytes this host
+    /// stores itself, so they name no file.
     pub(super) fn remote_scope(&self) -> RemoteScope<'_> {
         match self {
             Self::GraphProposal {

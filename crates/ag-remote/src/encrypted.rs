@@ -4,8 +4,9 @@ use ag_noise::{Handshake, PublicKey, Session, StaticKeypair};
 
 use crate::transport::{CloseCause, FrameTransport, Incoming};
 
-/// Largest frame accepted from a device, in bytes.
-const MAX_FRAME_BYTES: usize = 1 << 20;
+/// Largest frame accepted from a device, in bytes: as large as a local
+/// device's.
+const MAX_FRAME_BYTES: usize = crate::server::MAX_MESSAGE_SIZE;
 
 /// Ordered, reliable carrier of binary messages, such as a relay stream.
 /// Whoever operates the carrier can read and drop what it carries.

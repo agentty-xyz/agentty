@@ -8,6 +8,15 @@
 // crates/ag-remote/tests/web/ pass the fake DOM.
 
 import { settingsParts } from "./format.mjs";
+import {
+  imagePlaceholder,
+  imageRefusal,
+  imageSize,
+  nextImageNumber,
+  offersImages,
+  transferImages,
+  withoutPlaceholder,
+} from "./image.mjs";
 import { createMentions } from "./mention.mjs";
 import { separator } from "./session_list.mjs";
 import { offersAgentChoice, offersSettings } from "./settings.mjs";
@@ -168,7 +177,8 @@ export function modelNode(document, part) {
 }
 
 // Wires one composer. `elements` holds `form`, `message`, `meta`,
-// `settingsButton`, `send` and `hint`; `suggestionsId` names the popup.
+// `settingsButton`, `send`, `hint` and `images`, the list of attached
+// images; `suggestionsId` names the popup.
 // With `graphMode`, the `Graph` marker, `graphNote`, its note, and
 // `graphLeave`, its button that leaves graph mode, the slash menu also
 // offers `/graph` for a session whose host has the `graph_proposal`
@@ -179,6 +189,12 @@ export function modelNode(document, part) {
 // with the draft after a session switch or a reload. While the host or
 // the session takes no graph request, as `isGraphBlocked()` says, the
 // marker says so and sending is off until graph mode ends.
+//
+// Pasting a PNG or JPEG image into a composer whose host has the
+// `images` capability attaches it to the draft: a `[Image #n]`
+// placeholder lands at the caret and a chip with its size and a remove
+// button shows in `images`. Images stay in memory with their draft until
+// it goes out or the page reloads.
 //
 // `context()` returns what the composer writes for: `session`, whose
 // settings the line shows and the slash commands change, or `null`;
@@ -199,8 +215,9 @@ export function modelNode(document, part) {
 //
 // Returns `render(dock)` with the `placeholder`, `hint`, `sendLabel`,
 // `isSending` and `isLocked` to show, `refresh()` for a newer snapshot,
-// `load(draftId)`, `keepDraft(draftId, text)`, `forgetDraft(draftId, text)`,
-// `clearText(text)`, `isFinePointer()`, `isGraphArmed()`,
+// `load(draftId)`, `keepDraft(draftId, text, images)`,
+// `forgetDraft(draftId, text)`, `clearText(text)`, `images()`,
+// `forgetImages(draftId, images)`, `isFinePointer()`, `isGraphArmed()`,
 // `isGraphBlocked()`, `disarmGraph(draftId)` and `reset()`.
 export function createComposer({
   document,
@@ -217,6 +234,9 @@ export function createComposer({
   settings = null,
 }) {
   const drafts = createDrafts(window);
+  // The images attached to each draft, by draft id, in the order they
+  // were pasted: `{ file, number }`.
+  const attachedImages = new Map();
   // Whether a send in flight holds the settings as they are.
   let isLocked = false;
   // The dock last rendered, which arming and disarming render again.
@@ -452,6 +472,101 @@ export function createComposer({
     (isButton ? elements.settingsButton : elements.meta).replaceChildren(...nodes);
   }
 
+  // The images attached to the draft on screen.
+  function draftImages() {
+    const draftId = context().draftId;
+
+    return draftId ? (attachedImages.get(draftId) ?? []) : [];
+  }
+
+  // Attaches `images` to the draft of `draftId`, or detaches all when
+  // empty, and shows the list.
+  function setImages(draftId, images) {
+    if (images.length > 0) {
+      attachedImages.set(draftId, images);
+    } else {
+      attachedImages.delete(draftId);
+    }
+    renderImages();
+  }
+
+  // Shows a chip per image of the draft on screen.
+  function renderImages() {
+    const images = draftImages();
+    elements.images.hidden = images.length === 0;
+    elements.images.replaceChildren(...images.map((image) => imageChip(image)));
+  }
+
+  function imageChip(image) {
+    const label = imagePlaceholder(image.number).slice(1, -1);
+    const chip = element(document, "li", "composer-image");
+    const remove = element(document, "button", "icon-btn composer-image-remove", "×");
+    remove.type = "button";
+    remove.setAttribute("aria-label", "Remove " + label);
+    remove.addEventListener("click", () => {
+      removeImage(image.number);
+      elements.message.focus();
+    });
+    chip.append(
+      element(document, "span", "composer-image-label", label),
+      element(document, "span", "composer-image-size", imageSize(image.file.size)),
+      remove,
+    );
+
+    return chip;
+  }
+
+  // Detaches image `number` from the draft on screen and takes its
+  // placeholder out of the draft. An earlier prompt on screen stays; the
+  // draft it replaced loses the placeholder.
+  function removeImage(number) {
+    const draftId = context().draftId;
+    setImages(
+      draftId,
+      draftImages().filter((image) => image.number !== number),
+    );
+    if (browsing.index === null) {
+      setText(withoutPlaceholder(elements.message.value, number));
+
+      return;
+    }
+    browsing.draft = withoutPlaceholder(browsing.draft, number);
+    drafts.set(draftId, browsing.draft);
+  }
+
+  // Attaches the PNG and JPEG files of a paste to the draft on screen,
+  // with their placeholders at the caret. Returns whether it took the
+  // paste; a paste without images is left to the browser, and so is one
+  // with text, as office and rich-text apps copy their text with an image
+  // of it.
+  function pasteImages(transfer) {
+    const { capabilities = [], draftId = null } = context();
+    const files = transferImages(transfer);
+    const text = transfer?.getData?.("text/plain") ?? "";
+    if (!draftId || files.length === 0 || text !== "" || !offersImages(capabilities)) {
+      return false;
+    }
+    const images = draftImages();
+    const refusal = imageRefusal(images, files);
+    if (refusal) {
+      showError(refusal);
+
+      return true;
+    }
+    const first = nextImageNumber(images);
+    const pasted = files.map((file, index) => ({ file: file, number: first + index }));
+    const { selectionEnd, selectionStart, value } = elements.message;
+    const placeholders = pasted.map((image) => imagePlaceholder(image.number)).join(" ");
+    const caret = selectionStart + placeholders.length;
+    stopBrowsing();
+    setImages(draftId, [...images, ...pasted]);
+    setText(value.slice(0, selectionStart) + placeholders + value.slice(selectionEnd));
+    elements.message.setSelectionRange(caret, caret);
+    showError("");
+
+    return true;
+  }
+
   function openSettings() {
     const { capabilities = [], isConnected = false, isRunning = false, session = null } = context();
     if (!isConnected || isLocked || !canChangeSettings()) {
@@ -496,6 +611,11 @@ export function createComposer({
     if (composerKeyAction(event, { isFinePointer: isFinePointer() }) === "send") {
       event.preventDefault();
       onSend();
+    }
+  });
+  elements.message.addEventListener("paste", (event) => {
+    if (pasteImages(event.clipboardData)) {
+      event.preventDefault();
     }
   });
   // Moving the caret, or the focus, opens or closes the suggestions.
@@ -550,16 +670,48 @@ export function createComposer({
       drafts.setGraph(draftId, false);
       showGraphMode();
     },
+    // Detaches `sent`, images that went out, from the draft of `draftId`,
+    // and takes their placeholders out of what is left of it, so none
+    // points at another image once the next send renumbers them. Run it
+    // after `forgetDraft`; text typed and images pasted meanwhile stay.
+    forgetImages: (draftId, sent) => {
+      const kept = (attachedImages.get(draftId) ?? []).filter((image) => !sent.includes(image));
+      setImages(draftId, kept);
+      const draft = drafts.get(draftId);
+      const left = sent.reduce((text, image) => withoutPlaceholder(text, image.number), draft);
+      if (left === draft) {
+        return;
+      }
+      drafts.set(draftId, left);
+      if (context().draftId !== draftId) {
+        return;
+      }
+      if (browsing.index !== null && browsing.draft === draft) {
+        browsing.draft = left;
+      } else if (elements.message.value === draft) {
+        elements.message.value = left;
+        resize();
+      }
+    },
+    // The images attached to the draft on screen, in the order they were
+    // pasted.
+    images: () => [...draftImages()],
     isFinePointer,
     isGraphArmed,
     isGraphBlocked,
-    keepDraft: (draftId, text) => drafts.set(draftId, text),
-    // Shows the draft of `draftId`, the composer's `draftId` now, in graph
-    // mode when `/graph` armed it.
+    // Keeps `text` and `images` as the draft of `draftId`, as when its
+    // first message did not go out.
+    keepDraft: (draftId, text, images = []) => {
+      drafts.set(draftId, text);
+      setImages(draftId, images);
+    },
+    // Shows the draft of `draftId`, the composer's `draftId` now, with its
+    // images, in graph mode when `/graph` armed it.
     load: (draftId) => {
       stopBrowsing();
       elements.message.value = draftId ? drafts.get(draftId) : "";
       resize();
+      renderImages();
       showGraphMode();
     },
     // The suggestions follow the session, the host and the composer.
@@ -575,6 +727,7 @@ export function createComposer({
       isLocked = false;
       lastDock = null;
       showGraphMode();
+      renderImages();
       elements.hint.textContent = "";
       slash.reset();
       mentions.reset();

@@ -187,6 +187,12 @@ pub enum RemoteRequest {
     },
     /// Sends one chat message, starting, resuming, or queueing a turn.
     SendMessage {
+        /// PNG or JPEG images the message refers to as `[Image #n]`,
+        /// numbered in this order from 1. Agentty stores them in its own
+        /// prompt-image directory; a placeholder the text lacks is
+        /// appended. Offered through the `images` capability.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<RemoteImage>,
         /// Message text.
         message: String,
         /// Session that receives the message.
@@ -376,6 +382,13 @@ impl From<AgentSelection> for RemoteModelOption {
             supports_fast: selection.supports_fast_mode(),
         }
     }
+}
+
+/// One image sent with a `send_message` request.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteImage {
+    /// The PNG or JPEG file, in standard base64 with padding.
+    pub data: String,
 }
 
 /// One answer to a pending clarification question.

@@ -7,14 +7,15 @@ through `ag_session::SessionService`.
 
 - Keep Agentty UI state, SQLite rows, and listener policy (address, enablement) in the
   host. This crate receives a `SessionService`, a revision counter, and a `DeviceStore`.
-- Expose only the operations in `RemoteRequest`. The user approved stopping a turn,
-  creating sessions, merging, publishing, syncing a session or the active project,
-  session settings, generating a graph proposal with `/graph`, answering the questions
-  of a session's graph work, and the graph inspector's actions: accepting an output,
-  retrying or replying to a node, resuming or cancelling a graph, and adding provider
-  calls to its spent budget. Any other mutation, any operation that runs a host command,
-  and any read outside a listed session or the active project's status is a new security
-  decision; do not extend the protocol without one.
+- Expose only the operations in `RemoteRequest`. The user approved PNG and JPEG images
+  in chat messages, which the host stores itself, stopping a turn, creating sessions,
+  merging, publishing, syncing a session or the active project, session settings,
+  generating a graph proposal with `/graph`, answering the questions of a session's
+  graph work, and the graph inspector's actions: accepting an output, retrying or
+  replying to a node, resuming or cancelling a graph, and adding provider calls to its
+  spent budget. Any other mutation, any operation that runs a host command, and any read
+  outside a listed session or the active project's status is a new security decision; do
+  not extend the protocol without one.
 - Every request added after the first protocol version names its capability; the three
   original mutations, `send_message`, `answer_questions`, and `cancel_session`, are
   always served. A request declares the operation it needs and how it queues in
