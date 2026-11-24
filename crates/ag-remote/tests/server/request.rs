@@ -5,12 +5,14 @@ use std::time::Duration;
 use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteFocusedReview,
     RemoteFocusedReviewState, RemoteGraphAction, RemoteGraphActionRequest, RemoteGraphApproval,
-    RemoteGraphProposalPhase, RemoteGraphStatus, RemoteMessage, RemoteMessageKind, RemoteModeModel,
-    RemoteModelOption, RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestion,
-    RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest,
-    RemoteSession, RemoteSessionGraph, RemoteSessionMode, RemoteSessionSummary, RequestedSessionId,
-    ServerFrame,
+    RemoteGraphProposalPhase, RemoteGraphStatus, RemoteImage, RemoteMessage, RemoteMessageKind,
+    RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase,
+    RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
+    RemoteReviewRequest, RemoteSession, RemoteSessionGraph, RemoteSessionMode,
+    RemoteSessionSummary, RequestedSessionId, ServerFrame,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -139,6 +141,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
         &mut client,
         4,
         RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: "continue".to_string(),
             session_id: "session-1".into(),
         },
@@ -580,6 +583,7 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
         &mut client,
         1,
         RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: "busy".to_string(),
             session_id: "session-1".into(),
         },
@@ -609,6 +613,7 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
 /// Sends request `id`: a message the backend holds until it is released.
 async fn send_held_message(client: &mut Client, id: u64) -> TestResult {
     let request = RemoteRequest::SendMessage {
+        images: Vec::new(),
         message: "wait".to_string(),
         session_id: "session-1".into(),
     };
@@ -675,6 +680,7 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
         &mut client,
         4,
         RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: "hello".to_string(),
             session_id: "session-1".into(),
         },
@@ -856,6 +862,7 @@ async fn a_request_that_panics_gets_an_error_and_releases_its_session() -> TestR
     let message = |id, message: &str| ClientFrame::Request {
         id,
         request: RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: message.to_string(),
             session_id: "session-1".into(),
         },
@@ -920,6 +927,7 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
         &mut client,
         1,
         RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: "continue".to_string(),
             session_id: session_id.clone(),
         },
@@ -1289,6 +1297,46 @@ async fn requests_keep_working_after_the_host_drops_revisions() -> TestResult {
 
     // Assert
     assert!(matches!(listed, RemoteResult::Ok(_)));
+
+    Ok(())
+}
+
+/// Standard base64 of a PNG file of `bytes` bytes, larger than a frame
+/// without images may be.
+fn large_png(bytes: usize) -> String {
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.resize(bytes, 0);
+
+    STANDARD.encode(png)
+}
+
+#[tokio::test]
+async fn a_message_with_megabytes_of_images_fits_one_frame() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let request = RemoteRequest::SendMessage {
+        images: vec![
+            RemoteImage {
+                data: large_png(5 << 20),
+            },
+            RemoteImage {
+                data: large_png(1 << 20),
+            },
+        ],
+        message: "Look at [Image #1]".to_string(),
+        session_id: "session-1".into(),
+    };
+
+    // Act
+    let sent = call(&mut client, 1, request).await?;
+
+    // Assert
+    assert_eq!(sent, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        server.backend.calls().last().map(String::as_str),
+        Some("send:session-1:Look at [Image #1]:png=5242880,png=1048576")
+    );
 
     Ok(())
 }

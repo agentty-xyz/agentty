@@ -1,11 +1,55 @@
 //! Responses API event-stream parsing, bounds, and reasoning replay tests.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use reqwest::header::HeaderMap;
 use serde_json::json;
 
-use super::{EventStream, replayed_reasoning};
-use crate::http::{SUCCESS_BODY_LIMIT_BYTES, TransportError};
+use super::{EventStream, ResponsesBackend, replayed_reasoning};
+use crate::http::{HttpTransport, SUCCESS_BODY_LIMIT_BYTES, TransportError};
+use crate::provider_spec::{ProviderSpec, WireProtocol};
 use crate::reasoning::{ReasoningView, reasoning_view};
 use crate::stream::ResponseDelta;
+
+#[test]
+fn sends_a_header_safe_cache_key_as_the_session_id_where_the_spec_asks() {
+    // Arrange
+    let http = Arc::new(HttpTransport::new(Duration::from_secs(1)));
+    let base_url = "https://api.example.com/v1";
+    let plan =
+        ProviderSpec::new("plan", WireProtocol::Responses, base_url).with_session_id_header();
+    let api = ProviderSpec::new("api", WireProtocol::Responses, base_url);
+    let cases = [
+        (&plan, Some("ag-session-1"), Some("ag-session-1")),
+        // A key that cannot be a header value still travels in the body.
+        (&plan, Some("session\nkey"), None),
+        (&plan, None, None),
+        (&api, Some("ag-session-1"), None),
+    ];
+
+    for (spec, key, expected) in cases {
+        let backend = ResponsesBackend::new(
+            spec,
+            "gpt-6-luna".to_string(),
+            HeaderMap::new(),
+            Arc::clone(&http),
+            None,
+            None,
+        );
+
+        // Act
+        let headers = backend.request_headers(key);
+
+        // Assert
+        let session_id = headers
+            .get("session-id")
+            .and_then(|value| value.to_str().ok());
+        // A failure prints no key, which code scanning reads as a secret.
+        let sent_as_expected = session_id == expected;
+        assert!(sent_as_expected);
+    }
+}
 
 #[test]
 fn reads_events_split_across_chunks_and_lines() {

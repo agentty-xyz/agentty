@@ -89,9 +89,9 @@ pub use review::{
 pub use service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostContext, HostProjectStatus, HostProjectSync,
-    HostProjectSyncPhase, HostSessionMode, QuestionAnswer, SessionBackend, SessionDiffFile,
-    SessionDiffFileStatus, SessionFileEntry, SessionOperation, SessionService,
-    SessionSettingsChange, StartExecutionGraphRequest,
+    HostProjectSyncPhase, HostSessionMode, MessageImage, MessageImageFormat, QuestionAnswer,
+    SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionOperation,
+    SessionService, SessionSettingsChange, StartExecutionGraphRequest,
 };
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
