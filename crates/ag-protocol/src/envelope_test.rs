@@ -62,6 +62,27 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(normalized_prompt.contains("Git commands must be read-only"));
     assert!(normalized_prompt.contains("Never run mutating commands"));
     assert!(rendered_prompt.contains("`git worktree remove`"));
+    assert!(normalized_prompt.contains(
+        "Before giving design advice, a plan, or an assessment of existing code, inspect the \
+         relevant code"
+    ));
+    assert!(normalized_prompt.contains("In free-form answers, say what you could not inspect."));
+    assert!(normalized_prompt.contains(
+        "When choosing or running checks, read the project's instruction files (`AGENTS.md`, \
+         `CLAUDE.md`, or `GEMINI.md`) and, within application policy, follow them"
+    ));
+    assert!(normalized_prompt.contains("including formatters and linters"));
+    assert!(rendered_prompt.contains("`git clean`, `git stash`"));
+    assert!(normalized_prompt.contains("(for example, `cargo clean`) unless the user asks."));
+    assert!(normalized_prompt.contains(
+        "read it with `git show` or `git diff` instead of stashing, checking out, or reverting \
+         files"
+    ));
+    assert!(
+        normalized_prompt
+            .contains("Never override environment variables or tool settings they forbid changing")
+    );
+    assert!(normalized_prompt.contains("report an environment failure"));
     assert!(normalized_prompt.contains("Call only tools offered in this session."));
     assert!(normalized_prompt.contains(
         "When no shell tool is offered, as in some read-only runs, do not attempt shell or Git \
@@ -493,7 +514,7 @@ fn metadata_envelopes_use_the_same_direct_contract_for_bootstrap_and_refresh() {
 }
 
 #[test]
-fn workspace_tooling_exception_survives_every_policy_transport() {
+fn workspace_tooling_exception_and_cleanup_limits_survive_every_policy_transport() {
     // Arrange
     let workspace = test_workspace_root();
     let profiles = [
@@ -540,6 +561,10 @@ fn workspace_tooling_exception_survives_every_policy_transport() {
         assert!(normalized.contains("same boundary to parent and delegated agents"));
         assert!(normalized.contains("Read-only execution remains read-only"));
         assert!(normalized.contains("does not grant permission escalation"));
+        assert!(normalized.contains("`git stash`"));
+        assert!(normalized.contains(
+            "Never delete build output, caches, or untracked files this session did not create"
+        ));
         assert!(!normalized.contains("everything outside it is read-only"));
         assert!(!normalized.contains("everything outside this workspace root is read-only"));
     }

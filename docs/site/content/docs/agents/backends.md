@@ -105,7 +105,9 @@ to keep using them.
 <a id="backends-project-instruction-files"></a> Agentty relies on each backend's native
 project-instruction discovery: Codex loads `AGENTS.md`, Claude Code loads `CLAUDE.md`,
 and Antigravity loads `AGENTS.md` and `GEMINI.md`. Symlink `CLAUDE.md` and `GEMINI.md`
-to a canonical `AGENTS.md` to give every backend the same guidance.
+to a canonical `AGENTS.md` to give every backend the same guidance. Agentty also tells
+every agent, including `ag-harness` models, to read these files and follow their checks
+without overriding the environment settings they forbid changing.
 
 ## Selecting a Backend
 

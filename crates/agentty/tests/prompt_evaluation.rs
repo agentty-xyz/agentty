@@ -7,7 +7,9 @@
 //! from Agentty's key file, `auth/api_keys.json` under `AGENTTY_ROOT` (else
 //! `~/.agentty`), and import a key variable into it; point `AGENTTY_ROOT` at
 //! a scratch directory to keep a run away from real keys. The manual
-//! prompt-evaluation hook emits one JSON record per case and repetition.
+//! prompt-evaluation hook emits one JSON record per case and repetition;
+//! set `AGENTTY_EVAL_CASES` to a comma-separated list of case names to run
+//! only those.
 //! Missing credentials, provider errors, and timeouts fail the run; none is
 //! silently counted as a pass.
 //!
@@ -213,14 +215,14 @@ impl Settings {
 
     /// Returns the cases this provider runs: every shared case, plus the
     /// `bash` cases for Harness runs, the only ones that advertise
-    /// Agentty's `bash` description.
+    /// Agentty's `bash` description, narrowed to `AGENTTY_EVAL_CASES`.
     fn cases(&self) -> Vec<Case> {
         let mut cases = grader::cases();
         if self.provider == "harness" {
             cases.extend(grader::bash_cases());
         }
 
-        cases
+        grader::select_cases(cases, std::env::var("AGENTTY_EVAL_CASES").ok().as_deref())
     }
 }
 
@@ -289,12 +291,31 @@ impl Fixture {
     }
 
     /// Returns the repository `case` runs in: the shared workspace, or for
-    /// a description case a repository of its own holding only that case's
-    /// guidance, so no case sees another's rules.
+    /// a description or practice case a repository of its own holding only
+    /// that case's files, so no case sees another's rules.
     ///
     /// # Errors
     /// Returns the filesystem or Git error that stops it.
     fn folder(&self, case: &Case) -> EvaluationResult<PathBuf> {
+        if grader::practice_cases()
+            .iter()
+            .any(|practice| practice.name == case.name)
+        {
+            let folder = self.root.path().join(case.name);
+            std::fs::create_dir_all(&folder)?;
+            for (name, path, contents) in grader::PRACTICE_FIXTURES {
+                if *name == case.name {
+                    let path = folder.join(path);
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(path, contents)?;
+                }
+            }
+            Self::commit(&folder)?;
+
+            return Ok(folder);
+        }
         if case.request_kind != AgentRequestKind::ReviewMetadata {
             return Ok(self.workspace());
         }

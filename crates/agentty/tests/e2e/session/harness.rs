@@ -1943,8 +1943,11 @@ async fn test_harness_session_streams_its_answer_before_the_turn_completes() -> 
 /// Session turns the compaction scenario runs; the earlier, longer turns
 /// fill the small window's history.
 const COMPACTION_TURNS: usize = 5;
-/// Leading turns whose answers are long.
-const LONG_ANSWER_TURNS: usize = 3;
+/// Leading turns whose answers are long. Their history crosses the
+/// compaction threshold that the window leaves after Agentty's instructions,
+/// so the session compacts before the first short turn and the notice stays
+/// on screen; longer instructions move the threshold down.
+const LONG_ANSWER_TURNS: usize = 2;
 /// Start of the notice the session shows once its earlier turns are
 /// summarized, which names the session's model next.
 const COMPACTION_NOTICE: &str = "[Context] Summarized earlier turns with";

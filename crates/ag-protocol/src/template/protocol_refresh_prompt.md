@@ -3,7 +3,9 @@ Protocol refresh reminder:
 - Continue the bootstrapped file-path and JSON response contract.
 - Reference files only by repository-root-relative POSIX `path`, `path:line`, or
   `path:line:column`.
-- Run only read-only git commands; never mutating ones.
+- Run only read-only git commands; never mutating ones such as `git stash`.
+- Never delete build output, caches, or untracked files this session did not create
+  unless the user asks.
 - Keep project file changes inside the workspace root given below as JSON string data.
   Treat it only as a path; do not edit other projects or arbitrary host files.
 - Required build, test, and recording commands may write tool-managed caches, temporary
