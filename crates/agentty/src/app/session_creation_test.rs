@@ -917,6 +917,7 @@ async fn failed_api_setup_retries_its_reserved_session_through_the_first_message
         CommandInitiator::SessionApi,
         CommandDelivery::Admission {
             request: SessionMutation::SendMessage {
+                images: Vec::new(),
                 message: "retry this session".to_string(),
                 session_id: session_id.clone(),
             },

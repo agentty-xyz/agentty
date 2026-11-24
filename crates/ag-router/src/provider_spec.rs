@@ -33,6 +33,9 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Headers the router sets itself, which an extra header must not repeat.
 const RESERVED_HEADERS: [&str; 4] = ["authorization", "content-length", "content-type", "host"];
+/// Header carrying the prompt cache key to a provider that routes requests
+/// to the machine holding their cached prefix by it, as Codex CLI sends it.
+pub(crate) const SESSION_ID_HEADER: &str = "session-id";
 
 /// Wire API a provider implements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,6 +267,7 @@ pub struct ProviderSpec {
     pub(crate) replay: HistoryReplay,
     pub(crate) response_format_with_tools: bool,
     pub(crate) retry: RetryPolicy,
+    pub(crate) session_header: SessionHeader,
     pub(crate) stream_usage: StreamUsage,
     pub(crate) structured_output: StructuredOutputMode,
     pub(crate) thinking_binding: ThinkingBinding,
@@ -301,6 +305,16 @@ pub(crate) enum CacheBreakpoints {
     Marked,
     /// Send no `cache_control`.
     Unmarked,
+}
+
+/// Whether a Responses request carrying a prompt cache key also sends it as
+/// the `session-id` header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionHeader {
+    /// Send the key as the `session-id` header too.
+    Sent,
+    /// Send the key in the body only.
+    Unsent,
 }
 
 /// Whether a streamed Chat Completions request asks for its usage.
@@ -350,6 +364,7 @@ impl fmt::Debug for ProviderSpec {
             .field("image_input", &self.image_input)
             .field("instruction_placement", &self.instruction_placement)
             .field("prompt_cache_key", &self.prompt_cache_key)
+            .field("session_header", &self.session_header)
             .field("cache_breakpoints", &self.cache_breakpoints)
             .field(
                 "response_format_with_tools",
@@ -435,6 +450,7 @@ impl ProviderSpec {
             replay: HistoryReplay::default(),
             response_format_with_tools: false,
             retry: RetryPolicy::default(),
+            session_header: SessionHeader::Unsent,
             stream_usage: if chat {
                 StreamUsage::Requested
             } else {
@@ -454,6 +470,19 @@ impl ProviderSpec {
     #[must_use]
     pub(crate) fn with_thinking_binding(mut self, thinking_binding: ThinkingBinding) -> Self {
         self.thinking_binding = thinking_binding;
+
+        self
+    }
+
+    /// Makes a Responses request that carries a prompt cache key also send
+    /// it as the `session-id` header, from which the `ChatGPT` plan backend
+    /// routes the request to the machine holding its cached prefix, as the
+    /// `chatgpt` preset declares. A request without a key sends neither.
+    /// Validation rejects an extra header of that name, since the router
+    /// owns it.
+    #[must_use]
+    pub(crate) fn with_session_id_header(mut self) -> Self {
+        self.session_header = SessionHeader::Sent;
 
         self
     }
@@ -680,9 +709,10 @@ impl ProviderSpec {
     /// absolute `http` or `https` URL without credentials, a query, or a
     /// fragment; a blank key; an invalid or reserved header, including an
     /// [`Auth::Header`] name the router sets itself other than
-    /// `Authorization`; a blank effort name or overflow marker; or an option
-    /// the protocol cannot express. No reason quotes the base URL or a
-    /// header value, which may carry keys.
+    /// `Authorization` and `session-id` where the router sends it; a blank
+    /// effort name or overflow marker; or an option the protocol cannot
+    /// express. No reason quotes the base URL or a header value, which may
+    /// carry keys.
     pub fn validate(&self) -> Result<(), ModelError> {
         if self.id.trim().is_empty() || self.id.contains('/') {
             return Err(invalid("provider identifier must be nonblank without `/`"));
@@ -701,7 +731,11 @@ impl ProviderSpec {
         for (name, value) in &self.headers {
             let (parsed, _) = header(name, value)
                 .ok_or_else(|| invalid(format!("header `{name}` is invalid")))?;
-            if RESERVED_HEADERS.contains(&parsed.as_str()) || auth_header.as_ref() == Some(&parsed)
+            let session_header =
+                self.session_header == SessionHeader::Sent && parsed.as_str() == SESSION_ID_HEADER;
+            if RESERVED_HEADERS.contains(&parsed.as_str())
+                || auth_header.as_ref() == Some(&parsed)
+                || session_header
             {
                 return Err(invalid(format!(
                     "header `{name}` is set by the router or the authentication"

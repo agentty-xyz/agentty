@@ -64,6 +64,83 @@ pub struct AnswerQuestionsRequest {
     pub graph_question_target: Option<String>,
 }
 
+/// One encoded image a frontend sends with a chat message, whose bytes the
+/// host writes to its own prompt-image directory and attaches to the turn.
+///
+/// Only PNG and JPEG files are accepted, recognized by their signature, so
+/// the host never trusts a name or media type the sender chose.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageImage {
+    data: Vec<u8>,
+    format: MessageImageFormat,
+}
+
+impl MessageImage {
+    /// Wraps the encoded bytes of one PNG or JPEG image.
+    ///
+    /// # Errors
+    /// Returns an error when `data` is neither a PNG nor a JPEG file.
+    pub fn new(data: Vec<u8>) -> Result<Self, SessionError> {
+        let format = MessageImageFormat::of(&data).ok_or_else(|| {
+            SessionError::Operation("Only PNG and JPEG images can be attached".to_string())
+        })?;
+
+        Ok(Self { data, format })
+    }
+
+    /// Returns the encoded image bytes.
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Returns the image's file format.
+    #[must_use]
+    pub fn format(&self) -> MessageImageFormat {
+        self.format
+    }
+
+    /// Returns the encoded image bytes, consuming the image.
+    #[must_use]
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
+    }
+}
+
+/// File format of one [`MessageImage`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MessageImageFormat {
+    /// A JPEG image.
+    Jpeg,
+    /// A PNG image.
+    Png,
+}
+
+impl MessageImageFormat {
+    /// Returns the file extension the host stores the image under.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Jpeg => "jpg",
+            Self::Png => "png",
+        }
+    }
+
+    /// Recognizes the format of `data` by its file signature.
+    fn of(data: &[u8]) -> Option<Self> {
+        const JPEG_SIGNATURE: &[u8] = &[0xFF, 0xD8, 0xFF];
+        const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+        if data.starts_with(PNG_SIGNATURE) {
+            Some(Self::Png)
+        } else if data.starts_with(JPEG_SIGNATURE) {
+            Some(Self::Jpeg)
+        } else {
+            None
+        }
+    }
+}
+
 /// Idempotent turn submitted to one session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DurableMessageRequest {
@@ -143,6 +220,9 @@ pub enum SessionOperation {
     /// command does, through [`SessionBackend::generate_graph_proposal`].
     /// Nothing launches until a reply approves the proposal.
     GenerateGraphProposal,
+    /// Sending a chat message with images through
+    /// [`SessionBackend::send_message_with_images`].
+    MessageImages,
 }
 
 /// Settings to change on one session; `None` keeps a setting as it is.
@@ -636,6 +716,23 @@ pub trait SessionBackend: Send + Sync {
         session_id: &SessionId,
         message: String,
     ) -> Result<(), SessionError>;
+
+    /// Sends one message with images, which the host stores itself and
+    /// attaches as `[Image #n]`, numbered in `images` order from 1. A
+    /// placeholder `message` lacks is appended to it. Older hosts may omit
+    /// support.
+    async fn send_message_with_images(
+        &self,
+        session_id: &SessionId,
+        message: String,
+        images: Vec<MessageImage>,
+    ) -> Result<(), SessionError> {
+        let _ = (session_id, message, images);
+
+        Err(SessionError::Operation(
+            "Host does not support images in messages".to_string(),
+        ))
+    }
 
     /// Submits a durable turn without entering the lossy live-chat
     /// queue used while an ordinary user turn is active.
@@ -1146,6 +1243,23 @@ impl SessionService {
         message: impl Into<String> + Send,
     ) -> Result<(), SessionError> {
         self.backend.send_message(session_id, message.into()).await
+    }
+
+    /// Sends a message with images to one session. The host attaches the
+    /// images as `[Image #n]`, numbered in `images` order from 1.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not take images in messages, or
+    /// the session cannot accept or enqueue the message.
+    pub async fn send_message_with_images(
+        &self,
+        session_id: &SessionId,
+        message: impl Into<String> + Send,
+        images: Vec<MessageImage>,
+    ) -> Result<(), SessionError> {
+        self.backend
+            .send_message_with_images(session_id, message.into(), images)
+            .await
     }
 
     /// Submits one durable turn directly to the serialized worker.

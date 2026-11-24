@@ -574,6 +574,7 @@ async fn message_plans_preserve_busy_queue_order_and_terminal_attachments() {
                 CommandInitiator::SessionApi,
                 CommandDelivery::Admission {
                     request: SessionMutation::SendMessage {
+                        images: Vec::new(),
                         message: "accepted even without a listener".to_string(),
                         session_id: session_id.clone(),
                     },

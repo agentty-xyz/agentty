@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use ag_clipboard::{Clipboard, ClipboardImage};
+use ag_session::MessageImage;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
@@ -176,7 +177,8 @@ async fn persist_clipboard_image(
     clock: &dyn Clock,
     open_clipboard: ClipboardOpener,
 ) -> Result<PersistedClipboardImage, ClipboardError> {
-    let image_output_path = build_clipboard_image_path(session_id, attachment_number, clock)?;
+    let image_output_path =
+        build_clipboard_image_path(session_id, attachment_number, "png", clock)?;
     let clipboard_payload = read_clipboard_payload(open_clipboard).await?;
 
     persist_clipboard_payload(fs_client, &image_output_path, clipboard_payload).await?;
@@ -184,6 +186,46 @@ async fn persist_clipboard_image(
     Ok(PersistedClipboardImage {
         local_image_path: canonicalize_persisted_image_path(fs_client, &image_output_path).await?,
     })
+}
+
+/// Persists one image a remote device sent with a message under the
+/// session temp image directory, where pasted images live, and returns its
+/// absolute path.
+///
+/// # Errors
+/// Returns a [`ClipboardError`] when the image cannot be written or its path
+/// resolved through the filesystem boundary. The output file is removed
+/// first, since no caller learns its path to remove it.
+pub(crate) async fn persist_message_image(
+    fs_client: &dyn FsClient,
+    clock: &dyn Clock,
+    session_id: &str,
+    attachment_number: usize,
+    image: MessageImage,
+) -> Result<PathBuf, ClipboardError> {
+    let image_output_path = build_clipboard_image_path(
+        session_id,
+        attachment_number,
+        image.format().extension(),
+        clock,
+    )?;
+    let persisted = match persist_clipboard_payload(
+        fs_client,
+        &image_output_path,
+        ClipboardPayload::Encoded(image.into_data()),
+    )
+    .await
+    {
+        Ok(()) => canonicalize_persisted_image_path(fs_client, &image_output_path).await,
+        Err(error) => Err(error),
+    };
+    if persisted.is_err() {
+        // A write that failed partway leaves a file too, and the original
+        // error is the one worth reporting.
+        let _ = fs_client.remove_file(image_output_path).await;
+    }
+
+    persisted
 }
 
 /// Normalizes one [`ClipboardError`] into short prompt-mode status text.
@@ -222,7 +264,8 @@ pub(crate) fn clipboard_image_directory(session_id: &str) -> Result<PathBuf, Cli
     Ok(agentty_root.join("tmp").join(session_id).join("images"))
 }
 
-/// Builds a stable unique PNG path for one pasted image capture.
+/// Builds a stable unique path, ending in `extension`, for one pasted or
+/// received image.
 ///
 /// # Errors
 /// Returns an error when the session id cannot be used as a temp directory
@@ -230,6 +273,7 @@ pub(crate) fn clipboard_image_directory(session_id: &str) -> Result<PathBuf, Cli
 fn build_clipboard_image_path(
     session_id: &str,
     attachment_number: usize,
+    extension: &str,
     clock: &dyn Clock,
 ) -> Result<PathBuf, ClipboardError> {
     let timestamp_millis = clock
@@ -238,7 +282,8 @@ fn build_clipboard_image_path(
         .map_err(ClipboardError::SystemClock)?
         .as_millis();
     let sequence = NEXT_CLIPBOARD_IMAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let file_name = format!("image-{attachment_number:03}-{timestamp_millis}-{sequence}.png");
+    let file_name =
+        format!("image-{attachment_number:03}-{timestamp_millis}-{sequence}.{extension}");
 
     Ok(clipboard_image_directory(session_id)?.join(file_name))
 }
@@ -324,7 +369,7 @@ async fn read_clipboard_payload(
                 )?,
             };
 
-            Ok(ClipboardPayload::EncodedPng(encoded_png))
+            Ok(ClipboardPayload::Encoded(encoded_png))
         } else {
             Ok(ClipboardPayload::ExistingPngPath(
                 clipboard_png_path_from_text(&mut clipboard)?,
@@ -351,11 +396,12 @@ async fn canonicalize_persisted_image_path(
         .map_err(ClipboardError::PathResolve)
 }
 
-/// Clipboard image payload extracted on the blocking clipboard thread.
+/// Image payload to persist: one extracted on the blocking clipboard
+/// thread, or one a remote device sent.
 enum ClipboardPayload {
-    /// Image bytes encoded as PNG, either copied from the clipboard or
-    /// re-encoded from decoded pixels.
-    EncodedPng(Vec<u8>),
+    /// Encoded image bytes: a PNG copied from the clipboard or re-encoded
+    /// from decoded pixels, or a PNG or JPEG a remote device sent.
+    Encoded(Vec<u8>),
     /// Existing PNG file path referenced by clipboard text.
     ExistingPngPath(PathBuf),
 }
@@ -407,7 +453,7 @@ async fn persist_clipboard_payload(
         })?;
 
     let image_bytes = match clipboard_payload {
-        ClipboardPayload::EncodedPng(encoded_png) => encoded_png,
+        ClipboardPayload::Encoded(encoded_png) => encoded_png,
         ClipboardPayload::ExistingPngPath(source_image_path) => {
             if !fs_client.is_file(source_image_path.clone()) {
                 return Err(ClipboardError::PngPathNotFound);

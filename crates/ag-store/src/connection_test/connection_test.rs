@@ -1,29 +1,11 @@
-//! Database open, connection configuration, and error reporting tests.
-
-use std::path::Path;
+//! Database connection configuration and error reporting tests.
+//!
+//! `ag-sqlite` tests directory creation, temporary paths, and open failures.
 
 use tempfile::tempdir;
 
 use crate::connection::{DB_POOL_MAX_CONNECTIONS, Database, INTERACTIVE_BUSY_TIMEOUT};
 use crate::error::DbError;
-
-/// Verifies `open()` creates missing parent directories before opening the
-/// on-disk database.
-#[tokio::test]
-async fn test_open_creates_missing_parent_directory() {
-    // Arrange
-    let temp_dir = tempdir().expect("temp dir should be created");
-    let db_path = temp_dir.path().join("nested/store.db");
-
-    // Act
-    let database = Database::open(&db_path)
-        .await
-        .expect("database should open with missing parent directories");
-
-    // Assert
-    assert!(db_path.parent().is_some_and(Path::is_dir));
-    assert!(!database.pool().is_closed());
-}
 
 #[tokio::test]
 async fn query_on_dropped_table_returns_db_error_query() {
@@ -70,21 +52,26 @@ async fn db_error_display_includes_underlying_message() {
 }
 
 #[tokio::test]
-async fn open_with_unwritable_parent_returns_db_error_io() {
-    // Arrange — place the database path under a regular file so
-    // `create_dir_all` fails with an I/O error.
+async fn open_failures_name_the_app_database() {
+    // Arrange
     let temp = tempdir().expect("failed to create temp directory");
-    let blocking_file = temp.path().join("not_a_dir");
-    std::fs::write(&blocking_file, b"").expect("failed to create blocking file");
-    let db_path = blocking_file.join("nested").join("db.sqlite");
 
     // Act
-    let result = Database::open(&db_path).await;
+    let result = Database::open(temp.path()).await;
 
     // Assert
+    let error = result
+        .err()
+        .expect("a directory should not open as a database");
     assert!(
-        matches!(result, Err(DbError::Io(_))),
-        "expected DbError::Io variant"
+        matches!(
+            error,
+            DbError::QueryContext {
+                operation: "open app database",
+                ..
+            }
+        ),
+        "unexpected error: {error:?}"
     );
 }
 

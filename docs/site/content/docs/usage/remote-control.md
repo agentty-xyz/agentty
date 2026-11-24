@@ -110,13 +110,17 @@ brings back your earlier messages to the session, newest first, and `Down` on th
 line goes forward and then back to the text you were typing. While a turn runs, a
 message waits in the queue above the box for the next turn. The queue also lists, marked
 `Action`, what waits for the turn besides messages, such as a sync, a publish, or a
-model change. A draft session starts with a `Draft session` preview of the messages
-staged for it; your next message starts the session with them. While the agent asks
-questions, the box gives way to the questions: pick an option or type an answer, then
-press `Send answers` once each has one. When the session's graph proposal or one of its
-graph nodes asks instead, as the terminal's question panel shows, the page shows those
-questions the same way and sends the answers to the graph work that asked; where the
-session takes chat, `Reply in chat` closes them until you open the session again or
+model change. When this Agentty takes images, pasting a PNG or JPEG image into the
+message box attaches it: an `[Image #n]` placeholder marks its place in the text, and a
+chip under the box shows its size and removes it. A message carries up to 8 images, 6 MB
+together, and goes with your text to the agent as a terminal paste does. A `/graph`
+request takes no images. A draft session starts with a `Draft session` preview of the
+messages staged for it; your next message starts the session with them. While the agent
+asks questions, the box gives way to the questions: pick an option or type an answer,
+then press `Send answers` once each has one. When the session's graph proposal or one of
+its graph nodes asks instead, as the terminal's question panel shows, the page shows
+those questions the same way and sends the answers to the graph work that asked; where
+the session takes chat, `Reply in chat` closes them until you open the session again or
 other graph work asks, and a chat message answers them too. A session that is merging or
 finished shows why you cannot chat. Unsent text stays in the box for each session until
 Agentty accepts it, even after a reload of the tab.
@@ -257,7 +261,9 @@ podman build --file container/relay.Containerfile \
 
 Arguments after the image name go to the relay: behind a proxy, pass
 `--client-address-header` with the header your proxy sets to the client address, so the
-relay's limits count each client separately.
+relay's limits count each client separately. The relay carries up to 64 MiB a minute for
+each connected page and closes a connection that goes over, which leaves room for
+several messages with images.
 
 ### Run the Relay on Fly.io
 
@@ -383,7 +389,8 @@ device can:
 - see the active project's name and branch, how far the branch is ahead of and behind
   its remote, and the progress and result of its sync, including Git's message when it
   fails;
-- send messages, which start, resume, or queue a turn that agents run with edit
+- send messages, with PNG or JPEG images that Agentty stores in its own temporary folder
+  for the turn, which start, resume, or queue a turn that agents run with edit
   permissions;
 - answer an agent's questions, and the questions of a session's graph proposal or graph
   nodes, which go to the graph work that asked them as a terminal answer would;
@@ -445,7 +452,6 @@ control.
   current Git branch, such as a detached `HEAD`, cannot take new sessions; a device's
   request for the host details or a new session then fails.
 - The transcript updates when a turn finishes; live streaming output is not shown.
-- Image attachments cannot be sent from a remote device.
 - Answers render as Markdown: headings, lists, quotes, code blocks, tables, and links.
   Mermaid and other diagrams show as code, and images show as links. The page's own
   renderer can differ from the terminal at the edges; `View source` under an answer

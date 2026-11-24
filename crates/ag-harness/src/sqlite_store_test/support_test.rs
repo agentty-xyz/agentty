@@ -20,8 +20,8 @@ use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::schema_contract::OutputSchema;
 use crate::session::{NewSession, SessionError, StoreIdentity, TurnOwner};
 use crate::sqlite_store::{
-    Database, DbResultExt as _, EncodedMessage, ReservationObserver, TimestampSource,
-    connect_options, next_turn_position, system_timestamp_source,
+    Database, DbResultExt as _, EncodedMessage, OPEN_OPTIONS, ReservationObserver, TimestampSource,
+    next_turn_position, system_timestamp_source,
 };
 use crate::store::{AcquiredTurn, HistoryProjection, SessionStore, StoreBackend};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
@@ -176,7 +176,7 @@ ON session_message (session_id, turn_position);
 pub(super) async fn create_version_one_database(path: &Path) -> [HistoricalMessage; 4] {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
-        .connect_with(connect_options(path))
+        .connect_with(OPEN_OPTIONS.connect_options(path))
         .await
         .expect("version-one database should open");
     Migrator::with_migrations(vec![Migration::new(
@@ -293,7 +293,7 @@ impl Database {
     pub(crate) async fn open_in_memory_with_timestamp_source(
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Result<Self, SessionError> {
-        let options = connect_options(Path::new(":memory:"));
+        let options = OPEN_OPTIONS.connect_options(Path::new(":memory:"));
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)

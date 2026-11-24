@@ -47,6 +47,21 @@ pub enum DbError {
     },
 }
 
+impl DbError {
+    /// Converts a failure to open the database into the matching category;
+    /// a migration failure keeps no label because the store has one
+    /// migration step.
+    pub(crate) fn from_open(error: ag_sqlite::Error) -> Self {
+        match error {
+            ag_sqlite::Error::Io(source) => Self::Io(source),
+            ag_sqlite::Error::Sqlx { operation, source } => {
+                Self::QueryContext { operation, source }
+            }
+            ag_sqlite::Error::Migrate { source, .. } => Self::Migration(source),
+        }
+    }
+}
+
 /// Adds a semantic persistence-operation label to a query result.
 pub(crate) trait DbResultExt<T> {
     /// Maps a raw `SQLx` error into [`DbError::QueryContext`].
