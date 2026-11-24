@@ -1829,6 +1829,7 @@ async fn commit_all_with_retry(
         phase.attribute("agentty.git.commit.result", attempt_result.label());
         phase.finish(attempt_result.outcome());
         let attempt = result?;
+        let output = attempt.output();
 
         match attempt_result {
             CommitAttemptResult::Committed => return Ok(()),
@@ -1840,12 +1841,15 @@ async fn commit_all_with_retry(
                 return Err(nothing_to_commit_error());
             }
             CommitAttemptResult::HookModified => {
-                if let CommitAttempt::HookRejected(hook) = &attempt {
-                    last_hook_output.clone_from(&hook.output);
-                }
+                last_hook_output = output;
                 stage_all(repo_path.clone()).await?;
             }
-            CommitAttemptResult::Failed => return Err(attempt.failure()),
+            CommitAttemptResult::Failed => {
+                return Err(GitError::CommandFailed {
+                    command: "git commit".to_string(),
+                    stderr: output,
+                });
+            }
         }
     }
 
@@ -1905,15 +1909,11 @@ impl CommitAttempt {
         }
     }
 
-    /// Returns the error a failed attempt reports, with the hook's or
-    /// `git commit`'s output.
-    fn failure(&self) -> GitError {
+    /// Returns the hook's or `git commit`'s output.
+    fn output(&self) -> String {
         match self {
-            Self::HookRejected(hook) => hook.rejection("git commit"),
-            Self::Commit(output) => GitError::CommandFailed {
-                command: "git commit".to_string(),
-                stderr: command_output_detail(&output.stdout, &output.stderr),
-            },
+            Self::HookRejected(hook) => hook.output.trim().to_string(),
+            Self::Commit(output) => command_output_detail(&output.stdout, &output.stderr),
         }
     }
 }
