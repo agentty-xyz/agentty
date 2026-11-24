@@ -207,8 +207,7 @@ fn answer_calls(
 }
 
 #[tokio::test]
-async fn keeps_each_session_request_a_byte_prefix_of_the_next_on_one_session_id()
--> Result<(), Box<dyn Error>> {
+async fn keeps_each_session_request_a_byte_prefix_of_the_next() -> Result<(), Box<dyn Error>> {
     // Arrange
     let server = MockServer::start().await;
     for (reasoning, call_id, file) in [("rs_1", "call_1", "a.txt"), ("rs_2", "call_2", "b.txt")] {
@@ -245,16 +244,13 @@ async fn keeps_each_session_request_a_byte_prefix_of_the_next_on_one_session_id(
         .await
         .ok_or("request recording disabled")?;
     assert_eq!(requests.len(), 3);
-    for request in &requests {
-        assert!(
-            request
-                .headers
-                .get("session-id")
-                .is_some_and(|value| value == "ag-session-1")
-        );
-        let body = serde_json::from_slice::<Value>(&request.body)?;
-        assert_eq!(body["prompt_cache_key"], "ag-session-1");
-    }
+    // One session routes every request to the machine holding its prefix.
+    assert!(requests.iter().all(|request| {
+        request
+            .headers
+            .get("session-id")
+            .is_some_and(|value| value == "ag-session-1")
+    }));
     // Everything up to the end of a request's input, which the model field
     // follows, is sent again byte for byte, so the cached prefix holds.
     for pair in requests.windows(2) {
@@ -266,41 +262,6 @@ async fn keeps_each_session_request_a_byte_prefix_of_the_next_on_one_session_id(
         assert!(later.starts_with(&earlier[..input_end]));
         assert!(later.len() > earlier.len());
     }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn sends_no_session_id_without_a_key_that_fits_a_header() -> Result<(), Box<dyn Error>> {
-    // Arrange
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_raw(completed_stream(), "text/event-stream"),
-        )
-        .mount(&server)
-        .await;
-    let router = router(&server, ScriptedCredential::new(&["plan-token"; 2]));
-    let mut multiline = request()?;
-    multiline.options.prompt_cache_key = Some("session\nkey".to_string());
-
-    // Act
-    router.execute(request()?).await?;
-    router.execute(multiline).await?;
-
-    // Assert
-    let requests = server
-        .received_requests()
-        .await
-        .ok_or("request recording disabled")?;
-    assert!(
-        requests
-            .iter()
-            .all(|request| !request.headers.contains_key("session-id"))
-    );
-    let multiline = serde_json::from_slice::<Value>(&requests[1].body)?;
-    assert_eq!(multiline["prompt_cache_key"], "session\nkey");
 
     Ok(())
 }

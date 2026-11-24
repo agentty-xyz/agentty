@@ -33,6 +33,9 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Headers the router sets itself, which an extra header must not repeat.
 const RESERVED_HEADERS: [&str; 4] = ["authorization", "content-length", "content-type", "host"];
+/// Header carrying the prompt cache key to a provider that routes requests
+/// to the machine holding their cached prefix by it, as Codex CLI sends it.
+pub(crate) const SESSION_ID_HEADER: &str = "session-id";
 
 /// Wire API a provider implements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -471,6 +474,18 @@ impl ProviderSpec {
         self
     }
 
+    /// Makes a Responses request that carries a prompt cache key also send
+    /// it as the `session-id` header, from which the `ChatGPT` plan backend
+    /// routes the request to the machine holding its cached prefix, as the
+    /// `chatgpt` preset declares. A request without a key sends neither, and
+    /// validation then rejects an extra header of that name.
+    #[must_use]
+    pub(crate) fn with_session_id_header(mut self) -> Self {
+        self.session_header = SessionHeader::Sent;
+
+        self
+    }
+
     /// Returns the routing prefix of this provider's model identifiers.
     pub fn id(&self) -> &str {
         &self.id
@@ -614,22 +629,6 @@ impl ProviderSpec {
         self
     }
 
-    /// Sets whether a Responses request that carries a prompt cache key also
-    /// sends it as the `session-id` header, from which a provider such as
-    /// the `ChatGPT` plan backend routes the request to the machine holding
-    /// its cached prefix, as Codex CLI sends it. Off by default; other
-    /// protocols cannot express it.
-    #[must_use]
-    pub fn with_session_id_header(mut self, session_id_header: bool) -> Self {
-        self.session_header = if session_id_header {
-            SessionHeader::Sent
-        } else {
-            SessionHeader::Unsent
-        };
-
-        self
-    }
-
     /// Sets whether a streamed Chat Completions request asks for its usage
     /// with `stream_options.include_usage`, on by default. A server that
     /// rejects `stream_options` must turn it off, and then reports no
@@ -709,9 +708,10 @@ impl ProviderSpec {
     /// absolute `http` or `https` URL without credentials, a query, or a
     /// fragment; a blank key; an invalid or reserved header, including an
     /// [`Auth::Header`] name the router sets itself other than
-    /// `Authorization`; a blank effort name or overflow marker; or an option
-    /// the protocol cannot express. No reason quotes the base URL or a
-    /// header value, which may carry keys.
+    /// `Authorization` and `session-id` where the router sends it; a blank
+    /// effort name or overflow marker; or an option the protocol cannot
+    /// express. No reason quotes the base URL or a header value, which may
+    /// carry keys.
     pub fn validate(&self) -> Result<(), ModelError> {
         if self.id.trim().is_empty() || self.id.contains('/') {
             return Err(invalid("provider identifier must be nonblank without `/`"));
@@ -730,7 +730,11 @@ impl ProviderSpec {
         for (name, value) in &self.headers {
             let (parsed, _) = header(name, value)
                 .ok_or_else(|| invalid(format!("header `{name}` is invalid")))?;
-            if RESERVED_HEADERS.contains(&parsed.as_str()) || auth_header.as_ref() == Some(&parsed)
+            let session_header =
+                self.session_header == SessionHeader::Sent && parsed.as_str() == SESSION_ID_HEADER;
+            if RESERVED_HEADERS.contains(&parsed.as_str())
+                || auth_header.as_ref() == Some(&parsed)
+                || session_header
             {
                 return Err(invalid(format!(
                     "header `{name}` is set by the router or the authentication"
@@ -915,11 +919,6 @@ impl ProviderSpec {
     /// Rejects an option the protocol cannot express.
     fn validate_protocol(&self) -> Result<(), ModelError> {
         let unsupported = match self.protocol {
-            WireProtocol::AnthropicMessages | WireProtocol::ChatCompletions
-                if self.session_header == SessionHeader::Sent =>
-            {
-                Some("the `session-id` header")
-            }
             WireProtocol::AnthropicMessages => self.unsupported_by_anthropic(),
             _ if self.fallback_max_tokens.is_some() => Some("a fallback `max_tokens`"),
             _ if self.cache_breakpoints == CacheBreakpoints::Marked => {

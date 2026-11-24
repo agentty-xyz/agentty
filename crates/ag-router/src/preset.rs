@@ -148,7 +148,7 @@ pub fn chatgpt(
     openai_responses("chatgpt", "ChatGPT plan", base_url, model)
         .with_auth(Auth::Credential(credential))
         .with_max_tokens_field(None)
-        .with_session_id_header(true)
+        .with_session_id_header()
 }
 
 /// Moonshot AI Kimi through its Chat Completions API: JSON Object mode,

@@ -87,11 +87,6 @@ fn starts_from_a_conservative_policy_per_protocol() {
     );
     assert!(responses.image_input && responses.prompt_cache_key);
     assert_eq!(responses.session_header, SessionHeader::Unsent);
-    let header_cleared = responses
-        .clone()
-        .with_session_id_header(true)
-        .with_session_id_header(false);
-    assert_eq!(header_cleared.session_header, SessionHeader::Unsent);
     assert!(!responses.keeps_prefix_across_schemas());
     assert!(chat.validate().is_ok() && responses.validate().is_ok());
 }
@@ -303,8 +298,10 @@ fn rejects_specifications_no_request_can_be_sent_with() {
             "the Responses protocol cannot express a fallback `max_tokens`",
         ),
         (
-            chat().with_session_id_header(true),
-            "the ChatCompletions protocol cannot express the `session-id` header",
+            responses()
+                .with_session_id_header()
+                .with_header("Session-Id", "host-chosen"),
+            "header `Session-Id` is set by the router or the authentication",
         ),
     ];
     let valid = [
@@ -318,6 +315,8 @@ fn rejects_specifications_no_request_can_be_sent_with() {
         responses()
             .with_reasoning(ReasoningMapping::None)
             .with_max_tokens_field(None),
+        // The header is the host's own where the router does not send it.
+        responses().with_header("session-id", "host-chosen"),
     ];
 
     // Act / Assert
@@ -362,10 +361,6 @@ fn rejects_anthropic_messages_options_it_cannot_express() {
         (
             anthropic().with_stream_usage(true),
             "the AnthropicMessages protocol cannot express `stream_options.include_usage`",
-        ),
-        (
-            anthropic().with_session_id_header(true),
-            "the AnthropicMessages protocol cannot express the `session-id` header",
         ),
     ];
     let forced_tool = anthropic()

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -24,7 +24,7 @@ use crate::http::{
     deserialize_optional,
 };
 use crate::model::GeneratedResponse;
-use crate::provider_spec::{ProviderSpec, ReasoningMapping, SessionHeader};
+use crate::provider_spec::{ProviderSpec, ReasoningMapping, SESSION_ID_HEADER, SessionHeader};
 use crate::reasoning::ReasoningView;
 use crate::retry::RetryObserver;
 use crate::stream::{DeltaObserver, ResponseDelta, SseDecoder, StreamClosed};
@@ -38,9 +38,6 @@ const TERMINAL_EVENTS: [&str; 3] = [
 ];
 /// Path of the Responses endpoint under a provider base URL.
 pub(crate) const ENDPOINT_PATH: &str = "responses";
-/// Header carrying the prompt cache key to a provider that routes requests
-/// to the machine holding their cached prefix by it, as Codex CLI sends it.
-const SESSION_ID_HEADER: HeaderName = HeaderName::from_static("session-id");
 
 /// Structured-output backend for the `OpenAI` Responses API, applying the
 /// request policy of one [`ProviderSpec`].
