@@ -46,12 +46,7 @@ function mountProject({
   const byId = (id) => (Object.hasOwn(PARTS, id) ? view.project[PARTS[id]] : document.getElementById(id));
   const requests = [];
   const project = createProject({
-    elements: {
-      ...view.project,
-      dialog: byId("project-sync-dialog"),
-      dialogBranch: byId("project-sync-branch"),
-      dialogTarget: byId("project-sync-target"),
-    },
+    elements: view.project,
     request: async (body) => {
       requests.push(body);
 
@@ -67,12 +62,6 @@ function mountProject({
 // Lets the promises a click started run to their end.
 function settle() {
   return new Promise((resolve) => setImmediate(resolve));
-}
-
-// Opens the confirmation and answers it with the button of `value`.
-function confirmSync(byId, value = "confirm") {
-  byId("project-sync").click();
-  byId("project-sync-dialog").querySelector('button[value="' + value + '"]').click();
 }
 
 test("offersProjectSync needs the sync_project capability", () => {
@@ -110,26 +99,19 @@ test("a listed project shows its branch, its distance from upstream and the sync
   assert.equal(byId("project-sync").hidden, false);
   assert.equal(byId("project-sync").disabled, false);
   assert.equal(byId("project-sync-label").textContent, "Sync");
-  byId("project-sync").click();
-  assert.equal(byId("project-sync-target").textContent, "agentty/main");
-  assert.equal(byId("project-sync-branch").textContent, "main");
 
-  // A project without a branch names itself in the open confirmation.
   project.update(listed({ branch: undefined }));
   assert.equal(byId("project-branch").hidden, true);
   assert.equal(byId("project-branch").textContent, "");
   assert.equal(byId("project-counts").hidden, true);
-  assert.equal(byId("project-sync-target").textContent, "agentty");
-  assert.equal(byId("project-sync-branch").textContent, "its branch");
 
   // The host's name returns when a listing stops naming the project.
   project.update(null);
   assert.equal(byId("project-name").textContent, "from-host");
   assert.equal(byId("project-sync").hidden, true);
-  assert.equal(byId("project-sync-target").textContent, "the project");
 });
 
-test("the project lines of several Agenttys share the dialog, and only the asking one syncs", async () => {
+test("each Agentty's Sync syncs only its own project", async () => {
   // Arrange
   const first = mountProject();
   const second = mountProject({ document: first.document });
@@ -138,15 +120,9 @@ test("the project lines of several Agenttys share the dialog, and only the askin
 
   // Act
   second.byId("project-sync").click();
-  const target = first.byId("project-sync-target").textContent;
-  first.project.update(listed({ behind: 3 }));
-  const targetAfterUpdate = first.byId("project-sync-target").textContent;
-  first.byId("project-sync-dialog").querySelector('button[value="confirm"]').click();
   await settle();
 
   // Assert
-  assert.equal(target, "docs/dev");
-  assert.equal(targetAfterUpdate, "docs/dev");
   assert.deepEqual(first.requests, []);
   assert.deepEqual(second.requests, [{ method: "sync_project" }]);
 });
@@ -163,36 +139,19 @@ test("the sync button needs the capability and a connection", () => {
   assert.equal(byId("project-sync").disabled, true);
 });
 
-test("Sync asks first and sends sync_project only when confirmed", async () => {
+test("Sync sends sync_project at once and waits for the host before another", async () => {
   const { byId, project, requests } = mountProject();
   project.update(listed());
 
   byId("project-sync").click();
-  assert.equal(byId("project-sync-dialog").open, true);
-  byId("project-sync-dialog").querySelector('button[value="keep"]').click();
-  await settle();
-  assert.deepEqual(requests, []);
-
-  confirmSync(byId);
   assert.equal(byId("project-sync").disabled, true);
   assert.equal(byId("project-sync").getAttribute("aria-busy"), "true");
   assert.equal(byId("project-sync-label").textContent, "Syncing…");
+  byId("project-sync").click();
   await settle();
   assert.deepEqual(requests, [{ method: "sync_project" }]);
   assert.equal(byId("project-sync").disabled, false);
   assert.equal(byId("project-error").textContent, "");
-});
-
-test("a confirmation answered after the button went off sends nothing", async () => {
-  const { byId, project, requests } = mountProject();
-  project.update(listed());
-
-  byId("project-sync").click();
-  project.setConnected(false);
-  byId("project-sync-dialog").querySelector('button[value="confirm"]').click();
-  await settle();
-
-  assert.deepEqual(requests, []);
 });
 
 test("a refused sync shows the host's reason until a sync is reported", async () => {
@@ -203,7 +162,7 @@ test("a refused sync shows the host's reason until a sync is reported", async ()
   });
   project.update(listed());
 
-  confirmSync(byId);
+  byId("project-sync").click();
   await settle();
   assert.equal(byId("project-error").textContent, "Sync is blocked: a merge is active or queued");
   assert.equal(byId("project-sync").disabled, false);
