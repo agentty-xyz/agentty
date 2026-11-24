@@ -18,7 +18,7 @@ use super::fixture::{
     seed_review_ready_session_with_review_request, seed_review_worktree_with_diff,
     seed_sessions_startup_tab,
 };
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
 use crate::{common, selection, test_support};
 
 /// Stable id for the seeded binary-only diff session.
@@ -844,6 +844,78 @@ async fn test_open_diff_refreshes_live_edits() -> E2eResult {
         .await?;
 
     Ok(())
+}
+
+/// Verify that the session header's size badge and line totals follow a
+/// running turn's edits instead of waiting for the turn to end.
+#[tokio::test]
+async fn test_session_header_stats_refresh_during_turn() -> E2eResult {
+    // Arrange, Act, Assert
+    let gate = ReleaseGate::new()?;
+    let hold = gate.shell_wait();
+    FeatureTest::new("session_header_stats_refresh_during_turn")
+        .with_git()
+        .with_terminal_size(120, 40)
+        .setup(move |env| Box::pin(async move { seed_live_stats_claude_stub(env, &hold).await }))
+        .run(
+            move |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_text("Tab: focus | Enter: send", 5000)
+                    .write_text("Write live stats demo")
+                    .press_key("Enter")
+                    .wait_for_text("(+12 -0)", 15000)
+                    .capture_labeled("running_stats", "Header totals during the turn")
+                    .compose(&gate.release())
+                    .wait_for_text("Live stats demo finished", 15000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let running = common::frame_from_capture(&report.captures[0]);
+                    let running_full = Region::full(running.cols(), running.rows());
+                    assertion::assert_text_in_region(&running, "[S] ", &running_full);
+                    assertion::assert_text_in_region(&running, "(+12 -0)", &running_full);
+                    assertion::assert_text_in_region(&running, "Working...", &running_full);
+
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "(+12 -0)", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Install a Claude stub that writes twelve lines into its worktree, reports
+/// the finished command, and holds the turn open until `hold` returns.
+async fn seed_live_stats_claude_stub(env: &BuilderEnv, hold: &str) -> E2eResult {
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+IFS= read -r input
+case "$input" in
+  *"Generate a concise, commit-style title"*) answer='Live stats demo' ;;
+  *"Write live stats demo"*)
+    seq 1 12 > live-stats.txt
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"write","name":"Bash","input":{"command":"seq 1 12 > live-stats.txt"}}]}}'
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"write","content":""}]}}'
+    __HOLD__
+    answer='Live stats demo finished' ;;
+  *) answer='Ready' ;;
+esac
+result='{\"answer\":\"'"$answer"'\"}'
+printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$result"
+"#
+    .replace("__HOLD__", hold);
+    let path = env.stub_bin.join("claude");
+    std::fs::write(&path, script)?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750))?;
+
+    seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-5-5")]).await
 }
 
 /// Verify that an unstarted draft, whose worktree does not exist yet, opens an

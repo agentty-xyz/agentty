@@ -304,6 +304,7 @@ work; it does not submit an empty reply.
 | Archived worktree sweep             | Startup                                   |
 | File indexing and image capture     | Composer interaction                      |
 | Full diff and Markdown preview      | Inspection request; every 10 s while open |
+| Session size and line totals        | Finished tool calls, at most every 3 s    |
 | Process resource sampling           | Foreground ticks, rate-limited            |
 | Title and commit-message generation | Session input and changed turns           |
 | Focused review                      | Eligible changed diff or manual request   |

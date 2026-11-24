@@ -993,7 +993,8 @@ async fn auto_commit_cancellation_context() -> (
     git.expect_is_worktree_clean()
         .once()
         .returning(|_| Box::pin(async { Ok(false) }));
-    git.expect_diff_stats().once().returning(|_, _| {
+    // Once before post-turn effects and once during finalization.
+    git.expect_diff_stats().times(2).returning(|_, _| {
         Box::pin(async {
             Ok(DiffStats {
                 added_lines: 0,

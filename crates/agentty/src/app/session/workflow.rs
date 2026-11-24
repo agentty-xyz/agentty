@@ -16,6 +16,7 @@ pub(super) mod draft;
 mod graph_turn;
 pub(super) mod isolation;
 pub(super) mod lifecycle;
+mod live_diff_stats;
 pub(super) mod load;
 pub(super) mod merge;
 pub(super) mod output;

@@ -16,7 +16,8 @@ use tracing::debug;
 
 use super::base_branch::{BaseBranchScope, BaseBranchSnapshot};
 use super::lifecycle::SessionTitleGenerationTaskInput;
-use super::post_turn::PostTurnContext;
+use super::live_diff_stats::LiveDiffStats;
+use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::sandbox::SandboxNoticeTarget;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
@@ -174,7 +175,8 @@ impl MainCheckoutSnapshot {
 /// Start and resume turns transition to `InProgress` before provider work.
 /// Saved preparation prompts first record a durable execution marker. They
 /// schedule detached title generation while the current title remains
-/// provisional. Progress events update the UI indicator; `PidUpdate` events
+/// provisional. Finished tool calls refresh the session's diff stats while the
+/// turn runs. Progress events update the UI indicator; `PidUpdate` events
 /// update the shared PID slot used for accounting and CLI cancellation. If the
 /// turn fails, the error is appended to session output before transitioning to
 /// `Review`; user-stopped turns skip that fallback so the UI cancellation path
@@ -240,6 +242,7 @@ pub(super) async fn run_channel_turn(
     )
     .await;
     let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
+    let (sandbox_tx, diff_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let consumer = spawn::spawn_traced(consume_turn_events(
         event_rx,
@@ -260,10 +263,17 @@ pub(super) async fn run_channel_turn(
     .await;
 
     let sandbox_notices = sandbox_notice_target(context);
-    let (turn_result, ()) = tokio::join!(
+    let finalizer = TurnFinalizerContext::from_worker(context);
+    let live_diff_stats = LiveDiffStats::start(TurnFinalizerContext::from_worker(context));
+    let (turn_result, (), ()) = tokio::join!(
         run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx),
-        sandbox_notices.relay(relayed_rx, relay_tx),
+        sandbox_notices.relay(relayed_rx, sandbox_tx),
+        live_diff_stats.relay(diff_rx, relay_tx),
     );
+    live_diff_stats.finish().await;
+    // Project the turn's changes before post-turn effects, such as
+    // auto-commit recovery, which can run for minutes.
+    post_turn::refresh_channel_diff_stats(&finalizer).await;
     SessionManager::cleanup_prompt_attachment_paths(
         context.fs_client.clone(),
         prompt.local_image_paths().cloned().collect(),
@@ -284,7 +294,6 @@ pub(super) async fn run_channel_turn(
         turn_result,
     )
     .await;
-    let finalizer = post_turn::TurnFinalizerContext::from_worker(context);
     let result = Span::child("postprocess")
         .run(
             post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result, &activity),
@@ -463,7 +472,7 @@ async fn finalize_turn_setup_failure(
         prompt.local_image_paths().cloned().collect(),
     )
     .await;
-    let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
+    let finalizer_context = TurnFinalizerContext::from_worker(context);
     let result = post_turn::apply_turn_result(
         post_turn_context,
         turn_metadata,
