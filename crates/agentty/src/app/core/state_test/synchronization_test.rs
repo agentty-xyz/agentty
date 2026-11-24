@@ -1409,8 +1409,8 @@ fn app_event_batch_collect_event_marks_successful_sync_for_git_status_refresh() 
     // Assert
     assert!(event_batch.should_refresh_git_status);
     assert!(matches!(
-        event_batch.sync_main_completion,
-        Some(sync::SyncMainCompletion {
+        event_batch.sync_main_completions.as_slice(),
+        [sync::SyncMainCompletion {
             result: Ok(SyncMainOutcome {
                 default_branch,
                 pulled_commits: Some(1),
@@ -1418,7 +1418,7 @@ fn app_event_batch_collect_event_marks_successful_sync_for_git_status_refresh() 
                 ..
             }),
             ..
-        }) if default_branch == "main"
+        }] if default_branch == "main"
     ));
 }
 
@@ -1537,6 +1537,68 @@ async fn apply_app_events_sync_conflicts_updates_non_modal_status() {
         Some(sync::ProjectSyncStatus {
             phase: sync::ProjectSyncPhase::ResolvingConflicts {
                 conflicted_file_count: 2
+            },
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn apply_app_events_applies_every_project_sync_event_in_one_batch() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let first_project_id = app.active_project_id();
+    let second_project_id = first_project_id + 1;
+    let third_project_id = first_project_id + 2;
+    for project_id in [first_project_id, second_project_id, third_project_id] {
+        app.set_project_sync_status(sync::ProjectSyncStatus {
+            context: successful_manual_sync_completion(project_id, "main", 0).operation,
+            phase: sync::ProjectSyncPhase::Running,
+        });
+    }
+    let event_sender = app.services.event_sender();
+    for project_id in [third_project_id, second_project_id] {
+        event_sender
+            .send(AppEvent::SyncMainConflictResolutionStarted {
+                conflicted_files: vec!["src/lib.rs".to_string()],
+                operation: successful_manual_sync_completion(project_id, "main", 0).operation,
+            })
+            .expect("sync conflict should queue");
+    }
+    event_sender
+        .send(successful_manual_sync(second_project_id, "main", 2))
+        .expect("sync completion should queue");
+
+    // Act
+    app.apply_app_events(successful_manual_sync(first_project_id, "main", 1))
+        .await;
+
+    // Assert
+    assert!(matches!(
+        app.project_sync_statuses.get(&first_project_id),
+        Some(sync::ProjectSyncStatus {
+            phase: sync::ProjectSyncPhase::Complete {
+                pulled_commits: Some(1),
+                ..
+            },
+            ..
+        })
+    ));
+    assert!(matches!(
+        app.project_sync_statuses.get(&second_project_id),
+        Some(sync::ProjectSyncStatus {
+            phase: sync::ProjectSyncPhase::Complete {
+                pulled_commits: Some(2),
+                ..
+            },
+            ..
+        })
+    ));
+    assert!(matches!(
+        app.project_sync_statuses.get(&third_project_id),
+        Some(sync::ProjectSyncStatus {
+            phase: sync::ProjectSyncPhase::ResolvingConflicts {
+                conflicted_file_count: 1
             },
             ..
         })
