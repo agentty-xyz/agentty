@@ -477,8 +477,9 @@ impl ProviderSpec {
     /// Makes a Responses request that carries a prompt cache key also send
     /// it as the `session-id` header, from which the `ChatGPT` plan backend
     /// routes the request to the machine holding its cached prefix, as the
-    /// `chatgpt` preset declares. A request without a key sends neither, and
-    /// validation then rejects an extra header of that name.
+    /// `chatgpt` preset declares. A request without a key sends neither.
+    /// Validation rejects an extra header of that name, since the router
+    /// owns it.
     #[must_use]
     pub(crate) fn with_session_id_header(mut self) -> Self {
         self.session_header = SessionHeader::Sent;

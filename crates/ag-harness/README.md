@@ -507,9 +507,10 @@ async fn review(
   one key derived from a hash of the session ID, stable across handles and resume; each
   stateless turn gets a fresh key shared by its tool loop. `ModelRequest::cache_key`
   exposes it to `Model` adapters. Built-in providers send it as `prompt_cache_key` to
-  Muse and Kimi, which route requests sharing a key to the backend holding their cached
-  prefix, also as the `session-id` header to the `ChatGPT` plan, which routes by that
-  header, and leave it off for Qwen. Checkpoint and round-summary requests carry none.
+  Muse, Kimi, and `OpenAI`, which route requests sharing a key to the backend holding
+  their cached prefix, and leave it off for Qwen. The `ChatGPT` plan also receives it as
+  the `session-id` header, which that backend routes by. Checkpoint and round-summary
+  requests carry none.
 - **Read results are bounded as they run.** One `read` result may weigh 25% of the
   calibrated input budget: a `file` or `show` read keeps its leading whole lines and
   states the lines shown, the file's line count, and the exact `offset` and `limit` that
