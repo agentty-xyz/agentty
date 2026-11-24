@@ -6,6 +6,7 @@ mod cargo_cache;
 mod cargo_lockfile;
 mod config;
 mod output;
+mod run_projector;
 mod sandbox;
 mod sign_in;
 mod turn;
@@ -19,9 +20,9 @@ pub(crate) use config::{
     HarnessContext, ModelSelection, RunOptions, failure, harness_models, output_schema,
     process_environment, repository, running_context_window, system_prompt,
 };
-pub(crate) use output::{OutputProjector, turn_notice};
+pub(crate) use run_projector::RunProjector;
+pub(crate) use sandbox::SESSION_SANDBOX;
 pub use sandbox::dispatch_sandbox_helper;
-pub(crate) use sandbox::{SESSION_SANDBOX, notice as sandbox_notice};
 pub(crate) use sign_in::sign_in_chatgpt;
 pub(crate) use turn::{
     NativePrompt, cleanup_failure, parse_output, reject_attachments, run_one_shot,

@@ -846,6 +846,7 @@ async fn rebase_assist_clears_live_activity_without_a_following_user_turn() {
                         .send(TurnEvent::Activity(ActivityEvent {
                             attempt_id: "assist".into(),
                             exit_code: None,
+                            facts: Box::default(),
                             id: "call".into(),
                             input: None,
                             kind: ActivityKind::Tool,

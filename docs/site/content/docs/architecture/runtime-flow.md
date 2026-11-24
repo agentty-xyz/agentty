@@ -140,10 +140,15 @@ turn finishes. Usage summaries are saved history but excluded from provider repl
 
 Harness sessions also stream model output on that path. The agent runtime turns the
 harness run's item events into `TurnEvent::Output` changes, decoding the protocol answer
-as it arrives; the worker accumulates them into one replaceable snapshot below the
-activity rows. One notification stays armed while the output changes, and the foreground
-applies further changes once per frame, so a fast stream cannot flood the event loop.
-The runtime drops a discarded response's items and reports which message the validated
+as it arrives, and builds the session turn's tool rows from the same run events:
+`TurnEvent::Activity` rows keyed by the call's run item id, started when the harness
+requests the call and finished with its exit status, line counts, and duration, so they
+arrive in order with the narration around them. Utility runs, which have no event
+stream, take their tool rows from harness lifecycle events instead. The worker
+accumulates the output changes into one replaceable snapshot below the activity rows.
+One notification stays armed while the output changes, and the foreground applies
+further changes once per frame, so a fast stream cannot flood the event loop. The
+runtime drops a discarded response's items and reports which message the validated
 answer replaces. The worker removes the snapshot right after it saves the answer or
 failure notice to the transcript; streamed output is never persisted or replayed. When a
 harness turn compacts the session's earlier context, or fails to, the runtime also sends

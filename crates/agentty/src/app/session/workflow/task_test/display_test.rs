@@ -86,6 +86,7 @@ fn emit_assist_activity(sender: &mpsc::UnboundedSender<ActivityEvent>) {
     let event = ActivityEvent {
         attempt_id: "initial".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "read".into(),
         input: None,
         kind: ActivityKind::Tool,

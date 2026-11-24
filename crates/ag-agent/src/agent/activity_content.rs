@@ -1,14 +1,32 @@
 //! Bounded, terminal-safe previews of provider tool content.
 
+use ag_contracts::{ActivityEvent, ActivityFacts};
 use serde_json::Value;
 
 const PREVIEW_LIMIT: usize = 4096;
 const TRUNCATED: &str = "\n… [truncated]";
+/// Argument keys naming what an operation acts on, most specific first: a
+/// search pattern before the path it searches.
+const TARGET_KEYS: [&str; 12] = [
+    "pattern",
+    "query",
+    "Query",
+    "command",
+    "CommandLine",
+    "file_path",
+    "path",
+    "AbsolutePath",
+    "DirectoryPath",
+    "TargetFile",
+    "target_file",
+    "SearchPath",
+];
 
 /// Optional fields in a provider update; absent fields preserve prior values.
 #[derive(Default)]
 pub(super) struct ActivityDetails {
     pub exit_code: Option<i64>,
+    pub facts: ActivityFacts,
     pub input: Option<String>,
     pub output: Option<String>,
 }
@@ -19,9 +37,15 @@ impl ActivityDetails {
         output: Option<&Value>,
         exit_code: Option<i64>,
     ) -> Self {
+        let input = input.filter(|value| !value.is_null());
+
         Self {
             exit_code,
-            input: input.filter(|value| !value.is_null()).map(|value| {
+            facts: ActivityFacts {
+                target: input.and_then(target),
+                ..ActivityFacts::default()
+            },
+            input: input.map(|value| {
                 // Select useful fields before bounding large edit/write
                 // payloads.
                 let value = [
@@ -43,6 +67,32 @@ impl ActivityDetails {
             output: output.and_then(preview),
         }
     }
+
+    /// Applies the reported fields to `event`, keeping its earlier values
+    /// for the fields this update leaves out. Provider protocols report no
+    /// pipeline statuses, signals, or rejection reasons, so those stay unset.
+    pub(super) fn apply(self, event: &mut ActivityEvent) {
+        let facts = &mut event.facts;
+        facts.diff_stat = self.facts.diff_stat.or(facts.diff_stat);
+        facts.duration = self.facts.duration.or(facts.duration);
+        facts.lines = self.facts.lines.or(facts.lines);
+        facts.target = self.facts.target.or(facts.target.take());
+        event.input = self.input.or(event.input.take());
+        event.output = self.output.or(event.output.take());
+        event.exit_code = self.exit_code.or(event.exit_code);
+    }
+}
+
+/// Returns the bounded first line of what an operation's arguments act on,
+/// or of the arguments themselves when they are a plain string.
+fn target(input: &Value) -> Option<String> {
+    let value = if input.is_object() {
+        TARGET_KEYS.iter().find_map(|key| input.get(*key))?
+    } else {
+        input
+    };
+
+    value.as_str().and_then(ActivityFacts::bounded_line)
 }
 
 /// Appends a streamed chunk without growing beyond the preview limit.

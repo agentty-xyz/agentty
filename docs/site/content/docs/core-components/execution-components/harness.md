@@ -48,6 +48,15 @@ existing worker stream. Call identity combines an attempt ID with the provider o
 ID, so retries and protocol repairs remain distinct. Unfinished calls settle as
 interrupted when their attempt ends; this does not imply tool rollback.
 
+Each snapshot carries `ActivityFacts` where the provider reports them: the target path,
+query, or command line, a read's line range, an edit's line counts, the duration, a
+command's pipeline statuses and signal, and the reason a call was rejected. Reads,
+searches, and listings have their own kinds. `ActivityEvent::outcome` decides the state
+to show: a completed command whose own exit status is nonzero, judged by the first
+failing stage of its final pipeline, or that a signal terminated, failed. Native session
+turns build these snapshots from the run's event stream, ordered with its streamed
+output.
+
 Codex, Claude, and Antigravity adapters publish activity independently of telemetry.
 Only explicit Claude `Skill` calls identify skill usage. Input and output previews are
 bounded, stripped of terminal control characters, and transient: they are excluded from

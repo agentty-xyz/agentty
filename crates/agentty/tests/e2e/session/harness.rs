@@ -293,6 +293,13 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, UNAVAILABLE_TOOL_ANSWER, &full);
+                    // The run's own tool rows count the unavailable call as
+                    // failed in the turn's footer.
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Tools: read_file ×1 (1 failed)",
+                        &full,
+                    );
                 })
             },
         )
