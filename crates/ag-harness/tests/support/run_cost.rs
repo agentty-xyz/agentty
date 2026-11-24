@@ -220,12 +220,12 @@ async fn catalog_models_bill_at_list_prices_unless_the_host_overrides_them()
         .await;
 
     // Assert
-    // GPT-6 Luna lists $0.10 input and $0.50 output per million tokens:
-    // 1,000 input tokens, the 200 cached ones at the input price, bill 100
-    // micro-USD and 100 output tokens 50.
+    // GPT-6 Luna lists $0.10 input, $0.01 cached input, and $0.50 output
+    // per million tokens: 800 uncached input tokens bill 80 micro-USD, the
+    // 200 cached ones 2, and 100 output tokens 50.
     assert_eq!(
         priced(at_list.cost),
-        Some((100 + 50, PricingSource::BuiltIn))
+        Some((80 + 2 + 50, PricingSource::BuiltIn))
     );
     assert_eq!(
         priced(overridden.cost),

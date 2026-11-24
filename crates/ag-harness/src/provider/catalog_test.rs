@@ -804,68 +804,88 @@ fn every_per_token_model_has_sane_built_in_pricing() {
     // Assert
     for (_, model, pricing) in &priced {
         assert_eq!(pricing.source(), PricingSource::BuiltIn, "{model}");
-        assert_eq!(
-            pricing.cache_read_per_mtok_micro_usd(),
-            pricing.input_per_mtok_micro_usd()
-        );
-        assert_eq!(
-            pricing.cache_write_per_mtok_micro_usd(),
-            pricing.input_per_mtok_micro_usd()
-        );
     }
+    // Input, output, cache-read, and cache-write prices. Without a
+    // published price, cache reads and writes bill at the input price.
     assert_eq!(
         priced
             .iter()
             .map(|(provider, model, pricing)| (
                 *provider,
                 *model,
-                pricing.input_per_mtok_micro_usd(),
-                pricing.output_per_mtok_micro_usd()
+                [
+                    pricing.input_per_mtok_micro_usd(),
+                    pricing.output_per_mtok_micro_usd(),
+                    pricing.cache_read_per_mtok_micro_usd(),
+                    pricing.cache_write_per_mtok_micro_usd(),
+                ]
             ))
             .collect::<Vec<_>>(),
         [
             (
                 ModelProvider::Muse,
                 muse::MUSE_SPARK_1_3,
-                1_250_000,
-                4_250_000
+                [1_250_000, 4_250_000, 150_000, 1_250_000]
             ),
             (
                 ModelProvider::Muse,
                 muse::MUSE_SPARK_1_3_CONTRIBUTOR,
-                100_000,
-                200_000
+                [100_000, 200_000, 2_000, 100_000]
             ),
-            (ModelProvider::Kimi, kimi::KIMI_K3, 3_000_000, 15_000_000),
-            (ModelProvider::Kimi, kimi::KIMI_K2_6, 950_000, 4_000_000),
-            (ModelProvider::Qwen, qwen::QWEN3_8_MAX, 2_000_000, 6_000_000),
-            (ModelProvider::Qwen, qwen::QWEN_PLUS, 400_000, 1_200_000),
-            (ModelProvider::Qwen, qwen::QWEN3_8_FLASH, 150_000, 470_000),
-            (ModelProvider::Qwen, qwen::QWEN3_7_FLASH, 30_000, 130_000),
+            (
+                ModelProvider::Kimi,
+                kimi::KIMI_K3,
+                [3_000_000, 15_000_000, 300_000, 3_000_000]
+            ),
+            (
+                ModelProvider::Kimi,
+                kimi::KIMI_K2_6,
+                [950_000, 4_000_000, 160_000, 950_000]
+            ),
+            (
+                ModelProvider::Qwen,
+                qwen::QWEN3_8_MAX,
+                [2_000_000, 6_000_000, 2_000_000, 2_000_000]
+            ),
+            (
+                ModelProvider::Qwen,
+                qwen::QWEN_PLUS,
+                [400_000, 1_200_000, 80_000, 400_000]
+            ),
+            (
+                ModelProvider::Qwen,
+                qwen::QWEN3_8_FLASH,
+                [150_000, 470_000, 150_000, 150_000]
+            ),
+            (
+                ModelProvider::Qwen,
+                qwen::QWEN3_7_FLASH,
+                [30_000, 130_000, 6_000, 30_000]
+            ),
             (
                 ModelProvider::OpenAi,
                 openai::GPT_6_1_SOL,
-                2_000_000,
-                10_000_000
+                [2_000_000, 10_000_000, 100_000, 2_500_000]
             ),
             (
                 ModelProvider::OpenAi,
                 openai::GPT_6_ASTRA,
-                10_000_000,
-                50_000_000
+                [10_000_000, 50_000_000, 1_000_000, 12_500_000]
             ),
-            (ModelProvider::OpenAi, openai::GPT_6_LUNA, 100_000, 500_000),
+            (
+                ModelProvider::OpenAi,
+                openai::GPT_6_LUNA,
+                [100_000, 500_000, 10_000, 125_000]
+            ),
             (
                 ModelProvider::OpenAi,
                 openai::GPT_5_6_TERRA,
-                2_000_000,
-                12_000_000
+                [2_000_000, 12_000_000, 200_000, 2_500_000]
             ),
             (
                 ModelProvider::OpenAi,
                 openai::GPT_5_3_CODEX,
-                1_750_000,
-                14_000_000
+                [1_750_000, 14_000_000, 175_000, 1_750_000]
             ),
         ]
     );

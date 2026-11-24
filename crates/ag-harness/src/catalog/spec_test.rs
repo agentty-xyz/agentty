@@ -183,6 +183,19 @@ fn built_in_cache_prices_keep_the_built_in_source() {
 }
 
 #[test]
+fn built_in_cache_read_price_leaves_cache_writes_at_the_input_price() {
+    // Arrange / Act
+    let pricing = Pricing::built_in_cache_read(1_250_000, 4_250_000, 150_000);
+
+    // Assert
+    assert_eq!(pricing.source(), PricingSource::BuiltIn);
+    assert_eq!(pricing.input_per_mtok_micro_usd(), 1_250_000);
+    assert_eq!(pricing.output_per_mtok_micro_usd(), 4_250_000);
+    assert_eq!(pricing.cache_read_per_mtok_micro_usd(), 150_000);
+    assert_eq!(pricing.cache_write_per_mtok_micro_usd(), 1_250_000);
+}
+
+#[test]
 fn long_context_prices_apply_only_above_their_threshold() {
     // Arrange
     let base = Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000);

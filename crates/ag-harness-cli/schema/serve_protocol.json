@@ -806,7 +806,7 @@
         {
           "type": "string",
           "const": "built_in",
-          "description": "The harness's built-in list prices, as the providers published them\nat their lowest input tier: Anthropic on 2026-11-21, the others on\n2026-10-29. Claude Haiku 5.5 also carries its long-prompt prices."
+          "description": "The harness's built-in list prices, as the providers published them\nat their lowest input tier: Anthropic on 2026-11-21, the others on\n2026-11-23. Claude Haiku 5.5 also carries its long-prompt prices."
         },
         {
           "type": "string",
