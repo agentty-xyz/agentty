@@ -1,16 +1,19 @@
 use std::sync::Arc;
 
+use ag_relay::RelayLimits;
 use ag_session::{SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionOperation};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
 use super::execute;
 use crate::connection::{MessageOutcome, handle_incoming};
 use crate::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteGraphAction,
-    RemoteGraphActionRequest, RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectSync,
-    RemoteProjectSyncPhase, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
-    RemoteSession, RemoteSessionMode, RemoteSessionSummary,
+    RemoteGraphActionRequest, RemoteImage, RemoteModeModel, RemoteModelOption, RemoteProject,
+    RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
+    RemoteResult, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
 };
-use crate::server::ServerState;
+use crate::server::{MAX_MESSAGE_SIZE, ServerState};
 use crate::test_support::{
     FailingEntropy, MemoryDeviceStore, RecordingBackend, ReplayEntropy, StateFixture,
 };
@@ -50,6 +53,7 @@ async fn reads_and_original_mutations_reach_the_host_for_listed_sessions() {
             session_id: "missing".into(),
         },
         RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: "hi".to_string(),
             session_id: "session-1".into(),
         },
@@ -119,6 +123,7 @@ async fn original_mutations_of_unlisted_sessions_reach_only_the_listing() {
     let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let requests = vec![
         RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: "hi".to_string(),
             session_id: "other-project".into(),
         },
@@ -812,6 +817,99 @@ async fn stop_turn_reaches_the_host_only_for_listed_sessions_it_serves() {
     );
     assert_eq!(serving.backend.calls(), ["list", "stop:session-1", "list"]);
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+/// Standard base64 of a file that starts as a PNG does.
+const PNG_BASE64: &str = "iVBORw0KGgo=";
+/// Standard base64 of a file that starts as a JPEG does.
+const JPEG_BASE64: &str = "/9j/4A==";
+
+/// A `send_message` request to `session-1` with one image per item of
+/// `images`, each standard base64.
+fn image_message(images: &[&str]) -> RemoteRequest {
+    RemoteRequest::SendMessage {
+        images: images
+            .iter()
+            .map(|data| RemoteImage {
+                data: (*data).to_string(),
+            })
+            .collect(),
+        message: "Look at [Image #1]".to_string(),
+        session_id: "session-1".into(),
+    }
+}
+
+#[tokio::test]
+async fn message_images_reach_the_host_decoded_only_when_it_serves_them() {
+    // Arrange
+    let serving = StateFixture::supporting(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::MessageImages],
+    );
+    let not_serving = StateFixture::with_devices(MemoryDeviceStore::default());
+
+    // Act
+    let sent = reply_result(&serving.state, image_message(&[PNG_BASE64, JPEG_BASE64])).await;
+    let unsupported = reply_result(&not_serving.state, image_message(&[PNG_BASE64])).await;
+
+    // Assert
+    assert_eq!(sent, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        ["list", "send:session-1:Look at [Image #1]:png,jpg"]
+    );
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn message_images_beyond_the_limits_or_of_other_formats_never_reach_the_host() {
+    // Arrange
+    let fixture = StateFixture::supporting(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::MessageImages],
+    );
+    let large_png = STANDARD.encode([&[0x89, b'P', b'N', b'G'][..], &vec![0; 6 << 20]].concat());
+    let gif = STANDARD.encode(b"GIF89a");
+    let requests = [
+        image_message(&[PNG_BASE64; 9]),
+        image_message(&[large_png.as_str()]),
+        image_message(&["not base64"]),
+        image_message(&[gif.as_str()]),
+    ];
+
+    // Act
+    let mut results = Vec::new();
+    for request in requests {
+        results.push(reply_result(&fixture.state, request).await);
+    }
+
+    // Assert
+    assert_eq!(
+        results,
+        [
+            RemoteResult::Error("A message carries at most 8 images".to_string()),
+            RemoteResult::Error("A message's images are at most 6 MB together".to_string()),
+            RemoteResult::Error("Image data is not valid base64".to_string()),
+            RemoteResult::Error("Only PNG and JPEG images can be attached".to_string()),
+        ]
+    );
+    assert_eq!(fixture.backend.calls(), ["list"; 4]);
+}
+
+#[test]
+fn the_default_relay_budget_carries_several_full_size_messages_a_minute() {
+    // Arrange
+    let budget = RelayLimits::default().max_bytes_per_minute;
+
+    // Act
+    let full_size_messages = budget / MAX_MESSAGE_SIZE;
+
+    // Assert
+    assert!(full_size_messages >= 4);
 }
 
 #[tokio::test]

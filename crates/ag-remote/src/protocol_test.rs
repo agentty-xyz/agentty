@@ -9,10 +9,10 @@ use serde_json::json;
 
 use crate::protocol::{
     ClientFrame, MAX_FILE_RESPONSE_BYTES, RemoteDiffFile, RemoteFocusedReview,
-    RemoteFocusedReviewState, RemoteMessage, RemoteMessageKind, RemoteModeModel, RemoteModelOption,
-    RemoteProject, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, ServerFrame,
+    RemoteFocusedReviewState, RemoteImage, RemoteMessage, RemoteMessageKind, RemoteModeModel,
+    RemoteModelOption, RemoteProject, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
+    RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
 use crate::test_support::{host_fixture, project_status_fixture, session_fixture};
 
@@ -27,9 +27,8 @@ fn client_frames_use_snake_case_type_and_method_tags() {
         {"type": "pair", "protocol_version": 1, "code": "ABCD-EFGH", "device_name": "Phone"},
         {"type": "request", "id": 1, "request": {"method": "list_sessions"}},
         {"type": "request", "id": 2, "request": {"method": "get_session", "session_id": "s"}},
-        {"type": "request", "id": 3, "request": {
-            "method": "send_message", "session_id": "s", "message": "hi"
-        }},
+        {"type": "request", "id": 3,
+            "request": {"method": "send_message", "session_id": "s", "message": "hi"}},
         {"type": "request", "id": 4, "request": {
             "method": "answer_questions",
             "session_id": "s",
@@ -74,6 +73,7 @@ fn client_frames_use_snake_case_type_and_method_tags() {
             ClientFrame::Request {
                 id: 3,
                 request: RemoteRequest::SendMessage {
+                    images: Vec::new(),
                     message: "hi".to_string(),
                     session_id: "s".into(),
                 },
@@ -322,6 +322,41 @@ fn review_request_response_names_the_forge_and_omits_a_missing_status() {
             }
         })
     );
+}
+
+#[test]
+fn message_frames_carry_images_only_when_there_are_any() {
+    // Arrange
+    let with_images = RemoteRequest::SendMessage {
+        images: vec![RemoteImage {
+            data: "iVBORw0KGgo=".to_string(),
+        }],
+        message: "Look at [Image #1]".to_string(),
+        session_id: "s".into(),
+    };
+    let without_images = json!({"method": "send_message", "message": "hi", "session_id": "s"});
+
+    // Act
+    let encoded = serde_json::to_value(&with_images).expect("request should encode");
+    let decoded: RemoteRequest =
+        serde_json::from_value(without_images.clone()).expect("request should decode");
+    let reencoded = serde_json::to_value(&decoded).expect("request should encode");
+
+    // Assert
+    assert_eq!(
+        encoded,
+        json!({
+            "images": [{"data": "iVBORw0KGgo="}],
+            "message": "Look at [Image #1]",
+            "method": "send_message",
+            "session_id": "s"
+        })
+    );
+    assert!(matches!(
+        decoded,
+        RemoteRequest::SendMessage { ref images, .. } if images.is_empty()
+    ));
+    assert_eq!(reencoded, without_images);
 }
 
 #[test]

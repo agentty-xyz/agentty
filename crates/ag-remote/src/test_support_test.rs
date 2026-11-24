@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex};
 use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
     DurableMessageRequest, GenerateGraphProposalRequest, HostContext, HostProjectStatus,
-    HostProjectSync, HostProjectSyncPhase, HostSessionMode, QuestionItem, ReasoningLevel,
-    ResponseStyle, ReviewRequest, Session, SessionBackend, SessionDiffFile, SessionError,
-    SessionFileEntry, SessionGraphActionRequest, SessionGraphs, SessionGraphsRequest, SessionId,
-    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
-    SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
+    HostProjectSync, HostProjectSyncPhase, HostSessionMode, MessageImage, QuestionItem,
+    ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend, SessionDiffFile,
+    SessionError, SessionFileEntry, SessionGraphActionRequest, SessionGraphs, SessionGraphsRequest,
+    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
+    SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -366,6 +366,24 @@ impl SessionBackend for RecordingBackend {
         message: String,
     ) -> Result<(), SessionError> {
         self.record(format!("send:{session_id}:{message}"), ())
+    }
+
+    // Records the request as `send:<session>:<message>:<extensions>`.
+    async fn send_message_with_images(
+        &self,
+        session_id: &SessionId,
+        message: String,
+        images: Vec<MessageImage>,
+    ) -> Result<(), SessionError> {
+        let extensions: Vec<&str> = images
+            .iter()
+            .map(|image| image.format().extension())
+            .collect();
+
+        self.record(
+            format!("send:{session_id}:{message}:{}", extensions.join(",")),
+            (),
+        )
     }
 
     // Records the request as `graph_proposal:<session>:<id>:<task>`.

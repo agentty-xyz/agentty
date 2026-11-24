@@ -6,11 +6,15 @@ use std::time::Duration;
 
 use ag_noise::{Handshake, Session};
 use ag_relay::{AdmissionError, AdmissionPolicy, CONNECT_PATH_PREFIX, RelayConfig, RelayHandle};
-use ag_remote::protocol::{ClientFrame, RemoteRequest, RemoteResult, ServerFrame};
+use ag_remote::protocol::{
+    ClientFrame, RemoteImage, RemoteRequest, RemoteResponse, RemoteResult, ServerFrame,
+};
 use ag_remote::{
     PROTOCOL_VERSION, RelayStatus, RemoteRelayConfig, RemoteServerStatus, StaticKeypair,
 };
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::watch;
 use tokio_tungstenite::connect_async;
@@ -358,6 +362,66 @@ async fn unreachable_relay_keeps_the_local_listener_working() -> TestResult {
     // Assert
     assert_eq!(status, Some(RelayStatus::Connecting));
     assert_ne!(device_id, "");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn relay_device_sends_a_message_with_megabytes_of_images() -> TestResult {
+    // Arrange
+    let relay = start_relay().await?;
+    let instance = StaticKeypair::generate()?;
+    let server = start_linked_server(&relay, &instance).await?;
+    let code = server.handle.issue_pairing_code()?.code;
+    let mut device = RelayDevice::connect(&relay, &instance, &StaticKeypair::generate()?).await?;
+    device
+        .send(&ClientFrame::Pair {
+            code,
+            device_name: "Phone".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        })
+        .await?;
+    device.next_frame().await?;
+    let request_id = server
+        .handle
+        .status()
+        .wait_for(|status| !status.pairing_requests.is_empty())
+        .await?
+        .pairing_requests[0]
+        .id;
+    server.handle.approve_pairing(request_id);
+    device.next_frame().await?;
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.resize(4 << 20, 0);
+
+    // Act
+    device
+        .send(&ClientFrame::Request {
+            id: 1,
+            request: RemoteRequest::SendMessage {
+                images: vec![RemoteImage {
+                    data: STANDARD.encode(png),
+                }],
+                message: "Look".to_string(),
+                session_id: "session-1".into(),
+            },
+        })
+        .await?;
+    let sent = device.next_frame().await?;
+
+    // Assert
+    assert_eq!(
+        sent,
+        ServerFrame::Response {
+            id: 1,
+            result: RemoteResult::Ok(RemoteResponse::Accepted),
+        }
+    );
+    assert_eq!(
+        server.backend.calls().last().map(String::as_str),
+        Some("send:session-1:Look:png=4194304")
+    );
+    server.handle.shutdown().await;
 
     Ok(())
 }

@@ -6,12 +6,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ag_clipboard::{Clipboard, ClipboardBackend, ClipboardImage, RgbaImageData};
+use ag_session::MessageImage;
 
 use super::{
     ClipboardError, ClipboardImageClient, ClipboardOpener, ClipboardPayload,
     RealClipboardImageClient, build_clipboard_image_path, canonicalize_persisted_image_path,
     clipboard_image_directory, encode_clipboard_image_to_png, is_png_path,
-    normalize_clipboard_image_error, persist_clipboard_payload, read_clipboard_payload,
+    normalize_clipboard_image_error, persist_clipboard_payload, persist_message_image,
+    read_clipboard_payload,
 };
 use crate::infra::clock::Clock;
 use crate::infra::{fs, home};
@@ -111,8 +113,8 @@ fn test_build_clipboard_image_path_uses_png_extension_in_images_directory() {
     };
 
     // Act
-    let image_path =
-        build_clipboard_image_path(session_id, 2, &clock).expect("image path should resolve");
+    let image_path = build_clipboard_image_path(session_id, 2, "png", &clock)
+        .expect("image path should resolve");
 
     // Assert
     assert_eq!(image_path.parent(), Some(expected_directory.as_path()));
@@ -132,10 +134,10 @@ fn test_build_clipboard_image_path_stays_unique_within_one_clock_millisecond() {
     };
 
     // Act
-    let first_path =
-        build_clipboard_image_path(session_id, 1, &clock).expect("image path should resolve");
-    let second_path =
-        build_clipboard_image_path(session_id, 1, &clock).expect("image path should resolve");
+    let first_path = build_clipboard_image_path(session_id, 1, "png", &clock)
+        .expect("image path should resolve");
+    let second_path = build_clipboard_image_path(session_id, 1, "png", &clock)
+        .expect("image path should resolve");
 
     // Assert
     assert_ne!(first_path, second_path);
@@ -150,7 +152,7 @@ fn test_build_clipboard_image_path_rejects_pre_epoch_clock_values() {
     };
 
     // Act
-    let result = build_clipboard_image_path(session_id, 2, &clock);
+    let result = build_clipboard_image_path(session_id, 2, "png", &clock);
 
     // Assert
     assert!(matches!(result, Err(ClipboardError::SystemClock(_))));
@@ -258,12 +260,59 @@ async fn test_persist_clipboard_payload_writes_png_bytes_with_fs_client() {
     let result = persist_clipboard_payload(
         &fs_client,
         image_output_path.as_path(),
-        ClipboardPayload::EncodedPng(b"png-bytes".to_vec()),
+        ClipboardPayload::Encoded(b"png-bytes".to_vec()),
     )
     .await;
 
     // Assert
     assert!(result.is_ok());
+}
+
+/// Verifies a device's JPEG lands in the session image directory under a
+/// `.jpg` name, written byte for byte, at the resolved path.
+#[tokio::test]
+async fn test_persist_message_image_writes_device_image_under_its_extension() {
+    // Arrange
+    let jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2];
+    let image = MessageImage::new(jpeg.clone()).expect("JPEG image");
+    let expected_directory = clipboard_image_directory("session-123").expect("image directory");
+    let clock = FixedClock {
+        system_time: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(42),
+    };
+    let mut fs_client = fs::MockFsClient::new();
+    let created_directory = expected_directory.clone();
+    fs_client
+        .expect_create_dir_all()
+        .once()
+        .returning(move |path| {
+            assert_eq!(path, created_directory);
+
+            Box::pin(async { Ok(()) })
+        });
+    fs_client
+        .expect_write_file()
+        .once()
+        .returning(move |path, contents| {
+            assert!(path.to_string_lossy().ends_with(".jpg"));
+            assert!(
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("image-003-42-"))
+            );
+            assert_eq!(contents, jpeg);
+
+            Box::pin(async { Ok(()) })
+        });
+    fs_client
+        .expect_canonicalize()
+        .once()
+        .returning(|path| Box::pin(async move { Ok(path) }));
+
+    // Act
+    let persisted = persist_message_image(&fs_client, &clock, "session-123", 3, image).await;
+
+    // Assert
+    let persisted = persisted.expect("image should persist");
+    assert_eq!(persisted.parent(), Some(expected_directory.as_path()));
 }
 
 /// Verifies clipboard payload persistence rejects missing PNG source paths
@@ -499,7 +548,7 @@ async fn test_read_clipboard_payload_keeps_clipboard_png_bytes_unchanged() {
     // Assert
     assert!(matches!(
         payload,
-        Ok(ClipboardPayload::EncodedPng(bytes)) if bytes == clipboard_png_bytes
+        Ok(ClipboardPayload::Encoded(bytes)) if bytes == clipboard_png_bytes
     ));
 }
 
@@ -525,7 +574,7 @@ async fn test_read_clipboard_payload_encodes_image_without_copied_png_file() {
     // Assert
     assert!(matches!(
         payload,
-        Ok(ClipboardPayload::EncodedPng(bytes)) if bytes.starts_with(PNG_SIGNATURE)
+        Ok(ClipboardPayload::Encoded(bytes)) if bytes.starts_with(PNG_SIGNATURE)
     ));
 }
 
