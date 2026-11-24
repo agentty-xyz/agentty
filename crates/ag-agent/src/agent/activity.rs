@@ -222,9 +222,11 @@ impl ActivityObserver {
             return;
         }
         let output = append_output(previous.output.as_deref(), delta);
+        // Keep the kind the item reported, such as a read or a search.
+        let kind = previous.kind;
         self.record(
             id,
-            ActivityKind::Command,
+            kind,
             "shell",
             None,
             ActivityStatus::Running,

@@ -606,6 +606,26 @@ fn codex_command_actions_report_exploration_kinds_and_durations() {
 }
 
 #[test]
+fn codex_output_deltas_keep_an_exploration_kind() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let started = json!({"method":"item/started","params":{"item":{"id":"search","type":"commandExecution","command":"rg -n render src",
+        "commandActions":[{"type":"search","command":"rg","query":"render","path":"src"}]}}});
+
+    // Act
+    observer.observe(AgentKind::Codex, &started);
+    observer.observe(
+        AgentKind::Codex,
+        &json!({"method":"item/commandExecution/outputDelta","params":{"itemId":"search","delta":"src/a.rs:1: render"}}),
+    );
+
+    // Assert
+    let call = &observer.calls["search"];
+    assert_eq!(call.kind, ActivityKind::Search);
+    assert_eq!(call.output.as_deref(), Some("src/a.rs:1: render"));
+}
+
+#[test]
 fn codex_file_changes_report_line_counts_and_their_first_path() {
     // Arrange
     let mut observer = ActivityObserver::new(|_| {});
