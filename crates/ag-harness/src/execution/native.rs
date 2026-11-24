@@ -370,8 +370,9 @@ async fn resolve_access(
         access.write_nodes.push(node);
     }
     if let Some(temporary) = policy.temporary_directory() {
-        let (canonical, node) = directory_identity(files, temporary).await?;
+        let (canonical, node) = root_identity(files, temporary).await?;
         if overlaps(&canonical, workspace)
+            || !allowed_temporary_directory(&canonical, &homes(files, policy).await?)
             || access
                 .git_metadata
                 .iter()
@@ -415,14 +416,18 @@ async fn resolve_outside_grants(
     let workspace = policy.workspace();
     let homes = homes(files, policy).await?;
     for root in policy.writable_roots() {
-        let (canonical, node) = directory_identity(files, root).await?;
-        // Overlapping the workspace also rules out `/`.
+        let (canonical, node) = root_identity(files, root).await?;
+        // Overlapping the workspace also rules out `/`. A root must not
+        // overlap the temporary directory or another root either: only each
+        // grant's own path stays in place, so the directories between two
+        // nested grants could be moved to redirect the inner one.
         if !allowed_root(&canonical, &homes)
             || overlaps(&canonical, workspace)
             || access
                 .git_metadata
                 .iter()
-                .any(|git| overlaps(&canonical, git))
+                .chain(&access.writes)
+                .any(|denied| overlaps(&canonical, denied))
         {
             return Err(ExecutionError::Unsupported);
         }
@@ -723,6 +728,21 @@ fn allowed_root(root: &Path, homes: &[PathBuf]) -> bool {
             .any(|system| overlaps(root, Path::new(system)))
 }
 
+/// Returns whether the resolved temporary directory `temporary` may be
+/// granted. Unlike a writable root it may lie inside a home directory, as a
+/// host's per-session directory usually does, but it must not overlap a
+/// system or toolchain directory, contain a home directory, or lie in a
+/// home's `Library`, which holds the login items and preferences macOS
+/// runs and reads.
+fn allowed_temporary_directory(temporary: &Path, homes: &[PathBuf]) -> bool {
+    !homes
+        .iter()
+        .any(|home| home.starts_with(temporary) || temporary.starts_with(home.join("Library")))
+        && !SYSTEM_DIRECTORIES
+            .iter()
+            .any(|system| overlaps(temporary, Path::new(system)))
+}
+
 /// Returns whether one of two paths contains the other.
 fn overlaps(path: &Path, other: &Path) -> bool {
     path.starts_with(other) || other.starts_with(path)
@@ -747,6 +767,32 @@ async fn directory_identity(
     }
 
     Ok((canonical, (metadata.dev(), metadata.ino())))
+}
+
+/// Returns the resolved path and identity of the directory `path` names,
+/// like [`directory_identity`], for a granted root outside the workspace,
+/// which must be the directory itself rather than a link to one: commands
+/// write beside nothing but inside the root, so a link in its place could
+/// only have been left to redirect later grants elsewhere.
+///
+/// # Errors
+/// Returns [`ExecutionError::Unsupported`] when the last component of
+/// `path` is a link or the directory cannot be resolved.
+async fn root_identity(
+    files: &dyn Inspection,
+    path: &Path,
+) -> Result<(PathBuf, (u64, u64)), ExecutionError> {
+    let (canonical, node) = directory_identity(files, path).await?;
+    // Policy validation already refuses `/`, the only path without both.
+    let parent = files.canonicalize(path.parent().unwrap_or(path)).await.ok();
+    let unlinked = parent
+        .zip(path.file_name())
+        .map(|(parent, name)| parent.join(name));
+    if unlinked.as_ref() != Some(&canonical) {
+        return Err(ExecutionError::Unsupported);
+    }
+
+    Ok((canonical, node))
 }
 
 /// The workspace repository's resolved Git directories.

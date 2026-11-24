@@ -660,32 +660,20 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
     let result = turn.await;
 
     // Assert
-    // macOS resolves every write against the Seatbelt pattern denials, so the
-    // victim still runs fully confined; Linux verifies the validated grant
-    // identity inside the namespace and fails the launch closed instead.
-    #[cfg(target_os = "macos")]
-    {
-        let outcome = result.expect("victim");
-        let outcome: CommandOutcome =
-            serde_json::from_value(outcome.into_output()).expect("outcome");
-        control.settled().await.expect("best-effort cleanup");
-        assert_eq!(outcome.exit_code, Some(0), "{outcome:?}");
-        assert_eq!(outcome.stdout, "confined");
-        assert_eq!(
-            outcome.cleanup_scope,
-            ag_harness::bash::CommandCleanupScope::ProcessGroupBestEffort
-        );
-    }
+    // Both launchers verify the validated grant identity before running the
+    // command and fail the launch closed when it changed.
+    assert!(
+        matches!(result, Err(TurnError::CommandFailed { .. })),
+        "{result:?}"
+    );
+    // The failed Linux launcher exits before confirming its namespace scope,
+    // so settlement reports the retained cleanup instead of erasing it; the
+    // macOS process group may already be gone by then.
+    let settled = control.settled().await;
     #[cfg(target_os = "linux")]
-    {
-        assert!(
-            matches!(result, Err(TurnError::CommandFailed { .. })),
-            "{result:?}"
-        );
-        // The failed launcher exits before confirming its namespace scope, so
-        // settlement reports the retained cleanup instead of erasing it.
-        assert!(control.settled().await.is_err());
-    }
+    assert!(settled.is_err());
+    #[cfg(target_os = "macos")]
+    drop(settled);
     assert_eq!(
         std::fs::read_to_string(root.join(".git/config")).expect("metadata"),
         "protected"
