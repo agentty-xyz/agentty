@@ -84,6 +84,7 @@ mod linux {
             network: false,
             read_scope: ReadScope::Granted,
             system: false,
+            temporary_directory: None,
             unix_sockets: vec![],
             workspace: workspace.to_path_buf(),
             write_nodes: vec![],

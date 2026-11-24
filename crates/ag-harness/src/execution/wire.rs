@@ -33,6 +33,11 @@ pub(super) struct Launch {
     /// Whether the system directories were granted, so Linux adds a private
     /// `/proc` and a minimal `/dev`.
     pub(super) system: bool,
+    /// The resolved temporary directory, also one of [`Self::writes`], where
+    /// commands may create Git repositories of their own: it belongs to one
+    /// session, and host tools never run Git in it.
+    #[serde(default)]
+    pub(super) temporary_directory: Option<PathBuf>,
     /// Resolved Unix-domain sockets commands may connect to; only macOS
     /// allows them.
     #[serde(default)]

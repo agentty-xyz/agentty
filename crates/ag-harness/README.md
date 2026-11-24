@@ -637,8 +637,12 @@ while one leading elsewhere cannot be followed. Hard links already inside a writ
 are files of that grant; commands cannot create new ones that reach outside it. On Linux
 only a linked worktree can stage and commit under `with_git_writes`, which refuses a
 write grant containing a Git directory, and only the repository's own Git metadata and a
-repository at the top of each write grant stay read-only; macOS protects every `.git`
-name. Replacement refs, object alternates, commit-graph files, grafts, and the shallow
+repository at the top of each write grant stay read-only; macOS refuses every new `.git`
+name outside the temporary directory, where commands may create repositories of their
+own, so never run host Git there. A command can still move such a repository into a
+write grant, and on Linux create one there, so a host must never stage, diff into, or
+recurse into repositories embedded in the workspace. Replacement refs, object
+alternates, commit-graph files, grafts, and the shallow
 boundary stay read-only too, since they change the history Git shows without changing
 what it pushes. `with_git_writes(branch)` opens only that branch's reference and reflog
 among the references: other branches, tags, `refs/stash`, and `packed-refs` stay

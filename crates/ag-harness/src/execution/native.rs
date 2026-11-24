@@ -246,6 +246,8 @@ struct Access {
     git_writes: Option<GitWrites>,
     /// Resolved hidden paths, the built-in ones included.
     hidden_paths: Vec<PathBuf>,
+    /// The resolved temporary directory, also one of [`Self::writes`].
+    temporary_directory: Option<PathBuf>,
     /// Unix-domain sockets, resolved when configured.
     unix_sockets: Vec<PathBuf>,
     write_nodes: Vec<(u64, u64)>,
@@ -298,6 +300,7 @@ impl NativeProcess {
             hidden_paths: access.hidden_paths,
             read_scope: policy.read_scope(),
             system: self.configuration.snapshot.grants(Capability::SystemReads),
+            temporary_directory: access.temporary_directory,
             unix_sockets: access.unix_sockets,
             workspace: policy.workspace().to_path_buf(),
             write_nodes: access.write_nodes,
@@ -379,6 +382,7 @@ async fn resolve_access(
         {
             return Err(ExecutionError::Unsupported);
         }
+        access.temporary_directory = Some(canonical.clone());
         access.writes.push(canonical);
         access.write_nodes.push(node);
     }

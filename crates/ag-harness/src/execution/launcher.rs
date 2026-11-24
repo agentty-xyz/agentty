@@ -371,6 +371,12 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
         rule(&mut profile, "deny file-write*", path)?;
     }
     profile.push_str("(deny file-write* (regex #\"(^|/)[.][gG][iI][tT](/|$)\"))\n");
+    // Repositories inside the session's own temporary directory belong to
+    // its commands: host Git never runs there, so test fixtures and tools
+    // may create them. It overlaps no Git metadata the host protects.
+    if let Some(temporary) = &configuration.temporary_directory {
+        rule(&mut profile, "allow file-write*", temporary)?;
+    }
     if let Some(git) = &configuration.git_writes {
         let common = pattern(&git.common)?;
         match &git.admin {

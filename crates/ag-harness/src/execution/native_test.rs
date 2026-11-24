@@ -466,6 +466,7 @@ async fn access_resolves_grants_by_path_and_opens_the_repository_git_directories
         [fixture.workspace.join("output"), fixture.temporary.clone()]
     );
     assert_eq!(access.write_nodes.len(), 2);
+    assert_eq!(access.temporary_directory, Some(fixture.temporary.clone()));
     assert_eq!(
         access.git_writes,
         Some(GitWrites {

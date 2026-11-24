@@ -287,7 +287,8 @@ a key or sign-in is never chosen as the default.
 - The temporary directory, `~/.agentty/harness/<session>/tmp/`, holds the Cargo
   (`CARGO_HOME`), npm, Go, pip, and `XDG_CACHE_HOME` caches of that session only, and is
   removed with the session; host tools and other sessions never read it. Each new
-  session therefore downloads dependencies again.
+  session therefore downloads dependencies again. Commands can create Git repositories
+  there, such as test fixtures or `prek`'s cache, so leave `TMPDIR` as it is.
 - Your Cargo configuration still applies: Cargo finds `~/.cargo/config.toml` above a
   worktree in the home directory, and otherwise Agentty links your `CARGO_HOME`'s
   configuration into the sandbox before each turn, replacing whatever configuration or

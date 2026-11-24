@@ -134,6 +134,7 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
         network: false,
         read_scope: ReadScope::Granted,
         system: false,
+        temporary_directory: None,
         unix_sockets: vec![],
         workspace: "/workspace".into(),
         write_nodes: vec![],
@@ -200,6 +201,7 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         network: true,
         read_scope: ReadScope::FullDisk,
         system: false,
+        temporary_directory: Some("/sessions/own".into()),
         unix_sockets: vec!["/agent.sock".into()],
         workspace: "/workspace".into(),
         write_nodes: vec![],
@@ -250,6 +252,12 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         !profile.contains("(allow file-write* (subpath \"/workspace/.git\"))"),
         "{profile}"
     );
+    // The temporary directory may hold repositories of its own, so it is
+    // reopened after the metadata name denial.
+    let temporary = profile
+        .find("(allow file-write* (subpath \"/sessions/own\"))")
+        .expect("temporary directory reopened");
+    assert!(denial < temporary, "{profile}");
     // The main worktree's state, the branch, the protected entries, and the
     // directories holding them; no linked worktree administration.
     assert_eq!(profile.matches("(regex #\"^").count(), 4, "{profile}");
@@ -311,6 +319,7 @@ fn seatbelt_git_writes_in_a_linked_worktree_open_its_administration_and_branch_o
         network: false,
         read_scope: ReadScope::Granted,
         system: false,
+        temporary_directory: None,
         unix_sockets: vec![],
         workspace: "/workspace".into(),
         write_nodes: vec![],

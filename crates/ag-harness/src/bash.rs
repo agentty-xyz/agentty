@@ -545,6 +545,9 @@ impl BashConfig {
     /// directory per session, such as one the host creates under the system
     /// temporary directory, so commands never share temporary files with
     /// other sessions. It must not overlap the workspace or its Git metadata.
+    /// Unlike write grants in the workspace, it may hold Git repositories,
+    /// such as test fixtures that run `git init` there, so the host must
+    /// never run Git in it.
     /// The path is part of the policy fingerprint that identifies host
     /// requests and command records, so derive it from a stable session
     /// identity rather than choosing a fresh random name at each start.

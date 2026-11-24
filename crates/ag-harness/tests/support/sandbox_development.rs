@@ -655,6 +655,52 @@ async fn native_git_writes_cover_only_the_session_branch() {
     git(&main, &["fsck", "--no-progress"]);
 }
 
+/// Test fixtures and tools such as `prek` create repositories under
+/// `TMPDIR`, which belongs to one session and where host Git never runs, so
+/// commands can initialize and commit there, while the workspace
+/// repository's hooks and configuration stay read-only and macOS still
+/// refuses new metadata names inside the worktree.
+#[tokio::test]
+async fn native_temporary_directory_holds_repositories_of_its_own() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let common = fixture.root().join("main/.git");
+    let nested = if cfg!(target_os = "macos") {
+        "if /bin/mkdir docs/.git; then exit 93; fi; "
+    } else {
+        ""
+    };
+
+    // Act
+    let result = fixture
+        .run(
+            &format!(
+                "set -e; export GIT_AUTHOR_NAME=Sandbox GIT_AUTHOR_EMAIL=sandbox@example.com \
+                 GIT_COMMITTER_NAME=Sandbox GIT_COMMITTER_EMAIL=sandbox@example.com; common=$(git \
+                 rev-parse --path-format=absolute --git-common-dir); (cd \"$TMPDIR\" && git init \
+                 -q -b main fixture && cd fixture && printf fixture > file && git add file && git \
+                 -c commit.gpgsign=false commit -q -m fixture && printf hook > \
+                 .git/hooks/pre-commit); if printf x > \"$common/hooks/pre-commit\"; then exit \
+                 91; fi; if printf x >> \"$common/config\"; then exit 92; fi; {nested}printf \
+                 confined"
+            ),
+            fixture.configuration(),
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "confined", "{result:?}");
+    let repository = fixture.temporary().join("fixture");
+    assert_eq!(
+        git(&repository, &["log", "-1", "--format=%s"]).trim(),
+        "fixture"
+    );
+    assert!(repository.join(".git/hooks/pre-commit").exists());
+    assert!(!common.join("hooks/pre-commit").exists());
+    assert!(!fixture.worktree().join("docs/.git").exists());
+}
+
 /// Git run outside the sandbox resumes a rebase from its to-do list, which
 /// can run commands, so a rebase the host left in progress stays read-only
 /// and none can be started by writing new state.
