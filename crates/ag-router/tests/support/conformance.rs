@@ -13,9 +13,11 @@
 //! that the Chat Completions fixtures (every one but `chatgpt-*`, `openai-*`,
 //! and `anthropic-*`) have since gained `"stream":true` and
 //! `"stream_options":{"include_usage":true}` in their bodies, with their
-//! `content-length` 54 bytes longer, since those requests stream. The
-//! `anthropic-*` fixtures postdate that enum: they record the first Anthropic
-//! Messages requests, written by hand from the Messages API reference and
+//! `content-length` 54 bytes longer, since those requests stream, and the
+//! `chatgpt-*` fixtures have since gained the `session-id` header carrying
+//! their prompt cache key. The `anthropic-*` fixtures postdate that enum:
+//! they record the first Anthropic Messages requests, written by hand from
+//! the Messages API reference and
 //! then matched to the serialized key order; they have since gained
 //! `"stream":true` and a `"cache_control":{"type":"ephemeral"}` breakpoint
 //! on the tool, the `system` block, and the last message's last block, with

@@ -10,7 +10,7 @@ use crate::credential::CredentialSource;
 use crate::model::ReasoningEffort;
 use crate::preset;
 use crate::provider_spec::{
-    Auth, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping,
+    Auth, InstructionPlacement, MaxTokensField, ProviderSpec, ReasoningMapping, SessionHeader,
     StructuredOutputMode, ThinkingOptions, WireProtocol,
 };
 
@@ -222,6 +222,10 @@ fn chatgpt_names_the_plan_and_rejects_an_output_bound() {
         Some("max")
     );
     assert!(chatgpt.image_input && openai.image_input);
+    // Only the plan backend derives cache affinity from the header.
+    assert_eq!(chatgpt.session_header, SessionHeader::Sent);
+    assert_eq!(openai.session_header, SessionHeader::Unsent);
+    assert!(chatgpt.validate().is_ok());
 }
 
 #[test]
