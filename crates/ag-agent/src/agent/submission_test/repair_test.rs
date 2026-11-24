@@ -345,10 +345,7 @@ async fn claude_repair_folds_both_attempts_into_the_usage() {
     );
     assert_eq!(
         usage.cost,
-        Some(CostEstimate {
-            basis: CostBasis::AgentReported,
-            micro_usd: 12_000,
-        })
+        Some(CostEstimate::new(CostBasis::AgentReported, 12_000))
     );
 }
 

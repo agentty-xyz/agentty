@@ -252,6 +252,32 @@ pub(super) fn expect_user_input_request_turn(
         });
 }
 
+/// Expects the stdout line acknowledging the compaction request whose id
+/// `compact_id` recorded.
+pub(super) fn expect_compaction_acknowledgment(
+    transport: &mut MockCodexRuntimeTransport,
+    sequence: &mut Sequence,
+    compact_id: Arc<Mutex<Option<String>>>,
+) {
+    transport
+        .expect_next_stdout()
+        .times(1)
+        .in_sequence(sequence)
+        .returning(move || {
+            let response_id = compact_id
+                .lock()
+                .expect("compact mutex should lock")
+                .clone()
+                .expect("compact id should be recorded");
+
+            Box::pin(async move {
+                Ok(Some(
+                    serde_json::json!({"id": response_id, "result": {}}).to_string(),
+                ))
+            })
+        });
+}
+
 /// Expects a proactive compaction request followed by a successful turn.
 pub(super) fn expect_proactive_compaction_turn(
     transport: &mut MockCodexRuntimeTransport,
@@ -275,21 +301,7 @@ pub(super) fn expect_proactive_compaction_turn(
                 Box::pin(async { Ok(()) })
             }
         });
-    transport
-        .expect_wait_for_response_line()
-        .times(1)
-        .in_sequence(sequence)
-        .returning(move |_| {
-            let response_id = compact_id
-                .lock()
-                .expect("compact mutex should lock")
-                .clone()
-                .expect("compact id should be recorded");
-
-            Box::pin(
-                async move { Ok(serde_json::json!({"id": response_id, "result": {}}).to_string()) },
-            )
-        });
+    expect_compaction_acknowledgment(transport, sequence, compact_id);
     transport
         .expect_next_stdout()
         .times(1)
@@ -431,21 +443,7 @@ pub(super) fn expect_reactive_compaction(
                 Box::pin(async { Ok(()) })
             }
         });
-    transport
-        .expect_wait_for_response_line()
-        .times(1)
-        .in_sequence(sequence)
-        .returning(move |_| {
-            let response_id = compact_id
-                .lock()
-                .expect("compact mutex should lock")
-                .clone()
-                .expect("compact id should be recorded");
-
-            Box::pin(
-                async move { Ok(serde_json::json!({"id": response_id, "result": {}}).to_string()) },
-            )
-        });
+    expect_compaction_acknowledgment(transport, sequence, compact_id);
     transport
         .expect_next_stdout()
         .times(1)

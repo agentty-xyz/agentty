@@ -15,7 +15,7 @@ use super::usage::{TokenUsage, TurnUsageTracker};
 use crate::agent::prompt::{
     CliPromptAccessRootMode, cli_prompt_access_directories, render_prompt_with_local_images,
 };
-use crate::agent::usage::priced_turn_usage;
+use crate::agent::usage::{Billing, priced_turn_usage};
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::{agent, app_server_transport};
 
@@ -246,7 +246,12 @@ async fn run_turn_with_timeout<Transport: AppServerRuntimeTransport>(
 
             return Ok((
                 assistant_message,
-                priced_turn_usage(usage, &state.model, AgentKind::Antigravity),
+                priced_turn_usage(
+                    usage,
+                    &state.model,
+                    AgentKind::Antigravity,
+                    Billing::Metered,
+                ),
             ));
         }
     })

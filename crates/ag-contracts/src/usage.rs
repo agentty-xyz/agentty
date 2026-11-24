@@ -58,7 +58,7 @@ impl UsagePurpose {
     }
 }
 
-/// Where the prices of a [`CostEstimate`] came from.
+/// Where the prices of a [`PricedCost`] came from.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum CostBasis {
     /// Provider list prices from the built-in model catalog.
@@ -67,7 +67,7 @@ pub enum CostBasis {
     HostPrice,
     /// The agent's own estimate, such as Claude Code's per-model `costUSD`.
     AgentReported,
-    /// A sum of estimates priced from more than one basis.
+    /// A sum of amounts priced from more than one basis.
     Mixed,
 }
 
@@ -81,30 +81,185 @@ impl CostBasis {
             Self::Mixed => "mixed",
         }
     }
+
+    /// Returns the basis of a sum of amounts priced on `self` and `other`:
+    /// their shared basis, or [`Self::Mixed`] when they differ.
+    #[must_use]
+    pub fn combine(self, other: Self) -> Self {
+        if self == other { self } else { Self::Mixed }
+    }
 }
 
-/// Estimated charge of some usage in integer micro-USD, one millionth of a
-/// US dollar. Provider bills stay authoritative.
+/// Subscription login that bills usage a flat fee, whose priced figure is
+/// therefore only an API equivalent.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum PlanLogin {
+    /// A `ChatGPT` plan, through the harness or Codex.
+    ChatGpt,
+    /// A Claude subscription through Claude Code.
+    Claude,
+}
+
+impl PlanLogin {
+    /// Returns the stable persisted label of this login.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChatGpt => "chatgpt",
+            Self::Claude => "claude",
+        }
+    }
+}
+
+/// One priced amount in integer micro-USD, one millionth of a US dollar.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct CostEstimate {
+pub struct PricedCost {
     /// Where the prices came from.
     pub basis: CostBasis,
-    /// Estimated charge in micro-USD.
+    /// Amount in micro-USD.
     pub micro_usd: u64,
+    /// Whether the amount is an upper bound because cache reads were priced
+    /// at the input price, their price being undeclared.
+    pub upper_bound: bool,
 }
 
-impl CostEstimate {
-    /// Adds `other`, saturating; estimates from different bases sum to
-    /// [`CostBasis::Mixed`].
+impl PricedCost {
+    /// Returns an exact amount of `micro_usd` priced on `basis`.
+    pub fn new(basis: CostBasis, micro_usd: u64) -> Self {
+        Self {
+            basis,
+            micro_usd,
+            upper_bound: false,
+        }
+    }
+
+    /// Adds `other`, saturating; the bases combine as
+    /// [`CostBasis::combine`] describes, and the sum is an upper bound when
+    /// either side is.
     #[must_use]
     pub fn saturating_add(self, other: Self) -> Self {
         Self {
-            basis: if self.basis == other.basis {
-                self.basis
-            } else {
-                CostBasis::Mixed
-            },
+            basis: self.basis.combine(other.basis),
             micro_usd: self.micro_usd.saturating_add(other.micro_usd),
+            upper_bound: self.upper_bound || other.upper_bound,
+        }
+    }
+}
+
+/// What usage billed to a subscription plan would cost at the provider's
+/// API list prices. It is no charge: the plan bills a flat fee.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ApiEquivalentCost {
+    /// Amount at API list prices.
+    pub cost: PricedCost,
+    /// Login whose plan billed the usage, or `None` for a sum over several
+    /// logins.
+    pub login: Option<PlanLogin>,
+}
+
+/// Estimated cost of some usage: the charge of metered usage and the API
+/// equivalent of plan-billed usage, kept apart so an API equivalent is
+/// never summed into a charge. An estimate always holds at least one of
+/// them; usage with no price has no estimate. Provider bills stay
+/// authoritative.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct CostEstimate(CostParts);
+
+/// The amounts a [`CostEstimate`] holds.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum CostParts {
+    /// Only metered usage.
+    Charged(PricedCost),
+    /// Only plan-billed usage.
+    ApiEquivalent(ApiEquivalentCost),
+    /// Both, kept apart.
+    Both(PricedCost, ApiEquivalentCost),
+}
+
+impl CostEstimate {
+    /// Returns an exact charge of `micro_usd` priced on `basis`.
+    pub fn new(basis: CostBasis, micro_usd: u64) -> Self {
+        Self::charged(PricedCost::new(basis, micro_usd))
+    }
+
+    /// Returns the estimate of metered usage charged `cost`.
+    pub fn charged(cost: PricedCost) -> Self {
+        Self(CostParts::Charged(cost))
+    }
+
+    /// Returns the estimate of plan-billed usage whose API equivalent is
+    /// `equivalent`.
+    pub fn plan_billed(equivalent: ApiEquivalentCost) -> Self {
+        Self(CostParts::ApiEquivalent(equivalent))
+    }
+
+    /// Returns the estimated charge of the metered usage, or `None` when
+    /// none was metered.
+    pub fn charge(self) -> Option<PricedCost> {
+        match self.0 {
+            CostParts::Charged(charged) | CostParts::Both(charged, _) => Some(charged),
+            CostParts::ApiEquivalent(_) => None,
+        }
+    }
+
+    /// Returns the API equivalent of the plan-billed usage, or `None` when
+    /// none was plan-billed.
+    pub fn api_equivalent(self) -> Option<ApiEquivalentCost> {
+        match self.0 {
+            CostParts::ApiEquivalent(equivalent) | CostParts::Both(_, equivalent) => {
+                Some(equivalent)
+            }
+            CostParts::Charged(_) => None,
+        }
+    }
+
+    /// Returns this estimate as plan-billed usage of `login`: every amount
+    /// becomes its API equivalent.
+    #[must_use]
+    pub fn billed_to(self, login: PlanLogin) -> Self {
+        let cost = match self.0 {
+            CostParts::Charged(cost) | CostParts::ApiEquivalent(ApiEquivalentCost { cost, .. }) => {
+                cost
+            }
+            CostParts::Both(charged, equivalent) => charged.saturating_add(equivalent.cost),
+        };
+
+        Self::plan_billed(ApiEquivalentCost {
+            cost,
+            login: Some(login),
+        })
+    }
+
+    /// Adds `other`, saturating, part by part: charges to charges and API
+    /// equivalents to API equivalents. API equivalents of different logins
+    /// sum to an equivalent of no single login.
+    #[must_use]
+    pub fn saturating_add(self, other: Self) -> Self {
+        let charged = match (self.charge(), other.charge()) {
+            (Some(charged), Some(next)) => Some(charged.saturating_add(next)),
+            (charged, next) => charged.or(next),
+        };
+        let api_equivalent = match (self.api_equivalent(), other.api_equivalent()) {
+            (Some(equivalent), Some(next)) => Some(ApiEquivalentCost {
+                cost: equivalent.cost.saturating_add(next.cost),
+                login: equivalent.login.filter(|login| next.login == Some(*login)),
+            }),
+            (equivalent, next) => equivalent.or(next),
+        };
+
+        Self::from_parts(charged, api_equivalent).unwrap_or(self)
+    }
+
+    /// Returns the estimate holding `charged` and `api_equivalent`, or
+    /// `None` when it would hold neither.
+    fn from_parts(
+        charged: Option<PricedCost>,
+        api_equivalent: Option<ApiEquivalentCost>,
+    ) -> Option<Self> {
+        match (charged, api_equivalent) {
+            (Some(charged), Some(equivalent)) => Some(Self(CostParts::Both(charged, equivalent))),
+            (Some(charged), None) => Some(Self::charged(charged)),
+            (None, Some(equivalent)) => Some(Self::plan_billed(equivalent)),
+            (None, None) => None,
         }
     }
 }

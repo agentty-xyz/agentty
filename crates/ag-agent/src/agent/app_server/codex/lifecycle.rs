@@ -157,6 +157,11 @@ pub(super) async fn start_runtime_with_built_command(
             if restored_context {
                 state.usage.resumed();
             }
+            // The answer arrives during the first turn, which reads it; an
+            // app server that never answers leaves usage metered.
+            let _ = transport
+                .write_json_line(state.usage.account_request())
+                .await;
 
             Ok((child, transport, state))
         }
@@ -423,9 +428,14 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
         let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
             "Compacting context".to_string(),
         ));
-        send_compact_request(transport, &state.thread_id, &mut state.latest_input_tokens)
-            .with_context(Context::current().with_value(CompactionTrigger("proactive")))
-            .await?;
+        send_compact_request(
+            transport,
+            &state.thread_id,
+            &mut state.latest_input_tokens,
+            &mut state.usage,
+        )
+        .with_context(Context::current().with_value(CompactionTrigger("proactive")))
+        .await?;
         state.usage.clear_context();
     }
 
@@ -458,9 +468,14 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
                 "Compacting context".to_string(),
             ));
-            send_compact_request(transport, &state.thread_id, &mut state.latest_input_tokens)
-                .with_context(Context::current().with_value(CompactionTrigger("context_overflow")))
-                .await?;
+            send_compact_request(
+                transport,
+                &state.thread_id,
+                &mut state.latest_input_tokens,
+                &mut state.usage,
+            )
+            .with_context(Context::current().with_value(CompactionTrigger("context_overflow")))
+            .await?;
             state.usage.clear_context();
 
             let completion = execute_turn_event_loop(
@@ -494,22 +509,26 @@ pub(super) async fn send_compact_request<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     thread_id: &str,
     latest_input_tokens: &mut u64,
+    usage: &mut usage::UsageTracker,
 ) -> Result<(), AppServerError> {
     send_compact_request_with_timeout(
         transport,
         thread_id,
         latest_input_tokens,
+        usage,
         app_server_transport::TURN_TIMEOUT,
     )
     .await
 }
 
 /// Records the full `thread/compact/start` request and completion wait.
-/// The completion wait uses the caller-provided timeout.
+/// The completion wait uses the caller-provided timeout, and reads a pending
+/// `account/read` answer into `usage` when one arrives meanwhile.
 pub(super) async fn send_compact_request_with_timeout<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     thread_id: &str,
     latest_input_tokens: &mut u64,
+    usage: &mut usage::UsageTracker,
     turn_timeout: Duration,
 ) -> Result<(), AppServerError> {
     let span = ag_telemetry::Span::operation("agent.compaction");
@@ -533,19 +552,26 @@ pub(super) async fn send_compact_request_with_timeout<Transport: AppServerRuntim
             });
 
             transport.write_json_line(compact_payload).await?;
-            transport.wait_for_response_line(compact_id).await?;
 
             tokio::time::timeout(turn_timeout, async {
+                let mut is_acknowledged = false;
                 loop {
                     let stdout_line =
                         read_required_stdout_line(transport, " during compaction").await?;
-                    if stdout_line.trim().is_empty() {
-                        continue;
-                    }
-
                     let Ok(response_value) = serde_json::from_str::<Value>(&stdout_line) else {
                         continue;
                     };
+                    // The `account/read` answer can arrive before or after
+                    // the acknowledgment, such as when a turn ended before
+                    // it did.
+                    if usage.observe_account(&response_value) {
+                        continue;
+                    }
+                    if !is_acknowledged {
+                        is_acknowledged = response_id_matches(&response_value, &compact_id);
+
+                        continue;
+                    }
 
                     if response_value.get("method").and_then(Value::as_str)
                         == Some("turn/completed")
@@ -729,6 +755,10 @@ impl CodexTurnEventLoopState {
         turn_start_id: &str,
         response_value: Value,
     ) -> Result<Option<(String, TurnUsage)>, AppServerError> {
+        if self.usage.observe_account(&response_value) {
+            return Ok(None);
+        }
+
         if response_id_matches(&response_value, turn_start_id) {
             self.process_turn_start_response(&response_value)?;
 
@@ -791,6 +821,9 @@ impl CodexTurnEventLoopState {
             while !self.pending_steers.is_empty() {
                 match read_turn_response_value(transport).await {
                     Ok(Some(response_value)) => {
+                        if self.usage.observe_account(&response_value) {
+                            continue;
+                        }
                         if let Some(steer) = self.take_pending_steer(&response_value) {
                             steer.acknowledge(steer_response_result(&response_value));
                         }
@@ -949,8 +982,9 @@ impl CodexTurnEventLoopState {
     }
 
     /// Returns the turn's usage so far, priced at the `OpenAI` list price of
-    /// its model: the cumulative counters' turn total, else the usage
-    /// `turn/completed` or the latest request reported.
+    /// its model, as an API equivalent under a `ChatGPT` plan login: the
+    /// cumulative counters' turn total, else the usage `turn/completed` or
+    /// the latest request reported.
     fn turn_usage(&self) -> TurnUsage {
         let fallback = self.completed_turn_usage.or(self.latest_stream_usage);
 
@@ -958,6 +992,7 @@ impl CodexTurnEventLoopState {
             self.usage.turn_usage(fallback),
             &self.model,
             AgentKind::Codex,
+            self.usage.billing(),
         )
     }
 }

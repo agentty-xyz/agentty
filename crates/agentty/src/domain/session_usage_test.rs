@@ -1,9 +1,13 @@
 //! Session usage accumulation, live folding, and label parsing tests.
 
-use ag_contracts::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsagePurpose};
+use ag_contracts::{
+    ContextFill, CostBasis, CostEstimate, ModelUsage, PlanLogin, PricedCost, TurnUsage,
+    UsagePurpose,
+};
 
 use super::{
-    ContextNow, LiveUsageRun, SessionUsage, UsageRecord, parse_cost_basis, parse_usage_purpose,
+    ContextNow, LiveUsageRun, SessionUsage, UsageRecord, parse_cost_basis, parse_plan_login,
+    parse_usage_purpose,
 };
 
 /// Returns one detailed request of `model` with `input_tokens` of input.
@@ -23,10 +27,7 @@ fn detailed_usage(model: &str, input_tokens: u64, cost: Option<CostEstimate>) ->
 
 /// Returns a list-price estimate of `micro_usd`.
 fn list_price(micro_usd: u64) -> CostEstimate {
-    CostEstimate {
-        basis: CostBasis::ListPrice,
-        micro_usd,
-    }
+    CostEstimate::new(CostBasis::ListPrice, micro_usd)
 }
 
 #[test]
@@ -41,10 +42,10 @@ fn test_add_keeps_details_known_only_when_both_sides_know_them() {
         &detailed_usage(
             "model",
             200,
-            Some(CostEstimate {
-                basis: CostBasis::AgentReported,
-                micro_usd: 30,
-            }),
+            Some(CostEstimate::charged(PricedCost {
+                upper_bound: true,
+                ..PricedCost::new(CostBasis::AgentReported, 30)
+            })),
         ),
     );
     let unreported =
@@ -58,12 +59,16 @@ fn test_add_keeps_details_known_only_when_both_sides_know_them() {
     assert_eq!(
         record,
         UsageRecord {
+            api_equivalent_login: None,
+            api_equivalent_micro_usd: None,
+            api_equivalent_upper_bound: false,
             cache_read_tokens: None,
             cache_write_tokens: None,
             context_peak_tokens: Some(400),
             context_window_tokens: Some(1_000),
             cost_basis: Some(CostBasis::Mixed),
             cost_micro_usd: Some(100),
+            cost_upper_bound: true,
             detailed_invocation_count: 3,
             input_tokens: 600,
             invocation_count: 3,
@@ -97,6 +102,61 @@ fn test_add_takes_the_known_side_of_cost_and_context() {
     assert_eq!(record.context_peak_tokens, Some(300));
     assert_eq!(record.cost_basis, Some(CostBasis::ListPrice));
     assert_eq!(record.cost_micro_usd, Some(5));
+    assert!(!record.cost_upper_bound);
+}
+
+#[test]
+fn test_add_keeps_api_equivalents_apart_from_charges() {
+    // Arrange
+    let overpriced = PricedCost {
+        upper_bound: true,
+        ..PricedCost::new(CostBasis::ListPrice, 5)
+    };
+    let plan_cost = Some(CostEstimate::charged(overpriced).billed_to(PlanLogin::ChatGpt));
+    let mut record =
+        UsageRecord::from_model_usage(UsagePurpose::Turn, &detailed_usage("model", 300, plan_cost));
+    let charged = UsageRecord::from_model_usage(
+        UsagePurpose::Turn,
+        &detailed_usage("model", 300, Some(list_price(7))),
+    );
+    let plan = record.clone();
+
+    // Act
+    record.add(&charged);
+    record.add(&plan);
+
+    // Assert
+    assert_eq!(record.cost_basis, Some(CostBasis::ListPrice));
+    assert_eq!(record.cost_micro_usd, Some(7));
+    assert!(!record.cost_upper_bound);
+    assert_eq!(record.api_equivalent_micro_usd, Some(10));
+    assert_eq!(record.api_equivalent_login, Some(PlanLogin::ChatGpt));
+    assert!(record.api_equivalent_upper_bound);
+}
+
+#[test]
+fn test_add_takes_the_later_login_and_names_none_for_two() {
+    // Arrange
+    let plan = |login| {
+        UsageRecord::from_model_usage(
+            UsagePurpose::Turn,
+            &detailed_usage("model", 300, Some(list_price(5).billed_to(login))),
+        )
+    };
+    let mut charged_first = UsageRecord::from_model_usage(
+        UsagePurpose::Turn,
+        &detailed_usage("model", 300, Some(list_price(7))),
+    );
+    let mut two_logins = plan(PlanLogin::ChatGpt);
+
+    // Act
+    charged_first.add(&plan(PlanLogin::Claude));
+    two_logins.add(&plan(PlanLogin::Claude));
+
+    // Assert
+    assert_eq!(charged_first.api_equivalent_login, Some(PlanLogin::Claude));
+    assert_eq!(two_logins.api_equivalent_login, None);
+    assert_eq!(two_logins.api_equivalent_micro_usd, Some(10));
 }
 
 #[test]
@@ -286,4 +346,8 @@ fn test_parse_labels_round_trip_and_fall_back() {
     assert_eq!(parsed_bases, bases);
     assert_eq!(parse_usage_purpose("future"), UsagePurpose::Other);
     assert_eq!(parse_cost_basis("future"), CostBasis::Mixed);
+    assert_eq!(
+        ["chatgpt", "claude", "future"].map(parse_plan_login),
+        [Some(PlanLogin::ChatGpt), Some(PlanLogin::Claude), None]
+    );
 }

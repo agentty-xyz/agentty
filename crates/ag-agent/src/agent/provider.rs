@@ -13,10 +13,11 @@ use super::backend::{
     AgentBackend, AgentBackendError, AgentPromptTransport, AgentTransport, AppServerThoughtPolicy,
     BuildCommandRequest,
 };
-use super::cli::execution::CliTurnSteering;
+use super::cli::execution::{CliExecutionOutput, CliTurnSteering};
 use super::cli::stdin::StdinSteering;
 use super::prompt;
 use super::response_parser::ParsedResponse;
+use super::usage::Billing;
 use crate::app_server::{AppServerClient, TurnSteeringInbox};
 
 /// Factory hook used to build or override provider-specific app-server
@@ -40,6 +41,21 @@ pub fn create_app_server_client(
 /// Parses provider output and returns final response content and usage stats.
 pub(crate) fn parse_response(kind: AgentKind, stdout: &str, stderr: &str) -> ParsedResponse {
     (provider_descriptor(kind).parse_response)(stdout, stderr)
+}
+
+/// Parses one finished CLI process's output like [`parse_response`]. A
+/// process that ran with alternate credentials is metered, whatever login
+/// its output reports.
+pub(crate) fn parse_execution_output(
+    kind: AgentKind,
+    output: &CliExecutionOutput,
+) -> ParsedResponse {
+    let mut parsed = parse_response(kind, &output.stdout, &output.stderr);
+    if output.uses_alternate_credentials {
+        parsed.billing = Billing::Metered;
+    }
+
+    parsed
 }
 
 /// Classifies one parsed stream-line payload into incremental text and

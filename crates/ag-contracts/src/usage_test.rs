@@ -2,7 +2,8 @@
 //! cost bases, context fill, and per-model ordering.
 
 use crate::usage::{
-    ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsageCheckpoint, UsagePurpose,
+    ApiEquivalentCost, ContextFill, CostBasis, CostEstimate, ModelUsage, PlanLogin, PricedCost,
+    TurnUsage, UsageCheckpoint, UsagePurpose,
 };
 
 /// Returns fully detailed usage of `model` for one request.
@@ -11,10 +12,7 @@ fn detailed(model: &str, input_tokens: u64, micro_usd: u64) -> ModelUsage {
         cache_read_tokens: Some(input_tokens / 2),
         cache_write_tokens: Some(1),
         context: Some(ContextFill::of_request(input_tokens, Some(1_000))),
-        cost: Some(CostEstimate {
-            basis: CostBasis::ListPrice,
-            micro_usd,
-        }),
+        cost: Some(CostEstimate::new(CostBasis::ListPrice, micro_usd)),
         input_tokens,
         output_tokens: 10,
         reasoning_tokens: Some(4),
@@ -77,10 +75,7 @@ fn adding_detailed_usage_sums_every_count() {
                 peak_input_tokens: 100,
                 window_tokens: Some(1_000),
             }),
-            cost: Some(CostEstimate {
-                basis: CostBasis::ListPrice,
-                micro_usd: 12,
-            }),
+            cost: Some(CostEstimate::new(CostBasis::ListPrice, 12)),
             input_tokens: 160,
             output_tokens: 20,
             reasoning_tokens: Some(8),
@@ -126,25 +121,94 @@ fn a_context_reported_only_later_is_kept() {
 #[test]
 fn costs_from_different_bases_sum_to_mixed() {
     // Arrange
-    let list = CostEstimate {
-        basis: CostBasis::ListPrice,
-        micro_usd: u64::MAX,
-    };
-    let reported = CostEstimate {
-        basis: CostBasis::AgentReported,
-        micro_usd: 3,
-    };
+    let list = CostEstimate::new(CostBasis::ListPrice, u64::MAX);
+    let reported = CostEstimate::new(CostBasis::AgentReported, 3);
 
     // Act
     let total = list.saturating_add(reported);
 
     // Assert
+    assert_eq!(total, CostEstimate::new(CostBasis::Mixed, u64::MAX));
+}
+
+#[test]
+fn charges_and_api_equivalents_sum_apart() {
+    // Arrange
+    let list = CostEstimate::new(CostBasis::ListPrice, 5);
+    let overpriced = PricedCost {
+        upper_bound: true,
+        ..PricedCost::new(CostBasis::AgentReported, 3)
+    };
+    let plan = CostEstimate::charged(overpriced).billed_to(PlanLogin::Claude);
+    let same_plan = CostEstimate::new(CostBasis::AgentReported, 1).billed_to(PlanLogin::Claude);
+    let other_plan = CostEstimate::new(CostBasis::ListPrice, 2).billed_to(PlanLogin::ChatGpt);
+
+    // Act
+    let mixed = list.saturating_add(plan);
+    let both = mixed.saturating_add(mixed);
+    let plans = plan.saturating_add(other_plan);
+    let one_login = plan.saturating_add(same_plan);
+    let rebilled = mixed.billed_to(PlanLogin::ChatGpt);
+
+    // Assert
     assert_eq!(
-        total,
-        CostEstimate {
-            basis: CostBasis::Mixed,
-            micro_usd: u64::MAX,
-        }
+        mixed.charge(),
+        Some(PricedCost::new(CostBasis::ListPrice, 5))
+    );
+    assert_eq!(
+        mixed.api_equivalent(),
+        Some(ApiEquivalentCost {
+            cost: overpriced,
+            login: Some(PlanLogin::Claude),
+        })
+    );
+    assert_eq!(
+        both.charge(),
+        Some(PricedCost::new(CostBasis::ListPrice, 10))
+    );
+    assert_eq!(
+        both.api_equivalent()
+            .map(|equivalent| equivalent.cost.micro_usd),
+        Some(6)
+    );
+    assert_eq!(
+        plans.api_equivalent(),
+        Some(ApiEquivalentCost {
+            cost: PricedCost {
+                basis: CostBasis::Mixed,
+                micro_usd: 5,
+                upper_bound: true,
+            },
+            login: None,
+        }),
+        "API equivalents of two logins name no single login"
+    );
+    assert_eq!(
+        one_login
+            .api_equivalent()
+            .and_then(|equivalent| equivalent.login),
+        Some(PlanLogin::Claude)
+    );
+    assert_eq!(plans.charge(), None);
+    assert_eq!(rebilled.charge(), None);
+    assert_eq!(
+        rebilled
+            .api_equivalent()
+            .map(|equivalent| (equivalent.cost.micro_usd, equivalent.login)),
+        Some((8, Some(PlanLogin::ChatGpt)))
+    );
+    assert_eq!(
+        plan.billed_to(PlanLogin::ChatGpt).api_equivalent(),
+        Some(ApiEquivalentCost {
+            cost: overpriced,
+            login: Some(PlanLogin::ChatGpt),
+        })
+    );
+    assert_eq!(list.api_equivalent(), None);
+    assert_eq!(CostEstimate::from_parts(None, None), None);
+    assert_eq!(
+        [PlanLogin::ChatGpt, PlanLogin::Claude].map(PlanLogin::as_str),
+        ["chatgpt", "claude"]
     );
 }
 

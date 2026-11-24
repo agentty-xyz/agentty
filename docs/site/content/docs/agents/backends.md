@@ -177,8 +177,31 @@ Anthropic list price. When the difference cannot be trusted, the turn falls back
 main-conversation tokens at the Anthropic list price. This happens on the first resumed
 turn after upgrading Agentty, when the Claude Code release is unknown, or when the
 previous Claude run reported no totals. While a Claude turn runs, its live figures use
-the list price. Codex and Claude estimates do not yet distinguish a subscription login
-from an API key.
+the list price.
+
+A model without a declared cache price has its cached input priced at the input price,
+so its estimate is an upper bound.
+
+### Subscription Logins
+
+<a id="backends-subscription-logins"></a> Usage billed to a subscription plan has no
+per-token charge, so Agentty shows its API equivalent instead: the same tokens at the
+provider's API list prices.
+
+| Backend | Detected when                                        | Priced at                                            |
+| ------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| Harness | A `chatgpt/` plan model runs.                        | Same-named OpenAI API model, else `unknown`          |
+| Claude  | Claude Code uses no API key and Anthropic's own API. | Claude Code's own estimate, or Anthropic list prices |
+| Codex   | Codex reports a ChatGPT login.                       | OpenAI list prices                                   |
+
+A Claude run through a bearer token, a gateway, or a cloud provider such as Amazon
+Bedrock is charged per token and keeps a plain estimate: Agentty treats a run as metered
+when its environment sets `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, or a
+`CLAUDE_CODE_USE_*` switch. Claude Code releases that do not name the provider in their
+usage cannot be told apart from those, so their runs also keep a plain estimate. While a
+Claude turn without an API key runs, its live usage shows tokens without a cost until
+its result names the provider. Detection for Claude and Codex is tested against recorded
+protocol messages, not live logins.
 
 ## Available Models
 

@@ -539,11 +539,92 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
     );
     assert_eq!(
         result.usage.models[0].cost,
-        Some(ag_contracts::CostEstimate {
-            basis: ag_contracts::CostBasis::AgentReported,
-            micro_usd: 12_500,
-        })
+        Some(ag_contracts::CostEstimate::new(
+            ag_contracts::CostBasis::AgentReported,
+            12_500
+        ))
     );
+}
+
+/// Returns a Claude stub on a subscription login: no API key, then a
+/// response, then a result naming Anthropic's own API as the provider,
+/// with `bearer_token` exported when set and every alternate-credential
+/// variable of the test process removed otherwise.
+fn subscription_claude_command(bearer_token: Option<&str>) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(concat!(
+        r#"echo '{"type":"system","subtype":"init","apiKeySource":"none"}';"#,
+        r#"echo '{"type":"assistant","message":{"id":"msg-1","model":"claude-sonnet-5-5","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":5,"output_tokens":1}}}';"#,
+        r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3},"modelUsage":{"claude-sonnet-5-5":{"provider":"firstParty","inputTokens":5,"outputTokens":3,"costUSD":0.0125}}}'"#,
+    ));
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("ANTHROPIC_") || name.starts_with("CLAUDE_CODE_USE_") {
+            command.env_remove(&key);
+        }
+    }
+    if let Some(token) = bearer_token {
+        command.env("ANTHROPIC_AUTH_TOKEN", token);
+    }
+
+    command
+}
+
+#[tokio::test]
+/// Verifies a subscription turn's live usage carries no price until its
+/// result names the provider, and its result carries an API equivalent,
+/// while a process with a bearer token carries an unmarked charge live and
+/// in its result.
+async fn subscription_turns_price_as_api_equivalents_unless_a_bearer_token_is_set() {
+    for (bearer_token, is_plan_billed) in [(None, true), (Some("token"), false)] {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut mock_backend = MockAgentBackend::new();
+        mock_backend
+            .expect_build_command()
+            .returning(move |_| Ok(subscription_claude_command(bearer_token)));
+        let channel = CliAgentChannel::with_backend(Arc::new(mock_backend), AgentKind::Claude);
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        let req = make_turn_request(dir.path().to_path_buf());
+
+        // Act
+        let result = channel
+            .run_turn("sess-1".to_string(), req, events_tx)
+            .await
+            .expect("turn should succeed");
+
+        // Assert
+        let live_costs = std::iter::from_fn(|| events_rx.try_recv().ok())
+            .filter_map(|event| match event {
+                TurnEvent::UsageUpdated(usage) => Some(usage.models[0].cost),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if is_plan_billed {
+            assert_eq!(live_costs.first(), Some(&None));
+            assert!(
+                live_costs
+                    .last()
+                    .copied()
+                    .flatten()
+                    .is_some_and(|cost| cost.api_equivalent().is_some())
+            );
+        } else {
+            // A bearer token bills per token from the start, so every live
+            // update carries an unmarked charge.
+            assert_eq!(live_costs.len(), 2, "one response and one result");
+            assert!(live_costs.iter().all(|cost| cost.is_some_and(|cost| {
+                cost.charge().is_some() && cost.api_equivalent().is_none()
+            })));
+        }
+        let cost = result.usage.models[0].cost.expect("the turn is priced");
+        assert_eq!(
+            cost.api_equivalent().is_some(),
+            is_plan_billed,
+            "{bearer_token:?}"
+        );
+        assert_eq!(cost.charge().is_some(), !is_plan_billed, "{bearer_token:?}");
+    }
 }
 
 #[tokio::test]
@@ -655,10 +736,10 @@ async fn resumed_claude_turn_continues_from_the_usage_checkpoint() {
     );
     assert_eq!(
         usage.cost,
-        Some(ag_contracts::CostEstimate {
-            basis: ag_contracts::CostBasis::AgentReported,
-            micro_usd: 10_000,
-        })
+        Some(ag_contracts::CostEstimate::new(
+            ag_contracts::CostBasis::AgentReported,
+            10_000
+        ))
     );
     assert!(
         result

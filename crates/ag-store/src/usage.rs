@@ -19,6 +19,13 @@ use crate::timestamp::TimestampSource;
 /// but not in `detailed_invocation_count`, and report no detail.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionUsageRow {
+    /// Persisted label of the subscription login that billed the
+    /// plan-billed invocations, as [`ag_contracts::PlanLogin::as_str`]
+    /// writes it.
+    pub api_equivalent_login: Option<String>,
+    /// API equivalent of the plan-billed invocations in micro-USD, kept
+    /// apart from the charge of metered ones.
+    pub api_equivalent_micro_usd: Option<i64>,
     /// Accumulated input tokens served from the provider's prompt cache.
     pub cache_read_tokens: Option<i64>,
     /// Accumulated input tokens written to the provider's prompt cache.
@@ -27,9 +34,10 @@ pub struct SessionUsageRow {
     pub context_peak_tokens: Option<i64>,
     /// Context window of the model, when known.
     pub context_window_tokens: Option<i64>,
-    /// Persisted label of the price basis, `mixed` when invocations differ.
+    /// Persisted label of the charge's price basis, `mixed` when invocations
+    /// differ.
     pub cost_basis: Option<String>,
-    /// Estimated charge of the priced invocations in micro-USD.
+    /// Estimated charge of the metered invocations in micro-USD.
     pub cost_micro_usd: Option<i64>,
     /// Row creation timestamp in Unix seconds.
     pub created_at: i64,
@@ -39,6 +47,12 @@ pub struct SessionUsageRow {
     pub input_tokens: i64,
     /// Number of agent invocations included in the totals.
     pub invocation_count: i64,
+    /// Whether the API equivalent is an upper bound, because some
+    /// plan-billed invocation's cache reads were priced at the input price.
+    pub is_api_equivalent_upper_bound: bool,
+    /// Whether the estimated charge is an upper bound, because some metered
+    /// invocation's cache reads were priced at the input price.
+    pub is_cost_upper_bound: bool,
     /// Provider model identifier.
     pub model: String,
     /// Accumulated output-token count, reasoning included.
@@ -118,10 +132,13 @@ impl UsageRepository for SqliteUsageRepository {
         let rows = sqlx::query_as!(
             SessionUsageRow,
             r#"
-SELECT cache_read_tokens, cache_write_tokens, context_peak_tokens, context_window_tokens,
-       cost_basis, cost_micro_usd, created_at, detailed_invocation_count, input_tokens,
-       invocation_count, model, output_tokens, purpose, reasoning_tokens, request_count,
-       session_id, unpriced_invocation_count, unreported_request_count
+SELECT api_equivalent_login, api_equivalent_micro_usd, cache_read_tokens, cache_write_tokens,
+       context_peak_tokens, context_window_tokens, cost_basis, cost_micro_usd, created_at,
+       detailed_invocation_count, input_tokens, invocation_count,
+       is_api_equivalent_upper_bound AS "is_api_equivalent_upper_bound: bool",
+       is_cost_upper_bound AS "is_cost_upper_bound: bool", model, output_tokens, purpose,
+       reasoning_tokens, request_count, session_id, unpriced_invocation_count,
+       unreported_request_count
 FROM session_usage
 WHERE session_id = ?
 ORDER BY model, purpose

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::future::poll_fn;
 use std::pin::Pin;
 
-use ag_contracts::{ContextFill, ModelUsage, TurnUsage};
+use ag_contracts::{ContextFill, ModelUsage, PlanLogin, TurnUsage};
 use ag_harness::catalog::{ModelId, ModelSpec};
 use ag_harness::{Cost, EventStream, RunEventKind, Usage};
 use futures_core::Stream as _;
@@ -17,8 +17,11 @@ use crate::agent::usage::{cost_estimate, price};
 /// The harness prices requests only for models registered with prices, and
 /// Agentty registers its models without them, so an unpriced request is
 /// priced at the harness provider catalog's list price of the model that
-/// answered it. A request's context fill is its reported input against that
-/// model's window. The requests' usage sums to the run outcome's usage.
+/// answered it. A `ChatGPT` plan model has no price, as its plan bills a flat
+/// fee, so its requests carry the API equivalent: the list price of the
+/// same-named `OpenAI` API model, or no cost without one. A request's context
+/// fill is its reported input against that model's window. The requests' usage
+/// sums to the run outcome's usage.
 pub(crate) struct UsageMeter {
     /// Registration key of the run's model, which answers requests whose
     /// event names no catalog model.
@@ -83,7 +86,9 @@ impl UsageMeter {
         usage: &Usage,
     ) -> ModelUsage {
         let key = model.map_or(self.run_key.as_str(), ModelId::as_str);
-        let spec = ModelSelection::from_key(key).and_then(|selection| selection.catalog_spec());
+        let selection = ModelSelection::from_key(key);
+        let spec = selection.as_ref().and_then(ModelSelection::catalog_spec);
+        let api_twin = selection.as_ref().and_then(ModelSelection::api_twin_spec);
         let window = if key == self.run_key {
             self.run_window
         } else {
@@ -111,10 +116,15 @@ impl UsageMeter {
             requests: 1,
             ..ModelUsage::new(model)
         };
-        request.cost = cost.map(cost_estimate).or_else(|| {
-            spec.and_then(|spec| spec.pricing())
-                .map(|pricing| price(&request, pricing))
-        });
+        let pricing = spec.and_then(|spec| spec.pricing());
+        request.cost = cost
+            .map(|cost| cost_estimate(cost, &request, pricing))
+            .or_else(|| pricing.map(|pricing| price(&request, pricing)))
+            .or_else(|| {
+                api_twin
+                    .and_then(|twin| twin.pricing())
+                    .map(|pricing| price(&request, pricing).billed_to(PlanLogin::ChatGpt))
+            });
 
         request
     }

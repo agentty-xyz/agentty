@@ -17,6 +17,7 @@ use crate::agent::app_server::codex::usage;
 use crate::agent::app_server::stdio_transport::{
     AppServerRuntimeTransport, AppServerTransportFuture,
 };
+use crate::agent::usage::Billing;
 use crate::app_server::{AppServerError, AppServerStreamEvent, TurnSteeringInbox};
 use crate::app_server_transport::AppServerTransportError;
 
@@ -252,6 +253,7 @@ async fn completed_turn_still_acknowledges_a_steer_answered_after_completion() {
     let folder = tempdir().expect("runtime folder");
     let (mut transport, mut script) = scripted_transport();
     let mut usage_state = usage::UsageTracker::default();
+    let account_request_id = usage_state.account_request()["id"].clone();
     let inbox = TurnSteeringInbox::new();
     let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
     let input = steerable_turn_input(folder.path(), &inbox, &mut usage_state, stream_tx);
@@ -260,6 +262,11 @@ async fn completed_turn_still_acknowledges_a_steer_answered_after_completion() {
             start_turn_with_unanswered_steer(&inbox, &mut script).await;
         script.stdout.send("  ".to_string()).expect("blank line");
         script.emit(&serde_json::json!({"method": "thread/tokenUsage/updated", "params": {}}));
+        // The account answer can also arrive while steers settle.
+        script.emit(&serde_json::json!({
+            "id": account_request_id,
+            "result": {"account": {"type": "chatgpt"}}
+        }));
         script.emit(&serde_json::json!({
             "id": request_id(&steer_request),
             "result": {"turnId": "turn-1"}
@@ -275,6 +282,10 @@ async fn completed_turn_still_acknowledges_a_steer_answered_after_completion() {
     // Assert
     assert!(result.is_ok());
     assert!(acknowledgement.is_ok());
+    assert_eq!(
+        usage_state.billing(),
+        Billing::Plan(ag_contracts::PlanLogin::ChatGpt)
+    );
 }
 
 #[tokio::test]
@@ -347,6 +358,7 @@ async fn restarted_and_compacted_attempts_resend_prompts_the_inbox_accepted() {
             }}
         }));
         let compact = script.next_request().await;
+        script.emit(&serde_json::json!({"id": request_id(&compact), "result": {}}));
         script.emit(&serde_json::json!({
             "method": "turn/completed",
             "params": {"turn": {"status": "completed"}}

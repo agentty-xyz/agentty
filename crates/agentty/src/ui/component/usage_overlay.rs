@@ -98,10 +98,13 @@ impl<'a> UsageOverlay<'a> {
 impl Component for UsageOverlay<'_> {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let layout = PopupLayout::new(self.content, area);
-        let title = text_util::truncate_with_ellipsis(
-            &format!("Usage · {}", self.session_title),
-            layout.content_width.saturating_sub(2),
-        );
+        let mut title = format!("Usage · {}", self.session_title);
+        for login in &self.content.logins {
+            title.push_str(" · ");
+            title.push_str(usage_format::login_label(*login));
+        }
+        let title =
+            text_util::truncate_with_ellipsis(&title, layout.content_width.saturating_sub(2));
 
         overlay::clear_popup_area(frame, layout.popup_area);
         let block = overlay::overlay_block(&title, palette::accent())
@@ -415,7 +418,7 @@ fn figure_span(figure: &UsageFigure) -> Span<'static> {
 /// recorded; weight is left to the totals row.
 fn figure_style(figure: &UsageFigure) -> Style {
     match figure {
-        UsageFigure::Known { .. } => text(),
+        UsageFigure::Known { .. } | UsageFigure::Cost(_) | UsageFigure::CostPair { .. } => text(),
         UsageFigure::NotRecorded | UsageFigure::Unreported | UsageFigure::Unpriced => {
             Style::default().fg(palette::text_subtle())
         }

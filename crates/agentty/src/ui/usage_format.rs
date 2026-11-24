@@ -3,13 +3,16 @@
 //!
 //! Each figure is a [`UsageFigure`] that records how exact it is, so every
 //! surface renders the same states its own way. The panel writes a lower
-//! bound with `≥`, a figure no request reported as `?`, a cost without a
-//! price as `unknown`, and a detail the backend did not record as `—`. Each
-//! state that appears gets one note naming its cause.
+//! bound with `≥`, a charge that is an upper bound with `≤`, one that is
+//! both with `~`, the API equivalent of plan-billed usage with `≈`, a figure
+//! no request reported as `?`, a cost without a price as `unknown`, and a
+//! detail the backend did not record as `—`. Each state that appears gets
+//! one note naming its cause. API equivalents are never summed into a
+//! charged estimate.
 
 use std::collections::HashMap;
 
-use ag_contracts::{CostBasis, TurnUsage, UsagePurpose};
+use ag_contracts::{CostBasis, PlanLogin, TurnUsage, UsagePurpose};
 use ag_tui_text::text_util;
 
 use crate::domain::session::SessionId;
@@ -17,6 +20,21 @@ use crate::domain::session_usage::{ContextNow, LiveUsageKey, SessionUsage, Usage
 
 /// Prefix of a figure that is a lower bound.
 const LOWER_BOUND_MARK: &str = "≥";
+
+/// Prefix of a charge that is an upper bound.
+const UPPER_BOUND_MARK: &str = "≤";
+
+/// Prefix of a charge that is both a lower and an upper bound.
+const BOTH_BOUNDS_MARK: &str = "~";
+
+/// Prefix of the API equivalent of plan-billed usage.
+const API_EQUIVALENT_MARK: &str = "≈";
+
+/// Title label of a Claude login whose usage is plan-billed.
+const CLAUDE_LOGIN: &str = "Claude subscription";
+
+/// Title label of a `ChatGPT` plan login.
+const CHATGPT_LOGIN: &str = "ChatGPT subscription";
 
 /// Panel spelling of a figure no request reported.
 const UNREPORTED_TEXT: &str = "?";
@@ -52,6 +70,16 @@ pub(crate) enum UsageFigure {
         /// Formatted figure.
         text: String,
     },
+    /// A recorded charge with its bounds and basis.
+    Cost(CostFigure),
+    /// Charged estimates and API equivalents, summed apart because an API
+    /// equivalent is no charge, shown side by side.
+    CostPair {
+        /// Sum of the charged estimates.
+        charged: CostFigure,
+        /// Sum of the API equivalents.
+        equivalent: CostFigure,
+    },
     /// The backend did not record this figure.
     NotRecorded,
     /// No request reported this figure.
@@ -74,6 +102,11 @@ impl UsageFigure {
 
                 text.clone()
             }
+            Self::Cost(cost) => cost.panel_text(),
+            Self::CostPair {
+                charged,
+                equivalent,
+            } => format!("{} + {}", charged.panel_text(), equivalent.panel_text()),
             Self::NotRecorded => NOT_RECORDED_TEXT.to_string(),
             Self::Unreported => UNREPORTED_TEXT.to_string(),
             Self::Unpriced => UNPRICED_TEXT.to_string(),
@@ -82,13 +115,31 @@ impl UsageFigure {
 
     /// Returns whether this figure is a known lower bound.
     fn is_lower_bound(&self) -> bool {
-        matches!(
-            self,
-            Self::Known {
-                is_lower_bound: true,
-                ..
-            }
-        )
+        match self {
+            Self::Known { is_lower_bound, .. } => *is_lower_bound,
+            Self::Cost(cost) | Self::CostPair { charged: cost, .. } => cost.is_lower_bound,
+            Self::NotRecorded | Self::Unreported | Self::Unpriced => false,
+        }
+    }
+
+    /// Returns whether this figure is marked as a charge whose cached input
+    /// was priced at the input price; an API equivalent's `≈` covers that.
+    fn is_upper_bound(&self) -> bool {
+        match self {
+            Self::Cost(cost) | Self::CostPair { charged: cost, .. } => cost.shows_upper_bound(),
+            Self::Known { .. } | Self::NotRecorded | Self::Unreported | Self::Unpriced => false,
+        }
+    }
+
+    /// Returns whether this figure holds an API equivalent.
+    fn has_api_equivalent(&self) -> bool {
+        match self {
+            Self::Cost(cost)
+            | Self::CostPair {
+                equivalent: cost, ..
+            } => cost.is_api_equivalent,
+            Self::Known { .. } | Self::NotRecorded | Self::Unreported | Self::Unpriced => false,
+        }
     }
 
     /// Returns a known token count.
@@ -98,20 +149,74 @@ impl UsageFigure {
             text: text_util::format_token_count(count),
         }
     }
+}
 
-    /// Returns a known charge; a lower bound below half a cent reads
-    /// `$0.00` rather than carrying a second mark.
-    fn cost(micro_usd: u64, is_lower_bound: bool) -> Self {
+/// One estimated charge and how exact it is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CostFigure {
+    /// Whether the figure is the API equivalent of plan-billed usage rather
+    /// than a charge.
+    pub(crate) is_api_equivalent: bool,
+    /// Whether some usage is left out, so the true charge is at least this.
+    pub(crate) is_lower_bound: bool,
+    /// Whether cached input was priced at the input price, so the true
+    /// charge is at most this.
+    pub(crate) is_upper_bound: bool,
+    /// Formatted charge, without marks.
+    pub(crate) text: String,
+}
+
+impl CostFigure {
+    /// Returns a charge of `micro_usd`; a lower bound below half a cent
+    /// reads `$0.00` rather than carrying a second mark.
+    fn new(micro_usd: u64, is_lower_bound: bool, is_upper_bound: bool) -> Self {
         let text = if is_lower_bound && micro_usd < MICRO_USD_PER_CENT / 2 {
             LOWER_BOUND_SUB_CENT_TEXT.to_string()
         } else {
             format_money(micro_usd)
         };
 
-        Self::Known {
+        Self {
+            is_api_equivalent: false,
             is_lower_bound,
+            is_upper_bound,
             text,
         }
+    }
+
+    /// Returns this charge as the API equivalent of plan-billed usage.
+    fn api_equivalent(self) -> Self {
+        Self {
+            is_api_equivalent: true,
+            ..self
+        }
+    }
+
+    /// Returns how the usage panel writes this charge: `≥`, `≤`, or `~` for
+    /// its bounds, then `≈` for an API equivalent. The `≈` already says the
+    /// figure is approximate, so an API equivalent's upper bound adds no mark
+    /// of its own; its note names the cause.
+    fn panel_text(&self) -> String {
+        let bound_mark = match (self.is_lower_bound, self.shows_upper_bound()) {
+            (false, false) => "",
+            (true, false) => LOWER_BOUND_MARK,
+            (false, true) => UPPER_BOUND_MARK,
+            (true, true) => BOTH_BOUNDS_MARK,
+        };
+        let api_mark = if self.is_api_equivalent {
+            API_EQUIVALENT_MARK
+        } else {
+            ""
+        };
+
+        format!("{bound_mark}{api_mark}{}", self.text)
+    }
+
+    /// Returns whether this figure carries the upper-bound mark: a charge
+    /// whose cached input was priced at the input price. An API
+    /// equivalent's `≈` covers its own upper bound.
+    fn shows_upper_bound(&self) -> bool {
+        self.is_upper_bound && !self.is_api_equivalent
     }
 }
 
@@ -274,6 +379,9 @@ pub(crate) struct UsageNote {
 /// Everything the usage panel shows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct UsagePanelContent {
+    /// Subscription logins whose usage carries API-equivalent costs, such
+    /// as `ChatGPT subscription`, shown in the panel title.
+    pub(crate) logins: Vec<PlanLogin>,
     /// One note per mark that appears.
     pub(crate) notes: Vec<UsageNote>,
     /// One row per model and purpose.
@@ -307,6 +415,7 @@ pub(crate) fn usage_panel_content(usage: &SessionUsage) -> UsagePanelContent {
     let notes = usage_notes(&usage.records, &rows, &total, &summary);
 
     UsagePanelContent {
+        logins: subscription_logins(&usage.records),
         notes,
         rows,
         summary,
@@ -385,11 +494,38 @@ fn record_row(record: &UsageRecord) -> UsageTableRow {
 
 /// Returns the cost cell of one record.
 fn record_cost_cell(record: &UsageRecord) -> UsageFigure {
-    match record.cost_micro_usd {
-        Some(micro_usd) => UsageFigure::cost(micro_usd, record_cost_is_lower_bound(record)),
-        None if record.detailed_invocation_count == 0 => UsageFigure::NotRecorded,
-        None => UsageFigure::Unpriced,
+    let is_lower_bound = record_cost_is_lower_bound(record);
+    let charged = record
+        .cost_micro_usd
+        .map(|micro_usd| CostFigure::new(micro_usd, is_lower_bound, record.cost_upper_bound));
+    let equivalent = record.api_equivalent_micro_usd.map(|micro_usd| {
+        CostFigure::new(micro_usd, is_lower_bound, record.api_equivalent_upper_bound)
+            .api_equivalent()
+    });
+
+    cost_cell(charged, equivalent).unwrap_or(if record.detailed_invocation_count == 0 {
+        UsageFigure::NotRecorded
+    } else {
+        UsageFigure::Unpriced
+    })
+}
+
+/// Returns the cost figure of a charge and an API equivalent, side by side
+/// when both are present, or `None` when neither is.
+fn cost_cell(charged: Option<CostFigure>, equivalent: Option<CostFigure>) -> Option<UsageFigure> {
+    match (charged, equivalent) {
+        (Some(charged), Some(equivalent)) => Some(UsageFigure::CostPair {
+            charged,
+            equivalent,
+        }),
+        (charged, equivalent) => charged.or(equivalent).map(UsageFigure::Cost),
     }
+}
+
+/// Returns whether a record has no price at all: neither a charge nor an
+/// API equivalent.
+fn is_unpriced(record: &UsageRecord) -> bool {
+    record.cost_micro_usd.is_none() && record.api_equivalent_micro_usd.is_none()
 }
 
 /// Returns whether a record's known cost leaves out some of its usage.
@@ -514,30 +650,51 @@ fn peak_context(records: &[UsageRecord]) -> Option<(u64, Option<u64>)> {
 }
 
 /// Returns the session cost cell: the sum of known costs, a lower bound when
-/// any usage was left out, and `unknown` when nothing was priced.
+/// any usage was left out, an upper bound when any summed cost is one, and
+/// `unknown` when nothing was priced. Charged estimates and API equivalents
+/// are summed apart. Unpriced usage could belong to either, so it makes both
+/// sums lower bounds.
 fn total_cost_cell(records: &[UsageRecord]) -> UsageFigure {
-    let known = records
-        .iter()
-        .filter_map(|record| record.cost_micro_usd)
-        .collect::<Vec<_>>();
-    if known.is_empty() {
+    let has_unpriced = records.iter().any(is_unpriced);
+    let sum = |amount: fn(&UsageRecord) -> Option<u64>, upper_bound: fn(&UsageRecord) -> bool| {
+        let priced = records
+            .iter()
+            .filter(|record| amount(record).is_some())
+            .collect::<Vec<_>>();
+        if priced.is_empty() {
+            return None;
+        }
+        let micro_usd = priced.iter().fold(0_u64, |total, record| {
+            total.saturating_add(amount(record).unwrap_or_default())
+        });
+        let is_lower_bound = has_unpriced
+            || priced
+                .iter()
+                .any(|record| record_cost_is_lower_bound(record));
+        let is_upper_bound = priced.iter().any(|record| upper_bound(record));
+
+        Some(CostFigure::new(micro_usd, is_lower_bound, is_upper_bound))
+    };
+    let charged = sum(
+        |record| record.cost_micro_usd,
+        |record| record.cost_upper_bound,
+    );
+    let equivalent = sum(
+        |record| record.api_equivalent_micro_usd,
+        |record| record.api_equivalent_upper_bound,
+    )
+    .map(CostFigure::api_equivalent);
+
+    cost_cell(charged, equivalent).unwrap_or_else(|| {
         if records
             .iter()
             .any(|record| record.detailed_invocation_count > 0)
         {
-            return UsageFigure::Unpriced;
+            UsageFigure::Unpriced
+        } else {
+            UsageFigure::NotRecorded
         }
-
-        return UsageFigure::NotRecorded;
-    }
-    let total = known
-        .iter()
-        .fold(0_u64, |total, micro_usd| total.saturating_add(*micro_usd));
-    let is_lower_bound = records
-        .iter()
-        .any(|record| record.cost_micro_usd.is_none() || record_cost_is_lower_bound(record));
-
-    UsageFigure::cost(total, is_lower_bound)
+    })
 }
 
 /// Builds the headline figures from the totals row and session context.
@@ -573,11 +730,25 @@ fn usage_summary(usage: &SessionUsage, total: &UsageTableRow) -> UsageSummary {
 /// Explains the session cost figure in a short phrase.
 fn cost_explanation(cost: &UsageFigure, records: &[UsageRecord]) -> &'static str {
     match cost {
-        UsageFigure::Known {
+        UsageFigure::CostPair { .. } => "estimated, plus API-equivalent, plan-billed",
+        UsageFigure::Cost(CostFigure {
+            is_api_equivalent: true,
+            ..
+        }) => "API-equivalent, plan-billed",
+        UsageFigure::Cost(CostFigure {
+            is_lower_bound: true,
+            is_upper_bound: true,
+            ..
+        }) => "lower and upper bound",
+        UsageFigure::Cost(CostFigure {
             is_lower_bound: true,
             ..
-        } => "lower bound",
-        UsageFigure::Known { .. } => match combined_cost_basis(records) {
+        }) => "lower bound",
+        UsageFigure::Cost(CostFigure {
+            is_upper_bound: true,
+            ..
+        }) => "upper bound",
+        UsageFigure::Cost(_) | UsageFigure::Known { .. } => match combined_cost_basis(records) {
             Some(CostBasis::ListPrice) => "from list prices",
             Some(CostBasis::HostPrice) => "from configured prices",
             Some(CostBasis::AgentReported) => "as the agent reported",
@@ -588,40 +759,19 @@ fn cost_explanation(cost: &UsageFigure, records: &[UsageRecord]) -> &'static str
     }
 }
 
-/// Returns the one basis every priced record shares, or
+/// Returns the one basis every charged record shares, or
 /// [`CostBasis::Mixed`] when they differ.
 fn combined_cost_basis(records: &[UsageRecord]) -> Option<CostBasis> {
     records
         .iter()
         .filter_map(|record| record.cost_basis)
-        .reduce(|basis, next| {
-            if basis == next {
-                basis
-            } else {
-                CostBasis::Mixed
-            }
-        })
+        .reduce(CostBasis::combine)
 }
 
 /// Returns the share of input served from cache over the records that
 /// report cache reads, when any of them had input.
 fn cache_share(records: &[UsageRecord]) -> Option<String> {
-    let (cached, input) = records
-        .iter()
-        .filter_map(|record| {
-            record
-                .cache_read_tokens
-                .map(|cached| (cached, record.input_tokens))
-        })
-        .fold(
-            (0_u64, 0_u64),
-            |(cached, input), (record_cached, record_input)| {
-                (
-                    cached.saturating_add(record_cached),
-                    input.saturating_add(record_input),
-                )
-            },
-        );
+    let (cached, input) = cached_input(records);
     if input == 0 {
         return None;
     }
@@ -638,6 +788,27 @@ fn cache_share(records: &[UsageRecord]) -> Option<String> {
         "{} of input served from cache{scope}",
         format_percent(cached.min(input), input)
     ))
+}
+
+/// Sums the cache reads and the input of the records that report cache
+/// reads.
+fn cached_input<'a>(records: impl IntoIterator<Item = &'a UsageRecord>) -> (u64, u64) {
+    records
+        .into_iter()
+        .filter_map(|record| {
+            record
+                .cache_read_tokens
+                .map(|cached| (cached, record.input_tokens))
+        })
+        .fold(
+            (0_u64, 0_u64),
+            |(cached, input), (record_cached, record_input)| {
+                (
+                    cached.saturating_add(record_cached),
+                    input.saturating_add(record_input),
+                )
+            },
+        )
 }
 
 /// Builds the context line from the latest fill and the largest peak.
@@ -721,8 +892,19 @@ fn usage_notes(
             });
         }
     };
+    // A `~` charge is explained by the lower- and upper-bound notes.
     if figures.iter().any(|figure| figure.is_lower_bound()) {
         push_note(LOWER_BOUND_MARK, "Lower bound", lower_bound_causes(records));
+    }
+    if figures.iter().any(|figure| figure.is_upper_bound()) {
+        push_note(UPPER_BOUND_MARK, "Upper bound", upper_bound_causes(records));
+    }
+    if figures.iter().any(|figure| figure.has_api_equivalent()) {
+        push_note(
+            API_EQUIVALENT_MARK,
+            "API-equivalent",
+            api_equivalent_causes(records),
+        );
     }
     if has_figure(&UsageFigure::Unreported) {
         push_note(UNREPORTED_TEXT, "Unreported", unreported_causes(records));
@@ -737,14 +919,17 @@ fn usage_notes(
             not_recorded_causes(records),
         );
     }
-    if let Some(basis) = combined_cost_basis(records) {
+    let source = combined_cost_basis(records).map(basis_source).or_else(|| {
+        records
+            .iter()
+            .any(|record| record.api_equivalent_micro_usd.is_some())
+            .then_some("at API list prices for plan-billed usage")
+    });
+    if let Some(source) = source {
         notes.push(UsageNote {
             is_estimate: true,
             mark: "$",
-            text: format!(
-                "Costs are estimated {}; the provider bill is authoritative.",
-                basis_source(basis)
-            ),
+            text: format!("Costs are estimated {source}; the provider bill is authoritative."),
         });
     }
 
@@ -768,7 +953,7 @@ fn lower_bound_causes(records: &[UsageRecord]) -> Vec<String> {
             model_list(&unreported)
         ));
     }
-    let has_priced = records.iter().any(|record| record.cost_micro_usd.is_some());
+    let has_priced = records.iter().any(|record| !is_unpriced(record));
     let unpriced = records
         .iter()
         .filter(|record| record.unpriced_invocation_count > 0)
@@ -811,6 +996,86 @@ fn lower_bound_causes(records: &[UsageRecord]) -> Vec<String> {
     causes
 }
 
+/// Names why charges are upper bounds: the share of input the affected
+/// models read from cache, priced at the input price for want of a cache
+/// price.
+fn upper_bound_causes(records: &[UsageRecord]) -> Vec<String> {
+    let upper_bound = records
+        .iter()
+        .filter(|record| record.cost_upper_bound)
+        .collect::<Vec<_>>();
+
+    vec![format!(
+        "{} cached, no cache price for {}",
+        cached_share(upper_bound.iter().copied()),
+        model_list(&upper_bound)
+    )]
+}
+
+/// Names the logins whose costs are API equivalents and the prices used.
+fn api_equivalent_causes(records: &[UsageRecord]) -> Vec<String> {
+    let mut causes = subscription_logins(records)
+        .into_iter()
+        .map(|login| match login {
+            PlanLogin::ChatGpt => "ChatGPT plan login; priced at OpenAI API list prices",
+            PlanLogin::Claude => {
+                "Claude subscription login; priced from Claude Code's estimate or Anthropic API \
+                 list prices"
+            }
+        })
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let has_mixed_login = records.iter().any(|record| {
+        record.api_equivalent_micro_usd.is_some() && record.api_equivalent_login.is_none()
+    });
+    if has_mixed_login {
+        causes.push(
+            "usage of several subscription logins, priced at their API list prices".to_string(),
+        );
+    }
+    let overpriced = records
+        .iter()
+        .filter(|record| record.api_equivalent_upper_bound)
+        .collect::<Vec<_>>();
+    if !overpriced.is_empty() {
+        causes.push(format!(
+            "{} cached input priced as uncached, with no cache price",
+            cached_share(overpriced)
+        ));
+    }
+    causes.push("a subscription bills no per-token charge".to_string());
+
+    causes
+}
+
+/// Formats the share of input `records` read from cache.
+fn cached_share<'a>(records: impl IntoIterator<Item = &'a UsageRecord>) -> String {
+    let (cached, input) = cached_input(records);
+
+    format_percent(cached.min(input), input)
+}
+
+/// Returns the subscription logins whose plan-billed usage `records` price
+/// as API equivalents, once each.
+fn subscription_logins(records: &[UsageRecord]) -> Vec<PlanLogin> {
+    let mut logins = records
+        .iter()
+        .filter_map(|record| record.api_equivalent_login)
+        .collect::<Vec<_>>();
+    logins.sort_unstable();
+    logins.dedup();
+
+    logins
+}
+
+/// Returns the panel-title label of a subscription login.
+pub(crate) fn login_label(login: PlanLogin) -> &'static str {
+    match login {
+        PlanLogin::ChatGpt => CHATGPT_LOGIN,
+        PlanLogin::Claude => CLAUDE_LOGIN,
+    }
+}
+
 /// Names the models whose figures no request reported.
 fn unreported_causes(records: &[UsageRecord]) -> Vec<String> {
     let unreported = records
@@ -829,9 +1094,9 @@ fn unreported_causes(records: &[UsageRecord]) -> Vec<String> {
 fn unpriced_causes(records: &[UsageRecord]) -> Vec<String> {
     let unpriced = records
         .iter()
-        .filter(|record| record.cost_micro_usd.is_none() && record.detailed_invocation_count > 0)
+        .filter(|record| is_unpriced(record) && record.detailed_invocation_count > 0)
         .collect::<Vec<_>>();
-    let has_priced = records.iter().any(|record| record.cost_micro_usd.is_some());
+    let has_priced = records.iter().any(|record| !is_unpriced(record));
     let scope = if has_priced {
         ", which the total leaves out"
     } else {

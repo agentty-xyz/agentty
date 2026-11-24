@@ -2,7 +2,10 @@
 //! read with session context, and cleanup on session delete.
 
 use ag_contracts::test_support::token_usage;
-use ag_contracts::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsagePurpose};
+use ag_contracts::{
+    ContextFill, CostBasis, CostEstimate, ModelUsage, PlanLogin, PricedCost, TurnUsage,
+    UsagePurpose,
+};
 use ag_session::SessionMessageKind;
 
 use super::support::insert_session_fixture;
@@ -151,10 +154,11 @@ async fn test_load_session_usage_returns_details_context_and_turns() {
         cache_read_tokens: Some(40),
         cache_write_tokens: None,
         context: Some(ContextFill::of_request(100, Some(1_000))),
-        cost: Some(CostEstimate {
+        cost: Some(CostEstimate::charged(PricedCost {
             basis: CostBasis::ListPrice,
             micro_usd: 12,
-        }),
+            upper_bound: true,
+        })),
         input_tokens: 100,
         output_tokens: 9,
         reasoning_tokens: Some(3),
@@ -213,6 +217,7 @@ async fn test_load_session_usage_returns_details_context_and_turns() {
             detailed_invocation_count: 1,
             input_tokens: 100,
             invocation_count: 1,
+            is_cost_upper_bound: true,
             model: "model".to_string(),
             output_tokens: 9,
             purpose: "turn".to_string(),
@@ -232,6 +237,96 @@ async fn test_load_session_usage_returns_details_context_and_turns() {
         }
     );
     assert_eq!(missing, SessionUsageContextRow::default());
+}
+
+/// Verifies the API equivalent sums apart from the charge, names no single
+/// login once two logins billed it, and stays an upper bound once any
+/// invocation was.
+#[tokio::test]
+async fn test_upsert_session_usage_keeps_api_equivalents_apart_from_charges() {
+    // Arrange
+    let database = session_database().await;
+    let priced = |cost: CostEstimate| ModelUsage {
+        cost: Some(cost),
+        input_tokens: 10,
+        output_tokens: 1,
+        requests: 1,
+        ..ModelUsage::new("model")
+    };
+    let overpriced = PricedCost {
+        upper_bound: true,
+        ..PricedCost::new(CostBasis::ListPrice, 5)
+    };
+    let invocations = [
+        priced(CostEstimate::charged(overpriced).billed_to(PlanLogin::ChatGpt)),
+        priced(CostEstimate::charged(overpriced).billed_to(PlanLogin::Claude)),
+        priced(CostEstimate::new(CostBasis::ListPrice, 7)),
+        ModelUsage {
+            cost: None,
+            ..priced(CostEstimate::new(CostBasis::ListPrice, 0))
+        },
+    ];
+
+    // Act
+    for invocation in invocations {
+        database
+            .usage()
+            .upsert_session_usage(
+                "session-a",
+                UsagePurpose::Turn,
+                &TurnUsage::single(invocation),
+            )
+            .await
+            .expect("failed to record usage");
+    }
+    let rows = database
+        .usage()
+        .load_session_usage("session-a")
+        .await
+        .expect("failed to load usage");
+
+    // Assert
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].cost_basis.as_deref(), Some("list"));
+    assert_eq!(rows[0].cost_micro_usd, Some(7));
+    assert!(!rows[0].is_cost_upper_bound);
+    assert_eq!(rows[0].api_equivalent_micro_usd, Some(10));
+    assert_eq!(
+        rows[0].api_equivalent_login.as_deref(),
+        Some("mixed"),
+        "two logins name none"
+    );
+    assert!(rows[0].is_api_equivalent_upper_bound);
+    assert_eq!(rows[0].unpriced_invocation_count, 1);
+}
+
+/// Verifies the schema rejects an API equivalent without its login, a login
+/// without an amount, an unknown login, and a negative amount.
+#[tokio::test]
+async fn test_session_usage_rejects_inconsistent_api_equivalents() {
+    // Arrange
+    let database = session_database().await;
+    let rows = [
+        (Some(5_i64), None),
+        (None, Some("chatgpt")),
+        (Some(5), Some("someone")),
+        (Some(-1), Some("claude")),
+    ];
+
+    for (amount, login) in rows {
+        // Act
+        let result = sqlx::query(
+            "INSERT INTO session_usage (session_id, model, created_at, api_equivalent_micro_usd, \
+             api_equivalent_login) VALUES ('session-a', 'model', 0, ?, ?)",
+        )
+        .bind(amount)
+        .bind(login)
+        .execute(database.pool())
+        .await;
+
+        // Assert
+        assert!(result.is_err(), "{amount:?} {login:?}");
+    }
 }
 
 /// Opens a migrated database holding the `session-a` session.

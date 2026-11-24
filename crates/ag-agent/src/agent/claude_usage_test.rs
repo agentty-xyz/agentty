@@ -2,16 +2,25 @@
 //! deduplication, subagent exclusion, context windows, and each turn's share
 //! of the per-model `modelUsage` totals.
 
+use std::ffi::OsString;
 use std::path::Path;
+use std::process::Command;
 
 use ag_contracts::{
-    AgentRequestKind, ContextFill, CostBasis, ModelUsage, TurnUsage, UsageCheckpoint,
+    AgentRequestKind, ApiEquivalentCost, ContextFill, CostBasis, CostEstimate, ModelUsage,
+    PlanLogin, PricedCost, TurnUsage, UsageCheckpoint,
 };
+use ag_harness::provider::ModelProvider;
+use ag_session::AgentKind;
 use semver::Version;
 use serde_json::{Value, json};
 
 use super::{ModelTotals, UNKNOWN_CHECKPOINT, micro_usd};
-use crate::agent::claude_usage::{AgentTotals, ClaudeRun, ClaudeUsageMeter, turn_usage};
+use crate::agent::claude_usage::{
+    AgentTotals, ClaudeRun, ClaudeUsageMeter, turn_usage, uses_alternate_credentials,
+};
+use crate::agent::provider::parse_response;
+use crate::agent::usage::{Billing, cli_turn_usage, list_price};
 
 /// Model a turn requests, which untrusted runs are charged under.
 const REQUESTED: &str = "claude-sonnet-5-5";
@@ -129,7 +138,9 @@ fn rows(usage: &TurnUsage) -> Vec<Row<'_>> {
                 row.input_tokens,
                 row.output_tokens,
                 row.requests,
-                row.cost.map(|cost| cost.basis),
+                row.cost
+                    .and_then(CostEstimate::charge)
+                    .map(|charged| charged.basis),
                 row.context.map(|context| context.last_input_tokens),
             )
         })
@@ -163,6 +174,7 @@ fn assert_turn_case(case: &TurnCase) {
         Path::new(WORKTREE),
         case.checkpoint.as_deref(),
         runs.iter().map(|(main_loop, totals)| ClaudeRun {
+            billing: Billing::Metered,
             main_loop,
             totals: totals.as_ref(),
         }),
@@ -476,6 +488,217 @@ fn turn_usage_checkpoints_started_sessions_and_prices_unmatched_costs_at_list_pr
     for case in &cases {
         assert_turn_case(case);
     }
+}
+
+#[test]
+fn only_a_first_party_run_without_an_api_key_bills_to_a_claude_plan() {
+    // Arrange
+    let plan = Billing::Plan(PlanLogin::Claude);
+    let first_party = json!({"provider": "firstParty", "inputTokens": 1, "outputTokens": 1});
+    let bedrock = json!({"provider": "bedrock", "inputTokens": 1, "outputTokens": 1});
+    let unnamed = json!({"inputTokens": 1, "outputTokens": 1});
+    let cases = [
+        (
+            "no key source",
+            None,
+            Some(json!({"a": first_party})),
+            Billing::Metered,
+        ),
+        (
+            "an API key",
+            Some("ANTHROPIC_API_KEY"),
+            Some(json!({"a": first_party})),
+            Billing::Metered,
+        ),
+        (
+            "an API key helper",
+            Some("apiKeyHelper"),
+            Some(json!({"a": first_party})),
+            Billing::Metered,
+        ),
+        (
+            "a Console login key",
+            Some("/login managed key"),
+            Some(json!({"a": first_party})),
+            Billing::Metered,
+        ),
+        ("no result yet", Some("none"), None, Billing::Metered),
+        (
+            "a subscription",
+            Some("none"),
+            Some(json!({"a": first_party, "b": first_party})),
+            plan,
+        ),
+        (
+            "a cloud provider",
+            Some("none"),
+            Some(json!({"a": first_party, "b": bedrock})),
+            Billing::Metered,
+        ),
+        (
+            "a release that names no provider",
+            Some("none"),
+            Some(json!({"a": first_party, "b": unnamed})),
+            Billing::Metered,
+        ),
+    ];
+
+    for (name, source, model_usage, expected) in cases {
+        let mut meter = ClaudeUsageMeter::default();
+        meter.observe(&json!({"type": "system", "subtype": "init", "apiKeySource": source}));
+        let is_undetermined = source == Some("none") && model_usage.is_none();
+
+        // Act
+        if let Some(model_usage) = model_usage {
+            meter.observe(&json!({"type": "result", "modelUsage": model_usage}));
+        }
+
+        // Assert
+        assert_eq!(meter.billing(), expected, "{name}");
+        assert_eq!(
+            meter.known_billing(),
+            (!is_undetermined).then_some(expected),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn alternate_credentials_come_from_the_command_over_the_process_environment() {
+    // Arrange
+    let process_env = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect::<Vec<_>>()
+    };
+    let plain = Command::new("claude");
+    let mut bearer = Command::new("claude");
+    bearer.env("ANTHROPIC_AUTH_TOKEN", "token");
+    let mut cleared = Command::new("claude");
+    cleared.env_remove("ANTHROPIC_BASE_URL");
+
+    // Act, Assert
+    assert!(!uses_alternate_credentials(&plain, process_env(&[])));
+    assert!(uses_alternate_credentials(&bearer, process_env(&[])));
+    assert!(uses_alternate_credentials(
+        &plain,
+        process_env(&[("ANTHROPIC_BASE_URL", "https://gateway.example")])
+    ));
+    assert!(uses_alternate_credentials(
+        &plain,
+        process_env(&[("CLAUDE_CODE_USE_BEDROCK", "1")])
+    ));
+    assert!(!uses_alternate_credentials(
+        &plain,
+        process_env(&[
+            ("CLAUDE_CODE_USE_VERTEX", "0"),
+            ("ANTHROPIC_AUTH_TOKEN", "")
+        ])
+    ));
+    assert!(!uses_alternate_credentials(
+        &cleared,
+        process_env(&[("ANTHROPIC_BASE_URL", "https://gateway.example")])
+    ));
+    assert!(!uses_alternate_credentials(
+        &plain,
+        process_env(&[("ANTHROPIC_MODEL", "claude-sonnet-5-5")])
+    ));
+}
+
+#[test]
+fn a_subscription_stream_parses_into_api_equivalent_turn_usage() {
+    // Arrange
+    let stdout = [
+        json!({"type": "system", "subtype": "init", "apiKeySource": "none", "claude_code_version": CUMULATIVE}),
+        json!({"type": "result", "subtype": "success", "result": "{\"answer\":\"Done\",\"questions\":[]}",
+            "usage": {"input_tokens": 30, "output_tokens": 5},
+            "modelUsage": {REQUESTED: {"provider": "firstParty", "inputTokens": 30, "outputTokens": 5, "costUSD": 0.01}}}),
+    ]
+    .map(|event| event.to_string())
+    .join("\n");
+    let parsed = parse_response(AgentKind::Claude, &stdout, "");
+
+    // Act
+    let usage = cli_turn_usage(
+        AgentKind::Claude,
+        REQUESTED,
+        &AgentRequestKind::SessionStart,
+        Path::new("/worktree"),
+        None,
+        &[&parsed],
+    );
+
+    // Assert
+    let cost = usage.models[0].cost.expect("the turn is priced");
+    assert_eq!(cost.charge(), None);
+    assert_eq!(
+        cost.api_equivalent(),
+        Some(ApiEquivalentCost {
+            cost: PricedCost::new(CostBasis::AgentReported, 10_000),
+            login: Some(PlanLogin::Claude),
+        })
+    );
+}
+
+#[test]
+fn plan_billed_runs_carry_api_equivalent_costs() {
+    // Arrange
+    let (reported_loop, reported_totals) = claude_run(
+        Some(CUMULATIVE),
+        Some(json!({"claude-opus-5-5": entry(130, 50, Some(0.015))})),
+    );
+    let (untrusted_loop, _) = claude_run(Some(CUMULATIVE), None);
+
+    // Act
+    let usage = turn_usage(
+        REQUESTED,
+        &AgentRequestKind::UtilityPrompt,
+        Path::new("/worktree"),
+        None,
+        [
+            ClaudeRun {
+                billing: Billing::Plan(PlanLogin::Claude),
+                main_loop: &reported_loop,
+                totals: reported_totals.as_ref(),
+            },
+            ClaudeRun {
+                billing: Billing::Plan(PlanLogin::Claude),
+                main_loop: &untrusted_loop,
+                totals: None,
+            },
+        ],
+    );
+
+    // Assert
+    let costs = usage
+        .models
+        .iter()
+        .map(|model| (model.model.as_str(), model.cost))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        costs,
+        [
+            (
+                CONTEXT_MODEL,
+                Some(
+                    CostEstimate::new(CostBasis::AgentReported, 15_000)
+                        .billed_to(PlanLogin::Claude)
+                )
+            ),
+            (
+                REQUESTED,
+                list_price(
+                    &ModelUsage {
+                        model: REQUESTED.to_string(),
+                        ..untrusted_loop
+                    },
+                    ModelProvider::Anthropic
+                )
+                .map(|cost| cost.billed_to(PlanLogin::Claude))
+            ),
+        ]
+    );
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Usage overlay rendering tests: table, notes, footer, narrow widths, and
 //! context gauge tones.
 
-use ag_contracts::{CostBasis, UsagePurpose};
+use ag_contracts::{CostBasis, PlanLogin, UsagePurpose};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -16,12 +16,16 @@ use crate::ui::usage_format::{ContextSummary, UsagePanelContent, usage_panel_con
 /// Returns a priced record of `model` under `purpose`.
 fn record(model: &str, purpose: UsagePurpose) -> UsageRecord {
     UsageRecord {
+        api_equivalent_login: None,
+        api_equivalent_micro_usd: None,
+        api_equivalent_upper_bound: false,
         cache_read_tokens: Some(3_000),
         cache_write_tokens: Some(100),
         context_peak_tokens: Some(9_000),
         context_window_tokens: Some(10_000),
         cost_basis: Some(CostBasis::ListPrice),
         cost_micro_usd: Some(240_000),
+        cost_upper_bound: false,
         detailed_invocation_count: 2,
         input_tokens: 4_000,
         invocation_count: 2,
@@ -159,6 +163,34 @@ fn test_wide_overlay_shows_every_column_rows_totals_notes_and_footer() {
     assert!(contains(&rows, "≥ Lower bound: 3 requests (qwen3-coder)"));
     assert!(contains(&rows, "$ Costs are estimated"));
     assert!(contains(&rows, "Esc: close"));
+}
+
+#[test]
+fn test_plan_login_overlay_names_the_login_and_marks_api_equivalents() {
+    // Arrange
+    let plan = UsageRecord {
+        api_equivalent_login: Some(PlanLogin::ChatGpt),
+        api_equivalent_micro_usd: Some(240_000),
+        cost_basis: None,
+        cost_micro_usd: None,
+        ..record("chatgpt/gpt-6.1-sol", UsagePurpose::Turn)
+    };
+    let content = usage_panel_content(&SessionUsage {
+        context: None,
+        records: vec![plan],
+        turn_count: 1,
+    });
+
+    // Act
+    let rows = render_rows(&content, 140, 30);
+
+    // Assert
+    assert!(contains(
+        &rows,
+        "Usage · Retry sync client · ChatGPT subscription"
+    ));
+    assert!(contains(&rows, "≈$0.24 API-equivalent, plan-billed"));
+    assert!(contains(&rows, "≈ API-equivalent: ChatGPT plan login"));
 }
 
 #[test]

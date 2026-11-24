@@ -5,7 +5,7 @@
 //! detailed usage count in [`UsageRecord::invocation_count`] but not in
 //! [`UsageRecord::detailed_invocation_count`], and report no detail.
 
-use ag_contracts::{CostBasis, ModelUsage, TurnUsage, UsagePurpose};
+use ag_contracts::{CostBasis, CostEstimate, ModelUsage, PlanLogin, TurnUsage, UsagePurpose};
 
 use crate::domain::session::SessionId;
 
@@ -13,6 +13,15 @@ use crate::domain::session::SessionId;
 /// way the store accumulates its rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageRecord {
+    /// Subscription login that billed the plan-billed invocations, or
+    /// `None` when several logins did or none was plan-billed.
+    pub api_equivalent_login: Option<PlanLogin>,
+    /// API equivalent of the plan-billed invocations in micro-USD, kept
+    /// apart from the charge of metered ones.
+    pub api_equivalent_micro_usd: Option<u64>,
+    /// Whether the API equivalent is an upper bound, because some
+    /// plan-billed invocation's cache reads were priced at the input price.
+    pub api_equivalent_upper_bound: bool,
     /// Input tokens served from the prompt cache, when every invocation
     /// reported them.
     pub cache_read_tokens: Option<u64>,
@@ -23,10 +32,13 @@ pub struct UsageRecord {
     pub context_peak_tokens: Option<u64>,
     /// Context window of the model, when known.
     pub context_window_tokens: Option<u64>,
-    /// Price basis of the priced invocations.
+    /// Price basis of the charged invocations.
     pub cost_basis: Option<CostBasis>,
-    /// Estimated charge of the priced invocations in micro-USD.
+    /// Estimated charge of the metered invocations in micro-USD.
     pub cost_micro_usd: Option<u64>,
+    /// Whether the estimated charge is an upper bound, because some metered
+    /// invocation's cache reads were priced at the input price.
+    pub cost_upper_bound: bool,
     /// Invocations recorded with detailed usage.
     pub detailed_invocation_count: u64,
     /// Input tokens, cache included.
@@ -53,13 +65,21 @@ impl UsageRecord {
     /// Returns the record of one detailed invocation of `usage` under
     /// `purpose`.
     pub fn from_model_usage(purpose: UsagePurpose, usage: &ModelUsage) -> Self {
+        let charged = usage.cost.and_then(CostEstimate::charge);
+        let api_equivalent = usage.cost.and_then(CostEstimate::api_equivalent);
+
         Self {
+            api_equivalent_login: api_equivalent.and_then(|equivalent| equivalent.login),
+            api_equivalent_micro_usd: api_equivalent.map(|equivalent| equivalent.cost.micro_usd),
+            api_equivalent_upper_bound: api_equivalent
+                .is_some_and(|equivalent| equivalent.cost.upper_bound),
             cache_read_tokens: usage.cache_read_tokens,
             cache_write_tokens: usage.cache_write_tokens,
             context_peak_tokens: usage.context.map(|context| context.peak_input_tokens),
             context_window_tokens: usage.context.and_then(|context| context.window_tokens),
-            cost_basis: usage.cost.map(|cost| cost.basis),
-            cost_micro_usd: usage.cost.map(|cost| cost.micro_usd),
+            cost_basis: charged.map(|charged| charged.basis),
+            cost_micro_usd: charged.map(|charged| charged.micro_usd),
+            cost_upper_bound: charged.is_some_and(|charged| charged.upper_bound),
             detailed_invocation_count: 1,
             input_tokens: usage.input_tokens,
             invocation_count: 1,
@@ -74,14 +94,31 @@ impl UsageRecord {
     }
 
     /// Adds the later record `next` of the same model and purpose. A detail
-    /// stays known only when both sides know it, costs sum over priced
-    /// invocations, and different bases sum to [`CostBasis::Mixed`].
+    /// stays known only when both sides know it. Charges and API
+    /// equivalents each sum over the invocations that have them, never into
+    /// each other; bases combine as [`CostBasis::combine`] describes, and
+    /// each amount stays an upper bound once either side is one.
     pub fn add(&mut self, next: &Self) {
         let both = |total: Option<u64>, tokens: Option<u64>| {
             total
                 .zip(tokens)
                 .map(|(total, tokens)| total.saturating_add(tokens))
         };
+        let either = |total: Option<u64>, amount: Option<u64>| match (total, amount) {
+            (Some(total), Some(amount)) => Some(total.saturating_add(amount)),
+            (total, amount) => total.or(amount),
+        };
+        self.api_equivalent_login =
+            match (self.api_equivalent_micro_usd, next.api_equivalent_micro_usd) {
+                (Some(_), Some(_)) => self
+                    .api_equivalent_login
+                    .filter(|login| next.api_equivalent_login == Some(*login)),
+                (Some(_), None) => self.api_equivalent_login,
+                (None, _) => next.api_equivalent_login,
+            };
+        self.api_equivalent_micro_usd =
+            either(self.api_equivalent_micro_usd, next.api_equivalent_micro_usd);
+        self.api_equivalent_upper_bound |= next.api_equivalent_upper_bound;
         self.cache_read_tokens = both(self.cache_read_tokens, next.cache_read_tokens);
         self.cache_write_tokens = both(self.cache_write_tokens, next.cache_write_tokens);
         self.context_peak_tokens = match (self.context_peak_tokens, next.context_peak_tokens) {
@@ -90,13 +127,11 @@ impl UsageRecord {
         };
         self.context_window_tokens = next.context_window_tokens.or(self.context_window_tokens);
         self.cost_basis = match (self.cost_basis, next.cost_basis) {
-            (Some(basis), Some(next_basis)) if basis != next_basis => Some(CostBasis::Mixed),
+            (Some(basis), Some(next_basis)) => Some(basis.combine(next_basis)),
             (basis, next_basis) => next_basis.or(basis),
         };
-        self.cost_micro_usd = match (self.cost_micro_usd, next.cost_micro_usd) {
-            (Some(cost), Some(next_cost)) => Some(cost.saturating_add(next_cost)),
-            (cost, next_cost) => cost.or(next_cost),
-        };
+        self.cost_upper_bound |= next.cost_upper_bound;
+        self.cost_micro_usd = either(self.cost_micro_usd, next.cost_micro_usd);
         self.detailed_invocation_count = self
             .detailed_invocation_count
             .saturating_add(next.detailed_invocation_count);
@@ -262,6 +297,14 @@ pub fn parse_cost_basis(label: &str) -> CostBasis {
     .into_iter()
     .find(|basis| basis.as_str() == label)
     .unwrap_or(CostBasis::Mixed)
+}
+
+/// Parses a persisted subscription-login label; the label of several
+/// logins and unknown labels read as `None`.
+pub fn parse_plan_login(label: &str) -> Option<PlanLogin> {
+    [PlanLogin::ChatGpt, PlanLogin::Claude]
+        .into_iter()
+        .find(|login| login.as_str() == label)
 }
 
 /// Returns the display order of `purpose`: session turns first.

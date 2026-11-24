@@ -660,6 +660,7 @@ impl ag_harness::catalog::Pricing
 pub const fn ag_harness::catalog::Pricing::cache_read_per_mtok_micro_usd(self) -> u64
 pub const fn ag_harness::catalog::Pricing::cache_write_per_mtok_micro_usd(self) -> u64
 pub const fn ag_harness::catalog::Pricing::cost_tier(self) -> ag_harness::catalog::CostTier
+pub const fn ag_harness::catalog::Pricing::declares_cache_read(self) -> bool
 pub const fn ag_harness::catalog::Pricing::for_prompt(self, u64) -> Self
 pub const fn ag_harness::catalog::Pricing::input_per_mtok_micro_usd(self) -> u64
 pub const fn ag_harness::catalog::Pricing::new(u64, u64) -> Self

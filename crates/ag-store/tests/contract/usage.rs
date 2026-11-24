@@ -40,7 +40,7 @@ async fn test_upsert_session_usage_accumulates_known_details_only() {
         cache_read_tokens: Some(input_tokens / 2),
         cache_write_tokens: Some(1),
         context: Some(ContextFill::of_request(input_tokens, Some(1_000))),
-        cost: Some(CostEstimate { basis, micro_usd }),
+        cost: Some(CostEstimate::new(basis, micro_usd)),
         input_tokens,
         output_tokens: 10,
         reasoning_tokens: Some(4),

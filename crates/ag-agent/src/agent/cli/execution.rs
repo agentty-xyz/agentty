@@ -14,7 +14,9 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _
 use tokio_util::sync::CancellationToken;
 
 use super::stdin;
-use crate::agent::{self as agent, AgentBackend, AgentBackendError, BuildCommandRequest};
+use crate::agent::{
+    self as agent, AgentBackend, AgentBackendError, BuildCommandRequest, claude_usage,
+};
 
 /// Whitespace JSON permits around a value (RFC 8259 `ws`).
 const JSON_WHITESPACE: [char; 4] = [' ', '\t', '\n', '\r'];
@@ -28,6 +30,11 @@ pub(crate) trait CliExecutionObserver: Send + Sync {
     /// retaining the same line in the final raw output. `payload` carries the
     /// line's JSON, parsed once for every consumer.
     fn stdout_line(&self, line: &str, payload: &CliStdoutPayload);
+
+    /// Reports, before the child starts, whether it runs with alternate
+    /// credentials, as [`CliExecutionOutput::uses_alternate_credentials`]
+    /// later records.
+    fn credentials_resolved(&self, _uses_alternate_credentials: bool) {}
 }
 
 /// JSON parsed once from one stdout line and shared by every line consumer.
@@ -101,6 +108,10 @@ pub(crate) struct CliExecutionOutput {
     pub stderr: String,
     /// Complete stdout captured from the child process.
     pub stdout: String,
+    /// Whether the child ran with credentials or an endpoint other than an
+    /// interactive login, as [`claude_usage::uses_alternate_credentials`]
+    /// detects them, so its usage is metered whatever it reports.
+    pub uses_alternate_credentials: bool,
 }
 
 /// Infrastructure failure while preparing or running a CLI subprocess.
@@ -160,6 +171,9 @@ pub(crate) async fn execute_cli_command(
         let command = backend
             .build_command(build_request)
             .map_err(CliExecutionError::CommandBuild)?;
+        let uses_alternate_credentials =
+            claude_usage::uses_alternate_credentials(&command, std::env::vars_os());
+        observer.credentials_resolved(uses_alternate_credentials);
         let stdin_payload = agent::build_command_stdin_payload(kind, build_request)
             .map_err(CliExecutionError::StdinBuild)?;
         let mut tokio_command = tokio::process::Command::from(command);
@@ -252,6 +266,7 @@ pub(crate) async fn execute_cli_command(
             exit_status: classify_exit_status(exit_status),
             stderr,
             stdout,
+            uses_alternate_credentials,
         })
     }
     .with_context(span.context())

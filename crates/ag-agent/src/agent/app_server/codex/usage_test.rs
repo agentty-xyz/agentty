@@ -1,11 +1,68 @@
 //! Codex token usage extraction and cumulative billing unit tests.
 
-use ag_contracts::{ContextFill, ModelUsage};
+use ag_contracts::{ContextFill, ModelUsage, PlanLogin};
 
 use crate::agent::app_server::codex::usage::{
-    extract_thread_token_usage_for_turn, extract_turn_usage_for_turn,
+    UsageTracker, extract_thread_token_usage_for_turn, extract_turn_usage_for_turn,
     update_turn_usage_from_response,
 };
+use crate::agent::usage::Billing;
+
+#[test]
+fn account_read_answers_decide_whether_usage_bills_to_a_chatgpt_plan() {
+    // Arrange
+    let cases = [
+        (
+            serde_json::json!({"account": {"type": "chatgpt", "email": null, "planType": "plus", "workspaceName": null}, "requiresOpenaiAuth": true}),
+            Billing::Plan(PlanLogin::ChatGpt),
+        ),
+        (
+            serde_json::json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}),
+            Billing::Metered,
+        ),
+        (
+            serde_json::json!({"account": null, "requiresOpenaiAuth": true}),
+            Billing::Metered,
+        ),
+    ];
+
+    for (result, expected) in cases {
+        let mut tracker = UsageTracker::default();
+        let request = tracker.account_request();
+        let request_id = request["id"].clone();
+
+        // Act
+        let unrelated = tracker.observe_account(&serde_json::json!({"id": "other", "result": {}}));
+        let answered =
+            tracker.observe_account(&serde_json::json!({"id": request_id, "result": result}));
+        let repeated =
+            tracker.observe_account(&serde_json::json!({"id": request_id, "result": result}));
+
+        // Assert
+        assert_eq!(request["method"], "account/read");
+        assert!(!unrelated);
+        assert!(answered);
+        assert!(!repeated, "only the pending request is read");
+        assert_eq!(tracker.billing(), expected, "{result}");
+    }
+}
+
+#[test]
+fn an_error_answer_to_account_read_leaves_usage_metered() {
+    // Arrange
+    let mut tracker = UsageTracker::default();
+    let request_id = tracker.account_request()["id"].clone();
+
+    // Act
+    let answered = tracker.observe_account(&serde_json::json!({
+        "id": request_id,
+        "error": {"code": -32601, "message": "method not found"}
+    }));
+
+    // Assert
+    assert!(answered);
+    assert_eq!(tracker.billing(), Billing::Metered);
+}
 
 #[test]
 fn extract_thread_token_usage_for_turn_does_not_treat_snake_case_totals_as_request_usage() {

@@ -16,24 +16,44 @@
 //! per-model usage is the difference between its `modelUsage` totals and the
 //! totals after the session's previous resumed turn, which the host keeps as
 //! an opaque checkpoint. Live updates use the main-loop usage at list price;
-//! the turn result switches to Claude Code's own per-model figures.
+//! the turn result switches to Claude Code's own per-model figures. A run on
+//! a Claude subscription, as [`ClaudeUsageMeter::billing`] detects it,
+//! carries API-equivalent costs.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::Path;
+use std::process::Command;
 
 use ag_contracts::{
-    AgentRequestKind, ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsageCheckpoint,
+    AgentRequestKind, ContextFill, CostBasis, CostEstimate, ModelUsage, PlanLogin, TurnUsage,
+    UsageCheckpoint,
 };
 use ag_harness::provider::ModelProvider;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent::usage::list_price;
+use crate::agent::usage::{Billing, list_price};
 
 /// First Claude Code release whose resumed sessions restore their earlier
 /// totals into `modelUsage`; earlier releases start each process at zero.
 const CUMULATIVE_RESUME_VERSION: Version = Version::new(2, 1, 277);
+
+/// Environment variables that send Claude Code to a bearer token or a
+/// custom endpoint instead of an interactive login.
+const ALTERNATE_CREDENTIAL_VARIABLES: [&str; 2] = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"];
+
+/// Prefix of the environment switches that run Claude Code on a cloud
+/// provider, such as `CLAUDE_CODE_USE_BEDROCK`.
+const CLOUD_PROVIDER_SWITCH_PREFIX: &str = "CLAUDE_CODE_USE_";
+
+/// `apiKeySource` of a run that authenticates without an API key.
+const NO_API_KEY_SOURCE: &str = "none";
+
+/// `modelUsage` provider of Anthropic's own API, which a Claude
+/// subscription login uses.
+const FIRST_PARTY_PROVIDER: &str = "firstParty";
 
 /// Checkpoint of a process that reported no totals. It names no totals, so
 /// the turn that continues its conversation falls back to list price.
@@ -47,6 +67,12 @@ pub(crate) struct ClaudeUsageMeter {
     context: Option<ContextFill>,
     /// Model of the latest main-loop response.
     context_model: Option<String>,
+    /// Whether the latest result's `modelUsage` names Anthropic's own API as
+    /// the provider of every model, or `None` before a result reports it.
+    is_first_party: Option<bool>,
+    /// Whether the `system/init` event reported that the run uses no API
+    /// key.
+    is_without_api_key: bool,
     /// Per-model totals of the latest result's `modelUsage`.
     model_totals: BTreeMap<String, ModelTotals>,
     /// Summed main-loop usage of the run's turn results.
@@ -55,6 +81,9 @@ pub(crate) struct ClaudeUsageMeter {
     seen_messages: HashSet<String>,
     /// Summed usage of the main-loop responses, with placeholder output.
     steps: Option<ModelUsage>,
+    /// Whether the process runs with alternate credentials, which bill per
+    /// token.
+    uses_alternate_credentials: bool,
     /// Claude Code release from the `system/init` event.
     version: Option<Version>,
     /// Context window of each model, from a result's `modelUsage`.
@@ -65,16 +94,23 @@ impl ClaudeUsageMeter {
     /// Folds one stream event and returns whether it reported usage: a
     /// main-loop response not counted yet, or a turn result.
     pub(crate) fn observe(&mut self, event: &Value) -> bool {
-        if event.get("type").and_then(Value::as_str) == Some("system")
-            && let Some(version) = event
+        if event.get("type").and_then(Value::as_str) == Some("system") {
+            if let Some(version) = event
                 .get("claude_code_version")
                 .and_then(Value::as_str)
                 .and_then(|version| Version::parse(version).ok())
-        {
-            self.version = Some(version);
+            {
+                self.version = Some(version);
+            }
+            if let Some(source) = event.get("apiKeySource").and_then(Value::as_str) {
+                self.is_without_api_key = source == NO_API_KEY_SOURCE;
+            }
         }
         if let Some(model_usage) = event.get("modelUsage").and_then(Value::as_object) {
             self.model_totals.clear();
+            self.is_first_party = Some(model_usage.values().all(|usage| {
+                usage.get("provider").and_then(Value::as_str) == Some(FIRST_PARTY_PROVIDER)
+            }));
             for (model, usage) in model_usage {
                 if let Some(window) = usage.get("contextWindow").and_then(Value::as_u64) {
                     self.windows.insert(model.clone(), window);
@@ -129,6 +165,44 @@ impl ClaudeUsageMeter {
         });
 
         usage
+    }
+
+    /// Returns how the run is billed.
+    ///
+    /// Claude Code reports `apiKeySource: "none"` for a Claude subscription
+    /// login, but also for a bearer token, a gateway, or a cloud provider
+    /// such as Amazon Bedrock, Google Vertex AI, or Microsoft Foundry, which
+    /// bill per token. A run is therefore plan-billed only when it used no
+    /// API key and its `modelUsage` names Anthropic's own API
+    /// (`firstParty`) as every model's provider. Any other provider, or a
+    /// release that reports none, leaves the run metered.
+    pub(crate) fn billing(&self) -> Billing {
+        if !self.uses_alternate_credentials
+            && self.is_without_api_key
+            && self.is_first_party == Some(true)
+        {
+            return Billing::Plan(PlanLogin::Claude);
+        }
+
+        Billing::Metered
+    }
+
+    /// Returns how the run is billed as far as it is known so far, or
+    /// `None` while it may still turn out plan-billed: it uses no API key
+    /// and no alternate credentials, and no result has named its provider
+    /// yet.
+    pub(crate) fn known_billing(&self) -> Option<Billing> {
+        (self.uses_alternate_credentials
+            || !self.is_without_api_key
+            || self.is_first_party.is_some())
+        .then(|| self.billing())
+    }
+
+    /// Records that the process runs with alternate credentials, as
+    /// [`uses_alternate_credentials`] detects them, which bill per token
+    /// whatever the run reports.
+    pub(crate) fn set_alternate_credentials(&mut self, uses_alternate_credentials: bool) {
+        self.uses_alternate_credentials = uses_alternate_credentials;
     }
 
     /// Returns the run's `modelUsage` totals, or `None` before a result
@@ -276,10 +350,7 @@ impl ModelTotals {
             ..ModelUsage::new(model)
         };
         usage.cost = match self.cost {
-            Some(micro_usd) => Some(CostEstimate {
-                basis: CostBasis::AgentReported,
-                micro_usd,
-            }),
+            Some(micro_usd) => Some(CostEstimate::new(CostBasis::AgentReported, micro_usd)),
             None => list_price(&usage, ModelProvider::Anthropic),
         };
 
@@ -287,9 +358,40 @@ impl ModelTotals {
     }
 }
 
+/// Returns whether `command`, started with the environment `process_env`
+/// overlaid by the command's own variables, points Claude Code at
+/// credentials or an endpoint other than an interactive login: a bearer
+/// token (`ANTHROPIC_AUTH_TOKEN`), a custom endpoint (`ANTHROPIC_BASE_URL`),
+/// or a cloud provider (any `CLAUDE_CODE_USE_*` switch). Such runs report no
+/// API key yet bill per token.
+pub(crate) fn uses_alternate_credentials(
+    command: &Command,
+    process_env: impl IntoIterator<Item = (OsString, OsString)>,
+) -> bool {
+    let mut environment = process_env.into_iter().collect::<HashMap<_, _>>();
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => environment.insert(key.to_os_string(), value.to_os_string()),
+            None => environment.remove(key),
+        };
+    }
+
+    environment.iter().any(|(key, value)| {
+        let key = key.to_string_lossy();
+        let is_set = !value.is_empty() && value != "0" && value != "false";
+
+        is_set
+            && (ALTERNATE_CREDENTIAL_VARIABLES.contains(&key.as_ref())
+                || key.starts_with(CLOUD_PROVIDER_SWITCH_PREFIX))
+    })
+}
+
 /// One Claude Code process of a turn: its main-loop usage and its
 /// `modelUsage` totals, when reported.
 pub(crate) struct ClaudeRun<'a> {
+    /// How the process was billed; under a plan its costs are API
+    /// equivalents.
+    pub(crate) billing: Billing,
     /// Main-loop usage, under an empty model name.
     pub(crate) main_loop: &'a ModelUsage,
     /// `modelUsage` totals of the process.
@@ -340,6 +442,7 @@ pub(crate) fn turn_usage<'a>(
             .filter(|context_model| models.iter().any(|usage| usage.model == *context_model))
             .unwrap_or(model);
         for mut model_usage in models {
+            model_usage.cost = run.billing.present(model_usage.cost);
             if model_usage.model == context_model {
                 model_usage.context = run.main_loop.context;
                 model_usage.requests = model_usage.requests.max(run.main_loop.requests);
