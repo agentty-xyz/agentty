@@ -216,6 +216,9 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Graph proposal v1 approved · execution started", 10000)
                     .wait_for_text("2/2 done", 10000)
+                    // The header can be redrawn before the rows below it, so
+                    // wait for the last asserted row.
+                    .wait_for_text("✓ node-1", 10000)
                     .capture_labeled("execution", "Chat approval runs the graph beside chat")
                     .press_key("Enter")
                     .write_text("Explain the overall execution")
@@ -399,6 +402,9 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
                     .write_text("Start implementing")
                     .press_key("Enter")
                     .wait_for_text("2/2 done", 10000)
+                    // The header can be redrawn before the rows below it, so
+                    // wait for the last asserted row.
+                    .wait_for_text("✓ node-1", 10000)
                     .capture_labeled("continued", "Chat acceptance continues the graph")
             },
             |_, report| {
