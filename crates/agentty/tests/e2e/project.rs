@@ -199,6 +199,10 @@ async fn test_non_repository_launch_stays_out_of_project_switcher()
 
 /// Configures two local upstreams and delays `git pull` long enough to prove
 /// navigation and concurrent syncs of two projects remain non-modal.
+///
+/// The first project's pull outlasts the second project's whole sync, so a
+/// serialized sync queue cannot show the second project syncing while the
+/// first one still runs.
 async fn seed_delayed_project_sync(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_second_project(env).await?;
 
@@ -223,7 +227,10 @@ async fn seed_delayed_project_sync(env: &BuilderEnv) -> Result<(), Box<dyn std::
         format!(
             r#"#!/bin/sh
 if [ "$1" = "pull" ]; then
-  sleep 4
+  case "$(pwd)" in
+    *zeta-project*) sleep 2 ;;
+    *) sleep 12 ;;
+  esac
 fi
 exec '{real_git}' "$@"
 "#
@@ -447,8 +454,8 @@ fn assert_active_project_centered(frame: &TerminalFrame, project_name: &str) {
 }
 
 /// Verify explicit project sync reports progress in the status bar while tab
-/// navigation remains available, then syncs another project without showing
-/// the first project's sync there.
+/// navigation remains available, then syncs another project while the first
+/// one still syncs, with each project's status bar showing only its own sync.
 #[tokio::test]
 async fn test_project_sync_non_modal() {
     // Arrange
@@ -497,7 +504,16 @@ async fn test_project_sync_non_modal() {
                         "other_project_sync",
                         "Another project syncs and shows only its own status",
                     )
-                    .wait_for_text("Synced zeta-project/main", 15_000)
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("~/test-project", 5000)
+                    .wait_for_text("Syncing test-project/main...", 5000)
+                    .capture_labeled(
+                        "first_project_still_syncing",
+                        "The first project keeps syncing while the other project syncs",
+                    )
+                    .wait_for_text("Synced test-project/main", 20_000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
                         "sync_complete",
@@ -509,7 +525,7 @@ async fn test_project_sync_non_modal() {
                         Duration::from_millis(20),
                         move |frame| match std::fs::write(&clock_file, "10500") {
                             Ok(()) => {
-                                assertion::match_not_visible(frame, "Synced zeta-project/main")
+                                assertion::match_not_visible(frame, "Synced test-project/main")
                             }
                             Err(error) => assertion::match_text_in_region(
                                 frame,
@@ -595,8 +611,9 @@ fn assert_project_sync_non_modal(
     frame: &testty::frame::TerminalFrame,
     report: &testty::proof::report::ProofReport,
 ) -> Result<(), &'static str> {
-    assertion::assert_not_visible(frame, "Synced zeta-project/main");
-    assertion::assert_not_visible(frame, "Syncing zeta-project/main");
+    assertion::assert_not_visible(frame, "Synced test-project/main");
+    assertion::assert_not_visible(frame, "Syncing test-project/main");
+    assertion::assert_not_visible(frame, "zeta-project/main");
     assertion::assert_not_visible(frame, "Sync complete");
 
     let complete_capture = report
@@ -606,7 +623,8 @@ fn assert_project_sync_non_modal(
         .ok_or("missing completed sync capture")?;
     let complete_frame = common::frame_from_capture(complete_capture);
     let complete_full = Region::full(complete_frame.cols(), complete_frame.rows());
-    assertion::assert_text_in_region(&complete_frame, "Synced zeta-project/main", &complete_full);
+    assertion::assert_text_in_region(&complete_frame, "Synced test-project/main", &complete_full);
+    assertion::assert_not_visible(&complete_frame, "zeta-project/main");
 
     let syncing_capture = report
         .captures
@@ -638,6 +656,20 @@ fn assert_project_sync_non_modal(
         &other_project_full,
     );
     assertion::assert_not_visible(&other_project_frame, "test-project/main");
+
+    let still_syncing_capture = report
+        .captures
+        .iter()
+        .find(|capture| capture.label == "first_project_still_syncing")
+        .ok_or("missing first project still syncing capture")?;
+    let still_syncing_frame = common::frame_from_capture(still_syncing_capture);
+    let still_syncing_full = Region::full(still_syncing_frame.cols(), still_syncing_frame.rows());
+    assertion::assert_text_in_region(
+        &still_syncing_frame,
+        "Syncing test-project/main...",
+        &still_syncing_full,
+    );
+    assertion::assert_not_visible(&still_syncing_frame, "zeta-project/main");
 
     Ok(())
 }
