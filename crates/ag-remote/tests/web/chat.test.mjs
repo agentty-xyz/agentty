@@ -3944,6 +3944,23 @@ test("pasted images go with the message as renumbered placeholders and base64 fi
   assert.equal(byId("composer-images").hidden, true);
 });
 
+test("removing an image while an earlier prompt shows takes it out of the draft only", () => {
+  const storage = new MemoryStorage();
+  const { byId, chat } = mountChat({ capabilities: ["images"], sessionStorage: storage });
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  typeMessage(byId, "See ");
+  pasteFiles(byId, [imageFile([1]), imageFile([2])]);
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+
+  byId("composer-images").children[0].querySelector("button").click();
+
+  assert.equal(byId("message").value, "Add tests\nand docs");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "See [Image #2]");
+  assert.deepEqual(imageChips(byId), [["Image #2", "1 KB"]]);
+  assert.equal(pressArrow(byId, "ArrowDown"), true);
+  assert.equal(byId("message").value, "See [Image #2]");
+});
+
 test("an image goes out without text, and a refused message keeps its images", async () => {
   let isRefusing = true;
   const { byId, chat, requests } = mountChat({

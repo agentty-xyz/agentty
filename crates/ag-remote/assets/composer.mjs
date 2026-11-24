@@ -517,14 +517,21 @@ export function createComposer({
   }
 
   // Detaches image `number` from the draft on screen and takes its
-  // placeholder out of the text.
+  // placeholder out of the draft. An earlier prompt on screen stays; the
+  // draft it replaced loses the placeholder.
   function removeImage(number) {
     const draftId = context().draftId;
     setImages(
       draftId,
       draftImages().filter((image) => image.number !== number),
     );
-    setText(withoutPlaceholder(elements.message.value, number));
+    if (browsing.index === null) {
+      setText(withoutPlaceholder(elements.message.value, number));
+
+      return;
+    }
+    browsing.draft = withoutPlaceholder(browsing.draft, number);
+    drafts.set(draftId, browsing.draft);
   }
 
   // Attaches the PNG and JPEG files of a paste to the draft on screen,
