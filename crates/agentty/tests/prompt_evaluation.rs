@@ -12,18 +12,18 @@
 //! silently counted as a pass.
 //!
 //! Every case runs in a committed Git repository, as Agentty sessions do,
-//! so Harness repository tools can inspect it. `AGENTTY_EVAL_PROVIDER=harness`
-//! also evaluates the Agentty-owned unavailable-tool result and the `bash`
-//! cases, whose utility prompts run commands only inside the native
-//! sandbox.
+//! so Harness repository tools can inspect it. Only Harness runs
+//! (`AGENTTY_EVAL_PROVIDER=harness`) exercise the Agentty-owned
+//! unavailable-tool result, and only they add the `bash` cases, whose
+//! utility prompts run commands only inside the native sandbox.
 //!
 //! The binary is its own test harness so that `main` can call
 //! `dispatch_sandbox_helper` before anything else, as Agentty's `main`
 //! does; the harness then starts this executable as the sandbox helper. It
-//! answers the `cargo nextest` listing protocol with its one ignored test,
-//! runs it only when ignored tests are selected, and fails on any other
-//! argument or on a filter that selects nothing. The cases, graders, and
-//! their deterministic tests live in `prompt_evaluation_grader.rs`.
+//! answers the `cargo nextest` listing protocol with its one ignored test
+//! and runs it only when ignored tests are selected; see
+//! [`Invocation::parse`]. The cases, graders, and their deterministic tests
+//! live in `prompt_evaluation_grader.rs`.
 
 use std::error::Error;
 use std::io::{self, Write as _};
@@ -33,7 +33,7 @@ use std::process::{Command, ExitCode};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ag_contracts::{AgentRequestKind, ReasoningLevel};
+use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel};
 use ag_store::Database;
 use ag_worker::test_support::instruction_bootstrap_key;
 use ag_worker::{HeartbeatClock, RunClient, RunWorker, RuntimeConfig, dispatch_sandbox_helper};
@@ -58,6 +58,9 @@ type EvaluationResult<T = ()> = Result<T, Box<dyn Error>>;
 const TEST_NAME: &str = "live_prompt_evaluation";
 /// File the denial case's script tries to write, in the workspace's parent.
 const OUTSIDE_PROBE: &str = "outside-probe.txt";
+/// File the denial case's script writes in the workspace before the
+/// blocked write, so a report of the block without running it fails.
+const RAN_MARKER: &str = "record-ran.txt";
 /// Unchanged helper a live review must find by searching the workspace.
 const TEXT_HELPER_PATH: &str = "src/text.rs";
 /// Contents of [`TEXT_HELPER_PATH`].
@@ -119,33 +122,40 @@ enum Invocation {
 }
 
 impl Invocation {
-    /// Parses the runner's arguments: `--list --format terse [--ignored]`,
-    /// or an optional name filter with `--ignored` or `--include-ignored`,
-    /// `--exact`, and `--nocapture`, as `cargo nextest` and plain
-    /// `cargo test` pass them.
+    /// Parses the runner's arguments. `--list` lists, as `cargo nextest`
+    /// asks with `--list --format terse [--ignored]`. Without `--ignored`
+    /// or `--include-ignored` nothing runs, whatever else is passed,
+    /// because plain `cargo test` hands its filter and flags to every test
+    /// binary of the package. With one of them, only an optional name
+    /// filter, `--exact`, and `--nocapture` are accepted, as the
+    /// prompt-evaluation hook passes them.
     ///
     /// # Errors
-    /// Returns an error for any other argument, a second filter, or a
-    /// filter that does not select the test.
+    /// Returns an error when ignored tests are selected and an argument is
+    /// another one, a second filter, or a filter that does not select the
+    /// test.
     fn parse(arguments: &[String]) -> Result<Self, String> {
-        let mut list = false;
-        let mut ignored = false;
+        let passed = |flags: &[&str]| {
+            arguments
+                .iter()
+                .any(|argument| flags.contains(&argument.as_str()))
+        };
+        let ignored = passed(&["--ignored", "--include-ignored"]);
+        if passed(&["--list"]) {
+            return Ok(Self::List { ignored });
+        }
+        if !ignored {
+            return Ok(Self::Skip);
+        }
         let mut exact = false;
         let mut filter = None;
-        let mut remaining = arguments.iter();
-        while let Some(argument) = remaining.next() {
+        for argument in arguments {
             match argument.as_str() {
-                "--list" => list = true,
-                "--ignored" | "--include-ignored" => ignored = true,
+                "--ignored" | "--include-ignored" | "--nocapture" => {}
                 "--exact" => exact = true,
-                "--nocapture" => {}
-                "--format" if remaining.next().map(String::as_str) == Some("terse") => {}
                 name if !name.starts_with('-') && filter.is_none() => filter = Some(name),
                 other => return Err(format!("unsupported argument `{other}`")),
             }
-        }
-        if list {
-            return Ok(Self::List { ignored });
         }
         let selected = filter.is_none_or(|filter| {
             if exact {
@@ -158,9 +168,6 @@ impl Invocation {
             return Err(format!(
                 "the filter selects no test; the only test is `{TEST_NAME}`"
             ));
-        }
-        if !ignored {
-            return Ok(Self::Skip);
         }
 
         Ok(Self::Run)
@@ -245,11 +252,15 @@ impl Fixture {
         if let Some(parent) = script.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        // Paths follow from the script's own location, whatever directory
+        // runs it: first a marker in the workspace, which proves it ran,
+        // then the probe in the workspace's parent, which the sandbox blocks.
         std::fs::write(
             script,
             format!(
-                "#!/bin/sh\n# Records that the evaluation \
-                 ran.\nout=\"${{RECORD_DIR:-..}}\"\nprintf 'ok\\n' > \"$out/{OUTSIDE_PROBE}\"\n"
+                "#!/bin/sh\n# Records that the evaluation ran.\nhere=\"$(dirname \
+                 \"$0\")\"\nprintf 'ok\\n' > \"$here/../{RAN_MARKER}\"\nprintf 'ok\\n' > \
+                 \"$here/../../{OUTSIDE_PROBE}\"\n"
             ),
         )?;
         for case in grader::positive_review_cases() {
@@ -335,25 +346,55 @@ impl Fixture {
     /// # Errors
     /// Returns an error when a Git command cannot start or fails.
     fn commit(folder: &Path) -> EvaluationResult {
-        let commands: [&[&str]; 3] = [
-            &["init", "--quiet", "--initial-branch=main"],
-            &["add", "--all"],
+        Self::git(
+            folder,
             &[
-                "-c",
-                "user.name=Evaluation",
-                "-c",
-                "user.email=evaluation@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "--quiet",
-                "--message=Evaluation fixture",
+                &["init", "--quiet", "--initial-branch=main"],
+                &["add", "--all"],
+                &[
+                    "-c",
+                    "user.name=Evaluation",
+                    "-c",
+                    "user.email=evaluation@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--quiet",
+                    "--message=Evaluation fixture",
+                ],
             ],
-        ];
+        )
+    }
+
+    /// Returns `folder` to its committed fixture, so a case that may edit
+    /// it, such as the denial case's script, cannot change what later
+    /// repetitions and cases see.
+    ///
+    /// # Errors
+    /// Returns an error when a Git command cannot start or fails.
+    fn restore(folder: &Path) -> EvaluationResult {
+        Self::git(
+            folder,
+            &[
+                &["reset", "--quiet", "--hard"],
+                &["clean", "--quiet", "-d", "--force"],
+            ],
+        )
+    }
+
+    /// Runs each of `commands` as Git arguments in `folder`, without the
+    /// user's global or system configuration, so their hooks, templates,
+    /// and excludes cannot change the fixture.
+    ///
+    /// # Errors
+    /// Returns an error when a Git command cannot start or fails.
+    fn git(folder: &Path, commands: &[&[&str]]) -> EvaluationResult {
         for arguments in commands {
             let status = Command::new("git")
-                .args(arguments)
+                .args(*arguments)
                 .current_dir(folder)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
                 .status()?;
             if !status.success() {
                 return Err(format!("git {} failed in the fixture", arguments.join(" ")).into());
@@ -432,6 +473,16 @@ async fn live_prompt_evaluation() -> EvaluationResult {
                     case.name
                 ));
                 std::fs::remove_file(outside_probe)?;
+            }
+            if case.prompt.contains(grader::RECORD_SCRIPT) && !folder.join(RAN_MARKER).exists() {
+                record["script_ran"] = json!(false);
+                failures.push(format!(
+                    "{} repetition {repetition}: the script never ran",
+                    case.name
+                ));
+            }
+            if case.permission_mode != PermissionMode::ReadOnly {
+                Fixture::restore(&folder)?;
             }
             writeln!(io::stdout().lock(), "{record}")?;
         }
