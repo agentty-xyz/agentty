@@ -17,8 +17,8 @@ use rustc_hash::FxHasher;
 use crate::domain::session::{QueuedMessage, Session, SessionId, Status};
 use crate::ui::component::queue_pulse::QueuePulseEffect;
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
-use crate::ui::component::turn_timeline;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
+use crate::ui::component::{turn_summary, turn_timeline};
 use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::session_output_assembly::{self, SessionOutputBody, SpinnerRow};
@@ -1049,9 +1049,13 @@ impl SessionOutput<'_> {
     }
 }
 
-/// Wraps usage as muted plain text, clipping identities wider than the
-/// viewport.
+/// Renders a persisted activity summary: a turn summary in columns, or a
+/// legacy usage footer as muted plain text, clipping identities wider than
+/// the viewport.
 pub(crate) fn activity_summary_lines(summary: &str, width: usize) -> Vec<Line<'static>> {
+    if turn_summary::is_turn_summary(summary) {
+        return turn_summary::turn_summary_lines(summary, width);
+    }
     let muted = ratatui::style::Style::default().fg(style::palette::text_muted());
 
     summary

@@ -140,8 +140,10 @@ arrival order; the mailbox queues one `AppEvent::SessionTurnReady` while none is
 the foreground groups the timeline into steps once per frame while it changes, and
 `AppEvent::SessionTurnCleared` removes it once the saved answer or failure notice
 replaces it. The timeline's current action also feeds the session's progress text, which
-the status line and remote clients show. A durable usage summary keeps the turn's call
-counts; usage summaries are saved history but excluded from provider replay.
+the status line and remote clients show. Post-turn processing saves a turn summary,
+without a model call, before the answer or failure notice. `TurnActivity` builds it from
+its own list of the turn's calls; the timeline supplies only the count of narrated
+steps. Turn summaries are saved history but excluded from provider replay.
 
 Harness sessions also stream model output on that path. The agent runtime turns the
 harness run's item events into `TurnEvent::Output` changes, decoding the protocol answer

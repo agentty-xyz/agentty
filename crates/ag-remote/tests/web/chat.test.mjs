@@ -384,6 +384,80 @@ test("activity lines take the tone of their first character, and long boxes star
   );
 });
 
+test("a turn summary lays out its rows in columns and stays open when short", () => {
+  const rows = ["Edited\t✓\tsrc/lib.rs\t+3 −1\t1 edit", "Failed\t✗\tcargo build\texit 1\t"];
+  const summary = (body) =>
+    ["turn-summary v1", "2 tools · 0s", ...body, "─ Worked 0s · 2 tools · 1 failed (1 nonzero exit)"].join(
+      "\n",
+    );
+  const { byId, chat } = mountChat();
+  chat.render(
+    session({
+      messages: [
+        { content: summary([...rows, "Ran\t2 commands"]), kind: "activity" },
+        { content: summary(Array(9).fill(rows[0])), kind: "activity" },
+      ],
+    }),
+  );
+  const [short, long] = byId("transcript").querySelectorAll("details");
+  assert.equal(short.open, true);
+  assert.equal(long.open, false);
+  assert.equal(short.querySelector("summary").textContent, "Activity2 tools · 0s");
+  assert.deepEqual(
+    Array.from(short.querySelectorAll("li"), (line) => [
+      line.className,
+      Array.from(line.children, (cell) => [cell.className, cell.textContent]),
+    ]),
+    [
+      [
+        "summary-row",
+        [
+          ["summary-heading", "Edited"],
+          ["tone-success", "✓"],
+          ["summary-target", "src/lib.rs"],
+          ["summary-result", "+3 −1"],
+          ["tone-muted", "1 edit"],
+        ],
+      ],
+      [
+        "summary-row",
+        [
+          ["summary-heading", "Failed"],
+          ["tone-error", "✗"],
+          ["summary-target", "cargo build"],
+          ["summary-result", "exit 1"],
+          ["tone-muted", ""],
+        ],
+      ],
+      [
+        "summary-row",
+        [
+          ["summary-heading", "Ran"],
+          ["summary-text", "2 commands"],
+        ],
+      ],
+      ["summary-divider", []],
+    ],
+  );
+  assert.equal(
+    short.querySelector(".summary-divider").textContent,
+    "─ Worked 0s · 2 tools · 1 failed (1 nonzero exit)",
+  );
+  // Added lines are green and removed ones red, as in the terminal.
+  assert.deepEqual(
+    Array.from(short.querySelectorAll(".summary-result"), (cell) =>
+      Array.from(cell.children, (part) => [part.className, part.textContent]),
+    ),
+    [
+      [
+        ["tone-success", "+3"],
+        ["tone-error", "−1"],
+      ],
+      [["tone-error", "exit 1"]],
+    ],
+  );
+});
+
 test("the transcript only appends when it grows, and keeps the nodes on screen", () => {
   const first = transcriptEntries(session().messages);
   const grown = transcriptEntries([...session().messages, { content: "More", kind: "user" }]);

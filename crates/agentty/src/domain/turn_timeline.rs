@@ -42,6 +42,9 @@ static NEXT_TIMELINE_ID: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug)]
 pub(crate) struct TurnTimeline {
     entries: Vec<Entry>,
+    /// Evicted steps that held narration or reasoning, which the turn
+    /// summary counts.
+    evicted_narrated_steps: usize,
     /// Oldest steps evicted to bound memory, counted as hidden.
     evicted_steps: usize,
     /// Distinct identity of this timeline, which snapshots carry.
@@ -66,6 +69,7 @@ impl Default for TurnTimeline {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
+            evicted_narrated_steps: 0,
             evicted_steps: 0,
             id: NEXT_TIMELINE_ID.fetch_add(1, Ordering::Relaxed),
             index: HashMap::new(),
@@ -168,6 +172,32 @@ impl TurnTimeline {
     /// Returns whether the timeline holds anything to show.
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Returns the steps the turn narrated or reasoned in, evicted ones
+    /// included, leaving out a step that only holds the answer, or `None`
+    /// when it did neither, as backends without narration do.
+    pub(crate) fn narrated_steps(&self) -> Option<usize> {
+        let steps = self.evicted_narrated_steps
+            + self
+                .steps
+                .iter()
+                .filter(|step| self.is_narrated(step))
+                .count();
+
+        (steps > 0).then_some(steps)
+    }
+
+    /// Returns whether `step` holds narration other than the answer, or
+    /// reasoning.
+    fn is_narrated(&self, step: &StepSlot) -> bool {
+        step.entries
+            .iter()
+            .any(|index| match &self.entries[*index].kind {
+                EntryKind::Narration(narration) => !narration.is_answer,
+                EntryKind::Reasoning(_) => true,
+                EntryKind::Tool(_) => false,
+            })
     }
 
     /// Returns the visible steps, rebuilding only those that changed since
@@ -419,14 +449,17 @@ impl TurnTimeline {
     fn evict_oldest_steps(&mut self) {
         let mut evicted_entries = 0;
         let mut evicted_steps = 0;
+        let mut evicted_narrated_steps = 0;
         for step in &self.steps {
             if self.entries.len() - evicted_entries <= ENTRY_LIMIT - ENTRY_EVICTION_BATCH {
                 break;
             }
             evicted_entries += step.entries.len();
             evicted_steps += 1;
+            evicted_narrated_steps += usize::from(self.is_narrated(step));
         }
         self.evicted_steps += evicted_steps;
+        self.evicted_narrated_steps += evicted_narrated_steps;
         let first_kept = self
             .steps
             .get(evicted_steps)
@@ -1230,6 +1263,13 @@ impl StepSlot {
     }
 }
 
+/// Returns what call `event` acted on, as its timeline row names it: a
+/// command literally, else the reported target or a field of its input,
+/// prefixed by the tool for MCP and other tools.
+pub(crate) fn call_target(event: &ActivityEvent) -> String {
+    ToolActivity::target(event)
+}
+
 /// Returns the title of reasoning text: its first line written as
 /// `**Title**`.
 fn reasoning_title(text: &str) -> Option<String> {
@@ -1276,7 +1316,7 @@ fn input_preview(input: &str, kind: ActivityKind) -> Option<String> {
 }
 
 /// Keeps multiline text on one row without control characters.
-fn single_line(text: &str) -> String {
+pub(crate) fn single_line(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
             word.chars()
@@ -1289,7 +1329,7 @@ fn single_line(text: &str) -> String {
 
 /// Returns whether two reported paths name the same file, allowing one to
 /// be relative to the other.
-fn same_path(left: &str, right: &str) -> bool {
+pub(crate) fn same_path(left: &str, right: &str) -> bool {
     let left = left.trim_start_matches("./");
     let right = right.trim_start_matches("./");
 
@@ -1297,7 +1337,7 @@ fn same_path(left: &str, right: &str) -> bool {
 }
 
 /// Returns the last component of `path`.
-fn file_name(path: &str) -> &str {
+pub(crate) fn file_name(path: &str) -> &str {
     path.trim_end_matches('/')
         .rsplit('/')
         .next()

@@ -1453,8 +1453,9 @@ impl SessionTaskService {
         ))
     }
 
-    /// Executes one isolated assist prompt and appends its answer or failure
-    /// notice followed by observed activity to the session transcript.
+    /// Executes one isolated assist prompt and appends a summary of its
+    /// observed activity followed by its answer or failure notice to the
+    /// session transcript.
     ///
     /// # Errors
     /// Returns an error when the one-shot prompt fails or returns invalid
@@ -1506,13 +1507,13 @@ impl SessionTaskService {
             TurnActivity::collect(activity_rx),
         );
         let (answer_kind, answer_text) = Self::assist_response_message(&assist_submission);
-        let activity_summary = activity.summary();
+        let activity_summary = activity.summary().render(None);
         for (kind, raw_content) in [
-            (answer_kind, answer_text.as_str()),
             (
                 SessionMessageKind::ActivitySummary,
                 activity_summary.as_str(),
             ),
+            (answer_kind, answer_text.as_str()),
         ] {
             if raw_content.trim().is_empty() {
                 continue;

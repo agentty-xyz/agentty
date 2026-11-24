@@ -1110,6 +1110,49 @@ fn test_output_lines_use_generic_in_progress_loader() {
 }
 
 #[test]
+fn turn_summaries_precede_their_answer_and_a_trailing_failure_notice() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::Review;
+    session.transcript = Some(SessionTranscript::new(vec![
+        SessionMessage::new(0, SessionMessageKind::UserPrompt, "First prompt"),
+        SessionMessage::new(
+            1,
+            SessionMessageKind::ActivitySummary,
+            "turn-summary v1\n1 tool · 0s\nRan\t1 command\n─ Worked 0s · 1 tool",
+        ),
+        SessionMessage::new(2, SessionMessageKind::AssistantAnswer, "First answer"),
+        SessionMessage::new(3, SessionMessageKind::UserPrompt, "Second prompt"),
+        SessionMessage::new(
+            4,
+            SessionMessageKind::ActivitySummary,
+            "turn-summary v1\n2 tools · 0s\nRan\t2 commands\n─ Worked 0s · 2 tools",
+        ),
+        SessionMessage::new(5, SessionMessageKind::WorkflowNotice, "[Error] It failed."),
+    ]));
+
+    // Act
+    let text = output_lines(&session, Rect::new(0, 0, 60, 30), line_context(), None)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Assert
+    let positions = [
+        "First prompt",
+        "Ran       1 command",
+        "─ Worked 0s · 1 tool ─",
+        "First answer",
+        "Second prompt",
+        "─ Worked 0s · 2 tools ─",
+        "[Error] It failed.",
+    ]
+    .map(|label| text.find(label).expect(label));
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
 fn activity_footers_follow_each_answer_and_invalidate_cached_layout() {
     // Arrange
     let mut session = session_fixture();

@@ -1,30 +1,31 @@
-//! Bounded per-turn activity reduction for the durable usage footer, beside
+//! Bounded per-turn activity reduction for the durable turn summary, beside
 //! the turn's live timeline of narration and tool rows.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, OutputEvent, TurnNotice};
+use ag_contracts::{ActivityEvent, ActivityStatus, OutputEvent, TurnNotice};
 use tokio::sync::mpsc;
 
 use super::timeline::LiveTurn;
 use crate::app::AppEvent;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
+use crate::domain::turn_summary::TurnSummary;
 
-/// Most distinct calls the usage footer counts.
+/// Most distinct calls the turn summary counts.
 const CALL_LIMIT: usize = 2048;
-/// Usage footer line labels in display order, indexed by
-/// `ActivityState::usage_section`.
-const USAGE_SECTIONS: [&str; 3] = ["Tools: ", "MCP: ", "Skills: "];
 
 /// Reduces snapshots without counting lifecycle updates as additional calls,
 /// and feeds the turn's live timeline.
 #[derive(Default)]
 pub(super) struct TurnActivity {
     calls: ActivityState,
+    /// Unix milliseconds when the turn's events ended.
+    finished_at: Option<u64>,
     /// Transcript notices the turn reported, in order.
     notices: Vec<String>,
+    /// Unix milliseconds when the turn's events started.
+    started_at: Option<u64>,
     turn: LiveTurn,
 }
 
@@ -42,7 +43,13 @@ impl TurnActivity {
         activity
     }
 
-    /// Counts one activity snapshot toward the usage footer.
+    /// Records `now` Unix milliseconds as the turn's start, from which the
+    /// summary measures the time the turn took.
+    pub(super) fn start(&mut self, now: u64) {
+        self.started_at = Some(now);
+    }
+
+    /// Counts one activity snapshot toward the turn summary.
     pub(super) fn observe(&mut self, event: ActivityEvent) {
         self.calls.observe(event);
     }
@@ -129,6 +136,7 @@ impl TurnActivity {
         sender: &mpsc::UnboundedSender<AppEvent>,
         session_id: &SessionId,
     ) {
+        self.finished_at = Some(now);
         self.calls.interrupt_running();
         self.turn.interrupt_running(now, sender, session_id);
     }
@@ -143,9 +151,17 @@ impl TurnActivity {
         self.turn.clear(sender, session_id);
     }
 
-    /// Summarizes invocation and outcome counts without per-call previews.
-    pub(super) fn summary(&self) -> String {
-        self.calls.usage_text()
+    /// Summarizes the turn from its calls, with the steps its live timeline
+    /// counted when it narrated; a utility prompt has no timeline. The time
+    /// it took is known once both its start and end were recorded.
+    pub(super) fn summary(&self) -> TurnSummary {
+        let elapsed_seconds = self
+            .started_at
+            .zip(self.finished_at)
+            .map(|(started_at, finished_at)| finished_at.saturating_sub(started_at) / 1000);
+        let calls = self.calls.calls.iter().collect::<Vec<_>>();
+
+        TurnSummary::from_calls(&calls, self.turn.narrated_steps(), elapsed_seconds)
     }
 }
 
@@ -177,58 +193,6 @@ impl ActivityState {
             if event.status == ActivityStatus::Running {
                 event.status = ActivityStatus::Interrupted;
             }
-        }
-    }
-
-    /// Groups invocations with their failed and unfinished counts.
-    fn usage_text(&self) -> String {
-        let mut groups = BTreeMap::<(usize, &str), (usize, usize, usize)>::new();
-        for event in &self.calls {
-            let counts = groups
-                .entry((Self::usage_section(event.kind), event.name.as_str()))
-                .or_default();
-            counts.0 += 1;
-            counts.1 += usize::from(event.outcome() == ActivityStatus::Failed);
-            counts.2 += usize::from(matches!(
-                event.status,
-                ActivityStatus::Running | ActivityStatus::Interrupted
-            ));
-        }
-        let mut summary = String::new();
-        for (section, label) in USAGE_SECTIONS.iter().enumerate() {
-            let mut separator = *label;
-            for ((group_section, name), (count, failed, interrupted)) in &groups {
-                if *group_section != section {
-                    continue;
-                }
-                let _ = write!(summary, "{separator}{name} ×{count}");
-                if *failed > 0 {
-                    let _ = write!(summary, " ({failed} failed)");
-                }
-                if *interrupted > 0 {
-                    let _ = write!(summary, " ({interrupted} interrupted)");
-                }
-                separator = ", ";
-            }
-            if separator == ", " {
-                summary.push('\n');
-            }
-        }
-        summary
-    }
-
-    /// Maps an activity kind to its `USAGE_SECTIONS` line.
-    fn usage_section(kind: ActivityKind) -> usize {
-        match kind {
-            ActivityKind::Mcp => 1,
-            ActivityKind::Skill => 2,
-            ActivityKind::Command
-            | ActivityKind::FileChange
-            | ActivityKind::List
-            | ActivityKind::Read
-            | ActivityKind::Search
-            | ActivityKind::Tool
-            | ActivityKind::WebSearch => 0,
         }
     }
 }

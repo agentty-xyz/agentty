@@ -62,22 +62,22 @@ async fn assist_activity_follows_answer_or_failure_and_is_excluded_from_replay()
             result.expect("assistance should succeed");
             ("assistant_answer", "Recovered the session.")
         };
-        let summary = "Tools: Read ×2 (1 failed)\nSkills: recovery ×1";
+        let summary = "turn-summary v1\n3 tools\nFailed\t✗\tRead\tfailed\t\nUsed\tRead ×2 · \
+                       recovery ×1\n─ Worked 3 tools · 1 failed (1 error)";
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].kind, kind);
-        assert_eq!(messages[0].content, content);
-        assert_eq!(messages[1].kind, "activity_summary");
-        assert_eq!(messages[1].content, summary);
+        assert_eq!(messages[0].kind, "activity_summary");
+        assert_eq!(messages[0].content, summary);
+        assert_eq!(messages[1].kind, kind);
+        assert_eq!(messages[1].content, content);
         let transcript = transcript.lock().expect("transcript lock");
         assert_eq!(
-            transcript.messages()[1].kind,
+            transcript.messages()[0].kind,
             SessionMessageKind::ActivitySummary
         );
-        assert_eq!(transcript.messages()[1].content, summary);
+        assert_eq!(transcript.messages()[0].content, summary);
         let replay = transcript.replay_text().expect("answer is replayable");
         assert!(replay.contains(content));
-        assert!(!replay.contains("Tools:"));
-        assert!(!replay.contains("Skills:"));
+        assert!(!replay.contains("─ Worked"));
     }
 }
 

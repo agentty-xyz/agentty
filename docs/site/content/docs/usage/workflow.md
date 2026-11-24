@@ -465,11 +465,16 @@ run, and a finished call that took 5 seconds or more shows its duration. Agent C
 report no messages show the rows alone. A status line above the composer names what the
 turn does now and for how long, the step count, and the turn's time.
 
-When the turn ends, its saved answer replaces the timeline and a usage footer stays:
-`Tools` lists invocation counts, `MCP` lists Codex and Claude MCP calls as
-`server/tool`, and `Skills` lists explicit Claude skill invocations. Codex, Claude,
-Antigravity, and Harness report this activity. Provider failures show a short error and
-captured output where available.
+When a turn that called tools ends, a summary replaces the timeline above its saved
+answer or error notice: `Edited` lists each changed file with its added and removed
+lines and edit count, `Failed` lists failed calls with `✓` and how the turn recovered,
+such as `→ rerun exit 0` or `→ retried after re-reading`, or `✗` when it did not,
+`Explored` counts reads, searches, and commands, and `Used` counts MCP, skill, and other
+tool calls. A `─ Worked` rule ends it with the turn's time, steps, tool calls, and
+failures. A Codex patch that changes several files is listed under its first file with
+the whole patch's line counts. Older sessions keep their `Tools`, `MCP`, and `Skills`
+lines. Codex, Claude, Antigravity, and Harness report this activity. Provider failures
+show a short error and captured output where available.
 
 ## Session Sizes
 

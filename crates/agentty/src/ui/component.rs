@@ -42,6 +42,8 @@ pub mod tab;
 pub mod tachyon_loader;
 /// Status line above the composer while a turn runs.
 pub(crate) mod turn_status;
+/// Column layout of a finished turn's summary.
+pub(crate) mod turn_summary;
 /// Live timeline rows of a running turn.
 pub(crate) mod turn_timeline;
 /// Reusable terminal scrollbar component.

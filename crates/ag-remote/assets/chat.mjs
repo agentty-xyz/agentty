@@ -15,6 +15,7 @@ import {
   formatTimer,
   parseActivity,
   parseNotice,
+  parseTurnSummary,
   reviewLabel,
   sessionFigures,
   settingsParts,
@@ -41,6 +42,9 @@ export const REFRESH_INTERVAL_MS = 1000;
 export const FOLLOW_DISTANCE_PX = 80;
 // An activity box with more lines than this starts closed.
 const OPEN_ACTIVITY_LINES = 3;
+// A turn summary with more rows than this, besides its header and its
+// `─ Worked` line, starts closed.
+const OPEN_SUMMARY_ROWS = 8;
 const MESSAGE_KINDS = new Set(["activity", "assistant", "notice", "user"]);
 // Statuses in which a message waits for the running turn.
 const QUEUEING_STATUSES = new Set(["InProgress", "Rebasing"]);
@@ -1040,13 +1044,11 @@ export function createChat({
   }
 
   function renderActivity(content) {
+    const turnSummary = parseTurnSummary(content);
+    if (turnSummary) {
+      return renderTurnSummary(turnSummary);
+    }
     const lines = parseActivity(content);
-    const details = element(document, "details");
-    details.open = lines.length <= OPEN_ACTIVITY_LINES;
-    const summary = element(document, "summary", null, "Activity");
-    summary.append(
-      element(document, "span", "count", lines.length === 1 ? "1 line" : lines.length + " lines"),
-    );
     const list = element(document, "ul", "activity-lines");
     list.append(
       ...lines.map((line) => {
@@ -1056,6 +1058,64 @@ export function createChat({
         return row;
       }),
     );
+
+    return activityBox(
+      lines.length === 1 ? "1 line" : lines.length + " lines",
+      lines.length <= OPEN_ACTIVITY_LINES,
+      list,
+    );
+  }
+
+  // Lays out a finished turn's summary in columns under its header, with
+  // the glyph, failure, and recovery tones the terminal uses, ending with
+  // its `─ Worked` line. The header and that line do not count toward
+  // closing the box.
+  function renderTurnSummary(turnSummary) {
+    const list = element(document, "ul", "activity-lines activity-summary");
+    list.append(
+      ...turnSummary.rows.map((row) => {
+        const item = element(document, "li", "summary-row");
+        item.append(element(document, "span", "summary-heading", row.heading));
+        if (row.text !== undefined) {
+          item.append(element(document, "span", "summary-text", row.text));
+        } else {
+          item.append(
+            element(document, "span", "tone-" + row.glyphTone, row.glyph),
+            element(document, "span", "summary-target", row.target),
+            summaryResult(row.resultParts),
+            element(document, "span", "tone-" + row.noteTone, row.note),
+          );
+        }
+        item.title = item.textContent;
+
+        return item;
+      }),
+      element(document, "li", "summary-divider", turnSummary.divider),
+    );
+
+    return activityBox(turnSummary.header, turnSummary.rows.length <= OPEN_SUMMARY_ROWS, list);
+  }
+
+  // Returns a summary row's result cell, each part in its own tone.
+  function summaryResult(parts) {
+    const cell = element(document, "span", "summary-result");
+    parts.forEach((part, index) => {
+      if (index > 0) {
+        cell.append(document.createTextNode(" "));
+      }
+      cell.append(element(document, "span", "tone-" + part.tone, part.text));
+    });
+
+    return cell;
+  }
+
+  // Wraps `list` in an `Activity` box labeled with `count`, starting open
+  // when `isOpen`, that remembers when the reader toggles it.
+  function activityBox(count, isOpen, list) {
+    const details = element(document, "details");
+    details.open = isOpen;
+    const summary = element(document, "summary", null, "Activity");
+    summary.append(element(document, "span", "count", count));
     // Clicks and the keys that activate the summary both arrive as a click.
     summary.addEventListener("click", () => {
       details.dataset.toggled = "true";

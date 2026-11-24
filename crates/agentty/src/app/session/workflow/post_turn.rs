@@ -298,15 +298,17 @@ pub(super) async fn apply_turn_result(
     match turn_result {
         Ok(result) => apply_successful_turn_result(context, turn_metadata, result, activity).await,
         Err(AgentError::InterruptedByUser(message)) => {
+            append_turn_summary(context, activity).await;
             append_turn_error(context, &message).await;
-            append_turn_activity(context, activity).await;
+            activity.clear_live(&context.app_event_tx, &context.session_id);
 
             Err(SessionError::StoppedByUser(message))
         }
         Err(error) => {
             let error_text = error.to_string();
+            append_turn_summary(context, activity).await;
             append_turn_error(context, &error_text).await;
-            append_turn_activity(context, activity).await;
+            activity.clear_live(&context.app_event_tx, &context.session_id);
 
             Err(SessionError::Workflow(error_text))
         }
@@ -410,11 +412,11 @@ fn truncate_turn_error_notice(error_text: &str) -> String {
     notice
 }
 
-/// Removes the live timeline, which the answer or failure notice saved just
-/// before replaces, then persists display-only usage directly after it.
-async fn append_turn_activity(context: &PostTurnContext, activity: &super::activity::TurnActivity) {
-    activity.clear_live(&context.app_event_tx, &context.session_id);
-    let summary = activity.summary();
+/// Persists the display-only turn summary, which precedes the turn's answer
+/// or failure notice. The live timeline stays until that answer or notice
+/// is saved too.
+async fn append_turn_summary(context: &PostTurnContext, activity: &super::activity::TurnActivity) {
+    let summary = activity.summary().render(None);
     if !summary.is_empty() {
         SessionTaskService::append_session_transcript_message(
             &context.transcript,
@@ -449,6 +451,7 @@ async fn apply_successful_turn_result(
         provider_conversation_id,
     } = result;
 
+    append_turn_summary(context, activity).await;
     if let Some(message) = build_assistant_message_content(&assistant_message) {
         SessionTaskService::append_session_transcript_message(
             &context.transcript,
@@ -463,7 +466,7 @@ async fn apply_successful_turn_result(
         )
         .await;
     }
-    append_turn_activity(context, activity).await;
+    activity.clear_live(&context.app_event_tx, &context.session_id);
     let review_comment_resolutions = if assistant_message.questions.is_empty() {
         prepare_review_comment_resolutions(
             context,

@@ -337,8 +337,9 @@ a key or sign-in is never chosen as the default.
   command. A command counts as failed when its own exit status is nonzero, including a
   failing stage before a pipe such as `cargo test | tail -20`, or when it runs past its
   time limit, and so does a rejected edit. Streamed text is replaced by the saved answer
-  when the turn ends, and only the saved answer is kept; a stopped or failed turn keeps
-  only its error notice.
+  when the turn ends, and only the saved answer is kept, below a summary of the turn's
+  edits, failures and recoveries, and explorations; a stopped or failed turn keeps that
+  summary and its error notice.
 - Commit messages, titles, and focused reviews use the project's default models when
   their agent CLI is installed, otherwise the session's harness model.
 - History is stored per session under `~/.agentty/harness/` and removed with the
