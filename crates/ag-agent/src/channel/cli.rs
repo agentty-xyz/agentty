@@ -389,7 +389,7 @@ async fn complete_cli_turn(
         usage: cli_turn_usage(
             kind,
             &req.model,
-            req.request_kind.is_resume(),
+            &req.request_kind,
             req.continuation.usage_checkpoint(),
             &runs,
         ),

@@ -20,8 +20,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use ag_contracts::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage};
+use ag_contracts::{AgentRequestKind, ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage};
 use ag_harness::provider::ModelProvider;
+use ag_protocol::ProtocolRequestProfile;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -217,8 +218,11 @@ impl ModelTotals {
         Some(Self {
             cache_read: count("cacheReadInputTokens").unwrap_or(0),
             cache_write: count("cacheCreationInputTokens").unwrap_or(0),
+            // A `costBasis` of `unknown` means no price table matched the
+            // model, so its `costUSD` is no estimate.
             cost: usage
                 .get("costUSD")
+                .filter(|_| usage.get("costBasis").and_then(Value::as_str) != Some("unknown"))
                 .and_then(Value::as_f64)
                 .and_then(micro_usd),
             input: count("inputTokens")?,
@@ -287,21 +291,25 @@ pub(crate) struct ClaudeRun<'a> {
 }
 
 /// Returns the usage of one turn's Claude Code processes on `model`, in the
-/// order they ran, and the checkpoint the next resumed turn needs.
+/// order they ran, and the checkpoint the next continued turn needs.
 ///
-/// A process that continued the session (`resumed`) is charged the
-/// difference from `checkpoint`, the totals after the session's previous
-/// resumed process, and its totals become the next checkpoint. Any other
-/// process, such as a utility prompt, starts at zero and is charged its own
+/// A process that continued the conversation (a `SessionResume` request) is
+/// charged the difference from `checkpoint`, the totals after the
+/// conversation's previous turn. Any other process, such as a session's
+/// first turn or a utility prompt, starts at zero and is charged its own
 /// totals. A process whose share cannot be trusted, because it reported no
 /// totals, its release is unknown, no checkpoint precedes it, or a total
-/// went down, is charged its main-loop usage at list price instead.
+/// went down, is charged its main-loop usage at list price instead. The
+/// totals of a session turn's processes, started or continued, become the
+/// next checkpoint; other requests never set one.
 pub(crate) fn turn_usage<'a>(
     model: &str,
-    resumed: bool,
+    request_kind: &AgentRequestKind,
     checkpoint: Option<&str>,
     runs: impl IntoIterator<Item = ClaudeRun<'a>>,
 ) -> TurnUsage {
+    let resumed = request_kind.is_resume();
+    let session_turn = request_kind.protocol_profile() == ProtocolRequestProfile::SessionTurn;
     let mut previous = checkpoint.and_then(|checkpoint| serde_json::from_str(checkpoint).ok());
     let mut usage = TurnUsage::default();
     for run in runs {
@@ -329,7 +337,7 @@ pub(crate) fn turn_usage<'a>(
             }
             usage.record(&model_usage);
         }
-        if resumed && let Some(totals) = run.totals {
+        if session_turn && let Some(totals) = run.totals {
             usage.checkpoint = serde_json::to_string(&totals.models).ok();
             previous = Some(totals.models.clone());
         }

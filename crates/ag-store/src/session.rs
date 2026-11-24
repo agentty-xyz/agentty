@@ -47,8 +47,8 @@ pub struct SessionTurnMetadata {
     pub questions_json: String,
     /// Review-comment operations committed with this completed turn.
     pub review_comment_resolutions: Vec<NewSessionReviewCommentResolution>,
-    /// Usage of every model the completed turn used; its checkpoint, when
-    /// present, replaces the session's.
+    /// Usage of every model the completed turn used; its checkpoint replaces
+    /// the session's, so a turn that reported none leaves none.
     pub usage: TurnUsage,
 }
 
@@ -1645,7 +1645,7 @@ UPDATE session
 SET questions = ?,
     provider_conversation_id = ?,
     app_server_instruction_provider_conversation_id = ?,
-    usage_checkpoint = COALESCE(?, usage_checkpoint),
+    usage_checkpoint = ?,
     updated_at = ?
 WHERE id = ?
 ",

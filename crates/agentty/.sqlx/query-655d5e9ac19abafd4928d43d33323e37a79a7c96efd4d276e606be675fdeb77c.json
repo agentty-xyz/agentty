@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT provider_conversation_id, instruction_conversation_id FROM task_agent_context WHERE task_id = ?",
+  "query": "SELECT provider_conversation_id, instruction_conversation_id, usage_checkpoint FROM task_agent_context WHERE task_id = ?",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "instruction_conversation_id"
           }
         }
+      },
+      {
+        "name": "usage_checkpoint",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "usage_checkpoint"
+          }
+        }
       }
     ],
     "parameters": {
@@ -31,8 +42,9 @@
     },
     "nullable": [
       true,
+      true,
       true
     ]
   },
-  "hash": "42e4e0b694ac982a843adffd1640af7d56f19c8873a755a1429744d65ce01a2b"
+  "hash": "655d5e9ac19abafd4928d43d33323e37a79a7c96efd4d276e606be675fdeb77c"
 }

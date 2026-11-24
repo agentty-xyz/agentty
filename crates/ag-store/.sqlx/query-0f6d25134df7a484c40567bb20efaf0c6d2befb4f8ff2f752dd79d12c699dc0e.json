@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task_agent_context SET provider_conversation_id = ?, instruction_conversation_id = ?, usage_checkpoint = ? WHERE task_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "0f6d25134df7a484c40567bb20efaf0c6d2befb4f8ff2f752dd79d12c699dc0e"
+}

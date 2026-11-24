@@ -168,8 +168,9 @@ unreported with no charge. Estimated charges are not bills.
 
 Claude Code reports each model's tokens and estimated cost, subagents included, as
 running totals that a resumed session carries over on Claude Code 2.1.277 and later.
-Agentty keeps the totals after each session turn and charges the next turn the
-difference. When that difference cannot be trusted, such as on the first turn after
+Agentty keeps the totals after each turn of a session or task agent and charges the next
+turn the difference; a model without a known price is charged at the Anthropic list
+price. When that difference cannot be trusted, such as on the first resumed turn after
 upgrading Agentty or when the Claude Code release is unknown, the turn falls back to its
 main-conversation tokens at the Anthropic list price. While a Claude turn runs, its live
 figures use the list price. Codex and Claude estimates do not yet distinguish a

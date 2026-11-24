@@ -407,10 +407,10 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
     assert_eq!(usage_checkpoint, None);
 }
 
-/// Verifies a turn's reported usage checkpoint replaces the session's, a
-/// turn without one keeps it, and a missing session reads none.
+/// Verifies each turn's reported usage checkpoint replaces the session's, a
+/// turn without one clears it, and a missing session reads none.
 #[tokio::test]
-async fn test_persist_session_turn_metadata_stores_and_keeps_usage_checkpoint() {
+async fn test_persist_session_turn_metadata_replaces_usage_checkpoint() {
     // Arrange
     let database = Database::in_memory()
         .await
@@ -471,7 +471,7 @@ async fn test_persist_session_turn_metadata_stores_and_keeps_usage_checkpoint() 
     assert_eq!(initial, None);
     assert_eq!(
         checkpoints,
-        [Some("first"), Some("second"), Some("second")].map(|value| value.map(str::to_string))
+        [Some("first"), Some("second"), None].map(|value| value.map(str::to_string))
     );
     assert_eq!(missing, None);
 }

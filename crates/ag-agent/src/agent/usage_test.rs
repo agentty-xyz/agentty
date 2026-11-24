@@ -1,6 +1,6 @@
 //! Tests for harness cost conversion and list-price estimates.
 
-use ag_contracts::{CostBasis, CostEstimate, ModelUsage, TurnUsage};
+use ag_contracts::{AgentRequestKind, CostBasis, CostEstimate, ModelUsage, TurnUsage};
 use ag_harness::catalog::{Pricing, PricingSource};
 use ag_harness::provider::ModelProvider;
 use ag_harness::{Cost, Usage};
@@ -125,7 +125,7 @@ fn cli_turn_usage_sums_other_agents_runs_under_the_model() {
     let usage = cli_turn_usage(
         AgentKind::Codex,
         "not-a-model",
-        true,
+        &AgentRequestKind::SessionResume,
         None,
         &[&turn, &repair],
     );

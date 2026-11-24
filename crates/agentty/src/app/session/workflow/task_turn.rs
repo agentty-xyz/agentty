@@ -244,7 +244,8 @@ async fn prepare(
         history.instruction_conversation_id.clone(),
         history.provider_conversation_id.clone(),
         if persistent { None } else { replay },
-    );
+    )
+    .with_usage_checkpoint(history.usage_checkpoint.clone());
     let prepared = TurnRequest {
         // Task agents run bounded assignments, and no transcript shows their
         // compaction notices.

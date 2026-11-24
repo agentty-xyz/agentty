@@ -2,7 +2,7 @@
 //! deduplication, subagent exclusion, context windows, and each turn's share
 //! of the per-model `modelUsage` totals.
 
-use ag_contracts::{ContextFill, CostBasis, ModelUsage, TurnUsage};
+use ag_contracts::{AgentRequestKind, ContextFill, CostBasis, ModelUsage, TurnUsage};
 use semver::Version;
 use serde_json::{Value, json};
 
@@ -28,8 +28,8 @@ struct TurnCase {
     checkpoint_run: Option<usize>,
     /// Scenario label for assertion messages.
     name: &'static str,
-    /// Whether the turn continued the session.
-    resumed: bool,
+    /// Kind of the turn's request.
+    request_kind: AgentRequestKind,
     /// Expected rows of the turn usage.
     rows: Vec<Row<'static>>,
     /// Release and `modelUsage` of each process, in order.
@@ -146,7 +146,7 @@ fn assert_turn_case(case: &TurnCase) {
     // Act
     let usage = turn_usage(
         REQUESTED,
-        case.resumed,
+        &case.request_kind,
         case.checkpoint.as_deref(),
         runs.iter().map(|(main_loop, totals)| ClaudeRun {
             main_loop,
@@ -353,7 +353,7 @@ fn turn_usage_charges_each_run_its_share_of_the_totals() {
             checkpoint: earlier.clone(),
             checkpoint_run: None,
             name: "fresh runs are charged absolute totals",
-            resumed: false,
+            request_kind: AgentRequestKind::UtilityPrompt,
             rows: vec![haiku, context_row(CONTEXT_MODEL, 1_100, 50, 2, reported)],
             runs: vec![(
                 Some(CUMULATIVE),
@@ -367,7 +367,7 @@ fn turn_usage_charges_each_run_its_share_of_the_totals() {
             checkpoint: earlier.clone(),
             checkpoint_run: Some(0),
             name: "resumed runs on cumulative releases are charged deltas",
-            resumed: true,
+            request_kind: AgentRequestKind::SessionResume,
             rows: vec![haiku, context_row(CONTEXT_MODEL, 30, 40, 2, reported)],
             runs: vec![(Some(CUMULATIVE), Some(current.clone()))],
         },
@@ -375,7 +375,7 @@ fn turn_usage_charges_each_run_its_share_of_the_totals() {
             checkpoint: earlier.clone(),
             checkpoint_run: Some(0),
             name: "resumed runs on older releases are charged absolute totals",
-            resumed: true,
+            request_kind: AgentRequestKind::SessionResume,
             rows: vec![
                 haiku,
                 context_row(CONTEXT_MODEL, 130, 50, 2, reported),
@@ -387,7 +387,7 @@ fn turn_usage_charges_each_run_its_share_of_the_totals() {
             checkpoint: earlier,
             checkpoint_run: Some(1),
             name: "a repair run is charged against the turn run's totals",
-            resumed: true,
+            request_kind: AgentRequestKind::SessionResume,
             rows: vec![context_row(CONTEXT_MODEL, 60, 50, 4, reported)],
             runs: vec![
                 (
@@ -404,13 +404,55 @@ fn turn_usage_charges_each_run_its_share_of_the_totals() {
             checkpoint: None,
             checkpoint_run: None,
             name: "context falls back to the requested model",
-            resumed: false,
+            request_kind: AgentRequestKind::UtilityPrompt,
             rows: vec![context_row(REQUESTED, 40, 4, 2, CostBasis::ListPrice)],
             runs: vec![(
                 Some(CUMULATIVE),
                 Some(json!({
                     "claude-opus-5-5": entry(0, 0, Some(0.0)),
                     REQUESTED: entry(40, 4, None)
+                })),
+            )],
+        },
+    ];
+
+    // Act & Assert
+    for case in &cases {
+        assert_turn_case(case);
+    }
+}
+
+#[test]
+fn turn_usage_checkpoints_started_sessions_and_prices_unmatched_costs_at_list_price() {
+    // Arrange
+    let cases = [
+        TurnCase {
+            checkpoint: None,
+            checkpoint_run: Some(0),
+            name: "a session's first turn is charged its totals and sets the checkpoint",
+            request_kind: AgentRequestKind::SessionStart,
+            rows: vec![context_row(
+                CONTEXT_MODEL,
+                130,
+                50,
+                2,
+                CostBasis::AgentReported,
+            )],
+            runs: vec![(
+                Some(CUMULATIVE),
+                Some(json!({"claude-opus-5-5": entry(130, 50, Some(0.015))})),
+            )],
+        },
+        TurnCase {
+            checkpoint: None,
+            checkpoint_run: None,
+            name: "a cost no price table matched is priced at list price",
+            request_kind: AgentRequestKind::UtilityPrompt,
+            rows: vec![context_row(REQUESTED, 40, 4, 2, CostBasis::ListPrice)],
+            runs: vec![(
+                Some(CUMULATIVE),
+                Some(json!({
+                    REQUESTED: {"inputTokens": 40, "outputTokens": 4, "costUSD": 0.5, "costBasis": "unknown"}
                 })),
             )],
         },
@@ -432,7 +474,7 @@ fn turn_usage_charges_untrusted_runs_their_main_loop_at_list_price() {
         checkpoint: checkpoint.map(str::to_string),
         checkpoint_run: model_usage.is_some().then_some(0),
         name,
-        resumed: true,
+        request_kind: AgentRequestKind::SessionResume,
         rows: vec![main_loop],
         runs: vec![(version, model_usage)],
     };

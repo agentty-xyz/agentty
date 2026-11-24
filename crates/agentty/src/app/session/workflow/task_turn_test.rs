@@ -28,6 +28,7 @@ fn task_replay_is_json_encoded() {
         instruction_conversation_id: None,
         provider_conversation_id: None,
         turns: Vec::new(),
+        usage_checkpoint: None,
     };
 
     // Act / Assert

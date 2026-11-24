@@ -1,7 +1,7 @@
 //! Conversion of harness usage and prices into the shared usage contract,
 //! and list-price estimates for agents that report tokens without a price.
 
-use ag_contracts::{CostBasis, CostEstimate, ModelUsage, TurnUsage};
+use ag_contracts::{AgentRequestKind, CostBasis, CostEstimate, ModelUsage, TurnUsage};
 use ag_harness::catalog::{Pricing, PricingSource};
 use ag_harness::provider::ModelProvider;
 use ag_harness::{Cost, Usage};
@@ -26,20 +26,19 @@ pub(crate) fn cost_estimate(cost: Cost) -> CostEstimate {
 /// they ran: the turn's own process and its protocol repairs.
 ///
 /// Claude Code's runs are charged their share of its `modelUsage` totals,
-/// as [`claude_usage::turn_usage`] describes, continuing from `checkpoint`
-/// when the turn continued the session (`resumed`). Other agents' runs are
-/// summed at list price.
+/// as [`claude_usage::turn_usage`] describes for `request_kind`, continuing
+/// from `checkpoint`. Other agents' runs are summed at list price.
 pub(crate) fn cli_turn_usage(
     kind: AgentKind,
     model: &str,
-    resumed: bool,
+    request_kind: &AgentRequestKind,
     checkpoint: Option<&str>,
     runs: &[&ParsedResponse],
 ) -> TurnUsage {
     if kind == AgentKind::Claude {
         return claude_usage::turn_usage(
             model,
-            resumed,
+            request_kind,
             checkpoint,
             runs.iter().map(|run| ClaudeRun {
                 main_loop: &run.usage,

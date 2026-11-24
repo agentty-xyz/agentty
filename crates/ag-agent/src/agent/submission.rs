@@ -353,6 +353,7 @@ async fn submit_one_shot_with_backend(
     let protocol_profile = request.request_kind.protocol_profile();
     let agent_kind = request.harness.parse::<AgentKind>()?;
     let model = request.model.clone();
+    let request_kind = request.request_kind.clone();
     let parsed_response =
         execute_one_shot_command(backend, agent_kind, &request.prompt, request.clone()).await?;
     let (agent_response, repair_response) =
@@ -393,7 +394,7 @@ async fn submit_one_shot_with_backend(
 
     Ok(OneShotSubmission {
         response: agent_response,
-        usage: cli_turn_usage(agent_kind, &model, false, None, &runs),
+        usage: cli_turn_usage(agent_kind, &model, &request_kind, None, &runs),
     })
 }
 

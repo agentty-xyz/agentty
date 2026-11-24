@@ -53,6 +53,7 @@ async fn task_response_preserves_ordinary_conversation_and_uses_captured_model()
         history.instruction_conversation_id,
         metadata.instruction_conversation_id
     );
+    assert_eq!(history.usage_checkpoint, metadata.usage.checkpoint);
     assert_eq!(history.turns.len(), 1);
     assert_eq!(history.turns[0].attempt_id, "first");
     assert_eq!(
@@ -505,7 +506,10 @@ fn metadata(label: &str) -> TaskAgentTurnMetadata {
         harness_turn_report: Some("content-free harness report".to_string()),
         instruction_conversation_id: Some(format!("bootstrap-{label}")),
         provider_conversation_id: Some(format!("thread-{label}")),
-        usage: token_usage("gpt-6.1-sol", 7, 3),
+        usage: TurnUsage {
+            checkpoint: Some(format!("checkpoint-{label}")),
+            ..token_usage("gpt-6.1-sol", 7, 3)
+        },
     }
 }
 

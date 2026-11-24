@@ -204,6 +204,7 @@ async fn assert_planner_attempt(
                 let mut result = successful_turn_result("A plan");
                 result.assistant_message.questions = vec![QuestionItem::new("Task question?")];
                 result.provider_conversation_id = Some("task-provider".to_string());
+                result.usage.checkpoint = Some("task-checkpoint".to_string());
                 Ok(result)
             })
         });
@@ -288,6 +289,14 @@ fn assert_planner_request(turn: &TurnRequest, attempt: &str, expected_kind: &Age
             None
         } else {
             Some("task-provider")
+        }
+    );
+    assert_eq!(
+        turn.continuation.usage_checkpoint(),
+        if attempt == "first" {
+            None
+        } else {
+            Some("task-checkpoint")
         }
     );
 }
