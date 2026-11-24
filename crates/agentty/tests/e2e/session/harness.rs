@@ -365,6 +365,107 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
     Ok(())
 }
 
+/// Lockfile the Cargo cache scenario commits: one crates.io package.
+const CARGO_LOCKFILE: &str = "version = 4\n\n[[package]]\nname = \"leaf\"\nversion = \
+                              \"1.0.0\"\nsource = \
+                              \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum \
+                              = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n";
+
+#[tokio::test]
+async fn test_harness_session_notes_when_caching_cargo_dependencies_fails() -> E2eResult {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(answer("Checked the build."))
+        .mount(&server)
+        .await;
+
+    // Act, Assert
+    FeatureTest::new("harness_cargo_cache_failure")
+        .with_git()
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server.uri())
+        .setup(|env| {
+            Box::pin(async move {
+                // A Cargo that reports its version but fails every fetch.
+                let cargo = env.stub_bin.join("cargo");
+                std::fs::write(
+                    &cargo,
+                    "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'cargo 1.99.0'; exit 0; fi\nexit \
+                     101\n",
+                )?;
+                std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))?;
+                std::fs::write(env.workdir.join("Cargo.lock"), CARGO_LOCKFILE)?;
+                for arguments in [
+                    ["add", "Cargo.lock"].as_slice(),
+                    ["commit", "-qm", "Lock dependencies"].as_slice(),
+                ] {
+                    let status = std::process::Command::new("git")
+                        .args(arguments)
+                        .current_dir(&env.workdir)
+                        .status()?;
+                    if !status.success() {
+                        return Err(format!("git {arguments:?} failed").into());
+                    }
+                }
+
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
+                    .write_text("Check the build")
+                    .wait_for_text("Check the build", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(
+                                frame,
+                                "Caching Cargo dependencies failed",
+                                &full,
+                            )
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_cargo_cache_failure",
+                        "Harness session noted that caching Cargo dependencies failed",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Caching Cargo dependencies failed",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Caching Cargo dependencies in the background",
+                        &full,
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_ag_harness_models_are_listed_without_provider_keys() -> E2eResult {
     // Arrange, Act, Assert

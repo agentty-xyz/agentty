@@ -16,6 +16,7 @@ use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
 use crate::analytics::{Analytics, SessionType, TurnOutcome, TurnSelection};
+use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::SessionManager;
 use crate::app::{AppEvent, spawn};
@@ -26,6 +27,7 @@ use crate::domain::agent::{
 use crate::domain::harness::{HarnessAvailability, HarnessModelCatalog};
 use crate::domain::session::SessionId;
 use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
+use crate::infra::cargo_cache::CargoCacheClient;
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
@@ -50,6 +52,7 @@ pub struct AppServices {
     available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
     base_path: PathBuf,
+    cargo_cache: CargoCacheWarmer,
     cleanup_task_handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     clipboard_image_client: Arc<dyn ClipboardImageClient>,
     clock: Arc<dyn Clock>,
@@ -125,6 +128,7 @@ impl AppServices {
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
             base_path,
+            cargo_cache: CargoCacheWarmer::default(),
             cleanup_task_handles: Arc::default(),
             creation_task_handles: Arc::default(),
             clipboard_image_client,
@@ -147,6 +151,17 @@ impl AppServices {
             telemetry_task_handles: Arc::default(),
             worktree_cleanup_lane: Arc::default(),
         }
+    }
+
+    /// Refreshes the read-only Cargo cache of Harness sessions through
+    /// `client`; without it, sessions download their own dependencies.
+    pub(crate) fn set_cargo_cache_client(&mut self, client: Arc<dyn CargoCacheClient>) {
+        self.cargo_cache = CargoCacheWarmer::new(client);
+    }
+
+    /// Returns the starter of trusted Cargo cache refreshes.
+    pub(crate) fn cargo_cache(&self) -> CargoCacheWarmer {
+        self.cargo_cache.clone()
     }
 
     /// Records the harness models this launch offers and the probe that

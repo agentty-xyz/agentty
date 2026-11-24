@@ -36,6 +36,7 @@ integration tests exercise supported APIs without exposing private implementatio
 | Browser pages and links        | `BrowserClient`                 |
 | Workspace agents               | `AgentCatalogClient`            |
 | Process sampling               | `ResourceClient`                |
+| Trusted Cargo cache fetches    | `CargoCacheClient`              |
 | Remote-control listener        | `RemoteControlLauncher`         |
 | Paired remote devices          | `DeviceStore`                   |
 | Agentty Platform API           | `PlatformClient`                |

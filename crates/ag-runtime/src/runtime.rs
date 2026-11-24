@@ -31,6 +31,18 @@ impl RuntimeFactory {
         self
     }
 
+    /// Makes in-process [`AgentKind::Harness`] session turns copy from the
+    /// per-project Cargo caches under `cache_root`; call it after
+    /// [`Self::with_native_harness`], without which it has no effect.
+    #[must_use]
+    pub fn with_trusted_cargo_cache(mut self, cache_root: PathBuf) -> Self {
+        self.native_harness = self
+            .native_harness
+            .map(|config| config.with_trusted_cargo_cache(cache_root));
+
+        self
+    }
+
     /// Composes a fresh runtime for one worker-owned session.
     pub fn session(&self, kind: AgentKind) -> SessionRuntime {
         SessionRuntime {

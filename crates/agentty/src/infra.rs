@@ -4,6 +4,8 @@
 pub mod agent_profile;
 /// Default-browser boundary for sign-in pages.
 pub mod browser;
+/// Trusted Cargo cache refreshes for native sandboxed sessions.
+pub(crate) mod cargo_cache;
 /// Clipboard image capture and persistence boundary for prompt attachments.
 pub(crate) mod clipboard_image;
 /// Wall-clock boundary used by app, runtime, and session orchestration.

@@ -20,6 +20,7 @@ use super::post_turn::PostTurnContext;
 use super::sandbox::SandboxNoticeTarget;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
+use crate::app::cargo_cache::Announcement;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting, spawn};
@@ -221,6 +222,14 @@ pub(super) async fn run_channel_turn(
             }
         };
 
+    // Background work: it never delays or fails the turn.
+    let _cargo_cache_refresh = context.cargo_cache.warm(
+        &context.app_event_tx,
+        &context.session_id,
+        turn_metadata.session_agent.kind(),
+        &workspace.env,
+        Announcement::Notices,
+    );
     let prepared = prepare_turn_request(
         context,
         &turn_metadata,

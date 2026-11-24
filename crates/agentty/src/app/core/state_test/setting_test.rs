@@ -1,6 +1,6 @@
 //! `App` subagent limit and `tmux` launch configuration setting unit tests.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mockall::predicate::eq;
@@ -10,6 +10,22 @@ use super::support::new_test_app_with_selected_session;
 use crate::domain::agent::AgentKind;
 use crate::domain::subagent::SubagentLimit;
 use crate::infra::tmux::MockTmuxClient;
+
+#[test]
+/// Keeps a trusted Cargo cache only for a launch that names its Agentty
+/// home.
+fn trusted_cargo_cache_is_kept_only_when_composed() {
+    // Arrange
+    let clients = AppClients::new();
+    let without_cache = clients.cargo_cache_client.is_none();
+
+    // Act
+    let clients = clients.with_trusted_cargo_cache(Path::new("/agentty-home"));
+
+    // Assert
+    assert!(without_cache);
+    assert!(clients.cargo_cache_client.is_some());
+}
 
 #[test]
 fn max_concurrent_subagents_caps_every_harness_that_enforces_a_limit() {

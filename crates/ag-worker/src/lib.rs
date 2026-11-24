@@ -15,6 +15,10 @@ mod store;
 mod turn;
 mod utility;
 
+/// Per-project Cargo cache that native sandboxed sessions copy from: hosts
+/// refresh it outside the sandbox and enable it with
+/// [`RuntimeConfig::with_trusted_cargo_cache`] under the same root.
+pub use ag_runtime::TrustedCargoCache;
 /// Host contract: a host whose runtime configuration enables harness
 /// sessions calls this first in `main`, before starting any runtime or
 /// thread, and returns its exit code at once when it is `Some`; the

@@ -2,6 +2,7 @@
 //! update tests for the session worker.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
@@ -26,11 +27,13 @@ use super::support::{
     successful_turn_result, transcript_text,
 };
 use crate::app::AppEvent;
+use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
+use crate::infra::cargo_cache::MockCargoCacheClient;
 use crate::infra::db::AppRepositories;
 use crate::test_support::{enable_tracing_log_fallback, poison_lock};
 
@@ -286,6 +289,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -700,4 +704,122 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
             if session_id.as_str() == "session" && activity.snapshot() == "Tools: Read ×1\nStatus: 1 succeeded · 0 failed · 0 running\n\n✓ Read\n"
     )));
     assert_eq!(activity.summary(), "Tools: Read ×1\n");
+}
+
+#[tokio::test]
+/// Verifies a Harness turn refreshes its project's Cargo cache for the main
+/// checkout and worktree it resolved, while another agent's turn does not.
+async fn test_run_channel_turn_refreshes_the_cargo_cache_for_harness_turns_only() {
+    // Arrange
+    let harness = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
+    let other = default_turn_metadata().session_agent;
+
+    // Act
+    let (harness_result, harness_refreshes, folder, main_checkout) =
+        run_turn_with_cargo_cache(harness).await;
+    let (other_result, other_refreshes, _, _) = run_turn_with_cargo_cache(other).await;
+
+    // Assert
+    assert!(harness_result.is_ok(), "{harness_result:?}");
+    assert!(other_result.is_ok(), "{other_result:?}");
+    assert_eq!(harness_refreshes, [(main_checkout, folder)]);
+    assert_eq!(other_refreshes, []);
+}
+
+/// Runs one successful turn of `session_agent` in a worktree of a resolved
+/// main checkout with a scripted Cargo cache, and returns the turn result,
+/// the cache refreshes it started, the worktree, and the main checkout.
+async fn run_turn_with_cargo_cache(
+    session_agent: AgentSelection,
+) -> (
+    Result<(), SessionError>,
+    Vec<(PathBuf, PathBuf)>,
+    PathBuf,
+    PathBuf,
+) {
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    insert_in_progress_test_session(&db).await;
+    let mut mock_channel = MockAgentChannel::new();
+    mock_channel
+        .expect_run_turn()
+        .once()
+        .returning(|_session_id, _req, _events| {
+            Box::pin(async { Ok(successful_turn_result("done")) })
+        });
+    let main_checkout = base_dir.path().join("main");
+    let mut mock_git_client = mock_git_client_detecting_main_repo(main_checkout.clone());
+    mock_git_client
+        .expect_tracked_worktree_status()
+        .returning(|_| Box::pin(async { Ok(String::new()) }));
+    mock_git_client
+        .expect_ref_hash()
+        .returning(|_, _| Box::pin(async { Ok("base-commit".to_string()) }));
+    // A detached `HEAD`, which Harness turns accept like the session branch.
+    mock_git_client
+        .expect_head_reference()
+        .returning(|_| Box::pin(async { Ok("HEAD".to_string()) }));
+    mock_git_client
+        .expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
+    mock_git_client
+        .expect_is_worktree_clean()
+        .returning(|_| Box::pin(async { Ok(true) }));
+    let (refresh_tx, mut refresh_rx) = mpsc::unbounded_channel();
+    let mut cargo_cache = MockCargoCacheClient::new();
+    cargo_cache
+        .expect_refresh()
+        .returning(move |main_checkout, worktree, _| {
+            let _ = refresh_tx.send((main_checkout, worktree));
+
+            Ok(())
+        });
+    let context = SessionWorkerContext {
+        app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
+        graph_activity: GraphActivityRegistry::default(),
+        harness_models: HarnessModels::default(),
+        branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+        cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::new(Arc::new(cargo_cache)),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
+        child_pid: Arc::new(Mutex::new(None)),
+        clock: Arc::new(crate::infra::clock::RealClock),
+        db,
+        folder: base_dir.path().to_path_buf(),
+        fs_client: Arc::new(mock_fs_client_with_existing_directories()),
+        git_client: Arc::new(mock_git_client),
+        transcript: empty_transcript(),
+        queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+        review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+        session_update_versions: Arc::default(),
+        session_id: "sess1".into(),
+        session_agent,
+        status: Arc::new(Mutex::new(Status::InProgress)),
+    };
+    let mut turn_metadata = default_turn_metadata();
+    turn_metadata.session_agent = session_agent;
+
+    let result = run_channel_turn(
+        &context,
+        auto_commit_run_client(),
+        turn_metadata,
+        AgentRequestKind::SessionStart,
+        None,
+        "test prompt".into(),
+    )
+    .await;
+    // The refresh task owns the only sender once the context is gone.
+    drop(context);
+    let mut refreshes = Vec::new();
+    while let Some(refresh) = refresh_rx.recv().await {
+        refreshes.push(refresh);
+    }
+
+    (
+        result,
+        refreshes,
+        base_dir.path().to_path_buf(),
+        main_checkout,
+    )
 }

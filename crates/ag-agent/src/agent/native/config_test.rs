@@ -26,6 +26,7 @@ use ag_harness::{
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel};
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1192,6 +1193,64 @@ async fn session_sandbox_reports_temporary_directory_failures() {
             .expect("a file in place of the directory should fail")
             .contains("Failed to create the harness temporary directory")
     );
+}
+
+#[tokio::test]
+/// Copies from the Cargo cache of the session's project, kept under the
+/// host's cache root and keyed by the main checkout, into the session's
+/// `CARGO_HOME`, and copies nothing for a host that keeps no cache.
+async fn session_sandbox_copies_from_the_project_cargo_cache() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let cache_root = tempfile::tempdir().expect("cache root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let main_checkout = Path::new("/projects/main");
+    let key = hex::encode(Sha256::digest(main_checkout.as_os_str().as_encoded_bytes()));
+    let cache = cache_root.path().join(&key[..32]);
+    let archive = "registry/cache/index.crates.io-1/leaf-1.0.0.crate";
+    std::fs::create_dir_all(cache.join("home/registry/cache/index.crates.io-1")).expect("cache");
+    std::fs::write(cache.join("home").join(archive), "crate").expect("archive");
+    std::fs::write(
+        cache.join("generation"),
+        format!("agentty-cargo-cache 2\n1\nvariant\nfile {archive}\n"),
+    )
+    .expect("generation");
+    std::fs::write(
+        workspace.path().join("Cargo.lock"),
+        format!(
+            "version = 4\n\n[[package]]\nname = \"leaf\"\nversion = \"1.0.0\"\nsource = \
+             \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n",
+            hex::encode(Sha256::digest("crate"))
+        ),
+    )
+    .expect("lockfile");
+    let without_cache = NativeHarnessConfig::new(data_root.path().to_path_buf());
+    let config = without_cache
+        .clone()
+        .with_trusted_cargo_cache(cache_root.path().to_path_buf());
+    let environment = BTreeMap::new();
+    let copy = data_root.path().join("session-1/tmp/cargo").join(archive);
+    let mut request = session_request(workspace.path(), None);
+    request.main_checkout_root = Some(main_checkout.to_path_buf());
+
+    // Act
+    without_cache
+        .session_sandbox("session-1", &request, &environment)
+        .await
+        .expect("sandbox without cache");
+    let copied_without_cache = copy.exists();
+    config
+        .session_sandbox("session-1", &request, &environment)
+        .await
+        .expect("sandbox");
+
+    // Assert
+    assert!(!copied_without_cache);
+    assert_eq!(
+        std::fs::read_to_string(&copy).expect("copied archive"),
+        "crate"
+    );
+    assert!(std::fs::symlink_metadata(&copy).expect("copy").is_file());
 }
 
 #[test]

@@ -21,6 +21,7 @@ use super::{
     live_transcript_source, load_session_response_style, load_title_reasoning_level,
     prepare_turn_request, sandbox_notice_target,
 };
+use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::domain::agent::{
@@ -522,6 +523,7 @@ fn turn_test_context(db: AppRepositories) -> SessionWorkerContext {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db,

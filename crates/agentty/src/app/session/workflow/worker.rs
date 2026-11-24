@@ -33,6 +33,7 @@ use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
     run_branch_publish_action,
 };
+use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::{GRAPH_ACTIVITY_OPERATION_KIND, GraphActivityRegistry};
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
@@ -624,6 +625,8 @@ pub(super) struct SessionWorkerContext {
     /// of each turn; the UI calls `cancel()` on the current token to
     /// interrupt a running turn.
     pub(super) cancel_token: Arc<Mutex<CancellationToken>>,
+    /// Starts refreshes of the read-only Cargo cache Harness turns reuse.
+    pub(super) cargo_cache: CargoCacheWarmer,
     /// Worker-owned execution client for this session.
     pub(super) session_run: SessionRunClient,
     /// Runtime accounting root; adapters retain their own cancellation
@@ -1511,6 +1514,7 @@ impl SessionWorkerService {
             available_agent_kinds: services.available_agent_kinds().into(),
             branch_operation_lock: Arc::clone(&runtime.branch_operation_lock),
             cancel_token: Arc::clone(&runtime.cancel_token),
+            cargo_cache: services.cargo_cache(),
             session_run,
             child_pid: Arc::clone(&runtime.child_pid),
             clock: services.clock(),
