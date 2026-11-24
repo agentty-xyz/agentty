@@ -3894,9 +3894,11 @@ function imageFile(bytes, type = "image/png") {
   return new File([Uint8Array.from(bytes)], "pasted", { type: type });
 }
 
-// Pastes `files` into the composer and returns the paste event.
-function pasteFiles(byId, files) {
-  const event = new FakeEvent("paste", { clipboardData: { files: files } });
+// Pastes `files`, and `text` with them, into the composer and returns the
+// paste event.
+function pasteFiles(byId, files, text = "") {
+  const clipboardData = { files: files, getData: (type) => (type === "text/plain" ? text : "") };
+  const event = new FakeEvent("paste", { clipboardData: clipboardData });
   byId("message").dispatchEvent(event);
 
   return event;
@@ -4042,6 +4044,10 @@ test("pastes the host cannot take, or without images, are left alone or refused"
   chat.render(session());
   // Text pastes as text.
   assert.equal(pasteFiles(byId, [new File(["notes"], "notes.txt", { type: "text/plain" })]).defaultPrevented, false);
+  // Text copied with an image of it, as from a spreadsheet, pastes as text.
+  assert.equal(pasteFiles(byId, [imageFile([1])], "A1\tB1").defaultPrevented, false);
+  assert.equal(pasteFiles(byId, [imageFile([1], "image/tiff")], "A1\tB1").defaultPrevented, false);
+  assert.equal(byId("session-error").textContent, "");
   const gif = pasteFiles(byId, [imageFile([1], "image/gif")]);
   assert.equal(gif.defaultPrevented, true);
   assert.equal(byId("session-error").textContent, "Only PNG and JPEG images can be attached");

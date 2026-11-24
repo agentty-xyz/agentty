@@ -536,11 +536,14 @@ export function createComposer({
 
   // Attaches the PNG and JPEG files of a paste to the draft on screen,
   // with their placeholders at the caret. Returns whether it took the
-  // paste; a paste without images is left to the browser.
+  // paste; a paste without images is left to the browser, and so is one
+  // with text, as office and rich-text apps copy their text with an image
+  // of it.
   function pasteImages(transfer) {
     const { capabilities = [], draftId = null } = context();
     const files = transferImages(transfer);
-    if (!draftId || files.length === 0 || !offersImages(capabilities)) {
+    const text = transfer?.getData?.("text/plain") ?? "";
+    if (!draftId || files.length === 0 || text !== "" || !offersImages(capabilities)) {
       return false;
     }
     const images = draftImages();
