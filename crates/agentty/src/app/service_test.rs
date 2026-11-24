@@ -900,19 +900,11 @@ fn background_event_labels_preserve_variant_identity() {
             },
         },
         AppEvent::RefreshGitStatus,
-        AppEvent::SessionActivityReady {
-            activity: crate::app::session::LiveActivity::default(),
+        AppEvent::SessionTurnReady {
             session_id: session_id.clone(),
+            turn: crate::app::session::LiveTurn::default(),
         },
-        AppEvent::SessionActivityUpdated {
-            activity: None,
-            session_id: session_id.clone(),
-        },
-        AppEvent::SessionOutputReady {
-            output: crate::app::session::LiveOutput::default(),
-            session_id: session_id.clone(),
-        },
-        AppEvent::SessionOutputCleared {
+        AppEvent::SessionTurnCleared {
             session_id: session_id.clone(),
         },
         AppEvent::SessionProgressUpdated {

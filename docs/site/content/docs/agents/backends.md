@@ -331,14 +331,14 @@ a key or sign-in is never chosen as the default.
   Sync conflict assistance and execution-graph task turns in a session warn the same
   way. Merge conflict assistance, commit assistance, and other utility prompts never run
   commands without the sandbox: where it cannot run they fail with the same fix.
-- Answers and reasoning stream into the session view as the model writes them, with a
-  short "Preparing a tool call" line while tool arguments arrive; the activity footer
-  shows tool calls while a turn runs, each with what it acted on: a path, a search
-  query, or a command. A command counts as failed when its own exit status is nonzero,
-  including a failing stage before a pipe such as `cargo test | tail -20`, or when it
-  runs past its time limit, and so does a rejected edit. Streamed text is replaced by
-  the saved answer when the turn ends, and only the saved answer is kept; a stopped or
-  failed turn keeps only its error notice.
+- Messages, reasoning, and tool calls stream into the session's live timeline in the
+  order the model makes them, with a `Preparing a tool call` row while tool arguments
+  arrive; each tool row shows what the call acted on: a path, a search query, or a
+  command. A command counts as failed when its own exit status is nonzero, including a
+  failing stage before a pipe such as `cargo test | tail -20`, or when it runs past its
+  time limit, and so does a rejected edit. Streamed text is replaced by the saved answer
+  when the turn ends, and only the saved answer is kept; a stopped or failed turn keeps
+  only its error notice.
 - Commit messages, titles, and focused reviews use the project's default models when
   their agent CLI is installed, otherwise the session's harness model.
 - History is stored per session under `~/.agentty/harness/` and removed with the

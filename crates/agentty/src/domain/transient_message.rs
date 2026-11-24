@@ -1,17 +1,18 @@
 //! Explicit lifecycle state for non-durable session-output messages.
 
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use rustc_hash::FxHasher;
+
+use crate::domain::turn_timeline::TimelineSnapshot;
 
 /// Stable identity for one replaceable session-output message.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TransientMessageSlot {
-    /// Ordered tool and skill invocations from the current provider turn.
-    Activity,
-    /// Model output the current turn streams, shown below its activity rows
-    /// until the persisted result replaces it.
-    StreamedOutput,
+    /// Live timeline of the current provider turn: its narration,
+    /// reasoning, and tool rows, until the persisted result replaces it.
+    Turn,
     /// Durable workspace setup projected into inline session output.
     WorkspacePreparation,
     /// Focused review loading, result, or failure output.
@@ -77,14 +78,18 @@ pub(crate) enum TransientMessageBody {
     Loading(String),
     /// Calm waiting text for work queued behind the active command.
     Queued(QueuedAction),
+    /// Grouped live timeline of a running turn.
+    Timeline(Arc<TimelineSnapshot>),
 }
 
 impl TransientMessageBody {
-    /// Returns the message text independent of its render treatment.
+    /// Returns the message text independent of its render treatment; a
+    /// timeline has none.
     pub(crate) fn text(&self) -> &str {
         match self {
             Self::Markdown(text) | Self::Plain(text) | Self::Loading(text) => text,
             Self::Queued(action) => &action.text,
+            Self::Timeline(_) => "",
         }
     }
 

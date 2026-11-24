@@ -896,57 +896,28 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
 }
 
 #[test]
-fn app_event_batch_keeps_latest_live_activity_snapshot_and_clear() {
+fn app_event_batch_keeps_latest_live_turn_handle_or_clear_per_session() {
     // Arrange
     let mut batch = AppEventBatch::default();
+    let turn = crate::app::session::LiveTurn::default();
 
     // Act
-    for activity in [Some("running".into()), Some("completed".into()), None] {
-        batch.collect_event(AppEvent::SessionActivityUpdated {
-            activity,
-            session_id: "session".into(),
-        });
-    }
-    batch.collect_event(AppEvent::SessionActivityUpdated {
-        activity: Some("other".into()),
+    batch.collect_event(AppEvent::SessionTurnReady {
+        session_id: "session".into(),
+        turn: turn.clone(),
+    });
+    batch.collect_event(AppEvent::SessionTurnCleared {
+        session_id: "session".into(),
+    });
+    batch.collect_event(AppEvent::SessionTurnReady {
         session_id: "other".into(),
+        turn: turn.clone(),
     });
 
     // Assert
-    assert_eq!(batch.session_activity_updates.len(), 2);
-    assert_eq!(batch.session_activity_updates.get("session"), Some(&None));
-    assert_eq!(
-        batch.session_activity_updates.get("other"),
-        Some(&Some("other".into()))
-    );
-}
-
-#[test]
-fn app_event_batch_consumes_deferred_activity_before_clear() {
-    // Arrange
-    let mut batch = AppEventBatch::default();
-    let activity = crate::app::session::LiveActivity::default();
-
-    // Act
-    batch.collect_event(AppEvent::SessionActivityReady {
-        activity,
-        session_id: "session".into(),
-    });
-
-    // Assert
-    assert_eq!(
-        batch.session_activity_updates.get("session"),
-        Some(&Some(String::new()))
-    );
-
-    // Act
-    batch.collect_event(AppEvent::SessionActivityUpdated {
-        activity: None,
-        session_id: "session".into(),
-    });
-
-    // Assert
-    assert_eq!(batch.session_activity_updates.get("session"), Some(&None));
+    assert_eq!(batch.session_turn_updates.len(), 2);
+    assert_eq!(batch.session_turn_updates.get("session"), Some(&None));
+    assert_eq!(batch.session_turn_updates.get("other"), Some(&Some(turn)));
 }
 
 #[tokio::test]

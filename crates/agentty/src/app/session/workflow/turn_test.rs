@@ -413,6 +413,7 @@ async fn sandbox_notices_reach_the_transcript_as_they_arrive_and_other_events_pa
         context.app_event_tx.clone(),
         context.session_id.clone(),
         Arc::clone(&context.child_pid),
+        Arc::clone(&context.clock),
     )
     .await;
 

@@ -738,6 +738,8 @@ struct SessionWorkerRebaseAssistClient {
     session_run: SessionRunClient,
     /// Runtime accounting root; app-server cancellation uses channel shutdown.
     child_pid: Arc<Mutex<Option<u32>>>,
+    /// Clock that stamps the assist turn's live timeline.
+    clock: Arc<dyn Clock>,
     /// Repository bundle used for conversation and usage persistence.
     db: AppRepositories,
     /// Session worktree folder where the utility prompt runs.
@@ -774,6 +776,7 @@ impl SessionWorkerRebaseAssistClient {
             cancel_token: Arc::clone(&context.cancel_token),
             session_run: context.session_run.clone(),
             child_pid: Arc::clone(&context.child_pid),
+            clock: Arc::clone(&context.clock),
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
@@ -839,6 +842,7 @@ impl SessionWorkerRebaseAssistClient {
             self.app_event_tx.clone(),
             self.session_id.clone(),
             Arc::clone(&self.child_pid),
+            Arc::clone(&self.clock),
         ));
         let sandbox_notices = SandboxNoticeTarget {
             app_event_tx: &self.app_event_tx,

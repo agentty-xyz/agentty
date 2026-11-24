@@ -23,6 +23,7 @@ use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
 };
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
+use crate::ui::component::turn_status::{self, TurnStatusInput};
 use crate::ui::icon::Icon;
 use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, panel_inner_height, suggestion_dropdown_height,
@@ -91,6 +92,9 @@ struct SessionChatLayoutPlan {
     header_lines: Vec<Line<'static>>,
     prompt_panel: Option<PreparedPromptPanel>,
     question_panel_areas: Option<layout::QuestionPanelAreas>,
+    /// Row of the running turn's status line, while it shows a live
+    /// timeline.
+    turn_status_area: Option<Rect>,
 }
 
 impl SessionChatLayoutPlan {
@@ -119,11 +123,22 @@ impl SessionChatLayoutPlan {
             };
         let mut areas =
             layout::session_chat_areas(input.area, bottom_height, header_height(&header_lines));
+        let mut turn_status_area = None;
         if !matches!(input.session.status, Status::Done | Status::Canceled)
             && !matches!(input.mode, AppMode::Question { .. })
         {
             // Keep the composer's top margin outside the scrollable transcript.
             areas.output_area.height = areas.output_area.height.saturating_sub(1);
+            // A turn showing its live timeline names its progress on the
+            // row above that margin.
+            if input.session.live_timeline().is_some() && areas.output_area.height > 1 {
+                areas.output_area.height -= 1;
+                turn_status_area = Some(Rect {
+                    height: 1,
+                    y: areas.output_area.bottom(),
+                    ..areas.output_area
+                });
+            }
         }
         let question_panel_areas = question_panel_areas(areas.bottom_area, input.mode);
 
@@ -132,6 +147,7 @@ impl SessionChatLayoutPlan {
             header_lines,
             prompt_panel,
             question_panel_areas,
+            turn_status_area,
         }
     }
 
@@ -258,7 +274,8 @@ impl<'a> SessionChatPage<'a> {
             .session_update_version(self.session_update_version)
             .spinner_frame(Icon::spinner_frame_from_millis(
                 self.frame_time.unix_millis(),
-            ));
+            ))
+            .now_millis(self.frame_time.unix_millis());
         output = output.active_prompt_output(self.active_prompt_output);
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
@@ -267,6 +284,23 @@ impl<'a> SessionChatPage<'a> {
             output = output.active_progress(active_progress);
         }
         output.render(frame, layout_plan.areas.output_area);
+        if let Some(area) = layout_plan.turn_status_area
+            && let Some(snapshot) = session.live_timeline()
+        {
+            let status_line = turn_status::turn_status_line(
+                TurnStatusInput {
+                    current: snapshot.current.as_ref(),
+                    now_millis: self.frame_time.unix_millis(),
+                    spinner_frame: Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
+                    step_count: snapshot.step_count,
+                    turn_seconds: session
+                        .in_progress_duration_seconds(self.frame_time.unix_seconds()),
+                },
+                None,
+                area.width,
+            );
+            frame.render_widget(Paragraph::new(status_line), area);
+        }
         if session.awaits_first_message() {
             let transcript_area = Block::default()
                 .borders(session_format::session_output_panel_borders())

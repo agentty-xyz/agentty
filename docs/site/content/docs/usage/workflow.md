@@ -454,12 +454,22 @@ repository files; Rust and Python files show their module documentation summary.
 Unstarted drafts look up files in the project checkout. See
 [Prompt Input](@/docs/usage/keybindings.md#prompt-input) for editing keys.
 
-During a turn, the output shows live tool, MCP, and skill counts with succeeded, failed,
-running, and interrupted totals, plus the latest successful, running, and interrupted
-calls with shortened command previews. Completed responses keep a usage footer: `Tools`
-lists invocation counts, `MCP` lists Codex and Claude MCP calls as `server/tool`, and
-`Skills` lists explicit Claude skill invocations. Codex, Claude, and Antigravity report
-this activity. Provider failures show a short error and captured output where available.
+During a turn, the output shows a live timeline. Each message the model writes starts a
+`•` step, with its time since the turn started on the right, a dim `✻ Thought` line for
+its reasoning, and one row per tool call: `✓`, `✗`, or a spinner, a verb such as `Ran`
+or `Edit`, what the call acted on, and its result, such as `exit 0`, `+38 −4`, or
+`rejected · <reason>`. Consecutive reads, searches, and listings fold into one
+`Explored` row, a read directly followed by an edit of the same file folds into the
+edit, a failed command keeps its last output lines, a running call shows how long it has
+run, and a finished call that took 5 seconds or more shows its duration. Agent CLIs that
+report no messages show the rows alone. A status line above the composer names what the
+turn does now and for how long, the step count, and the turn's time.
+
+When the turn ends, its saved answer replaces the timeline and a usage footer stays:
+`Tools` lists invocation counts, `MCP` lists Codex and Claude MCP calls as
+`server/tool`, and `Skills` lists explicit Claude skill invocations. Codex, Claude,
+Antigravity, and Harness report this activity. Provider failures show a short error and
+captured output where available.
 
 ## Session Sizes
 

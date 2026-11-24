@@ -12,10 +12,10 @@ use tokio::task::JoinHandle;
 
 use super::workflow::merge::SessionMergeService;
 pub(crate) use super::workflow::merge::{SyncMainOutcome, SyncSessionStartError};
-use super::workflow::output::LiveOutput;
 pub(crate) use super::workflow::task::{
     RunAgentAssistTaskInput, SessionTaskService, StatusTransition,
 };
+use super::workflow::timeline::LiveTurn;
 use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting, spawn};
@@ -33,6 +33,7 @@ use crate::domain::transient_message::{
     GeneratedTurnUpdate, QueuedAction, TransientMessage, TransientMessageAnchor,
     TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot,
 };
+use crate::domain::turn_timeline::TimelineSnapshot;
 use crate::infra::resource::ResourceClient;
 
 /// Low-frequency fallback interval for metadata-based session refresh.
@@ -143,9 +144,9 @@ pub struct SessionManager {
     pub(super) active_prompt_outputs: HashMap<SessionId, String>,
     pub(super) default_session_model: AgentModel,
     pub(super) git_client: Arc<dyn git::GitClient>,
-    /// Streamed-output handles whose notification the foreground keeps
-    /// armed while their output still changes each frame.
-    pub(super) live_outputs: HashMap<SessionId, LiveOutput>,
+    /// Live-timeline handles whose notification the foreground keeps armed
+    /// while their timeline still changes each frame.
+    pub(super) live_turns: HashMap<SessionId, LiveTurn>,
     pub(super) merge_service: SessionMergeService,
     pub(super) resources: super::resource::ResourceMonitor,
     pub(super) state: SessionState,
@@ -177,7 +178,7 @@ impl SessionManager {
             at_mention_indexes: HashMap::new(),
             default_session_model: defaults.model,
             git_client,
-            live_outputs: HashMap::new(),
+            live_turns: HashMap::new(),
             merge_service: SessionMergeService,
             state,
             stats_activity,
@@ -900,81 +901,42 @@ impl SessionManager {
         }
     }
 
-    /// Replaces live invocation rows without persisting them or replaying
-    /// them to the provider. The transient store invalidates render caches.
-    pub(crate) fn update_live_activity(&mut self, session_id: &str, activity: Option<String>) {
-        let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
-            return;
-        };
-        if let Some(activity) = activity {
-            let is_new = session
-                .transient_messages
-                .get(TransientMessageSlot::Activity)
-                .is_none();
-            session.transient_messages.upsert(TransientMessage {
-                anchor: TransientMessageAnchor::AfterActiveTurn,
-                body: TransientMessageBody::Plain(activity),
-                lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
-                slot: TransientMessageSlot::Activity,
-                turn_position: session.latest_user_prompt_position(),
-            });
-            // Streamed output stays below the rows, beside the loader.
-            if is_new
-                && let Some(output) = session
-                    .transient_messages
-                    .retract(TransientMessageSlot::StreamedOutput)
-            {
-                session.transient_messages.upsert(output);
-            }
+    /// Shows the latest snapshot of a session turn's live timeline and keeps
+    /// its handle for per-frame refreshes, or removes the timeline when
+    /// `turn` is `None`. The timeline is never persisted or replayed to the
+    /// provider.
+    pub(crate) fn track_live_turn(&mut self, session_id: SessionId, turn: Option<LiveTurn>) {
+        if let Some(turn) = turn {
+            self.show_live_turn(&session_id, Some(turn.snapshot()));
+            self.live_turns.insert(session_id, turn);
         } else {
-            session
-                .transient_messages
-                .retract(TransientMessageSlot::Activity);
+            self.show_live_turn(&session_id, None);
+            self.live_turns.remove(&session_id);
         }
     }
 
-    /// Shows the latest snapshot of a session turn's streamed output and
-    /// keeps its handle for per-frame refreshes, or removes the output when
-    /// `output` is `None`. Like live activity, it is never persisted or
-    /// replayed to the provider.
-    pub(crate) fn track_live_output(&mut self, session_id: SessionId, output: Option<LiveOutput>) {
-        if let Some(output) = output {
-            self.show_live_output(&session_id, Some(output.snapshot()));
-            self.live_outputs.insert(session_id, output);
-        } else {
-            self.show_live_output(&session_id, None);
-            self.live_outputs.remove(&session_id);
-        }
-    }
-
-    /// Applies streamed output that changed since the previous frame and
-    /// releases handles that did not change. Returns whether any output
-    /// changed.
-    pub(crate) fn refresh_live_outputs(&mut self) -> bool {
-        let mut live_outputs = std::mem::take(&mut self.live_outputs);
+    /// Applies timelines that changed since the previous frame and releases
+    /// handles that did not change. Returns whether any timeline changed.
+    pub(crate) fn refresh_live_turns(&mut self) -> bool {
+        let mut live_turns = std::mem::take(&mut self.live_turns);
         let mut changed = false;
-        live_outputs.retain(|session_id, output| {
-            let Some(markdown) = output.refresh() else {
+        live_turns.retain(|session_id, turn| {
+            let Some(snapshot) = turn.refresh() else {
                 return false;
             };
-            self.show_live_output(session_id, Some(markdown));
+            self.show_live_turn(session_id, Some(snapshot));
             changed = true;
 
             true
         });
-        self.live_outputs = live_outputs;
+        self.live_turns = live_turns;
 
         changed
     }
 
-    /// Replaces or removes a session's streamed-output message; an empty
-    /// snapshot removes it.
-    fn show_live_output(&mut self, session_id: &str, markdown: Option<String>) {
+    /// Replaces or removes a session's live-timeline message; an empty
+    /// timeline removes it.
+    fn show_live_turn(&mut self, session_id: &str, snapshot: Option<Arc<TimelineSnapshot>>) {
         let Some(session) = self
             .state
             .sessions_mut()
@@ -983,18 +945,18 @@ impl SessionManager {
         else {
             return;
         };
-        match markdown.filter(|markdown| !markdown.is_empty()) {
-            Some(markdown) => session.transient_messages.upsert(TransientMessage {
+        match snapshot.filter(|snapshot| snapshot.step_count > 0) {
+            Some(snapshot) => session.transient_messages.upsert(TransientMessage {
                 anchor: TransientMessageAnchor::AfterActiveTurn,
-                body: TransientMessageBody::Markdown(markdown),
+                body: TransientMessageBody::Timeline(snapshot),
                 lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
-                slot: TransientMessageSlot::StreamedOutput,
+                slot: TransientMessageSlot::Turn,
                 turn_position: session.latest_user_prompt_position(),
             }),
             None => {
                 session
                     .transient_messages
-                    .retract(TransientMessageSlot::StreamedOutput);
+                    .retract(TransientMessageSlot::Turn);
             }
         }
     }

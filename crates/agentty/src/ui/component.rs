@@ -40,5 +40,9 @@ pub mod status_bar;
 pub mod tab;
 /// Animated terminal loading indicator.
 pub mod tachyon_loader;
+/// Status line above the composer while a turn runs.
+pub(crate) mod turn_status;
+/// Live timeline rows of a running turn.
+pub(crate) mod turn_timeline;
 /// Reusable terminal scrollbar component.
 pub mod vertical_scrollbar;

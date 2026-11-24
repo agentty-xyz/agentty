@@ -93,6 +93,16 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     render_markdown_with_prompt_blocks(text, width)
 }
 
+/// Parses one line's inline Markdown markers with Agentty's active UI theme,
+/// so inline code looks as it does in a rendered transcript message.
+pub(crate) fn themed_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>> {
+    ag_tui_text::markdown::parse_inline_spans_with_settings(
+        content,
+        base_style,
+        style::text_render_settings(),
+    )
+}
+
 fn has_prompt_blocks(text: &str) -> bool {
     text.split('\n')
         .any(|line| line.starts_with(USER_PROMPT_PREFIX))

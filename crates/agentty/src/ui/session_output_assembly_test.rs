@@ -4,6 +4,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use ag_contracts::{OutputEvent, OutputKind};
 use ratatui::text::Line;
 
 use super::{
@@ -18,6 +19,7 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::domain::turn_prompt::TurnPrompt;
+use crate::domain::turn_timeline::TurnTimeline;
 use crate::ui::session_output_line::OutputLines;
 use crate::ui::{markdown, session_format, style};
 
@@ -172,6 +174,134 @@ fn test_message_segments_survive_updates_and_prune_removed_history() {
 
     // Assert
     assert!(cleared.message_cache.entries.borrow().is_empty());
+}
+
+/// Shows a fresh snapshot of `timeline` as `session`'s live timeline.
+fn show_timeline(session: &mut Session, timeline: &mut TurnTimeline) {
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::AfterActiveTurn,
+        body: TransientMessageBody::Timeline(Arc::new(timeline.snapshot())),
+        lifecycle: crate::domain::transient_message::TransientMessageLifecycle::ClearOnNewTurn,
+        slot: TransientMessageSlot::Turn,
+        turn_position: None,
+    });
+}
+
+#[test]
+fn test_timeline_cache_keeps_only_visible_steps_and_shares_unchanged_rows() {
+    // Arrange
+    let mut session = crate::test_support::session_fixture("timeline", Status::InProgress);
+    let mut timeline = TurnTimeline::default();
+    for id in 0..402 {
+        timeline.observe_output(
+            OutputEvent::Started {
+                id,
+                kind: OutputKind::Message,
+            },
+            0,
+        );
+        timeline.observe_output(
+            OutputEvent::Completed {
+                id,
+                text: format!("Step {id}."),
+            },
+            0,
+        );
+    }
+    for event in [
+        ag_contracts::ActivityEvent {
+            kind: ag_contracts::ActivityKind::Read,
+            status: ag_contracts::ActivityStatus::Completed,
+            ..crate::test_support::activity_event("read")
+        },
+        ag_contracts::ActivityEvent {
+            status: ag_contracts::ActivityStatus::Completed,
+            ..crate::test_support::activity_event("done")
+        },
+        crate::test_support::activity_event("call"),
+    ] {
+        timeline.observe_activity(event, 0);
+    }
+    show_timeline(&mut session, &mut timeline);
+    let cache = Rc::new(super::TranscriptRenderCache::default());
+    output_body(&session, 80, None, Some(Rc::clone(&cache)));
+    let first_parts = cache.timeline_parts.borrow().len();
+
+    // Act
+    output_body(&session, 80, None, Some(Rc::clone(&cache)));
+    let reused = cache.timeline_parts.borrow().len();
+    for id in 402..410 {
+        timeline.observe_output(
+            OutputEvent::Started {
+                id,
+                kind: OutputKind::Message,
+            },
+            0,
+        );
+    }
+    show_timeline(&mut session, &mut timeline);
+    output_body(&session, 80, None, Some(Rc::clone(&cache)));
+    let hidden_steps = session
+        .live_timeline()
+        .map(|snapshot| snapshot.hidden_steps);
+    output_body(&session, 80, None, Some(Rc::clone(&cache)));
+    let pruned = cache.timeline_parts.borrow().len();
+    session.status = Status::Review;
+    output_body(&session, 80, None, Some(Rc::clone(&cache)));
+    let cleared = cache.timeline_parts.borrow().len();
+
+    // Assert
+    assert_eq!(first_parts, 403);
+    assert_eq!(reused, first_parts);
+    assert_eq!(hidden_steps, Some(10));
+    assert_eq!(pruned, 403);
+    assert!(
+        cache
+            .timeline_parts
+            .borrow()
+            .keys()
+            .all(|part| part.step >= 10)
+    );
+    assert_eq!(cleared, 0);
+}
+
+#[test]
+fn test_timeline_cache_never_reuses_a_previous_turns_rows() {
+    // Arrange
+    let mut session = crate::test_support::session_fixture("turns", Status::InProgress);
+    let cache = Rc::new(super::TranscriptRenderCache::default());
+    let turn = |command: &str| {
+        let mut timeline = TurnTimeline::default();
+        timeline.observe_activity(
+            ag_contracts::ActivityEvent {
+                input: Some(command.into()),
+                status: ag_contracts::ActivityStatus::Completed,
+                ..crate::test_support::activity_event("call")
+            },
+            0,
+        );
+
+        timeline
+    };
+    let text = |body: &super::SessionOutputBody| {
+        body.lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    show_timeline(&mut session, &mut turn("first-command"));
+    output_body(&session, 80, None, Some(Rc::clone(&cache)));
+
+    // Act
+    show_timeline(&mut session, &mut turn("second-command"));
+    let second = output_body(&session, 80, None, Some(Rc::clone(&cache)));
+
+    // Assert
+    let second_text = text(&second);
+    assert!(second_text.contains("second-command"), "{second_text}");
+    assert!(!second_text.contains("first-command"));
+    assert_eq!(cache.timeline_parts.borrow().len(), 2);
 }
 
 #[test]

@@ -19,6 +19,18 @@ fn queued_body_exposes_plain_display_text() {
 }
 
 #[test]
+fn timeline_body_has_no_display_text_or_pending_indicator() {
+    // Arrange
+    let body = TransientMessageBody::Timeline(std::sync::Arc::new(
+        crate::domain::turn_timeline::TurnTimeline::default().snapshot(),
+    ));
+
+    // Act, Assert
+    assert_eq!(body.text(), "");
+    assert!(!body.is_pending_indicator());
+}
+
+#[test]
 fn pending_indicator_only_matches_loading_and_queued_bodies() {
     // Arrange
     let bodies = [

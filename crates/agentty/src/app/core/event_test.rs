@@ -20,7 +20,6 @@ use crate::app::session::TurnAppliedState;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::sync::ProjectSyncContext;
 use crate::domain::session::{PublishBranchAction, SessionId};
-use crate::domain::transient_message::TransientMessageSlot;
 use crate::infra::db::DbError;
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffPreviewUnavailableReason,
@@ -1822,50 +1821,17 @@ async fn seed_current_review_checkpoint(app: &mut App, id: &SessionId, request_i
     );
 }
 
-#[tokio::test]
-async fn live_activity_events_update_foreground_output_and_request_redraw() {
+#[test]
+fn live_turn_events_change_observable_state() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("live")
-            .build(),
-    );
-    let event = AppEvent::SessionActivityUpdated {
-        activity: Some("Tool: Read [running]".into()),
-        session_id: "live".into(),
-    };
     let mut batch = AppEventBatch::default();
-    batch.collect_event(event.clone());
+    batch.collect_event(AppEvent::SessionTurnCleared {
+        session_id: "live".into(),
+    });
 
     // Act
     let plan = batch.drain_reduction_plan();
-    app.apply_app_events(event).await;
 
     // Assert
     assert!(plan.changes_observable_state);
-    assert_eq!(
-        app.sessions.sessions()[0]
-            .transient_messages
-            .get(TransientMessageSlot::Activity)
-            .expect("activity")
-            .body
-            .text(),
-        "Tool: Read [running]"
-    );
-
-    // Act
-    app.apply_app_events(AppEvent::SessionActivityUpdated {
-        activity: None,
-        session_id: "live".into(),
-    })
-    .await;
-
-    // Assert
-    assert!(
-        app.sessions.sessions()[0]
-            .transient_messages
-            .get(TransientMessageSlot::Activity)
-            .is_none()
-    );
 }

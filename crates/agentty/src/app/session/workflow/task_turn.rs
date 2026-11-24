@@ -92,6 +92,7 @@ async fn execute(
         context.app_event_tx.clone(),
         context.session_id.clone(),
         Arc::clone(&context.child_pid),
+        Arc::clone(&context.clock),
     ));
     let permission_mode = prepared.permission_mode;
     let base_branch_scope = turn::base_branch_scope(context);

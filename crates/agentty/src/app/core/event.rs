@@ -193,23 +193,13 @@ pub(crate) enum AppEvent {
         /// Session whose comments were requested.
         session_id: SessionId,
     },
-    /// Signals a replaceable activity snapshot awaiting foreground formatting.
-    SessionActivityReady {
-        activity: crate::app::session::LiveActivity,
+    /// Signals a session turn's live timeline awaiting foreground grouping.
+    SessionTurnReady {
         session_id: SessionId,
+        turn: crate::app::session::LiveTurn,
     },
-    /// Replaces the ordered live tool and skill rows for a session turn.
-    SessionActivityUpdated {
-        activity: Option<String>,
-        session_id: SessionId,
-    },
-    /// Signals streamed model output awaiting foreground formatting.
-    SessionOutputReady {
-        output: crate::app::session::LiveOutput,
-        session_id: SessionId,
-    },
-    /// Removes a session turn's streamed output once its result is shown.
-    SessionOutputCleared { session_id: SessionId },
+    /// Removes a session turn's live timeline once its result is shown.
+    SessionTurnCleared { session_id: SessionId },
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
@@ -460,7 +450,6 @@ pub(super) struct AppEventBatch {
     pub(super) review_watch_reruns_finished: HashSet<SessionId>,
     /// Selected screen texts that `tmux` did not copy, in selection order.
     pub(super) screen_copies_declined: Vec<String>,
-    pub(super) session_activity_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_creations: Vec<(String, Result<String, String>)>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
     pub(super) session_diff_updates: Vec<crate::app::SessionDiffUpdate>,
@@ -468,8 +457,6 @@ pub(super) struct AppEventBatch {
     pub(super) session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
-    /// Latest streamed-output handle per session, or `None` once cleared.
-    pub(super) session_output_updates: HashMap<SessionId, Option<crate::app::session::LiveOutput>>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
     pub(super) session_rebase_review_invalidated_ids: HashSet<SessionId>,
@@ -485,6 +472,8 @@ pub(super) struct AppEventBatch {
     /// Retains queued selections for every accepted message before coalescing.
     pub(super) session_turn_starts: Vec<TurnSelection>,
     pub(super) session_turn_started_ids: HashSet<SessionId>,
+    /// Latest live-timeline handle per session, or `None` once cleared.
+    pub(super) session_turn_updates: HashMap<SessionId, Option<crate::app::session::LiveTurn>>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
     pub(super) should_refresh_git_status: bool,
@@ -556,8 +545,7 @@ impl AppEventBatch {
             || !self.review_progress_updates.is_empty()
             || !self.session_model_updates.is_empty()
             || !self.session_progress_updates.is_empty()
-            || !self.session_activity_updates.is_empty()
-            || !self.session_output_updates.is_empty()
+            || !self.session_turn_updates.is_empty()
             || !self.session_generated_turn_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
             || !self.session_rebase_review_invalidated_ids.is_empty()
@@ -725,10 +713,8 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_session_diff_loaded(request_id, result, session_id),
-            event @ (AppEvent::SessionActivityReady { .. }
-            | AppEvent::SessionActivityUpdated { .. }
-            | AppEvent::SessionOutputReady { .. }
-            | AppEvent::SessionOutputCleared { .. }
+            event @ (AppEvent::SessionTurnReady { .. }
+            | AppEvent::SessionTurnCleared { .. }
             | AppEvent::SessionProgressUpdated { .. }) => self.collect_activity_event(event),
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
@@ -802,31 +788,17 @@ impl AppEventBatch {
         }
     }
 
-    /// Collects transient session activity, output, and progress.
+    /// Collects a session turn's live timeline and progress.
     ///
-    /// Formats deferred activity only after dequeuing, preserving clear order.
-    /// Streamed output keeps its handle, which the foreground formats when it
-    /// applies the batch and again on later frames.
+    /// The timeline keeps its handle, which the foreground groups when it
+    /// applies the batch and again on later frames; a later clear wins.
     fn collect_activity_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::SessionOutputReady { output, session_id } => {
-                self.session_output_updates.insert(session_id, Some(output));
+            AppEvent::SessionTurnReady { session_id, turn } => {
+                self.session_turn_updates.insert(session_id, Some(turn));
             }
-            AppEvent::SessionOutputCleared { session_id } => {
-                self.session_output_updates.insert(session_id, None);
-            }
-            AppEvent::SessionActivityReady {
-                activity,
-                session_id,
-            } => {
-                self.session_activity_updates
-                    .insert(session_id, Some(activity.snapshot()));
-            }
-            AppEvent::SessionActivityUpdated {
-                activity,
-                session_id,
-            } => {
-                self.session_activity_updates.insert(session_id, activity);
+            AppEvent::SessionTurnCleared { session_id } => {
+                self.session_turn_updates.insert(session_id, None);
             }
             AppEvent::SessionProgressUpdated {
                 progress_message,
@@ -1208,10 +1180,10 @@ impl App {
     /// The foreground runtime calls this before draw so queued
     /// `SessionUpdated` events can synchronize only the touched sessions into
     /// render snapshots without polling every live handle each frame. It
-    /// first applies streamed output that changed since the previous frame,
+    /// first applies live timelines that changed since the previous frame,
     /// which is how a fast stream redraws once per frame.
     pub(crate) async fn process_pending_app_events(&mut self) {
-        if self.sessions.refresh_live_outputs() {
+        if self.sessions.refresh_live_turns() {
             self.mark_dirty();
         }
         let Ok(first_event) = self.event_rx.try_recv() else {
@@ -1366,11 +1338,8 @@ impl App {
     /// Applies transient updates after completed-turn snapshots are
     /// synchronized.
     fn apply_session_transient_updates(&mut self, event_batch: &mut AppEventBatch) {
-        for (session_id, activity) in std::mem::take(&mut event_batch.session_activity_updates) {
-            self.sessions.update_live_activity(&session_id, activity);
-        }
-        for (session_id, output) in std::mem::take(&mut event_batch.session_output_updates) {
-            self.sessions.track_live_output(session_id, output);
+        for (session_id, turn) in std::mem::take(&mut event_batch.session_turn_updates) {
+            self.sessions.track_live_turn(session_id, turn);
         }
         for (session_id, update) in std::mem::take(&mut event_batch.session_generated_turn_updates)
         {

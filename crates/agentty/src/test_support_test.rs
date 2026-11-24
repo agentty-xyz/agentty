@@ -12,6 +12,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
+use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};
 use ag_git as git;
 use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
 use ag_worker::test_support::{AppServerClient, MockAppServerClient};
@@ -303,6 +304,24 @@ impl SessionFixtureBuilder {
     /// Consumes the builder and returns the fully populated fixture.
     pub(crate) fn build(self) -> Session {
         self.session
+    }
+}
+
+/// Builds a running command activity `id` with no facts, for tests to
+/// adjust with struct-update syntax.
+pub(crate) fn activity_event(id: &str) -> ActivityEvent {
+    ActivityEvent {
+        attempt_id: "attempt".into(),
+        exit_code: None,
+        facts: Box::default(),
+        id: id.into(),
+        input: None,
+        kind: ActivityKind::Command,
+        name: "shell".into(),
+        observed_at: SystemTime::UNIX_EPOCH,
+        output: None,
+        parent_id: None,
+        status: ActivityStatus::Running,
     }
 }
 
