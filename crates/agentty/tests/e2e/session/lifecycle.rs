@@ -1436,6 +1436,11 @@ async fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
                         "Continuation confirmation for the selected done session",
                     )
                     .press_key("y")
+                    // A stable frame alone can still show the confirmation if
+                    // the key has not been handled yet; only the draft
+                    // composer shows these.
+                    .wait_for_text("Enter: stage draft", 15000)
+                    .wait_for_text("Use 704de31d0f4b5a12", 15000)
                     .wait_for_stable_frame(500, 15000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -1512,6 +1517,10 @@ async fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
                         "Continuation confirmation for the canceled session",
                     )
                     .press_key("y")
+                    // The session's own text was visible before `y`, so wait
+                    // for what only the new draft shows.
+                    .wait_for_text("Enter: stage draft", 15000)
+                    .wait_for_text("Previous session transcript:", 15000)
                     .wait_for_text("Resume the remaining work.", 15000)
                     .wait_for_stable_frame(500, 15000)
                     .viewing_pause_ms(1500)
