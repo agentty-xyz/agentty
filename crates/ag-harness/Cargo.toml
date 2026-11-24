@@ -45,7 +45,7 @@ providers-compat = []
 providers-openai = []
 # Durable `SqliteStore` sessions, `Harness::database`, and the bundled
 # migrations.
-sqlite = ["dep:sqlx"]
+sqlite = ["dep:ag-sqlite", "dep:sqlx"]
 
 [[bin]]
 name = "ag-harness-sandbox"
@@ -99,6 +99,7 @@ required-features = ["native-sandbox", "otel", "providers-compat", "providers-op
 
 [dependencies]
 ag-router.workspace = true
+ag-sqlite = { workspace = true, optional = true }
 async-trait.workspace = true
 base64.workspace = true
 close_fds = { workspace = true, optional = true }

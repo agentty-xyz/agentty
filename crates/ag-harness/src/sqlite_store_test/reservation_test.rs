@@ -19,7 +19,7 @@ use crate::model::{ModelError, ModelMessage};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 use crate::session::{NewSession, SessionError};
-use crate::sqlite_store::{Database, TimestampSource, connect_options, interrupt_owned_turn};
+use crate::sqlite_store::{Database, OPEN_OPTIONS, TimestampSource, interrupt_owned_turn};
 use crate::store::{AcquiredTurn, StoreBackend as _, TurnAdmission};
 use crate::store_fixture::{loaded_turn, unselected_model};
 use crate::transcript::{TurnRange, TurnStatus};
@@ -32,7 +32,7 @@ async fn owner_token_migration_preserves_existing_turns() {
     let database_path = temp_dir.path().join("harness.db");
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
-        .connect_with(connect_options(&database_path))
+        .connect_with(OPEN_OPTIONS.connect_options(&database_path))
         .await
         .expect("legacy database should open");
     sqlx::migrate!("./migrations")

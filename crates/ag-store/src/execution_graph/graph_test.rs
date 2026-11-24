@@ -2,11 +2,12 @@
 //! rollback of invalid writes.
 
 use std::num::NonZeroU64;
+use std::path::Path;
 
 use ag_protocol::TurnPromptAttachment;
 use ag_session::EnvId;
 
-use crate::connection::{Database, MIGRATOR};
+use crate::connection::{Database, INTERACTIVE_BUSY_TIMEOUT, MIGRATOR, open_options};
 use crate::execution_graph::support_test::{graph, produced};
 use crate::test_support::task_database_fixture;
 
@@ -15,7 +16,7 @@ async fn migration_preserves_existing_tasks_and_sessions() {
     // Arrange
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
-        .connect_with(crate::connection::in_memory_connect_options())
+        .connect_with(open_options(INTERACTIVE_BUSY_TIMEOUT).connect_options(Path::new(":memory:")))
         .await
         .expect("pool");
     let prior = sqlx::migrate::Migrator::with_migrations(
