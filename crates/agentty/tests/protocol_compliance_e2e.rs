@@ -1,5 +1,6 @@
 //! Live provider contract compliance tests through the worker runtime.
 
+use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -127,12 +128,26 @@ async fn harness_protocol_compliance_e2e() {
     // Act
     for &model in AgentKind::Harness.models() {
         let result = assert_provider_protocol_compliance(AgentKind::Harness, model, &config).await;
-        if let Err(error) = result
-            && !error.contains("before starting Agentty")
-            && !error.contains("to paste its API key")
-        {
-            failures.push(error);
-        }
+        let status = match result {
+            Ok(()) => "pass",
+            Err(error)
+                if error.contains("before starting Agentty")
+                    || error.contains("to paste its API key")
+                    || error.contains("not signed in with ChatGPT") =>
+            {
+                "skipped"
+            }
+            Err(error) => {
+                failures.push(error);
+
+                "fail"
+            }
+        };
+        let _ = writeln!(
+            io::stdout().lock(),
+            "LIVE harness_protocol model={} result={status}",
+            model.as_str()
+        );
     }
 
     // Assert
@@ -187,7 +202,12 @@ async fn assert_provider_protocol_compliance(
     config: &RuntimeConfig,
 ) -> Result<(), String> {
     let folder = resolve_workspace_folder()?;
-    let session_id = format!("protocol-e2e-{}", model.provider_model_str());
+    // Harness model ids such as `openai/gpt-6-luna` name their provider, and
+    // a harness session id must be one path component.
+    let session_id = format!(
+        "protocol-e2e-{}",
+        model.provider_model_str().replace('/', "-")
+    );
     let channel = SessionRunClient::new(session_id.clone(), kind, config);
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let turn_request = build_turn_request(folder, model);

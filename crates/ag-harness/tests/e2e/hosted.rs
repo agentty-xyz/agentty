@@ -37,10 +37,12 @@ use crate::features::{
 const MAX_REQUESTS: u32 = 8;
 /// Input plus output tokens one turn may use, compaction included.
 const MAX_TOKENS: u64 = 200_000;
-/// Share of the streamed request's duration that must separate the first
-/// text delta from the request's completion, so a response buffered and
-/// replayed as deltas just before completion fails the check.
-const MIN_STREAMED_SHARE: f64 = 0.25;
+/// Time that must separate the first and last text deltas of the streamed
+/// response. A response buffered and then replayed as deltas emits them
+/// within microseconds, while eight streamed sentences take far longer to
+/// generate. A share of the request's duration would instead count the
+/// silent reasoning a model such as GPT-6 Luna does before its first text.
+const MIN_STREAMED_SPREAD: Duration = Duration::from_millis(200);
 
 impl Provider {
     /// Hosted providers to check: those `AG_LIVE_PROVIDERS` names, or else
@@ -157,7 +159,7 @@ where
 // ---------------------------------------------------------------------------
 
 /// Text deltas must arrive while the response is generated: they must span
-/// at least [`MIN_STREAMED_SHARE`] of the request's duration, which a
+/// at least [`MIN_STREAMED_SPREAD`] before the request completes, which a
 /// response buffered and then replayed as deltas cannot.
 async fn streamed_turn(provider: Provider) -> Result<String, DynError> {
     let harness = provider.harness(&provider.model())?.build()?;
@@ -204,8 +206,7 @@ async fn streamed_turn(provider: Provider) -> Result<String, DynError> {
          completed={completed:?} chars={}",
         text.len()
     );
-    if text_deltas < 2 || first_delta >= completed || spread < completed.mul_f64(MIN_STREAMED_SHARE)
-    {
+    if text_deltas < 2 || first_delta >= completed || spread < MIN_STREAMED_SPREAD {
         return Err(format!("text did not stream while it was generated: {summary}").into());
     }
 
