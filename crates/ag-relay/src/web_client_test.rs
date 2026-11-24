@@ -61,11 +61,13 @@ fn default_options_render_the_relays_own_page() {
             .count(),
         2
     );
+    // Only the sidebar holds the sections; the pairing card never shows
+    // them.
     assert_eq!(
         page.html()
             .matches(r#"<nav class="sections" aria-label="Sections" hidden>"#)
             .count(),
-        2
+        1
     );
     assert!(
         page.html()
@@ -112,8 +114,10 @@ fn options_render_the_relay_directory_navigation_and_account_escaped() {
         r#"<span class="badge">2&#39;</span></a></li>"#,
         "</ul></nav>"
     );
-    assert_eq!(html.matches(navigation).count(), 2);
+    // The sidebar's sections, shown, make the page pair in its main pane.
+    assert_eq!(html.matches(navigation).count(), 1);
     assert!(!html.contains(r#"aria-label="Sections" hidden"#));
+    assert!(html.contains(r#"<div id="pair-pane" class="pair-pane" hidden></div>"#));
     assert!(html.contains(concat!(
         r#"<a class="account" href="/account">"#,
         r#"<span class="account-glyph" aria-hidden="true">a</span>"#,

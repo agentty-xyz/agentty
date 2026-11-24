@@ -10,8 +10,8 @@ const LOCAL_TRANSPORT: &str = r#"<meta name="agentty-transport" content="local">
 const RELAY_TRANSPORT: &str = r#"<meta name="agentty-transport" content="relay">"#;
 /// The brand badge as the page names it.
 const BRAND_BADGE: &str = r#"<span class="badge">remote</span>"#;
-/// Where the page's own sections go in the sidebar and on the pairing
-/// card: each such element, up to its closing tag.
+/// Where the page's own sections go in the sidebar: the element, up to its
+/// closing tag.
 const SECTIONS: (&str, &str) = (
     r#"<nav class="sections" aria-label="Sections" hidden>"#,
     "</nav>",
@@ -119,7 +119,10 @@ pub struct WebClientOptions {
     /// Text of the badge beside the brand, in place of `remote`.
     pub brand_badge: Option<String>,
     /// Links to the program's own sections, in order, shown above the
-    /// session tools.
+    /// session tools. With any, the page keeps its sidebar, with these
+    /// links, the theme switch, and the account link, while it pairs, and
+    /// shows pairing in its main pane instead of the full-screen card of a
+    /// relay's own page.
     pub sections: Vec<WebClientSection>,
     /// Link to the signed-in account, shown in the sidebar foot.
     pub account: Option<WebClientLink>,
@@ -172,8 +175,9 @@ pub enum WebClientError {
 /// [`Self::html`] at the page's address and each of [`web_client_files`]
 /// at its path relative to the page, every response with its content type
 /// and the headers [`Self::headers`] lists, which include the content
-/// security policy the page needs. Pairing links that Agentty shows open
-/// the relay's own page, so such a page takes a pasted link as well.
+/// security policy the page needs. A pairing link from Agentty's `Remote`
+/// tab opens the relay's own page, so such a page takes a pasted link as
+/// well.
 ///
 /// ```
 /// use ag_relay::{

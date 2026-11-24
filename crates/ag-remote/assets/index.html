@@ -99,11 +99,9 @@
                 </svg>
                 agentty <span class="badge">remote</span>
             </span>
-            <nav class="sections" aria-label="Sections" hidden>
-            </nav>
             <form id="pair-form" class="pair" autocomplete="off">
                 <p class="eyebrow">Remote control</p>
-                <h1>Pair this device</h1>
+                <h1 id="pair-title" tabindex="-1">Pair this device</h1>
                 <p id="pair-hint-local">
                     Start remote control in Agentty's <code class="code">Remote</code> tab and enter the code it shows.
                 </p>
@@ -111,7 +109,7 @@
                     Open the pairing link or scan the QR code that Agentty's <code class="code">Remote</code> tab shows.
                 </p>
                 <p id="pair-hint-paste" hidden>
-                    Copy the pairing link from Agentty's <code class="code">Remote</code> tab and paste it here.
+                    Start remote control in Agentty's <code class="code">Platform</code> tab and open the pairing link it shows, or scan its QR code. A pairing link from the <code class="code">Remote</code> tab can be pasted here.
                 </p>
                 <label id="pair-link-field" hidden>
                     Pairing link
@@ -194,7 +192,7 @@
                 </div>
                 <nav class="sections" aria-label="Sections" hidden>
                 </nav>
-                <div class="sidebar-actions">
+                <div id="sidebar-actions" class="sidebar-actions">
                     <div id="instance-slot" class="instance-slot" hidden></div>
                     <label class="filter">
                         <svg class="icon icon--sm" aria-hidden="true">
@@ -211,7 +209,7 @@
                     <fieldset id="chips" class="segmented chips" aria-label="Show">
                     </fieldset>
                 </div>
-                <nav class="session-list" aria-label="Session list">
+                <nav id="session-list" class="session-list" aria-label="Session list">
                     <div id="sessions" class="sessions"></div>
                     <output id="filter-summary" class="list-summary" hidden></output>
                     <section id="directory"
@@ -230,7 +228,7 @@
                         <button type="button" data-theme="dark" aria-pressed="false">dark</button>
                     </fieldset>
                     <span class="account" hidden></span>
-                    <div class="device">
+                    <div id="device" class="device">
                         <span class="device-glyph">
                             <svg class="icon" aria-hidden="true">
                                 <use href="#i-device" />
@@ -275,8 +273,8 @@
                             <use href="#i-menu" />
                         </svg>
                     </button>
-                    <div class="chat-heading">
-                        <h1 id="heading" class="chat-title">agentty</h1>
+                    <div id="chat-heading" class="chat-heading">
+                        <h1 id="heading" class="chat-title" tabindex="-1">agentty</h1>
                         <p id="heading-sub" class="chat-sub"></p>
                     </div>
                     <span id="session-status" class="badge wide-only" hidden></span>
@@ -334,6 +332,7 @@
                     <button id="retry" type="button" class="btn btn--ghost" hidden>Retry now</button>
                     <button id="reload" type="button" class="btn btn--ghost" hidden>Reload</button>
                 </div>
+                <div id="pair-pane" class="pair-pane" hidden></div>
                 <section id="home-view" class="empty home">
                     <p id="home-eyebrow" class="eyebrow">Remote control</p>
                     <h2 id="home-title">Pick a session</h2>

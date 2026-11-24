@@ -65,6 +65,8 @@ const STATE_LABELS = { ...CONNECTION_LABELS, connected: "Connected" };
 const elements = {
   announcer: document.getElementById("announcer"),
   "pair-view": document.getElementById("pair-view"),
+  "pair-pane": document.getElementById("pair-pane"),
+  "pair-title": document.getElementById("pair-title"),
   "pair-hint-local": document.getElementById("pair-hint-local"),
   "pair-hint-relay": document.getElementById("pair-hint-relay"),
   "pair-hint-paste": document.getElementById("pair-hint-paste"),
@@ -87,6 +89,8 @@ const elements = {
   sidebar: document.getElementById("sidebar"),
   "sidebar-hide": document.getElementById("sidebar-hide"),
   "drawer-close": document.getElementById("drawer-close"),
+  "sidebar-actions": document.getElementById("sidebar-actions"),
+  "session-list": document.getElementById("session-list"),
   "instance-slot": document.getElementById("instance-slot"),
   "instance-prototype": document.getElementById("instance-prototype"),
   filter: document.getElementById("filter"),
@@ -94,6 +98,7 @@ const elements = {
   chips: document.getElementById("chips"),
   sessions: document.getElementById("sessions"),
   "filter-summary": document.getElementById("filter-summary"),
+  device: document.getElementById("device"),
   "device-name": document.getElementById("device-name"),
   connection: document.getElementById("connection"),
   "device-more": document.getElementById("device-more"),
@@ -105,6 +110,7 @@ const elements = {
   scrim: document.getElementById("scrim"),
   main: document.getElementById("main"),
   menu: document.getElementById("menu"),
+  "chat-heading": document.getElementById("chat-heading"),
   heading: document.getElementById("heading"),
   "heading-sub": document.getElementById("heading-sub"),
   "session-status": document.getElementById("session-status"),
@@ -233,6 +239,16 @@ const elements = {
   "pair-directory-list": document.getElementById("pair-directory-list"),
 };
 
+// A web application that serves this page as one of its sections renders
+// links to its other sections into the sidebar. Such a page pairs in the
+// shell's main pane, so the links, the theme switch, and the account stay
+// as on the application's other sections; any other page pairs on the
+// full-screen card. The one pairing form moves into the main pane.
+const pairsInShell = !elements.sidebar.querySelector(".sections").hidden;
+if (pairsInShell) {
+  elements["pair-pane"].append(elements["pair-form"], elements["pair-foot"]);
+}
+
 const state = {
   // The open session and the Agentty it runs on, or null on home.
   current: null,
@@ -250,6 +266,8 @@ const state = {
   // Every Agentty in the sidebar, in the order they were paired. Without a
   // relay, the one behind this page's listener, with the id "".
   instances: [],
+  // Whether the pairing flow shows, on the card or in the main pane.
+  isPairingShown: false,
   // The pairing in progress, `{ instance, deviceName }`, until Agentty
   // answers it. Its Agentty joins `instances` once paired.
   pairing: null,
@@ -410,7 +428,7 @@ async function refreshDirectory(force = false) {
 }
 
 // Names the paired Agenttys as the directory does, and lists the ones this
-// browser has not paired in the sidebar and on the pairing card. Without
+// browser has not paired in the sidebar and in the pairing flow. Without
 // an answer yet, nothing shows.
 function renderDirectoryState() {
   renameInstances();
@@ -567,10 +585,20 @@ function placeInstances() {
     }
     elements.sessions.replaceChildren(...nodes);
   }
+  renderSidebarParts();
   renderForgetItems();
   renderSessions();
   renderFooter();
   renderDirectoryState();
+}
+
+// Until an Agentty is paired here, the sidebar leaves out the session
+// tools, the session list, and the device, which have nothing to show.
+function renderSidebarParts() {
+  const isEmpty = state.instances.length === 0;
+  elements["sidebar-actions"].hidden = isEmpty;
+  elements["session-list"].hidden = isEmpty;
+  elements.device.hidden = isEmpty;
 }
 
 // Shows each Agentty's state in its heading and the device footer,
@@ -635,6 +663,7 @@ function renderForgetItems() {
 
 // While the Agentty in view is paired but not connected, a banner under
 // the header says so and the composer keeps its draft without sending it.
+// The pairing flow in the main pane shows no Agentty, so no banner either.
 function renderOffline() {
   window.clearInterval(state.tickTimer);
   state.tickTimer = null;
@@ -642,7 +671,7 @@ function renderOffline() {
   const kind = active?.connection.kind() ?? "offline";
   const rejection = active?.rejection ?? null;
   const isOffline = Boolean(active) && (kind === "reconnecting" || kind === "offline");
-  elements.banner.hidden = !rejection && !isOffline;
+  elements.banner.hidden = isPairingInShell() || (!rejection && !isOffline);
   elements.banner.classList.toggle("is-error", Boolean(rejection));
   elements.retry.hidden = !isOffline || Boolean(rejection);
   elements.reload.hidden = !rejection;
@@ -670,16 +699,19 @@ function tickCountdown() {
   elements["banner-text"].textContent = bannerText(active, "Reconnecting in " + seconds + "s");
 }
 
-// Shows the pairing card instead of the app. Through a relay the code
-// comes from the pairing link, so the fields appear only once a link was
-// opened. A page that names its relay is on another origin than the
-// page an Agentty's link opens, so it takes the link pasted.
+// Shows the pairing flow instead of home or a session. Through a relay the
+// code comes from the pairing link, so the fields appear only once a link
+// was opened. A page that names its relay is on another origin than the
+// page a link from Agentty's Remote tab opens, so it takes the link pasted.
+// The form starts over, so a pairing still in progress is abandoned; in the
+// main pane the device menu beside the flow can reopen it meanwhile.
 function showPairing() {
-  // The drawer and the session route belong to the app this card replaces.
+  // The drawer and the session route belong to the views the flow
+  // replaces.
   shell.reset();
   clearSessionRoute();
   leaveSession();
-  setPairingWait(null);
+  stopPairing();
   if (usesRelay) {
     const link = state.pairingLink;
     const takesPaste = Boolean(configuredRelay);
@@ -693,15 +725,35 @@ function showPairing() {
       elements["pair-code"].value = link.code;
     }
   }
-  elements["pair-view"].hidden = false;
-  elements.shell.hidden = true;
+  revealPairing();
+}
+
+// Puts the pairing flow on screen: in the shell's main pane on a page a
+// web application serves as one of its sections, otherwise on the
+// full-screen card in place of the shell.
+function revealPairing() {
+  state.isPairingShown = true;
+  elements["pair-view"].hidden = pairsInShell;
+  elements.shell.hidden = !pairsInShell;
+  if (pairsInShell) {
+    renderSidebarParts();
+    renderMain();
+    renderOffline();
+  }
+}
+
+// Whether the pairing flow shows in the shell's main pane.
+function isPairingInShell() {
+  return pairsInShell && state.isPairingShown;
 }
 
 function showShell() {
+  state.isPairingShown = false;
   elements["pair-view"].hidden = true;
   elements.shell.hidden = false;
   elements["device-name"].textContent = readStored(DEVICE_NAME_KEY) || defaultDeviceName();
   renderMain();
+  renderOffline();
 }
 
 // Shows the confirmation code while Agentty waits for approval, or the
@@ -738,11 +790,16 @@ function clearSessionRoute() {
   }
 }
 
-// Shows home or the open session in the main area.
+// Shows home, the open session, or the pairing flow in the main area. The
+// flow brings its own heading, so the header's stays out of the way.
 function renderMain() {
+  const isPairing = isPairingInShell();
   const isOpen = Boolean(state.current);
-  elements["home-view"].hidden = isOpen;
-  elements["session-view"].hidden = !isOpen;
+  elements.shell.classList.toggle("is-pairing", isPairing);
+  elements["pair-pane"].hidden = !isPairing;
+  elements["chat-heading"].hidden = isPairing;
+  elements["home-view"].hidden = isOpen || isPairing;
+  elements["session-view"].hidden = !isOpen || isPairing;
   if (!isOpen) {
     chat.close();
     elements.heading.textContent = "agentty";
@@ -997,6 +1054,9 @@ function renderNewSessionButtons() {
 
 // `New session` leads to the home composer, for that Agentty.
 function startNewSession(instance) {
+  if (state.isPairingShown) {
+    leavePairing();
+  }
   shell.showSession(null);
   leaveSession();
   state.homeId = instance.id;
@@ -1064,7 +1124,7 @@ function onRejected(instance, reason, wasPairing) {
       if (usesRelay) {
         removeInstance(instance);
       }
-      // A pairing with another Agentty keeps its card as it is.
+      // A pairing with another Agentty keeps its flow as it is.
       if (!state.pairing) {
         elements["pair-error"].textContent = reason;
         showPairing();
@@ -1267,8 +1327,9 @@ const shell = createShell({
     sidebar: elements.sidebar,
   },
   onRoute: (route) => {
-    if (!elements["pair-view"].hidden) {
-      // An unpaired page has no sessions to route to.
+    if (state.isPairingShown) {
+      // The pairing flow takes the place of any session, so the address
+      // names none; choosing a session leaves the flow instead.
       clearSessionRoute();
 
       return;
@@ -1295,9 +1356,9 @@ const sessionList = createSessionList({
     waiting: elements["home-waiting"],
   },
   // The field is on screen in the open drawer, or in the sidebar on a
-  // wide screen unless it was hidden.
+  // wide screen unless it was hidden, once an Agentty is paired.
   isFilterShown: () => {
-    if (elements.shell.hidden) {
+    if (elements.shell.hidden || elements["sidebar-actions"].hidden) {
       return false;
     }
 
@@ -1309,6 +1370,10 @@ const sessionList = createSessionList({
     const instance = findInstance(instanceId);
     if (!instance) {
       return;
+    }
+    // A session chosen in the sidebar beside the pairing flow leaves it.
+    if (state.isPairingShown) {
+      leavePairing();
     }
     shell.showSession(sessionId, routeId(instance));
     enterSession(instance, sessionId);
@@ -1423,7 +1488,7 @@ async function pairingInstance(link) {
 
 // Stops waiting for approval. Agentty drops the request once the
 // connection closes; an Agentty that was paired before reconnects.
-elements["pair-cancel"].addEventListener("click", () => {
+function stopPairing() {
   const instance = state.pairing?.instance;
   state.pairing = null;
   instance?.connection.disconnect();
@@ -1431,13 +1496,26 @@ elements["pair-cancel"].addEventListener("click", () => {
     instance.connection.connect();
   }
   setPairingWait(null);
-});
+}
 
-// Returns from a pairing link to the Agenttys already paired.
-elements["pair-back"].addEventListener("click", () => {
+elements["pair-cancel"].addEventListener("click", stopPairing);
+
+// Returns from the pairing flow to the Agenttys already paired, dropping
+// its link and any pairing still waiting for approval.
+function leavePairing() {
+  stopPairing();
   state.pairingLink = null;
   elements["pair-error"].textContent = "";
   showShell();
+}
+
+// In the main pane, focus moves to the header's heading, since the button
+// that had it is gone.
+elements["pair-back"].addEventListener("click", () => {
+  leavePairing();
+  if (pairsInShell) {
+    elements.heading.focus();
+  }
 });
 
 for (const button of document.querySelectorAll("[data-theme]")) {
@@ -1569,7 +1647,7 @@ elements["pair-link"].addEventListener("input", () => {
     // Not an address yet.
   }
   if (!link) {
-    elements["pair-error"].textContent = text ? "Paste the whole pairing link from the Remote tab." : "";
+    elements["pair-error"].textContent = text ? "Paste the whole pairing link that Agentty shows." : "";
 
     return;
   }
@@ -1583,13 +1661,18 @@ elements["pair-link"].addEventListener("input", () => {
 });
 
 // A page that names its relay offers pairing another Agentty from the
-// device menu, since links from Agentty open the relay's page.
+// device menu, since a link from Agentty's Remote tab opens the relay's
+// page. In the main pane, focus moves to the flow's heading, since the
+// menu that had it closed.
 elements["pair-another"].hidden = !(usesRelay && configuredRelay);
 elements["pair-another"].addEventListener("click", () => {
   setDeviceMenu(false);
   state.pairingLink = null;
   elements["pair-error"].textContent = "";
   showPairing();
+  if (pairsInShell) {
+    elements["pair-title"].focus();
+  }
 });
 
 // Opens the session the address names, if any, once the app connects.
@@ -1622,7 +1705,7 @@ async function startThroughRelay() {
     elements["pair-submit"].hidden = true;
     elements["pair-error"].textContent =
       "This browser cannot pair through a relay. Open the link in an up-to-date browser, over HTTPS.";
-    elements["pair-view"].hidden = false;
+    revealPairing();
 
     return;
   }
@@ -1634,15 +1717,9 @@ async function startThroughRelay() {
   void refreshDirectory(true);
   // A link opened in a tab that already shows this page only changes the
   // fragment. It replaces whatever this tab was doing; the Agenttys already
-  // paired stay connected behind the pairing card.
+  // paired stay connected behind the pairing flow.
   window.addEventListener("hashchange", () => {
     if (adoptPairingLink()) {
-      const instance = state.pairing?.instance;
-      state.pairing = null;
-      instance?.connection.disconnect();
-      if (instance && state.instances.includes(instance) && hasCredential(instance)) {
-        instance.connection.connect();
-      }
       showPairing();
     }
   });

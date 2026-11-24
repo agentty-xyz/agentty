@@ -348,10 +348,18 @@ relay's own:
 
 - Links to the application's other sections sit at the top of the sidebar, its own badge
   stands beside the brand, and a link to your account sits under the theme switch.
-- The pairing link that Agentty's `Remote` tab shows opens the relay's own page, so copy
-  it and paste it into the page's pairing card instead; `Pair another Agentty` in the
-  device menu opens that card once one Agentty is paired. A link to the page itself may
-  leave out the relay, and the page refuses a link for another relay.
+- The page pairs in its main pane, beside that sidebar, so the links, the theme switch,
+  and your account stay while it pairs instead of giving way to a full-screen card.
+  Until an Agentty is paired, the sidebar leaves out the session list and the device;
+  they appear once one is.
+- When the application is the [platform](@/docs/usage/platform.md) Agentty signs in to,
+  the pairing link that Agentty's `Platform` tab shows, or its QR code, opens the page
+  directly. The link that the `Remote` tab shows opens the relay's own page, so copy it
+  and paste it into the page's pairing form instead. Once one Agentty is paired,
+  `Pair another Agentty` in the device menu opens the same form in the main pane, with
+  your sessions still in the sidebar; choose a session or `Back to sessions` to leave
+  it. A link to the page itself may leave out the relay, and the page refuses a link for
+  another relay.
 - The page may list the Agenttys of your account that this browser has not paired yet,
   with when each last connected and how to pair it, and name the paired ones as the
   application does. When the list says you are signed out, sign in to the application

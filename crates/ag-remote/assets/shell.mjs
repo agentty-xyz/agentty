@@ -220,8 +220,8 @@ export function createShell({ document, window, elements, parsePairingLink, onRo
 
   return {
     isOpen: () => drawer.isOpen,
-    // Closes the drawer and drops its history entry, as when the app gives
-    // way to the pairing card.
+    // Closes the drawer and drops its history entry, as when the pairing
+    // flow opens.
     reset: dismiss,
     // Choosing the route already shown only closes the drawer, through its
     // own entry, so no back step is left that returns to the same place

@@ -255,6 +255,47 @@ body {
   text-align: center;
 }
 
+/* On a page a web application serves as one of its sections, the same
+   form is the main pane's content: it starts at the top, at the reading
+   width, without the card's frame, and the header keeps only the button
+   that opens the drawer. */
+.pair-pane {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  gap: var(--space-xl);
+  padding: clamp(var(--space-lg), 4vw, var(--space-3xl)) var(--gutter) calc(var(--space-3xl) + env(safe-area-inset-bottom));
+}
+
+.pair-pane .pair,
+.pair-pane .pair-foot {
+  width: min(100%, var(--width-reading));
+  margin-inline: auto;
+}
+
+.pair-pane .pair {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.pair-pane .pair .btn {
+  justify-self: start;
+}
+
+.pair-pane .pair-foot {
+  text-align: start;
+}
+
+@media (min-width: 861px) {
+  .app.is-pairing:not(.is-sidebar-hidden) .chat-head {
+    display: none;
+  }
+}
+
 /* ---- App shell ---------------------------------------------------- */
 .app {
   position: relative;
@@ -311,10 +352,6 @@ body {
 .sidebar .sections {
   margin-bottom: var(--space-sm);
   border-bottom: 1px solid var(--color-border);
-}
-
-.pair-screen .sections {
-  width: min(100%, 26rem);
 }
 
 .sections a {
@@ -811,9 +848,12 @@ body {
   margin: var(--space-lg) var(--space-sm);
 }
 
+/* At the bottom also while the session list, which fills the space above,
+   is hidden until an Agentty is paired. */
 .sidebar-foot {
   display: grid;
   gap: 0.6rem;
+  margin-top: auto;
   padding: 0.7rem var(--space-md) calc(var(--space-md) + env(safe-area-inset-bottom));
   border-top: 1px solid var(--color-border);
 }
