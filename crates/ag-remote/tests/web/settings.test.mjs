@@ -14,6 +14,7 @@ import {
   offersSettings,
   offersSpeed,
   parseModels,
+  refreshedChoice,
   settingsChange,
   withCurrent,
 } from "../../assets/settings.mjs";
@@ -442,4 +443,36 @@ test("snapshots and choices update the sheet in place, so the focus stays", asyn
     [...REASONING_LEVELS, "turbo"],
   );
   assert.deepEqual(pressed(byId, "settings-reasoning"), ["medium"]);
+});
+
+test("a newer snapshot moves the settings the user left alone, so Apply keeps a switch made meanwhile", async () => {
+  const { byId, requests, settings } = mountSettings();
+  settings.open(session(), { canChooseAgent: true });
+  await settle();
+  choose(byId, "settings-style", "concise");
+  // A queued switch to the harness finishes, with the same model id.
+  settings.update(session({ agent: "harness", reasoning: "low", response_style: "detailed" }));
+  assert.deepEqual(pressed(byId, "settings-agent"), ["harness"]);
+  assert.deepEqual(pressed(byId, "settings-reasoning"), ["low"]);
+  assert.deepEqual(pressed(byId, "settings-style"), ["concise"]);
+  byId("settings-apply").click();
+  await settle();
+  assert.deepEqual(requests.at(-1), { method: "set_session_settings", response_style: "concise", session_id: "s1" });
+});
+
+test("refreshedChoice keeps what the user chose and moves the agent and model together", () => {
+  const before = currentChoice(session());
+  const after = currentChoice(session({ agent: "harness", model_id: "kimi-k3", speed_mode: "fast" }));
+  // A model picked on the old agent keeps that agent.
+  assert.deepEqual(refreshedChoice({ ...before, model: "claude-sonnet-5" }, before, after), {
+    ...after,
+    agent: "claude",
+    model: "claude-sonnet-5",
+  });
+  assert.deepEqual(refreshedChoice({ ...before, agent: "codex", model: "gpt-6.1" }, before, after), {
+    ...after,
+    agent: "codex",
+    model: "gpt-6.1",
+  });
+  assert.deepEqual(refreshedChoice(before, before, after), after);
 });

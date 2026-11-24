@@ -102,6 +102,26 @@ export function settingsChange(session, choice, models) {
   return change;
 }
 
+// `choice` for a newer snapshot of the session: each setting the user left
+// at its `before` value follows the snapshot to `after`, so applying the
+// sheet never undoes a change made meanwhile, such as a queued agent
+// switch. The agent and the model move together, since a model belongs to
+// its agent.
+export function refreshedChoice(choice, before, after) {
+  const refreshed = { ...choice };
+  if (choice.agent === before.agent && choice.model === before.model) {
+    refreshed.agent = after.agent;
+    refreshed.model = after.model;
+  }
+  for (const key of ["reasoning", "speed", "style"]) {
+    if (choice[key] === before[key]) {
+      refreshed[key] = after[key];
+    }
+  }
+
+  return refreshed;
+}
+
 // `values` with `current` added at the end when the host reports a value
 // this page does not know.
 export function withCurrent(values, current) {
@@ -339,6 +359,7 @@ export function createSettings({ document, elements, request }) {
     open,
     update: (session, { isRunning = false } = {}) => {
       if (state.session?.id === session?.id) {
+        state.choice = refreshedChoice(state.choice, currentChoice(state.session), currentChoice(session));
         state.session = session;
         renderNote(isRunning);
         render();
