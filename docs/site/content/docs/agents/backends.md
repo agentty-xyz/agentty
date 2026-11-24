@@ -277,12 +277,13 @@ a key or sign-in is never chosen as the default.
 - Git writes stay limited: commands can commit on the session branch, but cannot move
   the base branch, create branches or tags, use `git stash`, or edit `packed-refs`, so
   `git gc` fails without changing the repository. They cannot write Git configuration,
-  hooks, replacement refs, grafts, or object alternates either, and Agentty's own Git
-  ignores replacement refs and grafts. On Linux, commands can still move other sessions'
-  branches, since the sandbox there can only make the whole `wt/` directory writable. A
-  turn, task, or graph node that moves or deletes the session's base branch fails before
-  Agentty commits or publishes anything, with the commit to restore, and no turn starts
-  while the base does not resolve.
+  hooks, replacement refs, grafts, object alternates, or commit-graph files either, and
+  Agentty's own Git ignores replacement refs and grafts. On Linux, commands can still
+  move other sessions' branches, since the sandbox there can only make the whole `wt/`
+  directory writable. A turn, task, or graph node that moves or deletes the session's
+  base branch, or points the worktree's `HEAD` at another branch, fails before Agentty
+  commits or publishes anything, with how to restore it, and no turn starts while the
+  base does not resolve.
 - The temporary directory, `~/.agentty/harness/<session>/tmp/`, holds the Cargo
   (`CARGO_HOME`), npm, Go, pip, and `XDG_CACHE_HOME` caches of that session only, and is
   removed with the session; host tools and other sessions never read it. Each new

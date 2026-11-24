@@ -638,17 +638,19 @@ are files of that grant; commands cannot create new ones that reach outside it. 
 only a linked worktree can stage and commit under `with_git_writes`, which refuses a
 write grant containing a Git directory, and only the repository's own Git metadata and a
 repository at the top of each write grant stay read-only; macOS protects every `.git`
-name. Replacement refs, object alternates, grafts, and the shallow boundary stay
-read-only too, since they change the history Git shows without changing what it pushes.
-`with_git_writes(branch)` opens only that branch's reference and reflog among the
-references: other branches, tags, `refs/stash`, and `packed-refs` stay read-only, so
-creating a branch, stashing, or `git gc` fails with a lock error and leaves the
-repository unchanged. Linux confines writes by directory, so there the directory holding
-the branch stays writable: siblings of `wt/session` can still move, but `main` cannot.
-Name session branches inside a directory, and keep checking other branches in a host
-that reviews history. A command the sandbox refuses to start, for example because a
-granted directory is missing, comes back to the model as a rejected tool call, and the
-turn continues.
+name. Replacement refs, object alternates, commit-graph files, grafts, and the shallow
+boundary stay read-only too, since they change the history Git shows without changing
+what it pushes. `with_git_writes(branch)` opens only that branch's reference and reflog
+among the references: other branches, tags, `refs/stash`, and `packed-refs` stay
+read-only, so creating a branch, stashing, or `git gc` fails with a lock error and
+leaves the repository unchanged. Linux confines writes by directory, so there the
+directory holding the branch stays writable: siblings of `wt/session` can still move,
+but `main` cannot. Name session branches inside a directory, and keep checking other
+branches in a host that reviews history. Commands can still point `HEAD` or the branch
+at another branch, so check that `HEAD` resolves to the granted branch before the host's
+own Git writes to the worktree. A command the sandbox refuses to start, for example
+because a granted directory is missing, comes back to the model as a rejected tool call,
+and the turn continues.
 
 Coding sessions follow the sandboxes of Claude Code and Codex:
 

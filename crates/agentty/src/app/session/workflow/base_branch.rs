@@ -1,10 +1,14 @@
-//! Guard against a Harness turn moving its session's base branch.
+//! Guard against a Harness turn moving its session's base branch or
+//! retargeting the worktree's `HEAD`.
 //!
 //! Harness commands may write Git references in the shared repository.
 //! Moving the base under the session would hide the session's changes from
 //! the review diff that Agentty commits, merges, and pushes from, so every
 //! Harness turn that is followed by commit or publish effects records the
-//! base before it runs and fails when it moved.
+//! base before it runs and fails when it moved. The sandbox keeps every
+//! branch but the session's read-only, but commands can still point `HEAD`,
+//! or the session branch itself, at another branch, which Agentty's own
+//! commit would then move; such a turn fails the same way.
 
 use std::path::Path;
 
@@ -24,10 +28,12 @@ pub(super) struct BaseBranchScope<'a> {
 }
 
 /// The base branch commit captured before a Harness turn, resolved the way
-/// the review diff resolves the session's recorded base.
+/// the review diff resolves the session's recorded base, and the branch the
+/// worktree's `HEAD` finally resolved to.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct BaseBranchSnapshot {
     commit: String,
+    head: String,
     reference: String,
 }
 
@@ -65,17 +71,32 @@ impl BaseBranchSnapshot {
                      Restore the branch in the repository, then send the prompt again."
                 ))
             })?;
+        let head = scope
+            .git_client
+            .head_reference(scope.folder.to_path_buf())
+            .await
+            .map_err(|error| {
+                SessionError::Workflow(format!(
+                    "The session worktree's `HEAD` does not resolve ({error}), so Agentty does \
+                     not run Harness commands that it would commit or publish."
+                ))
+            })?;
 
-        Ok(Some(Self { commit, reference }))
+        Ok(Some(Self {
+            commit,
+            head,
+            reference,
+        }))
     }
 
     /// Fails a successful turn that moved or deleted the base `snapshot`
-    /// recorded, so Agentty commits, reviews, and publishes nothing on top
-    /// of it; a turn without a snapshot passes unchanged.
+    /// recorded, or left the worktree's `HEAD` resolving to another branch,
+    /// so Agentty commits, reviews, and publishes nothing on top of it; a
+    /// turn without a snapshot passes unchanged.
     ///
     /// # Errors
     /// Returns the turn's own error, or a backend error naming the moved
-    /// base and how to restore it.
+    /// base or retargeted `HEAD` and how to restore it.
     pub(super) async fn verify(
         snapshot: Option<&Self>,
         scope: &BaseBranchScope<'_>,
@@ -90,18 +111,38 @@ impl BaseBranchSnapshot {
             .ref_hash(scope.folder.to_path_buf(), snapshot.reference.clone())
             .await
             .ok();
-        if current.as_deref() == Some(snapshot.commit.as_str()) {
+        if current.as_deref() != Some(snapshot.commit.as_str()) {
+            return Err(Self::moved_base(snapshot));
+        }
+        let head = scope
+            .git_client
+            .head_reference(scope.folder.to_path_buf())
+            .await
+            .ok();
+        if head.as_deref() == Some(snapshot.head.as_str()) {
             return Ok(result);
         }
 
         Err(AgentError::Backend(format!(
+            "The session worktree's `HEAD` no longer resolves to `{expected}` after this turn, so \
+             Agentty stopped before committing or publishing the session. Point it back, for \
+             example with `git symbolic-ref HEAD {expected}` in the worktree, and make sure the \
+             session branch is not a symbolic reference, then send the prompt again.",
+            expected = snapshot.head,
+        )))
+    }
+
+    /// Returns the error of a turn that moved or deleted the base `snapshot`
+    /// recorded.
+    fn moved_base(snapshot: &Self) -> AgentError {
+        AgentError::Backend(format!(
             "The base branch `{reference}` moved during this turn, so Agentty stopped before \
              committing or publishing the session. If the session's commands moved it, restore it \
              to `{commit}` in the repository, for example with `git branch --force {reference} \
              {commit}` for a local branch; if you moved it yourself, send the prompt again.",
             reference = snapshot.reference,
             commit = snapshot.commit,
-        )))
+        ))
     }
 }
 

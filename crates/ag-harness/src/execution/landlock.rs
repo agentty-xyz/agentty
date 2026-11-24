@@ -140,7 +140,7 @@ pub(super) fn confine(configuration: &Launch) -> io::Result<()> {
             .flat_map(|admin| GIT_ADMIN_STORES.map(|store| admin.join(store)));
         let stores = std::iter::once(git.common.join("objects"))
             .chain(admin_stores)
-            .chain(super::launcher::branch_directories(git)?);
+            .chain(super::launcher::prepare_branch_directories(git)?);
         for store in stores {
             match directory(&store) {
                 Ok(store) => add_rule(&ruleset, &store, GRANT_ACCESS)?,

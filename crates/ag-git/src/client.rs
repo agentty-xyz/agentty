@@ -17,13 +17,14 @@ use super::{
     current_upstream_reference, delete_branch, detect_git_info, diff, diff_changed_files,
     diff_stats, fetch_remote, find_git_repo_root, get_ahead_behind, get_ref_ahead_behind,
     has_commits_since, has_merge_conflicts, has_unmerged_paths, head_commit_message, head_hash,
-    head_short_hash, in_progress_operation, is_rebase_in_progress, is_worktree_clean,
-    list_conflicted_files, list_local_commit_titles, list_staged_conflict_marker_files,
-    list_upstream_commit_titles, main_checkout_working_tree, main_repo_root, prune_worktrees,
-    pull_rebase, push_current_branch, push_current_branch_to_new_remote_branch,
-    push_current_branch_to_remote_branch, rebase, rebase_continue, rebase_start, ref_hash,
-    remote_branch_exists, remove_worktree, repo_url, run_pre_commit_hook, squash_merge,
-    squash_merge_diff, stage_all, sync, tracked_worktree_status, worktree_status,
+    head_reference, head_short_hash, in_progress_operation, is_rebase_in_progress,
+    is_worktree_clean, list_conflicted_files, list_local_commit_titles,
+    list_staged_conflict_marker_files, list_upstream_commit_titles, main_checkout_working_tree,
+    main_repo_root, prune_worktrees, pull_rebase, push_current_branch,
+    push_current_branch_to_new_remote_branch, push_current_branch_to_remote_branch, rebase,
+    rebase_continue, rebase_start, ref_hash, remote_branch_exists, remove_worktree, repo_url,
+    run_pre_commit_hook, squash_merge, squash_merge_diff, stage_all, sync, tracked_worktree_status,
+    worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -233,6 +234,14 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
         reference: String,
     ) -> GitFuture<Result<String, GitError>>;
+
+    /// Returns the full name of the branch `HEAD` finally resolves to in
+    /// `repo_path`, following every symbolic reference, or `HEAD` when it is
+    /// detached.
+    ///
+    /// # Errors
+    /// Returns an error when `HEAD` cannot be resolved.
+    fn head_reference(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>>;
 
     /// Returns the full `HEAD` commit message for `repo_path`, or `None` when
     /// no commits exist.
@@ -684,6 +693,10 @@ impl GitClient for RealGitClient {
         reference: String,
     ) -> GitFuture<Result<String, GitError>> {
         Box::pin(async move { ref_hash(repo_path, reference).await })
+    }
+
+    fn head_reference(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move { head_reference(repo_path).await })
     }
 
     fn head_commit_message(

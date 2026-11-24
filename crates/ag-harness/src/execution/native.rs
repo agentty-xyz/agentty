@@ -161,7 +161,7 @@ pub(crate) async fn probe(
     let writes = !snapshot.workspace_writes.is_empty()
         || !snapshot.writable_roots.is_empty()
         || snapshot.temporary_directory.is_some()
-        || snapshot.grants(Capability::GitWrites);
+        || snapshot.git_branch.is_some();
     if !host.landlock && writes {
         return Err(SandboxUnavailableReason::LandlockUnavailable);
     }

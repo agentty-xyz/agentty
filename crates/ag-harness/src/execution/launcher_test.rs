@@ -14,7 +14,7 @@ use rustix::io::Errno;
 use rustix::process::{Pid, WaitOptions, waitpid};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use super::branch_directories;
+use super::prepare_branch_directories;
 #[cfg(target_os = "macos")]
 use super::seatbelt;
 use super::{ChildEvent, child_event, instruction, write_notice};
@@ -213,16 +213,22 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
     let denial = profile
         .find("(deny file-write* (regex #\"(^|/)")
         .expect("metadata name denial");
-    // A main worktree reopens the files at the top of its Git directory, its
-    // own reflog and per-worktree references, the object store, and only
-    // the granted branch and its reflog, then denies the protected entries,
-    // packed references included.
+    // A main worktree reopens the state files at the top of its Git
+    // directory, its own reflog and per-worktree references, the object
+    // store, and only the granted branch and its reflog, then denies the
+    // protected entries, packed references included.
     let reopened = profile
         .find(
-            "(allow file-write* (regex \
-             #\"^/workspace/[.]git/([^/]+|logs/HEAD|refs/(bisect|worktree|rewritten)(/.*)?)$\"))",
+            "(allow file-write* (regex #\"^/workspace/[.]git/((index|sharedindex[.][0-9a-f]+|HEAD|",
         )
         .expect("main worktree state");
+    assert!(
+        profile.contains(
+            "|BISECT_[A-Z_]+)([.]lock)?|logs/HEAD|refs/(bisect|worktree|rewritten)(/.*)?)$\"))"
+        ),
+        "{profile}"
+    );
+    assert!(!profile.contains("[^/]+|"), "{profile}");
     let objects = profile
         .find("(allow file-write* (subpath \"/workspace/.git/objects\"))")
         .expect("object store");
@@ -328,7 +334,7 @@ fn seatbelt_git_writes_in_a_linked_worktree_open_its_administration_and_branch_o
         "{profile}"
     );
     // The common directory's top-level files belong to the main worktree.
-    assert!(!profile.contains("([^/]+|logs/HEAD"), "{profile}");
+    assert!(!profile.contains("|logs/HEAD|"), "{profile}");
     assert!(
         !profile.contains("(allow file-write* (subpath \"/repo/.git\"))"),
         "{profile}"
@@ -354,11 +360,11 @@ fn branch_directories_are_created_without_following_links_or_files() {
     std::fs::write(reftable.join("refs/heads"), "").expect("reftable heads file");
 
     // Act
-    let nested = branch_directories(&git(&common, "wt/a/b")).expect("nested branch");
-    let top = branch_directories(&git(&common, "main")).expect("top-level branch");
-    let linked = branch_directories(&git(&common, "linked/x")).expect("linked directory");
-    let files = branch_directories(&git(&reftable, "wt/x")).expect("reftable repository");
-    let missing = branch_directories(&git(&common.join("missing/repository"), "wt/x"));
+    let nested = prepare_branch_directories(&git(&common, "wt/a/b")).expect("nested branch");
+    let top = prepare_branch_directories(&git(&common, "main")).expect("top-level branch");
+    let linked = prepare_branch_directories(&git(&common, "linked/x")).expect("linked directory");
+    let files = prepare_branch_directories(&git(&reftable, "wt/x")).expect("reftable repository");
+    let missing = prepare_branch_directories(&git(&common.join("missing/repository"), "wt/x"));
 
     // Assert
     assert_eq!(

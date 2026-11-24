@@ -409,9 +409,10 @@ async fn native_git_command_latency_stays_bounded() {
     );
 }
 
-/// In a main worktree macOS commits while the Git directory and its
-/// protected entries stay in place; Linux refuses Git writes beside a write
-/// grant containing the Git directory, because Landlock would open all of
+/// In a main worktree macOS commits while the Git directory, its protected
+/// entries, other branches' reflogs, and the top-level entries Git does not
+/// write as worktree state stay in place; Linux refuses Git writes beside a
+/// write grant containing the Git directory, because Landlock would open all of
 /// it.
 #[tokio::test]
 async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() {
@@ -451,14 +452,17 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
              user.email=sandbox@example.com -c commit.gpgsign=false commit -q -m sandboxed; if \
              /bin/mv .git \"$TMPDIR/moved\"; then exit 91; fi; if /bin/mv .git moved; then exit \
              92; fi; if /bin/mv .git/hooks .git/objects/hooks; then exit 93; fi; if printf \
-             changed >> .git/config; then exit 94; fi; printf confined",
+             changed >> .git/config; then exit 94; fi; if printf x >> \
+             .git/logs/refs/heads/wt/session; then exit 95; fi; /bin/mkdir -p remotes; if /bin/mv \
+             remotes .git/remotes; then exit 96; fi; if printf x > .git/packed-refs.lock; then \
+             exit 97; fi; printf confined",
             options(configuration(".")),
         )
         .await
         .expect("turn");
     // Without a write grant around the Git directory, Linux opens only the
-    // object, reference, and log stores of a main worktree: objects can be
-    // written, but staging cannot replace the index.
+    // object store and the branch's directories of a main worktree: objects
+    // can be written, but staging cannot replace the index.
     #[cfg(target_os = "linux")]
     let stores = refusing_harness(&main)
         .turn(
@@ -496,6 +500,8 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
             git(&main, &["log", "-1", "--format=%s"]).trim(),
             "sandboxed"
         );
+        assert!(!main.join(".git/remotes").exists());
+        assert!(!main.join(".git/packed-refs.lock").exists());
     }
     #[cfg(target_os = "linux")]
     {
@@ -535,10 +541,11 @@ async fn native_linux_system_reads_mount_a_private_proc_and_a_minimal_dev() {
     assert_eq!(result.stdout, "private", "{result:?}");
 }
 
-/// Replacement refs, grafts, the shallow boundary, and object alternates
-/// change the history Git run outside the sandbox shows without changing
-/// the objects it pushes, so commands cannot write them, whether they exist
-/// or not, nor move the directories holding them to swap in replacements.
+/// Replacement refs, grafts, the shallow boundary, object alternates, and
+/// commit-graph files change the history Git run outside the sandbox shows
+/// without changing the objects it pushes, so commands cannot write them,
+/// whether they exist or not, nor move the directories holding them to swap
+/// in replacements.
 #[tokio::test]
 async fn native_git_writes_keep_history_rewrites_read_only() {
     // Arrange
@@ -558,7 +565,8 @@ async fn native_git_writes_keep_history_rewrites_read_only() {
              exit 95; fi; if mv \"$common/objects/info\" \"$common/objects/aside\" 2>/dev/null; \
              then exit 96; fi; if mv \"$common/objects\" \"$common/objects-aside\" 2>/dev/null; \
              then exit 97; fi; if mv \"$common/refs\" \"$common/refs-aside\" 2>/dev/null; then \
-             exit 98; fi; printf confined",
+             exit 98; fi; if printf x > \"$common/objects/info/commit-graph\"; then exit 89; fi; \
+             if mkdir \"$common/objects/info/commit-graphs\"; then exit 90; fi; printf confined",
             fixture.configuration(),
         )
         .await;
@@ -573,12 +581,16 @@ async fn native_git_writes_keep_history_rewrites_read_only() {
     );
     assert!(!common.join("info/grafts").exists());
     assert!(!common.join("shallow").exists());
+    assert!(!common.join("objects/info/commit-graph").exists());
+    assert!(!common.join("objects/info/commit-graphs").exists());
 }
 
 /// Commands commit to the session branch, even one only `packed-refs`
 /// holds, and write its reflog, but cannot move the base branch, create
-/// branches or tags, stash, or edit or rewrite `packed-refs`, so `git gc`
-/// fails without damaging the repository. macOS also keeps the session
+/// branches or tags, stash, or edit or rewrite `packed-refs`, and `git gc`
+/// stops at its first lock, leaving the repository intact. Each refusal
+/// must name the denied write, so a step failing for another reason, such
+/// as a missing identity, fails the test. macOS also keeps the session
 /// branch's siblings read-only; Linux grants the directory holding it.
 #[tokio::test]
 async fn native_git_writes_cover_only_the_session_branch() {
@@ -591,7 +603,7 @@ async fn native_git_writes_cover_only_the_session_branch() {
     let packed_before = std::fs::read(common.join("packed-refs")).expect("packed references");
     let base = git(&main, &["rev-parse", "main"]);
     let sibling = if cfg!(target_os = "macos") {
-        "if git branch -f wt/other HEAD 2>/dev/null; then exit 92; fi; "
+        "refused git branch -f wt/other HEAD || exit 92; "
     } else {
         ""
     };
@@ -600,15 +612,19 @@ async fn native_git_writes_cover_only_the_session_branch() {
     let result = fixture
         .run(
             &format!(
-                "common=$(git rev-parse --path-format=absolute --git-common-dir); git -c \
-                 user.name=Sandbox -c user.email=sandbox@example.com -c commit.gpgsign=false \
-                 commit -q --allow-empty -m own || exit 90; if git update-ref refs/heads/main \
-                 HEAD 2>/dev/null; then exit 91; fi; {sibling}if printf x >> \
-                 \"$common/packed-refs\"; then exit 93; fi; if git tag sandboxed 2>/dev/null; \
-                 then exit 94; fi; if git checkout -q -b wt-new 2>/dev/null; then exit 95; fi; \
-                 printf changed >> tracked; if git stash -q 2>/dev/null; then exit 96; fi; grep \
-                 -q changed tracked || exit 97; if git pack-refs --all 2>/dev/null; then exit 98; \
-                 fi; if git gc -q 2>/dev/null; then exit 99; fi; printf confined"
+                "export GIT_AUTHOR_NAME=Sandbox GIT_AUTHOR_EMAIL=sandbox@example.com \
+                 GIT_COMMITTER_NAME=Sandbox GIT_COMMITTER_EMAIL=sandbox@example.com \
+                 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false; \
+                 refused() {{ if \"$@\" 2> \"$TMPDIR/refusal\"; then echo \"ran: $*\" >&2; return \
+                 1; fi; grep -qiE 'not permitted|permission denied|cannot save the current \
+                 status' \"$TMPDIR/refusal\" || {{ cat \"$TMPDIR/refusal\" >&2; return 1; }}; }}; \
+                 common=$(git rev-parse --path-format=absolute --git-common-dir); git -c \
+                 commit.gpgsign=false commit -q --allow-empty -m own || exit 90; refused git \
+                 update-ref refs/heads/main HEAD || exit 91; {sibling}refused sh -c 'printf x >> \
+                 \"$1/packed-refs\"' sh \"$common\" || exit 93; refused git tag sandboxed || exit \
+                 94; refused git checkout -q -b wt-new || exit 95; printf changed >> tracked; \
+                 refused git stash || exit 96; grep -q changed tracked || exit 97; refused git \
+                 pack-refs --all || exit 98; refused git gc -q || exit 99; printf confined"
             ),
             fixture.configuration(),
         )

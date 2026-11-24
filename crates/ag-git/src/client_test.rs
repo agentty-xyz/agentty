@@ -713,6 +713,32 @@ async fn test_ref_hash_resolves_branch_head() {
 }
 
 #[tokio::test]
+async fn head_reference_follows_symbolic_branches_and_reports_detached_heads() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    setup_test_git_repo(dir.path());
+    run_git_command(dir.path(), &["checkout", "-q", "-b", "wt/session"]);
+    let client = RealGitClient;
+
+    // Act
+    let branch = client.head_reference(dir.path().to_path_buf()).await;
+    run_git_command(
+        dir.path(),
+        &["symbolic-ref", "refs/heads/wt/session", "refs/heads/main"],
+    );
+    let retargeted = client.head_reference(dir.path().to_path_buf()).await;
+    run_git_command(dir.path(), &["checkout", "-q", "--detach", "main"]);
+    let detached = client.head_reference(dir.path().to_path_buf()).await;
+    let outside = client.head_reference(dir.path().join("missing")).await;
+
+    // Assert
+    assert_eq!(branch.expect("branch"), "refs/heads/wt/session");
+    assert_eq!(retargeted.expect("retargeted branch"), "refs/heads/main");
+    assert_eq!(detached.expect("detached HEAD"), "HEAD");
+    assert!(outside.is_err());
+}
+
+#[tokio::test]
 async fn test_pull_rebase_returns_error_without_upstream() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");

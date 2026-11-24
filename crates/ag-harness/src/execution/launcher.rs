@@ -95,7 +95,7 @@ fn launch() -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         if let Some(git) = &configuration.git_writes {
-            branch_directories(git)?;
+            prepare_branch_directories(git)?;
         }
         let profile = seatbelt(&configuration)?;
         let mut command = Command::new("/usr/bin/sandbox-exec");
@@ -287,17 +287,17 @@ fn group_finished() -> io::Result<bool> {
     Ok(true)
 }
 
-/// Returns the directories of the common Git directory that hold the
-/// Git-writes grant's branch reference and its reflog, creating missing
-/// ones, so Git can write the branch without creating directories and Linux
-/// has a directory to grant. A directory reached through a link, or blocked
-/// by a file such as the `refs/heads` file of a `reftable` repository, is
-/// left out and its branch stays read-only.
+/// Creates the directories of the common Git directory that hold the
+/// Git-writes grant's branch reference and its reflog when they are
+/// missing, and returns them, so Git can write the branch without creating
+/// directories and Linux has a directory to grant. A directory reached through
+/// a link, or blocked by a file such as the `refs/heads` file of a `reftable`
+/// repository, is left out and its branch stays read-only.
 ///
 /// # Errors
 /// Returns an error when a missing directory cannot be created.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(super) fn branch_directories(git: &GitWrites) -> io::Result<Vec<std::path::PathBuf>> {
+pub(super) fn prepare_branch_directories(git: &GitWrites) -> io::Result<Vec<std::path::PathBuf>> {
     let parent = git.branch.rsplit_once('/').map(|(parent, _)| parent);
     let mut directories = Vec::new();
     for store in ["refs/heads", "logs/refs/heads"] {
@@ -381,7 +381,8 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
             None => writeln!(
                 profile,
                 "(allow file-write* (regex \
-                 #\"^{common}/([^/]+|logs/HEAD|refs/(bisect|worktree|rewritten)(/.*)?)$\"))"
+                 #\"^{common}/(({GIT_WORKTREE_STATE})([.]lock)?|logs/HEAD|refs/\
+                 (bisect|worktree|rewritten)(/.*)?)$\"))"
             )
             .map_err(io::Error::other)?,
         }
@@ -454,30 +455,33 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
 const GIT_WORKTREE_PROTECTED: &str =
     "config[.]worktree|commondir|gitdir|rebase-merge|rebase-apply|sequencer";
 
+/// State files at the top of a main worktree's Git directory that the
+/// Git-writes grant opens, as a Seatbelt pattern: the index, `HEAD`, and the
+/// files merges, cherry-picks, reverts, commits, and bisection leave there.
+/// Every other top-level entry stays read-only, so commands cannot rename a
+/// directory of their own onto `logs` or a legacy `remotes` directory, or
+/// hold a lock file that blocks the host's next Git command.
+#[cfg(target_os = "macos")]
+const GIT_WORKTREE_STATE: &str = "index|sharedindex[.][0-9a-f]+|HEAD|ORIG_HEAD|FETCH_HEAD|\
+                                  MERGE_HEAD|MERGE_MSG|MERGE_MODE|MERGE_RR|MERGE_AUTOSTASH|\
+                                  AUTO_MERGE|CHERRY_PICK_HEAD|REVERT_HEAD|COMMIT_EDITMSG|\
+                                  SQUASH_MSG|TAG_EDITMSG|BISECT_[A-Z_]+";
+
 /// Reference stores at the top of the common Git directory that stay
-/// read-only under the Git-writes grant, as a Seatbelt pattern, although a
-/// main worktree's other top-level files are writable: packed references
-/// and the `reftable` stack hold every branch, not only the granted one.
+/// read-only under the Git-writes grant, as a Seatbelt pattern, whatever
+/// else opens: packed references and the `reftable` stack hold every
+/// branch, not only the granted one.
 #[cfg(target_os = "macos")]
 const GIT_REFERENCE_PROTECTED: &str = "packed-refs|reftable";
-
-/// Entries inside the common Git directory's object store that stay
-/// read-only under the Git-writes grant on Linux: object alternates change
-/// the history Git run later outside the sandbox shows without changing the
-/// objects it pushes. A missing one is covered by an empty file, which Git
-/// treats as absent. Replacement refs lie outside the writable branch
-/// directory already.
-#[cfg(target_os = "linux")]
-const GIT_HISTORY_PROTECTED: [&str; 2] =
-    ["objects/info/alternates", "objects/info/http-alternates"];
 
 /// Entries of the common Git directory that stay read-only under the
 /// Git-writes grant, as a Seatbelt pattern, because they change the history
 /// Git run later outside the sandbox shows without changing the objects it
 /// pushes: replacement refs, grafts and other `info` files, the shallow
-/// boundary, and object alternates.
+/// boundary, and the object store's `info` directory with its alternates
+/// and commit-graph files.
 #[cfg(target_os = "macos")]
-const GIT_HISTORY_PROTECTED: &str = "info|shallow|refs/replace|objects/info/(http-)?alternates";
+const GIT_HISTORY_PROTECTED: &str = "info|shallow|refs/replace|objects/info";
 
 /// Network rules of the network grant: IP connections and listeners, the
 /// system resolver, and the services that resolve names and verify TLS
@@ -636,18 +640,14 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
     Err(command.exec())
 }
 
-/// Mounts the entries of `common` that [`GIT_HISTORY_PROTECTED`] lists
-/// read-only over the writable Git mount: object alternates lie inside the
+/// Mounts the object store's `info` directory of `common` read-only over the
+/// writable Git mount: its alternates and commit-graph files lie inside the
 /// writable object store but change the history Git run outside the sandbox
-/// shows. Existing ones are mounted over themselves, missing ones covered by
-/// an empty read-only file. Replacement refs, grafts, and the shallow
-/// boundary lie outside the writable directories already.
-///
-/// Mounts follow a renamed directory, so `objects/info`, which the object
-/// store's write grant could otherwise move aside and recreate, is mounted
-/// writable over itself first: a mount point cannot be renamed or removed,
-/// so the alternates mounts stay where Git reads them. `objects` itself lies
-/// outside the write grant.
+/// shows without changing the objects it pushes. A mount point cannot be
+/// renamed or removed, so a command cannot move the directory aside and
+/// recreate it either, and `objects` itself lies outside the write grant.
+/// Replacement refs, grafts, and the shallow boundary lie outside the
+/// writable directories already.
 ///
 /// # Errors
 /// Returns an error when a missing `objects/info` cannot be created.
@@ -655,16 +655,7 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
 fn protect_git_history(command: &mut Command, common: &std::path::Path) -> io::Result<()> {
     let object_info = common.join("objects/info");
     std::fs::create_dir_all(&object_info)?;
-    command.arg("--bind").arg(&object_info).arg(&object_info);
-    for relative in GIT_HISTORY_PROTECTED {
-        let path = common.join(relative);
-        let source = if path.exists() {
-            path.as_path()
-        } else {
-            std::path::Path::new("/dev/null")
-        };
-        command.arg("--ro-bind").arg(source).arg(&path);
-    }
+    command.arg("--ro-bind").arg(&object_info).arg(&object_info);
 
     Ok(())
 }

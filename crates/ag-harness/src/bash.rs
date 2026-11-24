@@ -568,8 +568,8 @@ impl BashConfig {
     /// store, the `refs/heads/<branch>` reference and its reflog, and, for a
     /// linked worktree, the worktree's own administration directory with its
     /// index, `HEAD`, and per-worktree logs and references. For a main
-    /// worktree, macOS also opens the files at the top of its Git directory,
-    /// which hold that worktree's index and `HEAD`. Every other reference,
+    /// worktree, macOS also opens the state files at the top of its Git
+    /// directory, such as its index and `HEAD`. Every other reference,
     /// including other branches, tags, `refs/stash`, and `packed-refs`, stays
     /// read-only, so commands cannot create branches, stash, or pack
     /// references; Git reports those refusals as a failure to lock the
@@ -577,10 +577,16 @@ impl BashConfig {
     /// worktree links, submodule metadata, and rebase and cherry-pick state
     /// stay read-only too, because Git run later outside the sandbox would
     /// otherwise execute or follow what a command wrote there, and so do
-    /// object alternates, grafts, and the shallow boundary, which would
-    /// change the history Git shows without changing the objects it pushes.
-    /// Repositories using the `reftable` reference backend keep every
-    /// reference read-only.
+    /// object alternates, commit-graph files, grafts, and the shallow
+    /// boundary, which would change the history Git shows without changing
+    /// the objects it pushes. Repositories using the `reftable` reference
+    /// backend keep every reference read-only.
+    ///
+    /// `HEAD` and the branch reference stay writable, so commands can point
+    /// either at another branch. A host that runs Git on the worktree after
+    /// a command, such as to commit its changes, must first check that
+    /// `HEAD` still resolves to `refs/heads/<branch>`, following every
+    /// symbolic reference, or its own write lands on the other branch.
     ///
     /// Linux confines writes by directory, so there the directory holding
     /// the branch stays writable: siblings of `wt/session`, such as
@@ -606,7 +612,6 @@ impl BashConfig {
         if !valid_branch(&branch) {
             return Err(BashError::InvalidPolicy);
         }
-        self.snapshot.capabilities.insert(Capability::GitWrites);
         self.snapshot.git_branch = Some(branch);
 
         Ok(self)
@@ -840,8 +845,8 @@ pub(crate) struct BashPolicySnapshot {
     pub(crate) executor: String,
     pub(crate) external_reads: Vec<PathBuf>,
     /// The branch [`BashConfig::with_git_writes`] grants. Snapshots recorded
-    /// before branch-scoped Git writes grant [`Capability::GitWrites`]
-    /// without one.
+    /// before branch-scoped Git writes hold [`Capability::GitWrites`]
+    /// instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) git_branch: Option<String>,
     /// [`BashConfig::with_hidden_path`] paths.
@@ -876,7 +881,9 @@ impl BashPolicySnapshot {
 pub(crate) enum Capability {
     /// [`BashConfig::with_full_disk_read`].
     FullDiskRead,
-    /// [`BashConfig::with_git_writes`].
+    /// Git writes without a branch, which snapshots recorded before
+    /// [`BashConfig::with_git_writes`] took one still hold; kept only so
+    /// they decode, and never granted.
     GitWrites,
     /// [`BashConfig::with_network`].
     Network,

@@ -272,9 +272,10 @@ impl Fixture {
     /// application database and stored API keys.
     fn command(&self) -> String {
         format!(
-            "printf 'sandboxed\\n' > notes.txt && git add notes.txt && git -c user.name=Agentty \
-             -c user.email=agentty@example.com commit -qm 'Add notes' && touch \
-             \"$TMPDIR/scratch\" && echo committed; git update-ref refs/heads/main HEAD \
+            "export GIT_AUTHOR_NAME=Agentty GIT_AUTHOR_EMAIL=agentty@example.com \
+             GIT_COMMITTER_NAME=Agentty GIT_COMMITTER_EMAIL=agentty@example.com; printf \
+             'sandboxed\\n' > notes.txt && git add notes.txt && git commit -qm 'Add notes' && \
+             touch \"$TMPDIR/scratch\" && echo committed; git update-ref refs/heads/main HEAD \
              2>/dev/null && echo moved-main; printf x >> \"$(git rev-parse --path-format=absolute \
              --git-common-dir)/packed-refs\" && echo edited-packed-refs; touch '{}' && echo \
              escaped; cat '{}' > /dev/null && echo read-history; cat '{}' > /dev/null && echo \

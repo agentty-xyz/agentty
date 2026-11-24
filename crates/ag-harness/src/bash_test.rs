@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::bash::{
     BashArguments, BashConfig, BashError, BashExecutor, BashPolicySnapshot, BashProcess,
-    Enforcement, ExecutionError, UnsandboxedExecutor,
+    Capability, Enforcement, ExecutionError, UnsandboxedExecutor,
 };
 use crate::command_journal::CommandCleanupScope;
 use crate::store::StoredTurnOptions;
@@ -428,7 +428,7 @@ fn development_grants_validate_and_record_only_what_they_set() {
     }
     assert_eq!(
         granted.fingerprint()["capabilities"],
-        json!(["git_writes", "network", "system_reads"])
+        json!(["network", "system_reads"])
     );
     assert_eq!(granted.fingerprint()["git_branch"], "wt/session");
     assert_eq!(
@@ -438,6 +438,12 @@ fn development_grants_validate_and_record_only_what_they_set() {
     let decoded: BashPolicySnapshot =
         serde_json::from_value(granted.fingerprint()).expect("snapshot");
     assert_eq!(decoded, granted.snapshot);
+    let mut branchless = legacy.clone();
+    branchless["capabilities"] = json!(["git_writes"]);
+    let branchless: BashPolicySnapshot =
+        serde_json::from_value(branchless).expect("snapshot recorded before branch grants");
+    assert!(branchless.grants(Capability::GitWrites));
+    assert_eq!(branchless.git_branch, None);
     let legacy: BashPolicySnapshot = serde_json::from_value(legacy).expect("legacy snapshot");
     assert_eq!(legacy, valid.snapshot);
     assert!(
