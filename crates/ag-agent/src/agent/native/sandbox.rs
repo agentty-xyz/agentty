@@ -20,6 +20,7 @@ use ag_harness::event::Item;
 use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, SandboxWarning};
 use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
 
+use super::cargo_cache::TrustedCargoCache;
 use super::config::{agentty_home, chatgpt_auth_file};
 
 /// How session turns run `bash`: inside the native sandbox, and without it,
@@ -82,8 +83,10 @@ impl CommandSandbox {
     /// `data_root` and commands may have written on earlier turns, for
     /// commands run in `workspace`: makes its `CARGO_HOME` a real directory,
     /// replaces the Cargo configuration and credential files commands could
-    /// have planted with a link to the host's configuration, and returns
-    /// the sandbox.
+    /// have planted with a link to the host's configuration, copies in what
+    /// the project's `cargo_cache`, when there is one, holds for
+    /// `workspace`'s `Cargo.lock`, and returns the sandbox, which also hides
+    /// every project's cache.
     ///
     /// # Errors
     /// Returns an error when the Cargo directory cannot be made safe.
@@ -92,18 +95,34 @@ impl CommandSandbox {
         temporary_directory: PathBuf,
         workspace: &Path,
         environment: &BTreeMap<String, String>,
+        cargo_cache: Option<TrustedCargoCache>,
     ) -> Result<Self, String> {
         let host_config = Self::host_cargo_config(workspace, environment).await;
+        if let Some(cargo_cache) = &cargo_cache {
+            // The cache root must exist before the sandbox starts, so that
+            // Bubblewrap masks it even when a fetch creates it meanwhile.
+            let _ = tokio::fs::create_dir_all(cargo_cache.hidden_path()).await;
+        }
         let directory = temporary_directory.clone();
+        let reused_cache = cargo_cache.clone();
+        let worktree = workspace.to_path_buf();
         tokio::task::spawn_blocking(move || {
-            Self::reset_cargo_home(&directory, host_config.as_deref())
+            let cache = reused_cache
+                .as_ref()
+                .map(|cache| (cache, worktree.as_path()));
+
+            Self::reset_cargo_home(&directory, host_config.as_deref(), cache)
         })
         .await
         .map_err(std::io::Error::other)
         .flatten()
         .map_err(|error| format!("Failed to prepare the sandbox Cargo directory: {error}"))?;
+        let mut sandbox = Self::new(data_root, temporary_directory, environment);
+        if let Some(cargo_cache) = cargo_cache {
+            sandbox.hidden.push(cargo_cache.hidden_path().to_path_buf());
+        }
 
-        Ok(Self::new(data_root, temporary_directory, environment))
+        Ok(sandbox)
     }
 
     /// Describes commands that write `temporary_directory` and cannot read
@@ -173,7 +192,8 @@ impl CommandSandbox {
 
     /// Makes the `CARGO_HOME` of `temporary_directory` a real directory
     /// without the Cargo configuration and credential files commands may
-    /// have planted, then links `host_config` into it.
+    /// have planted, then links `host_config` into it and copies in what
+    /// the cache of `cargo_cache` holds for its worktree's `Cargo.lock`.
     ///
     /// Only `temporary_directory` is resolved by path: commands cannot
     /// replace it, because its parent is hidden from them. Its Cargo
@@ -186,6 +206,7 @@ impl CommandSandbox {
     fn reset_cargo_home(
         temporary_directory: &Path,
         host_config: Option<&Path>,
+        cargo_cache: Option<(&TrustedCargoCache, &Path)>,
     ) -> std::io::Result<()> {
         std::fs::create_dir_all(temporary_directory)?;
         let temporary = fs::open(temporary_directory, Self::directory_flags(), Mode::empty())?;
@@ -203,12 +224,17 @@ impl CommandSandbox {
             Mode::empty(),
         )?;
 
-        Self::clear_cargo_home(temporary_directory, &temporary, &cargo, host_config)
+        Self::clear_cargo_home(temporary_directory, &temporary, &cargo, host_config)?;
+        if let Some((cargo_cache, worktree)) = cargo_cache {
+            cargo_cache.copy_into(&cargo, worktree);
+        }
+
+        Ok(())
     }
 
     /// Returns the flags that open a directory handle without following a
     /// final link.
-    fn directory_flags() -> OFlags {
+    pub(super) fn directory_flags() -> OFlags {
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
     }
 

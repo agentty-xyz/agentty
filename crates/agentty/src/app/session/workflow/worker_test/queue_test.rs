@@ -30,6 +30,7 @@ use super::support::{
 };
 use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::AppEvent;
+use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
@@ -173,6 +174,7 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),

@@ -35,6 +35,7 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::infra::browser::BrowserClient;
+use crate::infra::cargo_cache::CargoCacheClient;
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::infra::project_discovery::ProjectDiscoveryClient;
@@ -587,6 +588,18 @@ pub(super) fn successful_manual_sync_completion(
 }
 
 impl AppClients {
+    /// Refreshes the trusted Cargo cache through `cargo_cache_client`
+    /// instead of running Cargo.
+    #[must_use]
+    pub(crate) fn with_cargo_cache_client(
+        mut self,
+        cargo_cache_client: Arc<dyn CargoCacheClient>,
+    ) -> Self {
+        self.cargo_cache_client = Some(cargo_cache_client);
+
+        self
+    }
+
     /// Replaces the startup agent-availability boundary while preserving the
     /// remaining clients.
     #[must_use]

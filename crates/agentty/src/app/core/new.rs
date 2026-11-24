@@ -62,6 +62,7 @@ impl App {
         let repositories = repositories.into();
         let clients = AppClients::new()
             .with_harness_data_root(crate::app::agentty_home().join(super::AGENTTY_HARNESS_DIR))
+            .with_trusted_cargo_cache(&crate::app::agentty_home())
             .with_max_concurrent_subagents(
                 load_max_concurrent_subagents_setting(&repositories).await,
             );
@@ -517,6 +518,9 @@ impl App {
             harness_models,
             Arc::clone(&clients.agent_availability_probe),
         );
+        if let Some(client) = &clients.cargo_cache_client {
+            services.set_cargo_cache_client(Arc::clone(client));
+        }
 
         Ok(services)
     }

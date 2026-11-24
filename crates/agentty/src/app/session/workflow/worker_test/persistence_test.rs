@@ -24,6 +24,7 @@ use super::support::{
     resume_command, transcript_text,
 };
 use crate::app::AppEvent;
+use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
@@ -66,6 +67,7 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -175,6 +177,7 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -256,6 +259,7 @@ async fn test_apply_turn_result_persists_harness_turn_report() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -347,6 +351,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),

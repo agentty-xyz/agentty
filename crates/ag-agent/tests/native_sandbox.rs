@@ -4,17 +4,21 @@
 //! The binary is its own test harness so that `main` can call
 //! `dispatch_sandbox_helper` before anything else, as Agentty's `main`
 //! does; the harness then starts this executable as the sandbox helper. It
-//! answers the `cargo nextest` listing protocol, runs its one test when
-//! selected, and fails on any other argument or a filter that selects
+//! answers the `cargo nextest` listing protocol, runs the tests a filter
+//! selects, and fails on any other argument or a filter that selects
 //! nothing, so it never passes without running.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{self, Write as _};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use ag_agent::{NativeHarnessConfig, create_agent_channel, dispatch_sandbox_helper};
+use ag_agent::{
+    NativeHarnessConfig, TrustedCargoCache, create_agent_channel, dispatch_sandbox_helper,
+};
 use ag_contracts::{
     AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, PermissionMode,
     ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
@@ -24,6 +28,7 @@ use ag_harness::tool::ToolDefinition;
 use ag_protocol::TurnPrompt;
 use ag_session::AgentKind;
 use serde_json::json;
+use sha2::{Digest as _, Sha256};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use wiremock::matchers::{body_string_contains, method, path};
@@ -32,8 +37,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// Result of one fallible test step.
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-/// The only test this harness runs.
-const TEST_NAME: &str = "session_commands_commit_in_a_linked_worktree_and_stay_confined";
+/// The tests this harness runs.
+const TEST_NAMES: [&str; 2] = [
+    "session_commands_commit_in_a_linked_worktree_and_stay_confined",
+    "session_gets_verified_copies_and_cannot_reach_the_cache",
+];
 /// Harness model served by the scripted provider.
 const MODEL: &str = "muse-spark-1.3";
 /// Session whose harness history the command tries to read.
@@ -43,6 +51,8 @@ const SESSION_ID: &str = "session-sandbox";
 const SESSION_BRANCH: &str = "wt/session";
 /// Stored API key file, under the Agentty root, the command tries to read.
 const API_KEY_FILE: &str = "auth/api_keys.json";
+/// Archive the host `cargo` stores for the locked crate.
+const CACHED_ARCHIVE: &[u8] = b"leaf archive";
 
 fn main() -> ExitCode {
     if let Some(helper) = dispatch_sandbox_helper() {
@@ -55,21 +65,21 @@ fn main() -> ExitCode {
             let listing = if ignored {
                 String::new()
             } else {
-                format!("{TEST_NAME}: test\n")
+                TEST_NAMES.map(|name| format!("{name}: test\n")).concat()
             };
 
             io::stdout()
                 .write_all(listing.as_bytes())
                 .map_err(Box::<dyn Error>::from)
         }
-        Ok(Invocation::Run) => run(),
+        Ok(Invocation::Run(selected)) => run(&selected),
         Err(error) => Err(error.into()),
     };
 
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            let _ = writeln!(io::stderr().lock(), "{TEST_NAME}: {error}");
+            let _ = writeln!(io::stderr().lock(), "native_sandbox: {error}");
 
             ExitCode::FAILURE
         }
@@ -83,8 +93,8 @@ enum Invocation {
         /// Whether only ignored tests are listed.
         ignored: bool,
     },
-    /// Run the test.
-    Run,
+    /// Run the selected tests.
+    Run(Vec<&'static str>),
 }
 
 impl Invocation {
@@ -94,7 +104,7 @@ impl Invocation {
     ///
     /// # Errors
     /// Returns an error for any other argument, a second filter, or a
-    /// filter that does not select the test.
+    /// filter that selects no test.
     fn parse(arguments: &[String]) -> Result<Self, String> {
         let mut list = false;
         let mut ignored = false;
@@ -118,27 +128,43 @@ impl Invocation {
         if ignored {
             return Err("this harness has no ignored tests to run".to_string());
         }
-        let selected = filter.is_none_or(|filter| {
-            if exact {
-                filter == TEST_NAME
-            } else {
-                TEST_NAME.contains(filter)
-            }
-        });
-        if !selected {
+        let selected = TEST_NAMES
+            .into_iter()
+            .filter(|name| {
+                filter.is_none_or(|filter| {
+                    if exact {
+                        filter == *name
+                    } else {
+                        name.contains(filter)
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
             return Err(format!(
-                "the filter selects no test; the only test is `{TEST_NAME}`"
+                "the filter selects no test; the tests are {TEST_NAMES:?}"
             ));
         }
 
-        Ok(Self::Run)
+        Ok(Self::Run(selected))
     }
 }
 
-/// Runs the test, starting its runtime only after `main` dispatched.
+/// Runs the `selected` tests in order, starting their runtime only after
+/// `main` dispatched.
 #[tokio::main]
-async fn run() -> TestResult {
-    session_commands_commit_in_a_linked_worktree_and_stay_confined().await
+async fn run(selected: &[&str]) -> TestResult {
+    for name in selected {
+        let outcome = match *name {
+            "session_gets_verified_copies_and_cannot_reach_the_cache" => {
+                session_gets_verified_copies_and_cannot_reach_the_cache().await
+            }
+            _ => session_commands_commit_in_a_linked_worktree_and_stay_confined().await,
+        };
+        outcome.map_err(|error| format!("{name}: {error}"))?;
+    }
+
+    Ok(())
 }
 
 /// Runs a scripted session turn whose one command commits in a linked
@@ -150,7 +176,7 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
     let server = MockServer::start().await;
     respond(&server, r#""tool_call_id":"call-bash""#, answer("Done"), 1).await;
     respond(&server, "Commit notes", bash_call(&fixture.command()), 2).await;
-    let config = fixture.config(&server);
+    let config = fixture.config(&server, BTreeMap::new());
     let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
 
@@ -158,18 +184,13 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
     let result = channel
         .run_turn(
             SESSION_ID.to_string(),
-            turn_request(&fixture.worktree, "Commit notes"),
+            turn_request(&fixture.worktree, None, "Commit notes"),
             events_tx,
         )
         .await;
 
     // Assert
-    let mut notices = Vec::new();
-    while let Ok(event) = events_rx.try_recv() {
-        if let TurnEvent::Notice(notice) = event {
-            notices.push(notice);
-        }
-    }
+    let notices = drain_notices(&mut events_rx);
     assert!(
         !notices
             .iter()
@@ -210,6 +231,106 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
         "the sandboxed turn must report it: {notices:?}"
     );
     fixture.assert_effects()
+}
+
+/// Fills the project's trusted Cargo cache through a host `cargo` that
+/// stores a crates.io archive, then runs a session turn whose `CARGO_HOME`
+/// holds a verified copy of it, and whose commands can neither read, list,
+/// nor write the cache.
+async fn session_gets_verified_copies_and_cannot_reach_the_cache() -> TestResult {
+    // Arrange
+    let fixture = Fixture::new()?;
+    let (host, _temporary) = fixture.host_cargo()?;
+    let cache_root = fixture.agentty_root.path().join("cache/cargo");
+    let cache = TrustedCargoCache::for_project(&cache_root, fixture.repository.path());
+    let fetched = AtomicBool::new(false);
+    cache
+        .refresh("cargo", &fixture.worktree, &host, || {
+            fetched.store(true, Ordering::SeqCst);
+        })
+        .await?;
+    let archive = fixture.cached_archive()?;
+    let planted = archive
+        .ancestors()
+        .nth(4)
+        .ok_or("cache home")?
+        .join("planted");
+    let command = format!(
+        "cat \"$CARGO_HOME\"/registry/cache/index.crates.io-*/leaf-1.0.0.crate > /dev/null && \
+         echo copied; printf x >> '{archive}' && echo wrote-cache; touch '{}' && echo \
+         planted-cache; cat '{archive}' > /dev/null && echo read-cache; [ -z \"$(ls -A '{}' 2> \
+         /dev/null)\" ] && echo cache-hidden",
+        planted.display(),
+        cache_root.display(),
+        archive = archive.display(),
+    );
+    let server = MockServer::start().await;
+    respond(&server, r#""tool_call_id":"call-bash""#, answer("Done"), 1).await;
+    respond(&server, "Use the cache", bash_call(&command), 2).await;
+    let config = fixture
+        .config(&server, BTreeMap::new())
+        .with_trusted_cargo_cache(cache_root);
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+    let result = channel
+        .run_turn(
+            SESSION_ID.to_string(),
+            turn_request(
+                &fixture.worktree,
+                Some(fixture.repository.path()),
+                "Use the cache",
+            ),
+            events_tx,
+        )
+        .await;
+
+    // Assert
+    assert!(fetched.load(Ordering::SeqCst));
+    let notices = drain_notices(&mut events_rx);
+    assert!(
+        notices.contains(&TurnNotice::SandboxAvailable),
+        "the native sandbox must run here: {notices:?}"
+    );
+    assert_eq!(result?.assistant_message.answer, "Done");
+    let bash_result = bash_result(&server, "Use the cache").await?;
+    assert!(
+        // macOS denies listing the hidden cache; Linux shows it empty.
+        bash_result.contains(r#"\"stdout\":\"copied\\ncache-hidden\\n\""#),
+        "{bash_result}"
+    );
+    let copy = fixture.session_copy(&archive)?;
+    assert!(std::fs::symlink_metadata(&copy)?.is_file());
+    assert_eq!(std::fs::read(&copy)?, CACHED_ARCHIVE);
+    assert_eq!(std::fs::read(&archive)?, CACHED_ARCHIVE);
+    assert!(!planted.exists());
+
+    Ok(())
+}
+
+/// Returns the notices among the turn events `events` received so far.
+fn drain_notices(events: &mut mpsc::UnboundedReceiver<TurnEvent>) -> Vec<TurnNotice> {
+    let mut notices = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let TurnEvent::Notice(notice) = event {
+            notices.push(notice);
+        }
+    }
+
+    notices
+}
+
+/// Returns the request that carried the `bash` result of the turn started
+/// with `prompt` to `server`.
+async fn bash_result(server: &MockServer, prompt: &str) -> TestResult<String> {
+    let bodies = server.received_requests().await.unwrap_or_default();
+
+    bodies
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .find(|body| body.contains(r#""tool_call_id":"call-bash""#) && body.contains(prompt))
+        .ok_or_else(|| "bash result should reach the model".into())
 }
 
 /// A repository with a linked session worktree, a directory outside it, the
@@ -291,9 +412,10 @@ impl Fixture {
         )
     }
 
-    /// Returns a harness configuration whose provider is `server`.
-    fn config(&self, server: &MockServer) -> NativeHarnessConfig {
-        let environment = BTreeMap::from([
+    /// Returns a harness configuration whose provider is `server`, with the
+    /// `extra` host variables.
+    fn config(&self, server: &MockServer, extra: BTreeMap<String, String>) -> NativeHarnessConfig {
+        let mut environment = BTreeMap::from([
             (
                 "AGENTTY_ROOT".to_string(),
                 self.agentty_root.path().display().to_string(),
@@ -309,6 +431,7 @@ impl Fixture {
                 std::env::var("PATH").unwrap_or_default(),
             ),
         ]);
+        environment.extend(extra);
 
         NativeHarnessConfig::with_environment(self.data_root.path().to_path_buf(), move || {
             environment.clone()
@@ -343,10 +466,120 @@ impl Fixture {
         Ok(())
     }
 
+    /// Locks `leaf` from crates.io in the worktree and returns a host
+    /// environment whose `cargo` stores [`CACHED_ARCHIVE`] as that crate's
+    /// archive in a canonical crates.io registry, as a fetch would, and
+    /// whose `TMPDIR` is a private directory, kept until the guard drops.
+    fn host_cargo(&self) -> TestResult<(BTreeMap<String, String>, TempDir)> {
+        std::fs::write(
+            self.worktree.join("Cargo.lock"),
+            format!(
+                "version = 4\n\n[[package]]\nname = \"leaf\"\nversion = \"1.0.0\"\nsource = \
+                 \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n",
+                hex::encode(Sha256::digest(CACHED_ARCHIVE))
+            ),
+        )?;
+        let bin = self.outside.path().join("bin");
+        std::fs::create_dir_all(&bin)?;
+        let registry = "index.crates.io-0123456789abcdef";
+        std::fs::write(
+            bin.join("cargo"),
+            format!(
+                "#!/bin/sh\n[ \"$1\" = -V ] && {{ echo 'cargo 1.99.0'; exit 0; }}\nmkdir -p \
+                 \"$CARGO_HOME/registry/cache/{registry}\" \
+                 \"$CARGO_HOME/registry/index/{registry}/.cache/le/af\"\nprintf '%s' '{}' > \
+                 \"$CARGO_HOME/registry/cache/{registry}/leaf-1.0.0.crate\"\nprintf '%s' \
+                 '{{\"dl\":\"https://static.crates.io/crates\"}}' > \
+                 \"$CARGO_HOME/registry/index/{registry}/config.json\"\nprintf entry > \
+                 \"$CARGO_HOME/registry/index/{registry}/.cache/le/af/leaf\"\n",
+                String::from_utf8_lossy(CACHED_ARCHIVE),
+            ),
+        )?;
+        std::fs::set_permissions(bin.join("cargo"), std::fs::Permissions::from_mode(0o755))?;
+        let temporary = private_temporary_directory()?;
+        let environment = BTreeMap::from([
+            (
+                "PATH".to_string(),
+                format!("{}:/usr/bin:/bin", bin.display()),
+            ),
+            ("TMPDIR".to_string(), temporary.path().display().to_string()),
+        ]);
+
+        Ok((environment, temporary))
+    }
+
+    /// Returns where the session's `CARGO_HOME` holds its copy of the
+    /// cached `archive`.
+    fn session_copy(&self, archive: &Path) -> TestResult<PathBuf> {
+        let registry = archive
+            .parent()
+            .and_then(Path::file_name)
+            .ok_or("registry")?;
+
+        Ok(self
+            .data_root
+            .path()
+            .join(SESSION_ID)
+            .join("tmp/cargo/registry/cache")
+            .join(registry)
+            .join("leaf-1.0.0.crate"))
+    }
+
+    /// Returns the archive of `leaf` in the project's trusted Cargo cache.
+    fn cached_archive(&self) -> TestResult<PathBuf> {
+        let projects = self.agentty_root.path().join("cache/cargo");
+        let project = std::fs::read_dir(projects)?
+            .next()
+            .ok_or("one project cache")??
+            .path();
+        let registry = std::fs::read_dir(project.join("home/registry/cache"))?
+            .next()
+            .ok_or("one registry")??
+            .path();
+
+        Ok(registry.join("leaf-1.0.0.crate"))
+    }
+
     /// Returns the file the command must not create outside the worktree.
     fn escape(&self) -> PathBuf {
         self.outside.path().join("escape")
     }
+}
+
+/// Returns a fresh directory where the trusted Cargo fetch may run: under
+/// the first of the test process's `TMPDIR`, `XDG_RUNTIME_DIR`, CI runner
+/// temporary directory, and home directory whose every ancestor only root
+/// or the current user can change and has no Cargo configuration or
+/// toolchain file, since a shared `/tmp` does not qualify.
+fn private_temporary_directory() -> TestResult<TempDir> {
+    let user = rustix::process::geteuid().as_raw();
+    let is_private = |parent: &Path| {
+        std::fs::canonicalize(parent).is_ok_and(|parent| {
+            parent.ancestors().all(|ancestor| {
+                let owned = std::fs::metadata(ancestor).is_ok_and(|metadata| {
+                    (metadata.uid() == 0 || metadata.uid() == user) && metadata.mode() & 0o022 == 0
+                });
+                let configured = [
+                    ".cargo/config.toml",
+                    ".cargo/config",
+                    "rust-toolchain.toml",
+                    "rust-toolchain",
+                ]
+                .iter()
+                .any(|name| ancestor.join(name).exists());
+
+                owned && !configured
+            })
+        })
+    };
+    let parent = ["TMPDIR", "XDG_RUNTIME_DIR", "RUNNER_TEMP", "HOME"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .find(|parent| is_private(parent))
+        .ok_or("no private temporary directory")?;
+
+    Ok(tempfile::tempdir_in(parent)?)
 }
 
 /// Runs `git` in `directory` with a fixed identity.
@@ -363,15 +596,16 @@ fn git(directory: &Path, arguments: &[&str]) -> TestResult {
     Ok(())
 }
 
-/// Builds an edit-mode session turn for `folder`.
-fn turn_request(folder: &Path, prompt: &str) -> TurnRequest {
+/// Builds an edit-mode session turn for `folder`, a worktree of the
+/// project whose main checkout is `main_checkout`.
+fn turn_request(folder: &Path, main_checkout: Option<&Path>, prompt: &str) -> TurnRequest {
     TurnRequest {
         context_compaction: ContextCompaction::Off,
         provider_call_budget: None,
         continuation: TurnContinuation::fresh(),
         execution_policy: ExecutionPolicy::default(),
         folder: folder.to_path_buf(),
-        main_checkout_root: None,
+        main_checkout_root: main_checkout.map(Path::to_path_buf),
         model: MODEL.to_string(),
         permission_mode: PermissionMode::AutoEdit,
         agent_profile: AgentDefinitionPrompt::default(),

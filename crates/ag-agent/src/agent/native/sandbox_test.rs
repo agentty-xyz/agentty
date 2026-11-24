@@ -11,6 +11,7 @@ use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, Sand
 use serde_json::json;
 
 use super::{CommandSandbox, SESSION_SANDBOX, UTILITY_SANDBOX, notice};
+use crate::agent::native::cargo_cache::TrustedCargoCache;
 
 /// Returns a native policy without Agentty's grants.
 fn base_policy() -> BashConfig {
@@ -261,13 +262,20 @@ async fn prepare_replaces_planted_cargo_files_and_links() {
     let environment = BTreeMap::new();
 
     // Act
-    let planted =
-        CommandSandbox::prepare(&data_root, temporary.clone(), root.path(), &environment).await;
+    let planted = CommandSandbox::prepare(
+        &data_root,
+        temporary.clone(),
+        root.path(),
+        &environment,
+        None,
+    )
+    .await;
     let linked = CommandSandbox::prepare(
         &data_root,
         linked_temporary.clone(),
         root.path(),
         &environment,
+        None,
     )
     .await;
     let filed = CommandSandbox::prepare(
@@ -275,6 +283,7 @@ async fn prepare_replaces_planted_cargo_files_and_links() {
         filed_temporary.clone(),
         root.path(),
         &environment,
+        None,
     )
     .await;
 
@@ -352,7 +361,7 @@ async fn prepare_reports_an_unusable_temporary_directory() {
 
     // Act
     let failure =
-        CommandSandbox::prepare(root.path(), temporary, root.path(), &BTreeMap::new()).await;
+        CommandSandbox::prepare(root.path(), temporary, root.path(), &BTreeMap::new(), None).await;
 
     // Assert
     assert!(
@@ -387,17 +396,17 @@ async fn prepare_links_the_host_cargo_configuration() {
     let temporary = data_root.join("session-1/tmp");
 
     // Act
-    CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &custom)
+    CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &custom, None)
         .await
         .expect("linked sandbox");
     let link = temporary.join("cargo/config.toml");
     let linked_target = std::fs::read_link(&link).ok();
     let found =
-        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &home_above).await;
+        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &home_above, None).await;
     let after_found = std::fs::symlink_metadata(&link).is_ok();
     let missing =
-        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &empty_home).await;
-    let unset = CommandSandbox::prepare(&data_root, temporary, &workspace, &relative).await;
+        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &empty_home, None).await;
+    let unset = CommandSandbox::prepare(&data_root, temporary, &workspace, &relative, None).await;
 
     // Assert
     assert_eq!(linked_target, Some(custom_home.join("config")));
@@ -407,4 +416,32 @@ async fn prepare_links_the_host_cargo_configuration() {
         "a configuration Cargo finds itself is not linked"
     );
     assert!(std::fs::symlink_metadata(&link).is_err());
+}
+
+#[tokio::test]
+/// Hides every project's Cargo cache from commands, which receive copies,
+/// creating its root first so that the sandbox masks a real directory.
+async fn prepare_hides_the_cargo_cache() {
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+    let data_root = root.path().join("data");
+    let cache = TrustedCargoCache::for_project(&root.path().join("cache"), root.path());
+
+    // Act
+    let sandbox = CommandSandbox::prepare(
+        &data_root,
+        data_root.join("session-1/tmp"),
+        root.path(),
+        &BTreeMap::new(),
+        Some(cache.clone()),
+    )
+    .await
+    .expect("sandbox");
+
+    // Assert
+    assert!(sandbox.hidden.contains(&root.path().join("cache")));
+    assert!(
+        root.path().join("cache").is_dir(),
+        "the hidden cache root exists before any sandbox starts"
+    );
 }

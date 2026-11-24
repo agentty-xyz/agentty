@@ -36,6 +36,7 @@ use ag_session::{
 use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
 
+use super::cargo_cache::TrustedCargoCache;
 use super::sandbox::CommandSandbox;
 use crate::agent::model_profile;
 
@@ -152,6 +153,9 @@ type EnvironmentSource = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>
 /// cannot run, commands run without it and every turn reports why.
 #[derive(Clone)]
 pub struct NativeHarnessConfig {
+    /// Directory of the per-project Cargo caches session turns reuse, or
+    /// `None` when sessions download their own dependencies.
+    cargo_cache_root: Option<PathBuf>,
     data_root: PathBuf,
     environment: EnvironmentSource,
     /// Whether this process already removed the utility temporary
@@ -179,10 +183,22 @@ impl NativeHarnessConfig {
         environment: impl Fn() -> BTreeMap<String, String> + Send + Sync + 'static,
     ) -> Self {
         Self {
+            cargo_cache_root: None,
             data_root: std::path::absolute(&data_root).unwrap_or(data_root),
             environment: Arc::new(environment),
             swept_utility_directories: Arc::default(),
         }
+    }
+
+    /// Makes session turns reuse the per-project Cargo caches under
+    /// `cache_root`, which the host fills through
+    /// [`super::TrustedCargoCache::refresh`] with the same root. A relative
+    /// `cache_root` is resolved against the current directory.
+    #[must_use]
+    pub fn with_trusted_cargo_cache(mut self, cache_root: PathBuf) -> Self {
+        self.cargo_cache_root = Some(std::path::absolute(&cache_root).unwrap_or(cache_root));
+
+        self
     }
 
     /// Returns a fresh environment snapshot, before stored API keys replace
@@ -216,7 +232,9 @@ impl NativeHarnessConfig {
     /// `request`, which may commit to its session branch, with the session's
     /// own temporary directory, which keeps one path for the session's
     /// lifetime because the harness fingerprints it into the policy, and
-    /// goes with the session's harness directory.
+    /// goes with the session's harness directory. When the host keeps Cargo
+    /// caches and resolved the project's main checkout, its `CARGO_HOME`
+    /// receives copies from that project's cache.
     ///
     /// # Errors
     /// Returns an error for an invalid session id or when the directory
@@ -234,12 +252,17 @@ impl NativeHarnessConfig {
             .map_err(|error| {
                 format!("Failed to create the harness temporary directory: {error}")
             })?;
-
+        let cargo_cache = self
+            .cargo_cache_root
+            .as_deref()
+            .zip(request.main_checkout_root.as_deref())
+            .map(|(root, main_checkout)| TrustedCargoCache::for_project(root, main_checkout));
         let sandbox = CommandSandbox::prepare(
             &self.data_root,
             temporary_directory,
             &request.folder,
             environment,
+            cargo_cache,
         )
         .await?;
 
@@ -276,6 +299,7 @@ impl NativeHarnessConfig {
             directory.path().to_path_buf(),
             workspace,
             environment,
+            None,
         )
         .await?;
 

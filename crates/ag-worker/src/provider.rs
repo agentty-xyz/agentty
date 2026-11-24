@@ -44,6 +44,18 @@ impl RuntimeConfig {
         self
     }
 
+    /// Makes in-process [`AgentKind::Harness`] session turns of subsequently
+    /// constructed workers copy from the per-project Cargo caches under
+    /// `cache_root`, which the host fills with [`crate::TrustedCargoCache`]
+    /// under the same root. Call it after [`Self::with_native_harness`],
+    /// without which it has no effect.
+    #[must_use]
+    pub fn with_trusted_cargo_cache(mut self, cache_root: PathBuf) -> Self {
+        self.factory = self.factory.with_trusted_cargo_cache(cache_root);
+
+        self
+    }
+
     /// Replaces one harness's execution policy for subsequently constructed
     /// session and utility workers. Existing workers retain their snapshot.
     #[must_use]

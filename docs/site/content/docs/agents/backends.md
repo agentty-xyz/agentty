@@ -286,8 +286,30 @@ a key or sign-in is never chosen as the default.
   base does not resolve.
 - The temporary directory, `~/.agentty/harness/<session>/tmp/`, holds the Cargo
   (`CARGO_HOME`), npm, Go, pip, and `XDG_CACHE_HOME` caches of that session only, and is
-  removed with the session; host tools and other sessions never read it. Each new
-  session therefore downloads dependencies again.
+  removed with the session; host tools and other sessions never read it.
+- <a id="backends-harness-cargo-cache"></a> Rust projects keep a Cargo download cache in
+  `~/.agentty/cache/cargo/`, one per project. When a session's worktree has a
+  `Cargo.lock` naming crates.io packages the cache lacks, Agentty fetches them outside
+  the sandbox in the background, when the session starts and before each turn, and shows
+  a short note in the session. The fetch reads only the lockfile's crates.io entries,
+  never the worktree's manifest, so Git dependencies, path dependencies, and other
+  registries a session names are never fetched. It also reads none of your Cargo
+  configuration or credentials: it runs your default toolchain's `cargo` in a fresh
+  directory under `XDG_RUNTIME_DIR` or `TMPDIR`, used only when no other user can write
+  above it (a shared `/tmp` does not qualify, so without such a directory Agentty does
+  not cache), with its own empty Cargo home, passing on only `PATH`, `HOME`, the
+  `rustup` settings, and proxy and certificate variables, and it keeps only archives
+  from crates.io itself. If your network reaches crates.io only through a mirror, the
+  fetch fails quietly and sessions keep downloading per session. From the next turn,
+  Agentty copies the cached archives the session's lockfile names into its own
+  `CARGO_HOME`, each checked against the lockfile's checksum, so locked builds download
+  only what the cache misses. Sandboxed commands cannot read or write the cache, and
+  what one session changes in its own `CARGO_HOME` never reaches another. The cache
+  holds the crates.io archives your projects' lockfiles pinned, and Cargo removes those
+  no fetch used for three months; delete `~/.agentty/cache/cargo/` to reclaim the space
+  at any time. Projects that replace crates.io in their own `.cargo/config.toml`, Git
+  dependencies, and other tools' caches are still downloaded per session, and a failed
+  fetch only means the session downloads its dependencies itself.
 - Your Cargo configuration still applies: Cargo finds `~/.cargo/config.toml` above a
   worktree in the home directory, and otherwise Agentty links your `CARGO_HOME`'s
   configuration into the sandbox before each turn, replacing whatever configuration or

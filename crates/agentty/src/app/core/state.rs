@@ -59,6 +59,7 @@ use crate::domain::transient_message::{
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
 use crate::infra::browser::{BrowserClient, RealBrowserClient};
+use crate::infra::cargo_cache::{CargoCacheClient, RealCargoCacheClient};
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::remote_control::{RealRemoteControlLauncher, RemoteControlLauncher};
@@ -79,6 +80,13 @@ pub const AGENTTY_WT_DIR: &str = "wt";
 /// Relative directory name holding each Harness session's durable history
 /// within the `agentty` home directory.
 pub const AGENTTY_HARNESS_DIR: &str = "harness";
+
+/// Relative directory holding the per-project Cargo caches Harness sessions
+/// copy from within the `agentty` home directory.
+const CARGO_CACHE_DIRECTORY: &str = "cache/cargo";
+
+/// Cargo executable the cache fetch runs, found on the user's `PATH`.
+const CARGO_EXECUTABLE: &str = "cargo";
 
 /// Background auto-update progress state for the status bar.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -132,6 +140,9 @@ pub(crate) struct AppClients {
     pub(super) agent_cli_version_task_enabled: bool,
     /// Opens sign-in pages and clicked links in the user's browser.
     pub(super) browser_client: Arc<dyn BrowserClient>,
+    /// Refreshes the read-only Cargo cache Harness sessions reuse, when
+    /// this launch keeps one.
+    pub(super) cargo_cache_client: Option<Arc<dyn CargoCacheClient>>,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) is_tmux_session: bool,
@@ -161,6 +172,7 @@ impl AppClients {
             agent_availability_probe: Arc::new(RealAgentAvailabilityProbe),
             agent_cli_version_task_enabled: true,
             browser_client: Arc::new(RealBrowserClient::new()),
+            cargo_cache_client: None,
             runtime_config: RuntimeConfig::default(),
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
@@ -184,6 +196,24 @@ impl AppClients {
     #[must_use]
     pub(crate) fn with_harness_data_root(mut self, harness_data_root: PathBuf) -> Self {
         self.runtime_config = self.runtime_config.with_native_harness(harness_data_root);
+        self.session_run_factory =
+            Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));
+
+        self
+    }
+
+    /// Keeps the per-project Cargo caches Harness sessions copy from under
+    /// `agentty_home`: the same root names where the fetch outside the
+    /// sandbox stores packages and where session turns copy them from.
+    /// Call it after [`Self::with_harness_data_root`].
+    #[must_use]
+    pub(crate) fn with_trusted_cargo_cache(mut self, agentty_home: &Path) -> Self {
+        let cache_root = agentty_home.join(CARGO_CACHE_DIRECTORY);
+        self.cargo_cache_client = Some(Arc::new(RealCargoCacheClient::new(
+            cache_root.clone(),
+            CARGO_EXECUTABLE,
+        )));
+        self.runtime_config = self.runtime_config.with_trusted_cargo_cache(cache_root);
         self.session_run_factory =
             Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));
 

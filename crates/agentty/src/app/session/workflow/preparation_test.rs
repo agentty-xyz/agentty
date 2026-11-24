@@ -1,11 +1,50 @@
 //! Workspace preparation retry tests covering checkout removal on
 //! cancellation and preservation on backend failure.
 
+use std::sync::Arc;
+
 use ag_worker::test_support::{self as agent, AgentBackend};
+use tokio::sync::mpsc;
 
 use super::super::{session_branch, session_folder};
 use crate::app::SessionManager;
+use crate::infra::cargo_cache::MockCargoCacheClient;
 use crate::infra::db::SessionPreparationState;
+
+#[tokio::test]
+/// Starts refreshing the project's trusted Cargo cache once a Harness
+/// session's workspace is ready, for its main checkout and worktree.
+async fn ready_harness_workspace_warms_the_project_cargo_cache() {
+    // Arrange
+    let harness_root = tempfile::tempdir().expect("harness root");
+    let (checked_tx, mut checked_rx) = mpsc::unbounded_channel();
+    let mut cargo_cache = MockCargoCacheClient::new();
+    cargo_cache
+        .expect_refresh()
+        .returning(move |main_checkout, worktree, _| {
+            let _ = checked_tx.send((main_checkout, worktree));
+
+            Ok(())
+        });
+    let clients = crate::test_support::harness_only_test_app_clients(harness_root.path().into())
+        .with_cargo_cache_client(Arc::new(cargo_cache));
+    let (mut app, directory) = crate::test_support::new_git_test_app_with_clients(clients).await;
+
+    // Act
+    let session_id = app.create_session().await.expect("session");
+    let (main_checkout, worktree) = checked_rx.recv().await.expect("cache check");
+
+    // Assert
+    assert!(app.services.cargo_cache().is_enabled());
+    assert_eq!(
+        main_checkout,
+        std::fs::canonicalize(directory.path()).expect("main checkout")
+    );
+    assert_eq!(
+        worktree,
+        session_folder(app.services.base_path(), &session_id)
+    );
+}
 
 #[tokio::test]
 async fn retry_canceled_before_worker_start_removes_its_existing_checkout() {

@@ -7,6 +7,7 @@ mod api_key;
 mod assist;
 pub(crate) mod at_mention_task;
 mod branch_publish;
+pub(crate) mod cargo_cache;
 mod chatgpt_sign_in;
 mod command_gateway;
 mod core;

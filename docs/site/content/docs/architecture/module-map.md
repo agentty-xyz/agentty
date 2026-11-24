@@ -45,6 +45,10 @@ contracts. `ag-worker` also re-exports `dispatch_sandbox_helper`, which a host e
 harness sessions calls first in `main` so its executable serves as the native sandbox
 helper; see the
 [Execution Boundary](@/docs/core-components/execution-components/execution-boundary.md).
+It also re-exports `ag-agent`'s `TrustedCargoCache`: Agentty's `infra/` refreshes a
+project's Cargo cache through it outside the sandbox, `app/` decides when, and, under
+the cache root the host passes to `RuntimeConfig::with_trusted_cargo_cache`, `ag-agent`
+copies from it into each sandboxed session's `CARGO_HOME`.
 
 ## Application Layers (`crates/agentty/src/`)
 

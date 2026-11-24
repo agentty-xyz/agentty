@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -368,6 +368,146 @@ async fn test_harness_session_notes_a_temporary_provider_failure() -> E2eResult 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Harness turn failed", &full);
                     assertion::assert_text_in_region(frame, "(overloaded);", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Returns a fresh directory where Agentty's Cargo cache fetch may run:
+/// under the first of the test process's `TMPDIR`, `XDG_RUNTIME_DIR`,
+/// `/run`, and `/root` whose every ancestor only root or the current user
+/// can change and has no Cargo configuration or toolchain file, since a
+/// shared `/tmp` does not qualify. CI runs this suite as root.
+fn private_temporary_directory() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
+    let user = rustix::process::geteuid().as_raw();
+    let is_private = |parent: &std::path::Path| {
+        std::fs::canonicalize(parent).is_ok_and(|parent| {
+            parent.ancestors().all(|ancestor| {
+                let owned = std::fs::metadata(ancestor).is_ok_and(|metadata| {
+                    (metadata.uid() == 0 || metadata.uid() == user) && metadata.mode() & 0o022 == 0
+                });
+                let configured = [
+                    ".cargo/config.toml",
+                    ".cargo/config",
+                    "rust-toolchain.toml",
+                    "rust-toolchain",
+                ]
+                .iter()
+                .any(|name| ancestor.join(name).exists());
+
+                owned && !configured
+            })
+        })
+    };
+    let parent = ["TMPDIR", "XDG_RUNTIME_DIR"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .chain(["/run", "/root"].map(PathBuf::from))
+        .find(|parent| is_private(parent) && tempfile::tempdir_in(parent).is_ok())
+        .ok_or("no private temporary directory")?;
+
+    Ok(tempfile::tempdir_in(parent)?)
+}
+
+/// Lockfile the Cargo cache scenario commits: one crates.io package.
+const CARGO_LOCKFILE: &str = "version = 4\n\n[[package]]\nname = \"leaf\"\nversion = \
+                              \"1.0.0\"\nsource = \
+                              \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum \
+                              = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n";
+
+#[tokio::test]
+async fn test_harness_session_notes_when_caching_cargo_dependencies_fails() -> E2eResult {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(answer("Checked the build."))
+        .mount(&server)
+        .await;
+    let temporary = private_temporary_directory()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_cargo_cache_failure")
+        .with_git()
+        .env("TMPDIR", temporary.path().display().to_string())
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server.uri())
+        .setup(|env| {
+            Box::pin(async move {
+                // A Cargo that reports its version but fails every fetch.
+                let cargo = env.stub_bin.join("cargo");
+                std::fs::write(
+                    &cargo,
+                    "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'cargo 1.99.0'; exit 0; fi\nexit \
+                     101\n",
+                )?;
+                std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))?;
+                std::fs::write(env.workdir.join("Cargo.lock"), CARGO_LOCKFILE)?;
+                for arguments in [
+                    ["add", "Cargo.lock"].as_slice(),
+                    ["commit", "-qm", "Lock dependencies"].as_slice(),
+                ] {
+                    let status = std::process::Command::new("git")
+                        .args(arguments)
+                        .current_dir(&env.workdir)
+                        .status()?;
+                    if !status.success() {
+                        return Err(format!("git {arguments:?} failed").into());
+                    }
+                }
+
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
+                    .write_text("Check the build")
+                    .wait_for_text("Check the build", 3000)
+                    .press_key("Enter")
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(
+                                frame,
+                                "Caching Cargo dependencies failed",
+                                &full,
+                            )
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_cargo_cache_failure",
+                        "Harness session noted that caching Cargo dependencies failed",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Caching Cargo dependencies failed",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Caching Cargo dependencies in the background",
+                        &full,
+                    );
                 })
             },
         )

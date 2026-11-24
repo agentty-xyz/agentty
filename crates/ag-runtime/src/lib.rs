@@ -6,7 +6,7 @@
 mod provider;
 mod runtime;
 
-pub use ag_agent::dispatch_sandbox_helper;
+pub use ag_agent::{TrustedCargoCache, dispatch_sandbox_helper};
 pub use provider::{
     RealAgentAvailabilityProbe, cleanup_session_worktree_artifacts, setup_backend,
     supports_turn_steering, uses_persistent_session,

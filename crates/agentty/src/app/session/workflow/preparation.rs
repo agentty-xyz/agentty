@@ -3,9 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use super::{SessionTaskService, isolation, session_branch, session_folder};
+use crate::app::cargo_cache::Announcement;
 use crate::app::session::SessionError;
-use crate::app::{AppEvent, AppServices, SessionManager};
-use crate::domain::agent::parse_persisted_session_agent_model;
+use crate::app::{AppEvent, AppServices, SessionManager, spawn};
+use crate::domain::agent::{AgentKind, parse_persisted_session_agent_model};
 use crate::domain::session::Status;
 use crate::infra::db::{SessionPreparationRow, SessionPreparationState, SessionRow};
 
@@ -63,8 +64,48 @@ impl SessionManager {
                 "Workspace setup was canceled".to_string(),
             ));
         }
+        if result.is_ok() {
+            Self::warm_cargo_cache(services, session_id, selection.kind());
+        }
 
         result
+    }
+
+    /// Starts refreshing the Cargo cache of a new Harness session's project
+    /// silently in the background, as a head start for its first turn,
+    /// whose own refresh waits for this one and tells the user what is
+    /// still missing; other agents and disabled caches skip the work.
+    fn warm_cargo_cache(services: &AppServices, session_id: &str, agent_kind: AgentKind) {
+        let cargo_cache = services.cargo_cache();
+        if agent_kind != AgentKind::Harness || !cargo_cache.is_enabled() {
+            return;
+        }
+        let app_event_tx = services.event_sender();
+        let fs_client = services.fs_client();
+        let git_client = services.git_client();
+        let folder = session_folder(services.base_path(), session_id);
+        let session_id = session_id.to_string();
+        spawn::spawn_traced(async move {
+            let env = isolation::validate_session_worktree(
+                fs_client.as_ref(),
+                git_client.as_ref(),
+                &folder,
+                &session_id,
+            )
+            .await
+            .ok();
+            // A worktree that fails validation gets no refresh; its turns
+            // report the failure themselves.
+            let _refresh = env.and_then(|env| {
+                cargo_cache.warm(
+                    &app_event_tx,
+                    &session_id,
+                    agent_kind,
+                    &env,
+                    Announcement::Silent,
+                )
+            });
+        });
     }
 
     /// Reclaims a canceled attempt, including a retry canceled before its

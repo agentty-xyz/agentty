@@ -172,7 +172,9 @@ fn workspace_services_preserve_provider_capabilities_and_cleanup() {
 async fn native_harness_configuration_runs_harness_work_in_process() {
     // Arrange
     let data_root = tempfile::tempdir().expect("data root");
-    let config = RuntimeConfig::default().with_native_harness(data_root.path().to_path_buf());
+    let config = RuntimeConfig::default()
+        .with_native_harness(data_root.path().to_path_buf())
+        .with_trusted_cargo_cache(data_root.path().join("cache"));
     let (events, _events_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn = TurnRequest {
         context_compaction: ag_contracts::ContextCompaction::Off,

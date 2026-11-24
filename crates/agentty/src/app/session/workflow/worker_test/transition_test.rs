@@ -35,6 +35,7 @@ use super::support::{
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
+use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::{GRAPH_ACTIVITY_OPERATION_KIND, GraphActivityRegistry};
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
@@ -83,6 +84,7 @@ async fn test_should_skip_worker_command_without_cancel_request() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -159,6 +161,7 @@ async fn test_should_skip_worker_command_when_cancel_is_requested() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -249,6 +252,7 @@ async fn test_should_skip_worker_command_allows_new_operation_after_cancel() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -356,6 +360,7 @@ async fn test_apply_turn_result_reports_background_push_failures() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),
@@ -515,6 +520,7 @@ async fn test_run_channel_turn_finalizes_workspace_setup_failure() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -608,6 +614,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::clone(&cancel_token),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -743,6 +750,7 @@ async fn test_run_channel_turn_proceeds_after_previous_cancellation() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(stale_token)),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -845,6 +853,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -936,6 +945,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -1033,6 +1043,7 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -1107,6 +1118,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
         harness_models: HarnessModels::default(),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        cargo_cache: CargoCacheWarmer::default(),
         session_run: SessionRunClient::from_channel(
             "sess-preturn".to_string().clone(),
             Arc::new(mock_channel),
@@ -1227,6 +1239,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
             harness_models: HarnessModels::default(),
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            cargo_cache: CargoCacheWarmer::default(),
             session_run: SessionRunClient::from_channel(
                 "sess-timeout".to_string().clone(),
                 Arc::new(mock_channel),

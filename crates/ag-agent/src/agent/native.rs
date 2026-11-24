@@ -2,6 +2,8 @@
 
 mod activity;
 mod api_key;
+mod cargo_cache;
+mod cargo_lockfile;
 mod config;
 mod output;
 mod sandbox;
@@ -11,6 +13,7 @@ mod turn_error;
 
 pub(crate) use activity::ActivityBridge;
 pub(crate) use api_key::{save_api_key, with_stored_api_keys};
+pub use cargo_cache::TrustedCargoCache;
 pub use config::NativeHarnessConfig;
 pub(crate) use config::{
     HarnessContext, ModelSelection, RunOptions, failure, harness_models, output_schema,
