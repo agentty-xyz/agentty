@@ -128,7 +128,7 @@ async fn relay_forwards_every_event_and_refreshes_after_a_finished_edit() {
     let refreshed_on_finish = refresher.finish().await;
 
     // Assert
-    assert!(!refreshed_on_finish);
+    assert!(refreshed_on_finish, "the live refresh ran");
     assert!(matches!(
         forward_rx.recv().await,
         Some(TurnEvent::ThoughtDelta(_))
@@ -161,7 +161,7 @@ async fn signals_within_the_interval_coalesce_into_one_trailing_refresh() {
     assert_eq!(first, started);
     assert_eq!(trailing - first, LIVE_REFRESH_INTERVAL);
     assert!(extra.is_err(), "coalesced signals refreshed again");
-    assert!(!refreshed_on_finish);
+    assert!(refreshed_on_finish, "live refreshes ran");
     assert!(refreshed_rx.recv().await.is_none());
 }
 

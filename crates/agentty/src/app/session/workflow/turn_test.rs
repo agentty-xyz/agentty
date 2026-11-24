@@ -508,7 +508,7 @@ async fn only_edit_capable_turns_refresh_diff_stats_after_a_finished_edit() {
         drop(event_tx);
 
         // Act
-        relay_turn_events(&context, permission_mode, relayed_rx, relay_tx).await;
+        let refreshed = relay_turn_events(&context, permission_mode, relayed_rx, relay_tx).await;
         let sessions = context
             .db
             .sessions()
@@ -522,6 +522,7 @@ async fn only_edit_capable_turns_refresh_diff_stats_after_a_finished_edit() {
         let projected = std::iter::from_fn(|| app_event_rx.try_recv().ok())
             .any(|event| matches!(event, AppEvent::SessionDiffStatsUpdated { .. }));
         assert_eq!(projected, expected_added_lines > 0);
+        assert_eq!(refreshed, expected_added_lines > 0);
     }
 }
 

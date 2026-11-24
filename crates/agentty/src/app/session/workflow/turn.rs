@@ -793,7 +793,8 @@ pub(super) fn base_branch_scope(context: &SessionWorkerContext) -> BaseBranchSco
 /// stats, and a refresh still pending when the events end runs before this
 /// returns, so post-turn effects start from current totals.
 ///
-/// Returns whether that final refresh ran.
+/// Returns whether any refresh ran, which means the persisted totals already
+/// include every edit the turn reported.
 pub(super) async fn relay_turn_events(
     context: &SessionWorkerContext,
     permission_mode: PermissionMode,

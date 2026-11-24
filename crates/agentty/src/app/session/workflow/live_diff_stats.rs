@@ -72,7 +72,9 @@ impl LiveDiffStats {
     /// the refresh still pending for edits that finished during the throttle
     /// interval, so post-turn effects start from the turn's final totals.
     ///
-    /// Returns whether that pending refresh ran.
+    /// Returns whether any refresh ran during the turn. Every signal is
+    /// followed by a refresh that starts after it, so `true` means the
+    /// persisted totals already include every reported edit.
     pub(super) async fn finish(self) -> bool {
         let Self { stop, task, .. } = self;
         drop(stop);
@@ -123,7 +125,8 @@ impl LiveDiffStats {
     }
 
     /// Refreshes once per coalesced signal until `stop` is cancelled, then
-    /// once more if a signal is still pending, returning whether it did.
+    /// once more if a signal is still pending, returning whether any refresh
+    /// ran.
     ///
     /// After each refresh it waits [`LIVE_REFRESH_INTERVAL`] or the refresh's
     /// own duration, whichever is longer, so slow worktrees spend at most
@@ -138,6 +141,7 @@ impl LiveDiffStats {
         Refresh: Fn() -> Work,
         Work: Future<Output = ()>,
     {
+        let mut refreshed = false;
         loop {
             tokio::select! {
                 biased;
@@ -146,6 +150,7 @@ impl LiveDiffStats {
             }
             let started = clock.now_instant();
             refresh().await;
+            refreshed = true;
             let pause = clock
                 .now_instant()
                 .saturating_duration_since(started)
@@ -167,7 +172,7 @@ impl LiveDiffStats {
             refresh().await;
         }
 
-        pending
+        refreshed || pending
     }
 }
 
