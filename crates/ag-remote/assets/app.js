@@ -1643,7 +1643,7 @@ elements["pair-link"].addEventListener("input", () => {
     // Not an address yet.
   }
   if (!link) {
-    elements["pair-error"].textContent = text ? "Paste the whole pairing link from the Remote tab." : "";
+    elements["pair-error"].textContent = text ? "Paste the whole pairing link that Agentty shows." : "";
 
     return;
   }

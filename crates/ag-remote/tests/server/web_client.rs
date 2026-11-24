@@ -1093,7 +1093,7 @@ fn assert_another_pairing_beside_the_sessions(other_relay: &Value, left: &Value)
             "error": "This pairing link is for another relay. Open it from the address it names.",
             "fieldsHidden": true,
             "linkHidden": false,
-            "notLink": "Paste the whole pairing link from the Remote tab.",
+            "notLink": "Paste the whole pairing link that Agentty shows.",
             "submitHidden": true,
         })
     );
@@ -1219,7 +1219,7 @@ async fn web_client_served_by_another_web_application_reaches_agenttys_through_t
             "directory": [[
                 "server",
                 "Never connected",
-                "To pair, use the pairing link from its Remote tab.",
+                "To pair, start remote control in its Platform tab and open the pairing link.",
             ]],
             "headings": ["agentty"],
             "rows": ["A/session-1", "A/session-2"],
