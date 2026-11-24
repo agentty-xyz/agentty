@@ -7,8 +7,8 @@ use std::sync::Arc;
 use ag_session::SessionOperation;
 
 use crate::protocol::{
-    RemoteGraphAction, RemoteGraphActionRequest, RemoteRequest, RemoteResponse, RemoteResult,
-    RemoteSessionMode, RequestedSessionId,
+    RemoteGraphAction, RemoteGraphActionRequest, RemoteImage, RemoteRequest, RemoteResponse,
+    RemoteResult, RemoteSessionMode, RequestedSessionId,
 };
 use crate::request::{CAPABILITIES, RequestOrder, RequestPolicy, execute};
 use crate::test_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
@@ -49,7 +49,7 @@ struct Case {
 macro_rules! cases {
     ($($pattern:pat => $case:expr,)+) => {
         /// Returns one case per request variant.
-        fn cases() -> Vec<Case> {
+        fn variant_cases() -> Vec<Case> {
             vec![$({
                 let case: Case = $case;
                 assert!(
@@ -195,6 +195,7 @@ cases! {
         operation: None,
         order: Order::Queued,
         sample: RemoteRequest::SendMessage {
+            images: Vec::new(),
             message: "hi".to_string(),
             session_id: UNLISTED.into(),
         },
@@ -246,6 +247,27 @@ cases! {
 /// The answer to a request for a session the host does not list.
 fn not_found() -> RemoteResult {
     RemoteResult::Error("Session not found".to_string())
+}
+
+/// Returns one case per request variant, and one per payload that changes
+/// a variant's policy: a message with images needs the `images`
+/// capability.
+fn cases() -> Vec<Case> {
+    let mut cases = variant_cases();
+    cases.push(Case {
+        operation: Some(SessionOperation::MessageImages),
+        order: Order::Queued,
+        sample: RemoteRequest::SendMessage {
+            images: vec![RemoteImage {
+                data: "not base64".to_string(),
+            }],
+            message: "hi".to_string(),
+            session_id: UNLISTED.into(),
+        },
+        unlisted: Some(not_found()),
+    });
+
+    cases
 }
 
 /// Every operation a capability offers, plus the project status that

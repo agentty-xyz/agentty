@@ -12,8 +12,14 @@ use crate::model::{ReviewRequest, Session, SessionId};
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
-    QuestionAnswer, SessionBackend, SessionOperation, SessionService, SessionSettingsChange,
+    MessageImage, MessageImageFormat, QuestionAnswer, SessionBackend, SessionOperation,
+    SessionService, SessionSettingsChange,
 };
+
+/// Smallest prefix recognized as a PNG file.
+const PNG_PREFIX: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0];
+/// Smallest prefix recognized as a JPEG file.
+const JPEG_PREFIX: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
 use crate::{
     GenerateGraphProposalRequest, ReasoningLevel, SessionGraphAction, SessionGraphActionRequest,
     SessionGraphs, SessionGraphsRequest,
@@ -227,6 +233,96 @@ fn existing_hosts_serve_no_optional_operations() {
     assert!(!supports_stop);
 }
 
+#[test]
+fn message_images_are_recognized_by_their_signature() {
+    // Arrange
+    let png = PNG_PREFIX.to_vec();
+    let jpeg = JPEG_PREFIX.to_vec();
+
+    // Act
+    let png_image = MessageImage::new(png.clone()).expect("PNG image");
+    let jpeg_image = MessageImage::new(jpeg.clone()).expect("JPEG image");
+
+    // Assert
+    assert_eq!(png_image.format(), MessageImageFormat::Png);
+    assert_eq!(png_image.format().extension(), "png");
+    assert_eq!(png_image.data(), png.as_slice());
+    assert_eq!(jpeg_image.format(), MessageImageFormat::Jpeg);
+    assert_eq!(jpeg_image.format().extension(), "jpg");
+    assert_eq!(jpeg_image.into_data(), jpeg);
+}
+
+#[test]
+fn message_images_refuse_other_files() {
+    // Arrange
+    let gif = b"GIF89a".to_vec();
+
+    // Act
+    let refused = MessageImage::new(gif);
+
+    // Assert
+    assert_eq!(
+        refused,
+        Err(SessionError::Operation(
+            "Only PNG and JPEG images can be attached".to_string()
+        ))
+    );
+}
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_message_images() {
+    // Arrange
+    let backend = Arc::new(FakeBackend::default());
+    let service = SessionService::new(backend.clone());
+    let image = MessageImage::new(PNG_PREFIX.to_vec()).expect("PNG image");
+
+    // Act
+    let supported = service.supports(SessionOperation::MessageImages);
+    let sent = service
+        .send_message_with_images(&SessionId::from("session-1"), "Look", vec![image])
+        .await;
+
+    // Assert
+    assert!(!supported);
+    assert_eq!(
+        sent,
+        Err(SessionError::Operation(
+            "Host does not support images in messages".to_string()
+        ))
+    );
+    assert_eq!(backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn service_delegates_message_images_to_supporting_hosts() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+    let image = MessageImage::new(PNG_PREFIX.to_vec()).expect("PNG image");
+
+    // Act
+    let supported = service.supports(SessionOperation::MessageImages);
+    let sent = service
+        .send_message_with_images(&SessionId::from("session-1"), "Look", vec![image.clone()])
+        .await;
+
+    // Assert
+    assert!(supported);
+    assert_eq!(sent, Ok(()));
+    assert_eq!(
+        backend
+            .image_messages
+            .lock()
+            .expect("image messages")
+            .as_slice(),
+        [(
+            SessionId::from("session-1"),
+            "Look".to_string(),
+            vec![image]
+        )]
+    );
+}
+
 #[tokio::test]
 async fn existing_hosts_report_unsupported_turn_stop() {
     // Arrange
@@ -371,6 +467,8 @@ struct OptionalBackend {
     graph_actions: Mutex<Vec<SessionGraphActionRequest>>,
     /// Graph reads asked for, in order.
     graph_reads: Mutex<Vec<SessionGraphsRequest>>,
+    /// Messages sent with images, in order.
+    image_messages: Mutex<Vec<(SessionId, String, Vec<MessageImage>)>>,
     inner: FakeBackend,
     /// Whether a project sync was asked for and still runs.
     is_project_syncing: Mutex<bool>,
@@ -392,7 +490,23 @@ impl SessionBackend for OptionalBackend {
                 | SessionOperation::Graphs
                 | SessionOperation::GraphActions
                 | SessionOperation::GenerateGraphProposal
+                | SessionOperation::MessageImages
         )
+    }
+
+    async fn send_message_with_images(
+        &self,
+        session_id: &SessionId,
+        message: String,
+        images: Vec<MessageImage>,
+    ) -> Result<(), SessionError> {
+        self.image_messages.lock().expect("image messages").push((
+            session_id.clone(),
+            message,
+            images,
+        ));
+
+        Ok(())
     }
 
     async fn generate_graph_proposal(

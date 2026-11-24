@@ -22,7 +22,10 @@ pub struct RelayLimits {
     pub admission_timeout: Duration,
     /// Time an instance has to finish its registration handshake.
     pub handshake_timeout: Duration,
-    /// Bytes one stream may carry per minute, both directions combined.
+    /// Bytes one stream may carry per minute, both directions combined. A
+    /// stream that goes over it is closed, so the default leaves room for
+    /// several full-size remote-control messages, such as ones carrying
+    /// images, in one minute.
     pub max_bytes_per_minute: usize,
     /// Registrations that may be in progress at once, from the first
     /// handshake message until the admission decision.
@@ -53,7 +56,7 @@ impl Default for RelayLimits {
             accept_timeout: Duration::from_secs(10),
             admission_timeout: Duration::from_secs(5),
             handshake_timeout: Duration::from_secs(10),
-            max_bytes_per_minute: 16 * 1024 * 1024,
+            max_bytes_per_minute: 64 * 1024 * 1024,
             max_handshakes: 64,
             max_handshakes_per_address: 4,
             max_instances: 10_000,

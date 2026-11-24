@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
@@ -9,10 +10,10 @@ use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostContext, HostProjectStatus, HostProjectSync,
-    HostProjectSyncPhase, HostSessionMode, QuestionAnswer, ReviewRequest, ReviewRequestState,
-    SessionBackend, SessionError as ApiSessionError, SessionFileEntry, SessionId, SessionMessage,
-    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
-    SessionStatus, parse_persisted_session_agent_model,
+    HostProjectSyncPhase, HostSessionMode, MessageImage, QuestionAnswer, ReviewRequest,
+    ReviewRequestState, SessionBackend, SessionError as ApiSessionError, SessionFileEntry,
+    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
+    SessionSettings, SessionSettingsChange, SessionStatus, parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 use tokio::sync::oneshot;
@@ -24,7 +25,7 @@ use crate::app::message_admission::MessagePlan;
 use crate::app::prompt_intent::PromptModelChange;
 use crate::app::review::ReviewCacheEntry;
 use crate::app::session::{
-    SessionCreationSettings, SessionGitStatus, migrate_session_off_retired_model,
+    SessionCreationSettings, SessionGitStatus, SessionManager, migrate_session_off_retired_model,
 };
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::task::TaskService;
@@ -33,10 +34,12 @@ use crate::app::{
     SessionError, SessionQuery, SessionRuntimeCommand, SessionRuntimeHandle, review, spawn,
 };
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, HarnessModelStatus};
+use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::question::question_answer_message;
 use crate::domain::session::Session;
-use crate::domain::turn_prompt::TurnPrompt;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
+use crate::infra::clipboard_image::persist_message_image;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 /// Rejection of answers to a session that asks no questions now.
@@ -67,6 +70,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::Graphs
                 | SessionOperation::GraphActions
                 | SessionOperation::GenerateGraphProposal
+                | SessionOperation::MessageImages
         )
     }
 
@@ -272,6 +276,15 @@ impl SessionBackend for SessionRuntimeHandle {
         message: String,
     ) -> Result<(), ApiSessionError> {
         SessionRuntimeHandle::send_message(self, session_id, message).await
+    }
+
+    async fn send_message_with_images(
+        &self,
+        session_id: &SessionId,
+        message: String,
+        images: Vec<MessageImage>,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::send_message_with_images(self, session_id, message, images).await
     }
 
     async fn submit_durable_message(
@@ -1092,15 +1105,20 @@ impl App {
 
     /// Sends one validated API message through the existing session workflow.
     ///
-    /// Graph work waiting for the session's chat receives the message first,
-    /// as it does for terminal messages. Accepting a graph reply acknowledges
-    /// that it was recorded, not that its decision finished.
+    /// `images` are stored in the session's prompt-image directory, as pasted
+    /// images are, and attached as `[Image #n]` in their order; they are
+    /// removed again when the session does not take the message, unless a
+    /// staged draft whose start failed still refers to them. Graph work
+    /// waiting for the session's chat receives the message first, as it does
+    /// for terminal messages. Accepting a graph reply acknowledges that it
+    /// was recorded, not that its decision finished.
     pub(super) async fn send_api_message(
         &mut self,
         session_id: &SessionId,
         message: String,
+        images: Vec<MessageImage>,
     ) -> Result<(), ApiSessionError> {
-        if message.trim().is_empty() {
+        if message.trim().is_empty() && images.is_empty() {
             return Err(ApiSessionError::Operation(
                 "Cannot send an empty session message".to_string(),
             ));
@@ -1112,7 +1130,84 @@ impl App {
             .ok_or(ApiSessionError::NotFound)?;
         let status = session.status;
         let plan = MessagePlan::for_api(status, session.is_draft_session());
-        let prompt = TurnPrompt::from_text(message);
+        let prompt = TurnPrompt {
+            attachments: self.persist_api_message_images(session_id, images).await?,
+            ..TurnPrompt::from_text(message)
+        };
+        let mut image_paths: Vec<PathBuf> = prompt.local_image_paths().cloned().collect();
+        let result = self
+            .deliver_api_prompt(session_id, prompt, status, plan)
+            .await;
+        if result.is_err() {
+            // A staged draft keeps its images when its start fails, so the
+            // retried start still finds them.
+            let draft_attachments = self
+                .sessions
+                .session_for_id(session_id)
+                .map_or_default(|session| session.draft_attachments.as_slice());
+            image_paths.retain(|path| {
+                !draft_attachments
+                    .iter()
+                    .any(|attachment| &attachment.local_image_path == path)
+            });
+            SessionManager::cleanup_prompt_attachment_paths(self.services.fs_client(), image_paths)
+                .await;
+        }
+
+        result
+    }
+
+    /// Stores the images of one API message in the session's prompt-image
+    /// directory and returns them as attachments numbered from 1, removing
+    /// the ones already stored when one fails.
+    async fn persist_api_message_images(
+        &self,
+        session_id: &SessionId,
+        images: Vec<MessageImage>,
+    ) -> Result<Vec<TurnPromptAttachment>, ApiSessionError> {
+        let fs_client = self.services.fs_client();
+        let clock = self.services.clock();
+        let mut attachments = Vec::with_capacity(images.len());
+        for (index, image) in images.into_iter().enumerate() {
+            let attachment_number = index + 1;
+            match persist_message_image(
+                fs_client.as_ref(),
+                clock.as_ref(),
+                session_id.as_str(),
+                attachment_number,
+                image,
+            )
+            .await
+            {
+                Ok(local_image_path) => attachments.push(TurnPromptAttachment {
+                    local_image_path,
+                    placeholder: PromptAttachment::placeholder_for(attachment_number),
+                }),
+                Err(error) => {
+                    let stored = attachments
+                        .into_iter()
+                        .map(|attachment| attachment.local_image_path)
+                        .collect();
+                    SessionManager::cleanup_prompt_attachment_paths(fs_client, stored).await;
+
+                    return Err(ApiSessionError::Operation(format!(
+                        "Cannot store the message's images: {error}"
+                    )));
+                }
+            }
+        }
+
+        Ok(attachments)
+    }
+
+    /// Delivers one API prompt as a graph reply or through `plan`.
+    async fn deliver_api_prompt(
+        &mut self,
+        session_id: &SessionId,
+        prompt: TurnPrompt,
+        status: SessionStatus,
+        plan: MessagePlan,
+    ) -> Result<(), ApiSessionError> {
         // Like the terminal, a staged draft prompt is never a graph reply.
         // Boxed because accepting a reply can admit nested gateway commands.
         if plan != MessagePlan::StageAndStart

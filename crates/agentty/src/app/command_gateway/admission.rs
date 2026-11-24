@@ -251,9 +251,10 @@ impl App {
                 .await
                 .map_err(api_error_from_app),
             SessionMutation::SendMessage {
+                images,
                 message,
                 session_id,
-            } => self.send_api_message(&session_id, message).await,
+            } => self.send_api_message(&session_id, message, images).await,
             SessionMutation::SubmitDurableMessage {
                 request,
                 session_id,

@@ -15,8 +15,8 @@ use std::task::Poll;
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
-    HostProjectStatus, ReviewRequest, Session, SessionDiffFile, SessionError, SessionFileEntry,
-    SessionId, SessionListEntry, SessionSummary,
+    HostProjectStatus, MessageImage, ReviewRequest, Session, SessionDiffFile, SessionError,
+    SessionFileEntry, SessionId, SessionListEntry, SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -577,6 +577,24 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request_admission(SessionMutation::SendMessage {
+            images: Vec::new(),
+            message,
+            session_id,
+        })
+        .await
+    }
+
+    /// Sends one message with images through the runtime actor.
+    pub(crate) async fn send_message_with_images(
+        &self,
+        session_id: &SessionId,
+        message: String,
+        images: Vec<MessageImage>,
+    ) -> Result<(), SessionError> {
+        let session_id = session_id.clone();
+
+        self.request_admission(SessionMutation::SendMessage {
+            images,
             message,
             session_id,
         })
