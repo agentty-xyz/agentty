@@ -511,11 +511,14 @@ fn tool_call_from_json_decodes_arguments_sent_as_a_json_string() {
     // Arrange
     let encoded = serde_json::to_string(r#"{"path":"a.rs"}"#).expect("encode");
     let encoded_invalid = serde_json::to_string(r#"{"path":"a.rs","extra":1}"#).expect("encode");
+    let plain_string = serde_json::to_string("a.rs").expect("encode");
 
     // Act
     let call = ToolCall::from_json("call-id".to_string(), "read", &encoded, None).expect("call");
     let invalid =
         ToolCall::from_json("call-id".to_string(), "read", &encoded_invalid, None).expect("call");
+    let plain =
+        ToolCall::from_json("call-id".to_string(), "read", &plain_string, None).expect("call");
 
     // Assert
     assert_eq!(
@@ -528,6 +531,8 @@ fn tool_call_from_json_decodes_arguments_sent_as_a_json_string() {
     );
     let malformed = invalid.malformed_arguments().expect("malformed arguments");
     assert_eq!(malformed.raw(), encoded_invalid);
+    assert!(malformed.reason().contains("unknown field `extra`"));
+    let malformed = plain.malformed_arguments().expect("malformed arguments");
     assert!(malformed.reason().contains("invalid type: string"));
 }
 

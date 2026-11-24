@@ -401,12 +401,13 @@ impl ToolCall {
             }
         };
         // Some models send the arguments object JSON-encoded as a string; it
-        // is decoded once more, and a failure reports the original error.
+        // is decoded once more, and its own failure names the model's
+        // actual mistake. Any other string keeps the original error.
         let decoded = tool.decode(arguments).or_else(|error| {
-            serde_json::from_str::<String>(arguments)
-                .ok()
-                .and_then(|inner| tool.decode(&inner).ok())
-                .ok_or(error)
+            match serde_json::from_str::<String>(arguments) {
+                Ok(inner) if inner.trim_start().starts_with('{') => tool.decode(&inner),
+                _ => Err(error),
+            }
         });
         let arguments = decoded.unwrap_or_else(|error| {
             ToolArguments::Malformed(MalformedArguments {
