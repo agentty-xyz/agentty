@@ -557,13 +557,9 @@ async fn a_command_ending_in_a_pipeline_reports_each_stage_without_changing_its_
         ),
         ("exec 2>log.txt; false | true", 0, &[1, 0], Some(("", ""))),
         ("exec 2>&-; false | true", 0, &[1, 0], Some(("", ""))),
-        // Tracing does not trace the probe.
-        (
-            "set -x; false | true",
-            0,
-            &[1, 0],
-            Some(("", "+ false\n+ true\n")),
-        ),
+        // The stages trace concurrently, in either order; see
+        // `tracing_traces_only_the_command_not_the_probe`.
+        ("set -x; false | true", 0, &[1, 0], None),
         ("set -e; true | false", 1, &[0, 1], Some(("", ""))),
         ("set -o pipefail; false | true", 1, &[1, 0], Some(("", ""))),
         ("! true | true", 1, &[0, 0], Some(("", ""))),
@@ -630,6 +626,35 @@ async fn a_command_ending_in_a_pipeline_reports_each_stage_without_changing_its_
         .expect("temporary directory")
         .count();
     assert_eq!(leftovers, 0, "every status file is deleted once read");
+}
+
+#[tokio::test]
+async fn tracing_traces_only_the_command_not_the_probe() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let handler = real_bash_handler(root.path(), 4096);
+
+    // Act
+    let output = handler
+        .call(
+            json!({"command": "set -x; false | true"}),
+            ToolContext::new("traced"),
+        )
+        .await
+        .expect("command result");
+
+    // Assert: pipeline stages trace concurrently, so only the set of lines
+    // is fixed.
+    let (content, _) = output.into_parts();
+    let result: Value = serde_json::from_str(&content).expect("JSON result");
+    let mut traced = result["stderr"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .collect::<Vec<_>>();
+    traced.sort_unstable();
+    assert_eq!(traced, ["+ false", "+ true"], "{content}");
+    assert_eq!(result["stdout"], "");
 }
 
 #[tokio::test]
