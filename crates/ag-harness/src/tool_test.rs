@@ -405,6 +405,9 @@ fn bash_definition_states_exactly_the_executor_enforcement() {
     // Arrange
     let limits = " Output and duration are bounded; long output keeps each stream's start and \
                   end. Applied writes are not rolled back.";
+    let git = " Git metadata is read-only: `git status`, `git diff`, and `git log` work, but \
+               staging, committing, stashing, and creating or switching branches fail. Do not \
+               retry them; the host commits your changes after the turn.";
 
     // Act
     let unsandboxed = ToolDefinition::bash(Enforcement::None);
@@ -424,14 +427,14 @@ fn bash_definition_states_exactly_the_executor_enforcement() {
         file_system.description(),
         format!(
             "Run Bash inside a host filesystem sandbox. Workspace reads are allowed; writes \
-             require host grants. Network access is not restricted by the harness.{limits}"
+             require host grants. Network access is not restricted by the harness.{git}{limits}"
         )
     );
     assert_eq!(
         full.description(),
         format!(
             "Run Bash inside the host sandbox. Workspace reads are allowed; writes require host \
-             grants. Network access is denied.{limits}"
+             grants. Network access is denied.{git}{limits}"
         )
     );
     assert!(

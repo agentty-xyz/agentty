@@ -190,7 +190,6 @@ async fn native_harness_configuration_runs_harness_work_in_process() {
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::Concise,
-        session_branch: None,
         speed_mode: SpeedMode::Normal,
     };
     let utility = OneShotRequest {

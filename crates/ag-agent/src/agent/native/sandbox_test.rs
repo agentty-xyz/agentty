@@ -24,23 +24,14 @@ fn base_policy() -> BashConfig {
     .expect("base policy")
 }
 
-/// Returns the policy Agentty's grants must produce for `temporary`, the
-/// session branch `branch`, and the hidden `data_root` and `auth_file`,
-/// with the stored API keys, application database and pasted images of the
-/// Agentty root `/agentty-root` hidden too.
-fn expected_policy(
-    temporary: &Path,
-    branch: Option<&str>,
-    data_root: &Path,
-    auth_file: &Path,
-) -> BashConfig {
+/// Returns the policy Agentty's grants must produce for `temporary` and
+/// the hidden `data_root` and `auth_file`, with the stored API keys,
+/// application database and pasted images of the Agentty root
+/// `/agentty-root` hidden too.
+fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> BashConfig {
     let mut expected = base_policy()
         .with_full_disk_read()
         .and_then(|config| config.with_write(PathBuf::from(".")))
-        .and_then(|config| match branch {
-            Some(branch) => config.with_git_writes(branch.to_string()),
-            None => Ok(config),
-        })
         .map(BashConfig::with_network)
         .and_then(|config| config.with_temporary_directory(temporary.to_path_buf()))
         .and_then(|config| config.with_hidden_path(data_root.to_path_buf()))
@@ -86,11 +77,10 @@ fn sessions_fall_back_and_utility_prompts_refuse() {
 }
 
 #[test]
-/// Grants full-disk reads, worktree, session-branch, and
-/// temporary-directory writes, the network, and caches in the temporary
-/// directory, and hides the data root and the `ChatGPT` sign-in, with no
-/// writable roots, sockets (not even an SSH agent's), or excluded commands;
-/// without a session branch, no Git writes.
+/// Grants full-disk reads, worktree and temporary-directory writes, the
+/// network, and caches in the temporary directory, and hides the data root
+/// and the `ChatGPT` sign-in, with no Git writes, writable roots, sockets
+/// (not even an SSH agent's), or excluded commands.
 fn grant_adds_the_coding_agent_grant_set() {
     // Arrange
     let data_root = tempfile::tempdir().expect("data root");
@@ -103,26 +93,19 @@ fn grant_adds_the_coding_agent_grant_set() {
         ("SSH_AUTH_SOCK".to_string(), socket.display().to_string()),
     ]);
     let sandbox = CommandSandbox::new(data_root.path(), temporary.clone(), &environment);
-    let auth_file = Path::new("/agentty-root/auth/chatgpt.json");
 
     // Act
-    let without_branch = sandbox.grant(base_policy());
-    let sandbox = sandbox.with_git_branch(Some("wt/session".to_string()));
     let granted = sandbox.grant(base_policy());
-    let invalid = sandbox
-        .with_git_branch(Some("wt/..".to_string()))
-        .grant(base_policy());
 
     // Assert
     assert_eq!(
         granted.expect("granted policy"),
-        expected_policy(&temporary, Some("wt/session"), data_root.path(), auth_file)
+        expected_policy(
+            &temporary,
+            data_root.path(),
+            Path::new("/agentty-root/auth/chatgpt.json"),
+        )
     );
-    assert_eq!(
-        without_branch.expect("policy without a branch"),
-        expected_policy(&temporary, None, data_root.path(), auth_file)
-    );
-    assert!(invalid.is_err());
 }
 
 #[test]

@@ -625,7 +625,6 @@ too:
 | `with_read`                 | Reads one more directory, such as `~/.rustup` or `/opt/homebrew`                                                                                                               |
 | `with_write`                | Writes beneath a workspace directory; `with_write(".")` grants the whole worktree                                                                                              |
 | `with_temporary_directory`  | Reads and writes one directory outside the workspace, exported as `TMPDIR`; give each session its own                                                                          |
-| `with_git_writes`           | Lets `git add` and `git commit` on one branch write the objects, that branch, and the worktree's own Git state; other references, configuration, and hooks stay read-only      |
 | `with_network`              | Allows IP connections, listeners, and name resolution; denied by default                                                                                                       |
 | `with_full_disk_read`       | Reads everything except hidden paths, as Claude Code and Codex do; always hides the keychain and other credential stores                                                       |
 | `with_hidden_path`          | Hides one path, such as a project's `.env`, from reads and writes; refused inside a writable directory                                                                         |
@@ -640,23 +639,20 @@ Grants are paths: the sandbox never walks a granted directory, so a toolchain-si
 grant or a large `target/` or `node_modules` costs nothing per command. Links resolve to
 their targets, which stay subject to the policy, so a link inside the workspace works
 while one leading elsewhere cannot be followed. Hard links already inside a write grant
-are files of that grant; commands cannot create new ones that reach outside it. On Linux
-only a linked worktree can stage and commit under `with_git_writes`, which refuses a
-write grant containing a Git directory, and only the repository's own Git metadata and a
-repository at the top of each write grant stay read-only; macOS protects every `.git`
-name. Replacement refs, object alternates, commit-graph files, grafts, and the shallow
-boundary stay read-only too, since they change the history Git shows without changing
-what it pushes. `with_git_writes(branch)` opens only that branch's reference and reflog
-among the references: other branches, tags, `refs/stash`, and `packed-refs` stay
-read-only, so creating a branch, stashing, or `git gc` fails with a lock error and
-leaves the repository unchanged. Linux confines writes by directory, so there the
-directory holding the branch stays writable: siblings of `wt/session` can still move,
-but `main` cannot. Name session branches inside a directory, and keep checking other
-branches in a host that reviews history. Commands can still point `HEAD` or the branch
-at another branch, so check that `HEAD` resolves to the granted branch before the host's
-own Git writes to the worktree. A command the sandbox refuses to start, for example
-because a granted directory is missing, comes back to the model as a rejected tool call,
-and the turn continues.
+are files of that grant; commands cannot create new ones that reach outside it.
+
+Git metadata is read-only, as in Codex: the `.git` entry at the top of each write grant
+and the Git directories the workspace's `.git` resolves to, including a linked
+worktree's administration and common directories. Commands can run `git status`,
+`git diff`, and `git log`, but staging, committing, stashing, and creating or switching
+branches fail with a permission error, and the `bash` description tells the model so.
+Your application commits what commands change, after the turn. macOS also keeps a
+missing `.git` from being created at the top of a write grant, in any letter case. A
+repository nested deeper, such as one `git init` creates in the temporary directory, is
+the command's own and stays writable, so host tools must not trust the configuration of
+a repository nested in the workspace. A command the sandbox refuses to start, for
+example because a granted directory is missing, comes back to the model as a rejected
+tool call, and the turn continues.
 
 Coding sessions follow the sandboxes of Claude Code and Codex:
 

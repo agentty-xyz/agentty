@@ -383,7 +383,6 @@ async fn prepare(
         // replays this node's persisted transcript.
         request_kind: AgentRequestKind::SessionStart,
         response_style: turn::load_session_response_style(&context.db, &context.session_id).await,
-        session_branch: Some(env.branch),
         speed_mode: turn::load_session_speed_mode(&context.db, &context.session_id).await,
     })
 }

@@ -322,37 +322,36 @@ still describes the call by the model's arguments. A denial answers the model wi
   sandbox launcher (Bubblewrap, Landlock, and seccomp on Linux; Seatbelt on macOS), a
   host-supplied `BashExecutor`, or the shipped unsandboxed executor for hosts already
   inside a container or VM. Writes, external and system reads, a temporary directory,
-  Git writes, networking, environment values, and host information require explicit
-  grants. The native sandbox applies grants by path at launch, without walking granted
-  directories, and resolves links at access time, so links can reach only granted
-  targets. Git configuration, hooks, worktree links, submodule metadata, and rebase and
-  cherry-pick state stay read-only even under the Git-writes grant, because Git run
-  later outside the sandbox would execute or follow them. Unsupported policy fails
-  closed on enforcing executors, and a command the native sandbox refuses to start
-  returns to the model as a rejected tool call. For coding sessions the policy follows
-  Claude Code's and Codex's sandboxes: optional full-disk reads minus hidden paths,
-  which always include the keychain, credential stores, browser profiles, and other
-  sessions' temporary directories, and which fail closed without a known home directory;
-  writable roots kept out of home and system directories, since host tools would run
-  what commands plant there; a per-path Unix-socket allowlist that only macOS enforces
-  (Linux reports it through the sandbox warning); and excluded programs whose plain-word
-  commands run without a shell, outside the sandbox, only when the `ApprovalHandler`
-  explicitly decides `Decision::AllowUnsandboxed` after seeing the exact argument
-  vector; a plain allow keeps them sandboxed. Hidden paths are the policy's only
-  narrowing field, so host executors receive them only by declaring support. A sandboxed
-  command whose failure reads like an operating-system denial gets an advisory
-  `likely_sandbox_denial` flag; it never triggers an unsandboxed rerun by itself. Each
-  executor reports its `Enforcement` (none, filesystem, or filesystem and network), and
-  the model-facing `bash` description states exactly that and names the excluded
-  programs, so an unsandboxed command is never presented as sandboxed. Output is
-  captured within one bounded budget. A command whose source ends in a pipeline runs
-  behind an `EXIT` trap that writes Bash's `PIPESTATUS` to a randomly named file in the
-  turn's temporary directory, which the harness reads and deletes once the command
-  settles. No descriptor outlives the shell, and the command's output never carries the
-  status, so the result's `pipe_status` names the failing stage of `cargo test | tail`
-  without `pipefail` or any change to the exit status or output. A turn without a
-  temporary directory reports no stages. The command can forge or suppress the value, so
-  it is display-only.
+  networking, environment values, and host information require explicit grants. The
+  native sandbox applies grants by path at launch, without walking granted directories,
+  and resolves links at access time, so links can reach only granted targets. The
+  workspace repository's Git metadata stays read-only under every grant, as in Codex:
+  commands can inspect the repository but cannot stage, commit, or move references, and
+  the host commits what they change. Unsupported policy fails closed on enforcing
+  executors, and a command the native sandbox refuses to start returns to the model as a
+  rejected tool call. For coding sessions the policy follows Claude Code's and Codex's
+  sandboxes: optional full-disk reads minus hidden paths, which always include the
+  keychain, credential stores, browser profiles, and other sessions' temporary
+  directories, and which fail closed without a known home directory; writable roots kept
+  out of home and system directories, since host tools would run what commands plant
+  there; a per-path Unix-socket allowlist that only macOS enforces (Linux reports it
+  through the sandbox warning); and excluded programs whose plain-word commands run
+  without a shell, outside the sandbox, only when the `ApprovalHandler` explicitly
+  decides `Decision::AllowUnsandboxed` after seeing the exact argument vector; a plain
+  allow keeps them sandboxed. Hidden paths are the policy's only narrowing field, so
+  host executors receive them only by declaring support. A sandboxed command whose
+  failure reads like an operating-system denial gets an advisory `likely_sandbox_denial`
+  flag; it never triggers an unsandboxed rerun by itself. Each executor reports its
+  `Enforcement` (none, filesystem, or filesystem and network), and the model-facing
+  `bash` description states exactly that and names the excluded programs, so an
+  unsandboxed command is never presented as sandboxed. Output is captured within one
+  bounded budget. A command whose source ends in a pipeline runs behind an `EXIT` trap
+  that writes Bash's `PIPESTATUS` to a randomly named file in the turn's temporary
+  directory, which the harness reads and deletes once the command settles. No descriptor
+  outlives the shell, and the command's output never carries the status, so the result's
+  `pipe_status` names the failing stage of `cargo test | tail` without `pipefail` or any
+  change to the exit status or output. A turn without a temporary directory reports no
+  stages. The command can forge or suppress the value, so it is display-only.
 - Native sandbox availability — the harness's `Sandbox` choice decides what a native
   configuration does where the sandbox cannot run (missing helper or `bwrap`, user
   namespaces disabled, no usable Seatbelt, or another platform). The harness checks
@@ -495,18 +494,16 @@ sessions start on a harness model only once its provider is configured.
   environment without provider credential and endpoint variables.
 - `bash` runs in the native sandbox with Agentty's grants: full-disk reads, writes to
   the worktree and the session's own temporary directory, which holds the tool caches,
-  and network; no Unix sockets. Git writes cover only committing on the validated
-  session branch that `TurnRequest::session_branch` names, and one-shot utility prompts
-  get none. A Harness turn that leaves the worktree's `HEAD` resolving to another branch
-  fails like one that moves its base. The harness data root, Agentty's database and
-  pasted images, and the ChatGPT sign-in are hidden, and credential-like variables are
-  withheld. The `agentty` executable calls `ag_worker::dispatch_sandbox_helper`, which
-  wraps the harness's `sandbox::dispatch`, first in `main`, so it is its own sandbox
-  helper. Where the sandbox cannot run, session commands run unsandboxed and each turn
-  reports `SandboxUnavailable`, which the session view shows once per session, or again
-  when the reason changes or the sandbox worked in between; utility prompts refuse
-  instead. `ag-git` runs Git with `GIT_NO_REPLACE_OBJECTS` and without grafts, and a
-  Harness turn that moves its base branch fails before Agentty commits or publishes.
+  and network; no Unix sockets and no Git writes: Agentty's auto-commit after each turn
+  is the only committer. The harness data root, Agentty's database and pasted images,
+  and the ChatGPT sign-in are hidden, and credential-like variables are withheld. The
+  `agentty` executable calls `ag_worker::dispatch_sandbox_helper`, which wraps the
+  harness's `sandbox::dispatch`, first in `main`, so it is its own sandbox helper. Where
+  the sandbox cannot run, session commands run unsandboxed and each turn reports
+  `SandboxUnavailable`, which the session view shows once per session, or again when the
+  reason changes or the sandbox worked in between; utility prompts refuse instead.
+  `ag-git` runs Git with `GIT_NO_REPLACE_OBJECTS` and without grafts, and a Harness turn
+  that moves its base branch fails before Agentty commits or publishes.
 - Each session's database lives under the Agentty data root, outside the session
   worktree; session deletion removes it.
 - A turn returns to Agentty only after `TurnControl::settled`, so Agentty commits a

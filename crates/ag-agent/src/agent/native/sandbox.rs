@@ -1,8 +1,8 @@
 //! Native sandbox grants for `bash` and the sandbox notices a run reports.
 //!
 //! Commands read the whole disk except credential stores, write only the
-//! worktree, the session branch and the Git metadata committing to it
-//! needs, and their session's temporary directory, and
+//! worktree's files and their session's temporary directory, never the
+//! worktree's Git metadata, which Agentty commits to after each turn, and
 //! keep network access, like the sandboxes of other coding agents. Where
 //! the native sandbox cannot run, session commands run without it and the
 //! run reports why so the session view can tell the user how to fix it,
@@ -67,9 +67,6 @@ const APPLICATION: &str = "the application";
 /// The places one run's commands may write and the Agentty files they may
 /// not read.
 pub(crate) struct CommandSandbox {
-    /// The session branch commands may commit to; without one they cannot
-    /// write Git metadata.
-    git_branch: Option<String>,
     /// Paths hidden from commands: the harness histories, the `ChatGPT`
     /// sign-in, and Agentty's private directories.
     hidden: Vec<PathBuf>,
@@ -145,38 +142,25 @@ impl CommandSandbox {
             .collect();
 
         Self {
-            git_branch: None,
             hidden,
             temporary_directory,
         }
     }
 
-    /// Lets commands commit to `branch`, the session branch checked out in
-    /// the worktree, while every other reference stays read-only.
-    pub(crate) fn with_git_branch(mut self, branch: Option<String>) -> Self {
-        self.git_branch = branch;
-
-        self
-    }
-
     /// Adds Agentty's grants to `config`: full-disk reads except credential
-    /// stores and the hidden paths; writes to the worktree, the Git writes
-    /// that committing to the session branch needs, when there is one, and
-    /// the temporary directory, which also holds the tool caches; and
-    /// network access. No Unix-domain socket is granted, not even the SSH
-    /// agent's, whose keys would sign for any host the network reaches;
-    /// Agentty pushes outside the sandbox itself.
+    /// stores and the hidden paths; writes to the worktree, whose Git
+    /// metadata the harness keeps read-only, and the temporary directory,
+    /// which also holds the tool caches; and network access. No Unix-domain
+    /// socket is granted, not even the SSH agent's, whose keys would sign
+    /// for any host the network reaches; Agentty commits and pushes outside
+    /// the sandbox itself.
     ///
     /// # Errors
     /// Returns the grant the harness rejects.
     pub(crate) fn grant(&self, config: BashConfig) -> Result<BashConfig, BashError> {
         let mut config = config
             .with_full_disk_read()?
-            .with_write(PathBuf::from("."))?;
-        if let Some(branch) = &self.git_branch {
-            config = config.with_git_writes(branch.clone())?;
-        }
-        let mut config = config
+            .with_write(PathBuf::from("."))?
             .with_network()
             .with_temporary_directory(self.temporary_directory.clone())?;
         for path in &self.hidden {

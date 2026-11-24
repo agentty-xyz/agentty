@@ -229,12 +229,11 @@ impl NativeHarnessConfig {
     }
 
     /// Returns the sandbox of the session's commands run in the folder of
-    /// `request`, which may commit to its session branch, with the session's
-    /// own temporary directory, which keeps one path for the session's
-    /// lifetime because the harness fingerprints it into the policy, and
-    /// goes with the session's harness directory. When the host keeps Cargo
-    /// caches and resolved the project's main checkout, its `CARGO_HOME`
-    /// receives copies from that project's cache.
+    /// `request`, with the session's own temporary directory, which keeps one
+    /// path for the session's lifetime because the harness fingerprints it
+    /// into the policy, and goes with the session's harness directory. When
+    /// the host keeps Cargo caches and resolved the project's main checkout,
+    /// its `CARGO_HOME` receives copies from that project's cache.
     ///
     /// # Errors
     /// Returns an error for an invalid session id or when the directory
@@ -257,16 +256,15 @@ impl NativeHarnessConfig {
             .as_deref()
             .zip(request.main_checkout_root.as_deref())
             .map(|(root, main_checkout)| TrustedCargoCache::for_project(root, main_checkout));
-        let sandbox = CommandSandbox::prepare(
+
+        CommandSandbox::prepare(
             &self.data_root,
             temporary_directory,
             &request.folder,
             environment,
             cargo_cache,
         )
-        .await?;
-
-        Ok(sandbox.with_git_branch(request.session_branch.clone()))
+        .await
     }
 
     /// Returns the sandbox of one utility prompt's commands run in

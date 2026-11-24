@@ -17,8 +17,9 @@ pub(super) struct Launch {
     /// Readable roots outside the workspace: each granted path as given and
     /// resolved, and the repository's Git directories outside it.
     pub(super) external_reads: Vec<PathBuf>,
+    /// Resolved Git metadata of the workspace repository that stays
+    /// read-only: its `.git` entries and the Git directories they name.
     pub(super) git_metadata: Vec<PathBuf>,
-    pub(super) git_writes: Option<GitWrites>,
     /// Resolved paths hidden from commands, the built-in ones included.
     /// Coding grants default to their least access when absent.
     #[serde(default)]
@@ -44,21 +45,6 @@ pub(super) struct Launch {
     /// Resolved absolute writable directories: the workspace write grants,
     /// the temporary directory, then the writable roots.
     pub(super) writes: Vec<PathBuf>,
-}
-
-/// The repository's Git directories that the Git-writes grant opens.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct GitWrites {
-    /// The linked worktree's own administration directory, when it is not
-    /// the common directory.
-    pub(super) admin: Option<PathBuf>,
-    /// The branch whose reference and reflog in the common directory are
-    /// writable.
-    pub(super) branch: String,
-    /// The common Git directory holding objects, references, and
-    /// configuration.
-    pub(super) common: PathBuf,
 }
 
 #[derive(Deserialize, Serialize)]

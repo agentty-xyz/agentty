@@ -39,15 +39,14 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 /// The tests this harness runs.
 const TEST_NAMES: [&str; 2] = [
-    "session_commands_commit_in_a_linked_worktree_and_stay_confined",
+    "session_commands_write_a_linked_worktree_but_not_its_git_metadata",
     "session_gets_verified_copies_and_cannot_reach_the_cache",
 ];
 /// Harness model served by the scripted provider.
 const MODEL: &str = "muse-spark-1.3";
 /// Session whose harness history the command tries to read.
 const SESSION_ID: &str = "session-sandbox";
-/// Session branch checked out in the worktree, nested like Agentty's own so
-/// that Linux, which grants the directory holding it, keeps `main` read-only.
+/// Session branch checked out in the worktree, nested like Agentty's own.
 const SESSION_BRANCH: &str = "wt/session";
 /// Stored API key file, under the Agentty root, the command tries to read.
 const API_KEY_FILE: &str = "auth/api_keys.json";
@@ -159,7 +158,7 @@ async fn run(selected: &[&str]) -> TestResult {
             "session_gets_verified_copies_and_cannot_reach_the_cache" => {
                 session_gets_verified_copies_and_cannot_reach_the_cache().await
             }
-            _ => session_commands_commit_in_a_linked_worktree_and_stay_confined().await,
+            _ => session_commands_write_a_linked_worktree_but_not_its_git_metadata().await,
         };
         outcome.map_err(|error| format!("{name}: {error}"))?;
     }
@@ -167,10 +166,10 @@ async fn run(selected: &[&str]) -> TestResult {
     Ok(())
 }
 
-/// Runs a scripted session turn whose one command commits in a linked
-/// worktree, uses its temporary directory, and tries to write outside the
-/// worktree and to read the harness history.
-async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> TestResult {
+/// Runs a scripted session turn whose one command writes a file in a linked
+/// worktree, uses its temporary directory, and tries to commit, to write
+/// outside the worktree, and to read the harness history.
+async fn session_commands_write_a_linked_worktree_but_not_its_git_metadata() -> TestResult {
     // Arrange
     let fixture = Fixture::new()?;
     let server = MockServer::start().await;
@@ -214,12 +213,13 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
         .iter()
         .find(|body| body.contains(r#""tool_call_id":"call-bash""#))
         .ok_or("bash result should reach the model")?;
-    // The command commits, then the moves of the base branch, the edit of
-    // `packed-refs`, the write outside, and the reads of the harness history
-    // and the application database fail, so only the first marker reaches
-    // standard output.
+    // The command writes a file and reads the repository with Git, then
+    // staging, committing, moving the base branch, editing `packed-refs`,
+    // the write outside, and the reads of the harness history and the
+    // application database fail, so only the first marker reaches standard
+    // output.
     assert!(
-        bash_result.contains(r#"\"stdout\":\"committed\\n\""#),
+        bash_result.contains(r#"\"stdout\":\"written\\n\""#),
         "{bash_result}"
     );
     assert!(
@@ -387,20 +387,23 @@ impl Fixture {
         })
     }
 
-    /// Returns the command the model runs: a commit, a temporary file, moves
-    /// of the base branch and edits of `packed-refs`, a write outside the
-    /// worktree, and reads of the harness history and of Agentty's
-    /// application database and stored API keys.
+    /// Returns the command the model runs: a worktree file, a temporary
+    /// file, and Git reads, then staging, a commit, moves of the base branch
+    /// and edits of `packed-refs`, a write outside the worktree, and reads of
+    /// the harness history and of Agentty's application database and stored
+    /// API keys.
     fn command(&self) -> String {
         format!(
             "export GIT_AUTHOR_NAME=Agentty GIT_AUTHOR_EMAIL=agentty@example.com \
              GIT_COMMITTER_NAME=Agentty GIT_COMMITTER_EMAIL=agentty@example.com; printf \
-             'sandboxed\\n' > notes.txt && git add notes.txt && git commit -qm 'Add notes' && \
-             touch \"$TMPDIR/scratch\" && echo committed; git update-ref refs/heads/main HEAD \
-             2>/dev/null && echo moved-main; printf x >> \"$(git rev-parse --path-format=absolute \
-             --git-common-dir)/packed-refs\" && echo edited-packed-refs; touch '{}' && echo \
-             escaped; cat '{}' > /dev/null && echo read-history; cat '{}' > /dev/null && echo \
-             read-database; cat '{}' > /dev/null && echo read-keys",
+             'sandboxed\\n' > notes.txt && touch \"$TMPDIR/scratch\" && git status --porcelain | \
+             grep -q notes.txt && git log -1 > /dev/null && echo written; git add notes.txt \
+             2>/dev/null && echo staged; git commit -qam 'Add notes' 2>/dev/null && echo \
+             committed; git update-ref refs/heads/main HEAD 2>/dev/null && echo moved-main; \
+             printf x >> \"$(git rev-parse --path-format=absolute --git-common-dir)/packed-refs\" \
+             && echo edited-packed-refs; touch '{}' && echo escaped; cat '{}' > /dev/null && echo \
+             read-history; cat '{}' > /dev/null && echo read-database; cat '{}' > /dev/null && \
+             echo read-keys",
             self.escape().display(),
             self.data_root
                 .path()
@@ -438,9 +441,10 @@ impl Fixture {
         })
     }
 
-    /// Asserts that the commit landed on the session branch, the base branch
-    /// and packed references stayed unchanged, the temporary file is in the
-    /// session's temporary directory, and nothing was written outside.
+    /// Asserts that the file landed in the worktree for Agentty to commit,
+    /// while the index, the session and base branches, and packed
+    /// references stayed unchanged, the temporary file is in the session's
+    /// temporary directory, and nothing was written outside.
     fn assert_effects(&self) -> TestResult {
         let subject = |branch: &str| -> TestResult<String> {
             let log = Command::new("git")
@@ -450,8 +454,17 @@ impl Fixture {
 
             Ok(String::from_utf8_lossy(&log.stdout).trim().to_string())
         };
-        assert_eq!(subject(SESSION_BRANCH)?, "Add notes");
+        assert_eq!(subject(SESSION_BRANCH)?, "Base");
         assert_eq!(subject("main")?, "Base");
+        assert_eq!(
+            std::fs::read_to_string(self.worktree.join("notes.txt"))?,
+            "sandboxed\n"
+        );
+        let staged = Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(&self.worktree)
+            .output()?;
+        assert!(staged.status.success() && staged.stdout.is_empty());
         assert!(!self.repository.path().join(".git/packed-refs").exists());
         assert!(
             self.data_root
@@ -613,7 +626,6 @@ fn turn_request(folder: &Path, main_checkout: Option<&Path>, prompt: &str) -> Tu
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::Concise,
-        session_branch: Some(SESSION_BRANCH.to_string()),
         speed_mode: SpeedMode::Normal,
     }
 }

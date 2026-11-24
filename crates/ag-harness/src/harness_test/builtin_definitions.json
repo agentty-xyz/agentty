@@ -184,7 +184,7 @@
   ],
   "bash_file_system": [
     "bash",
-    "Run Bash inside a host filesystem sandbox. Workspace reads are allowed; writes require host grants. Network access is not restricted by the harness. Output and duration are bounded; long output keeps each stream's start and end. Applied writes are not rolled back.",
+    "Run Bash inside a host filesystem sandbox. Workspace reads are allowed; writes require host grants. Network access is not restricted by the harness. Git metadata is read-only: `git status`, `git diff`, and `git log` work, but staging, committing, stashing, and creating or switching branches fail. Do not retry them; the host commits your changes after the turn. Output and duration are bounded; long output keeps each stream's start and end. Applied writes are not rolled back.",
     {
       "type": "object",
       "properties": {
@@ -202,7 +202,7 @@
   ],
   "bash_file_system_and_network": [
     "bash",
-    "Run Bash inside the host sandbox. Workspace reads are allowed; writes require host grants. Network access is denied. Output and duration are bounded; long output keeps each stream's start and end. Applied writes are not rolled back.",
+    "Run Bash inside the host sandbox. Workspace reads are allowed; writes require host grants. Network access is denied. Git metadata is read-only: `git status`, `git diff`, and `git log` work, but staging, committing, stashing, and creating or switching branches fail. Do not retry them; the host commits your changes after the turn. Output and duration are bounded; long output keeps each stream's start and end. Applied writes are not rolled back.",
     {
       "type": "object",
       "properties": {

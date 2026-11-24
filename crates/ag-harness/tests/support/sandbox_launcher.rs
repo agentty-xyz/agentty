@@ -57,7 +57,7 @@ async fn missing_enforcement_or_executable_reports_failure_and_exits() {
     let mut configuration = json!({
         "arguments": [], "directory": root, "environment": {},
         "executable": root.join("missing-executable"), "external_reads": [],
-        "git_metadata": [], "git_writes": null, "host_information": true,
+        "git_metadata": [], "host_information": true,
         "launcher": launcher(), "linux_bubblewrap": null, "network": false,
         "system": false, "workspace": root, "write_nodes": [], "writes": [],
     });
@@ -129,7 +129,7 @@ async fn private_channel_cancellation_requires_host_process_group_cleanup() {
         "arguments": ["--noprofile", "--norc", "-c", "printf started > output/started; exec /bin/sleep 30"],
         "directory": root, "environment": {}, "executable": "/bin/bash",
         "external_reads": ["/bin", "/usr/lib", "/System/Library", launcher()],
-        "git_metadata": [], "git_writes": null, "host_information": true,
+        "git_metadata": [], "host_information": true,
         "launcher": workspace.launcher(), "linux_bubblewrap": null, "network": false,
         "system": false, "workspace": root,
         "write_nodes": [[std::os::unix::fs::MetadataExt::dev(&output), std::os::unix::fs::MetadataExt::ino(&output)]],
@@ -233,8 +233,8 @@ impl Namespace {
             "arguments": ["-c", command],
             "directory": root, "environment": {}, "executable": "/bin/bash",
             "external_reads": external_reads,
-            "git_metadata": [root.join(".git")], "git_writes": null,
-            "host_information": true, "launcher": workspace.launcher(),
+            "git_metadata": [root.join(".git")], "host_information": true,
+            "launcher": workspace.launcher(),
             "linux_bubblewrap": "/usr/bin/bwrap", "network": false, "system": false,
             "workspace": root, "write_nodes": write_nodes,
             "writes": [root.join("output")],
