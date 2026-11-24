@@ -3,6 +3,8 @@
 
 use std::fs;
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
 use opentelemetry::Value;
@@ -237,6 +239,29 @@ async fn commit_all_preserving_single_commit_reuses_head_message_on_amend() {
 async fn stage_all_reports_failure_outside_repository() {
     // Arrange
     let temp_dir = tempdir().expect("failed to create temp dir");
+
+    // Act
+    let result = stage_all(temp_dir.path().to_path_buf()).await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(GitError::CommandFailed { ref command, ref stderr })
+            if command == "git ls-files -z --stage"
+                && stderr.starts_with("Failed to list staged files:")
+    ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stage_all_reports_files_git_cannot_read() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    setup_test_git_repo(temp_dir.path());
+    let unreadable = temp_dir.path().join("unreadable.txt");
+    fs::write(&unreadable, "secret").expect("failed to write file");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+        .expect("failed to make file unreadable");
 
     // Act
     let result = stage_all(temp_dir.path().to_path_buf()).await;

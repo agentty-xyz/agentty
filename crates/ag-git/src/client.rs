@@ -207,10 +207,12 @@ pub trait GitClient: Send + Sync {
         message_strategy: SingleCommitMessageStrategy,
     ) -> GitFuture<Result<(), GitError>>;
 
-    /// Stages all tracked and untracked changes in `repo_path`.
+    /// Stages all tracked and untracked changes in `repo_path`, except
+    /// repositories embedded in it, untracked or tracked as gitlinks: staging
+    /// one would make later Git commands run its configuration.
     ///
     /// # Errors
-    /// Returns an error when `git add` fails.
+    /// Returns an error when listing the worktree or `git add` fails.
     fn stage_all(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>>;
 
     /// Returns the short `HEAD` hash for `repo_path`.
@@ -265,7 +267,8 @@ pub trait GitClient: Send + Sync {
     ) -> GitFuture<Result<(), GitError>>;
 
     /// Returns a cumulative patch including committed, staged, unstaged, and
-    /// untracked changes relative to `base_branch` in `repo_path`.
+    /// untracked changes relative to `base_branch` in `repo_path`, without
+    /// embedded repositories or submodule changes.
     ///
     /// # Errors
     /// Returns an error when refs are invalid or diff generation fails.
@@ -342,13 +345,15 @@ pub trait GitClient: Send + Sync {
     /// Returns an error when status inspection fails.
     fn is_worktree_clean(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>>;
 
-    /// Returns raw porcelain status for the worktree in `repo_path`.
+    /// Returns raw porcelain status for the worktree in `repo_path`, ignoring
+    /// submodules.
     ///
     /// # Errors
     /// Returns an error when status inspection fails.
     fn worktree_status(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>>;
 
-    /// Returns raw porcelain status for tracked files in `repo_path`.
+    /// Returns raw porcelain status for tracked files in `repo_path`,
+    /// ignoring submodules.
     ///
     /// # Errors
     /// Returns an error when tracked-file status inspection fails.

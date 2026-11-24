@@ -12,6 +12,7 @@ use super::repo::{
     command_output_detail, resolve_git_dir, run_git_command_output_sync,
     run_git_command_output_with_env_sync, run_git_command_sync, spawn_blocking_in_context,
 };
+use super::sync::refuse_embedded_gitlink_repositories;
 use crate::{Sleeper, ThreadSleeper};
 
 /// Allow five seconds of waiting for an in-flight index writer to finish.
@@ -20,7 +21,7 @@ pub(super) const GIT_INDEX_LOCK_RETRY_DELAY: Duration = Duration::from_millis(25
 
 /// Executes git commands for rebase operations.
 #[cfg_attr(test, mockall::automock)]
-trait GitCommandRunner: Send + Sync {
+pub(super) trait GitCommandRunner: Send + Sync {
     /// Runs a git command in `repo_path` with environment overrides.
     fn run_git_command_output_with_env(
         &self,
@@ -47,7 +48,7 @@ impl RebaseMetadataCleaner for FilesystemRebaseMetadataCleaner {
 }
 
 /// Git command runner backed by process execution.
-struct ProcessGitCommandRunner;
+pub(super) struct ProcessGitCommandRunner;
 
 impl GitCommandRunner for ProcessGitCommandRunner {
     fn run_git_command_output_with_env(
@@ -180,6 +181,7 @@ pub(crate) async fn rebase_start(
 /// Returns a [`GitError`] for non-conflict git failures.
 pub(crate) async fn rebase_continue(repo_path: PathBuf) -> Result<RebaseStepResult, GitError> {
     spawn_blocking_in_context(move || {
+        refuse_embedded_gitlink_repositories(&repo_path)?;
         let output = run_git_command_with_index_lock_retry(
             &repo_path,
             &["rebase", "--continue"],
@@ -394,21 +396,25 @@ pub(crate) async fn list_staged_conflict_marker_files(
 /// A list of relative file paths with unresolved conflicts.
 ///
 /// # Errors
-/// Returns a [`GitError`] if invoking `git diff --name-only --diff-filter=U`
-/// fails.
+/// Returns a [`GitError`] if invoking `git ls-files --unmerged` fails.
 pub(crate) async fn list_conflicted_files(repo_path: PathBuf) -> Result<Vec<String>, GitError> {
     spawn_blocking_in_context(move || -> Result<Vec<String>, GitError> {
+        // The index alone records conflicts; comparing the worktree would
+        // run `git status` inside tracked submodule paths.
         let output = run_git_command_sync(
             &repo_path,
-            &["diff", "--name-only", "--diff-filter=U"],
+            &["ls-files", "-z", "--unmerged"],
             "Failed to read conflicted files",
         )?;
-        let files = output
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(ToString::to_string)
-            .collect();
+        let mut files = Vec::<String>::new();
+        for path in output
+            .split('\0')
+            .filter_map(|entry| entry.split_once('\t').map(|(_, path)| path))
+        {
+            if files.last().is_none_or(|last| last != path) {
+                files.push(path.to_string());
+            }
+        }
 
         Ok(files)
     })
@@ -440,6 +446,7 @@ fn run_rebase_step(
     command: &str,
     failure_message: impl FnOnce(&str) -> String,
 ) -> Result<RebaseStepResult, GitError> {
+    refuse_embedded_gitlink_repositories(repo_path)?;
     let output = run_git_command_with_index_lock_retry(repo_path, args, &[])?;
 
     if output.status.success() {
@@ -555,7 +562,7 @@ pub(super) fn run_git_command_with_index_lock_retry(
 
 /// Runs a git command with retries using injected command and sleep
 /// dependencies.
-fn run_git_command_with_index_lock_retry_with_dependencies(
+pub(super) fn run_git_command_with_index_lock_retry_with_dependencies(
     repo_path: &Path,
     args: &[&str],
     environment: &[(&str, &str)],

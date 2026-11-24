@@ -142,6 +142,10 @@ impl ReadTool {
             "diff".to_string(),
             "--no-ext-diff".to_string(),
             "--no-textconv".to_string(),
+            // Git would otherwise run `git status` inside each tracked
+            // submodule path, and so the configuration of whatever
+            // repository commands left there.
+            "--ignore-submodules=all".to_string(),
             "--relative".to_string(),
             "--unified=20".to_string(),
             base.to_string(),
