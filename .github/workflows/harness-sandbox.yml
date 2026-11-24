@@ -31,6 +31,7 @@ on:
       - crates/ag-agent/**
       - crates/ag-harness/**
       - crates/ag-router/**
+      - crates/ag-sqlite/**
       - crates/ag-telemetry/**
       - rust-toolchain.toml
   merge_group:

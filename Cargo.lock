@@ -134,6 +134,7 @@ name = "ag-harness"
 version = "0.20.0"
 dependencies = [
  "ag-router",
+ "ag-sqlite",
  "ag-telemetry",
  "async-trait",
  "base64 0.23.1",
@@ -330,12 +331,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-sqlite"
+version = "0.20.0"
+dependencies = [
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "ag-store"
 version = "0.20.0"
 dependencies = [
  "ag-contracts",
  "ag-protocol",
  "ag-session",
+ "ag-sqlite",
  "ag-worker",
  "async-trait",
  "mockall",

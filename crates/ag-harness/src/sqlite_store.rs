@@ -2,18 +2,18 @@
 //! feature.
 
 use std::ffi::OsString;
-use std::io::ErrorKind;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ag_sqlite::OpenOptions;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::migrate::{MigrateError, Migrator};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Connection as _, SqliteConnection, SqlitePool, Transaction};
+use sqlx::migrate::Migrator;
+use sqlx::sqlite::SqliteSynchronous;
+use sqlx::{SqliteConnection, SqlitePool, Transaction};
 use tokio::time::Instant;
 
 use crate::admission::{
@@ -50,7 +50,13 @@ pub const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-const DB_POOL_MAX_CONNECTIONS: u32 = 4;
+/// Harness connection policy: `FULL` durability, so a committed turn survives
+/// power loss, and at most four pooled connections.
+const OPEN_OPTIONS: OpenOptions = OpenOptions {
+    busy_timeout: SQLITE_BUSY_TIMEOUT,
+    max_connections: 4,
+    synchronous: SqliteSynchronous::Full,
+};
 const TURN_SIZE_PAGE_SIZE: i64 = 64;
 
 struct WriteRecordRow {
@@ -355,33 +361,9 @@ impl Database {
         path: &Path,
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Result<Self, SessionError> {
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let temporary = path.as_os_str().is_empty() || path == Path::new(":memory:");
-        if !temporary && !tokio::fs::try_exists(path).await? {
-            create_wal_database(path).await?;
-        }
-        let options = connect_options(path);
-        // SQLite temporary databases belong to one connection. Additional
-        // pooled connections or eviction would lose their schema and history.
-        let pool_options = SqlitePoolOptions::new().acquire_timeout(SQLITE_BUSY_TIMEOUT);
-        let pool_options = if temporary {
-            pool_options
-                .max_connections(1)
-                .idle_timeout(None)
-                .max_lifetime(None)
-                .test_before_acquire(false)
-        } else {
-            pool_options.max_connections(DB_POOL_MAX_CONNECTIONS)
-        };
-        let pool = pool_options
-            .connect_with(options)
+        let pool = ag_sqlite::open(path, &MIGRATOR, OPEN_OPTIONS)
             .await
-            .session_context("open persistent session database")?;
-
-        migrate(&pool, &MIGRATOR).await?;
+            .map_err(open_error)?;
         let identity = StoreIdentity::for_path(path).await?;
 
         Ok(Self {
@@ -417,9 +399,7 @@ impl Database {
         &self,
         session_id: &str,
     ) -> Result<TurnAcquisition, SessionError> {
-        let mut transaction = self
-            .pool
-            .begin()
+        let mut transaction = ag_sqlite::begin_read(&self.pool)
             .await
             .session_context("load persistent session turn acquisition")?;
         let configuration = load_turn_configuration(&mut transaction, session_id).await?;
@@ -463,9 +443,7 @@ impl Database {
             .iter()
             .map(EncodedMessage::from_message)
             .collect::<Result<Vec<_>, _>>()?;
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("complete persistent session turn")?;
         self.validate_owner(owner)?;
@@ -532,9 +510,7 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
     ) -> Result<Option<Reservation>, SessionError> {
         let operation = "reserve persistent session turn";
         let recovery_now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context(operation)?;
         recover_stale_turns(&mut transaction, session_id, recovery_now).await?;
@@ -639,9 +615,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
 
     async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("recover stale persistent session turns")?;
         recover_stale_turns(&mut transaction, session_id, now).await?;
@@ -708,9 +682,7 @@ impl StoreBackend for Database {
     ) -> Result<i64, SessionError> {
         self.validate_owner(owner)?;
         let intent = serialize_payload(intent)?;
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("begin command intent")?;
         let id = sqlx::query_scalar::<_, i64>(
@@ -768,9 +740,7 @@ impl StoreBackend for Database {
 
     async fn reconcile_command(&self, owner: &TurnOwner, id: i64) -> Result<(), SessionError> {
         self.validate_owner(owner)?;
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("reconcile command")?;
         recover_stale_turns(
@@ -829,9 +799,7 @@ impl StoreBackend for Database {
         target: &str,
     ) -> Result<(), SessionError> {
         let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("fork persistent session")?;
         recover_stale_turns(&mut transaction, source, now).await?;
@@ -1035,7 +1003,9 @@ WHERE id = ?
         max_history_bytes: usize,
     ) -> Result<CompactionSource, SessionError> {
         let operation = "load session compaction source";
-        let mut transaction = self.pool.begin().await.session_context(operation)?;
+        let mut transaction = ag_sqlite::begin_read(&self.pool)
+            .await
+            .session_context(operation)?;
         let checkpoint = load_checkpoint_from(&mut transaction, session_id).await?;
         let window = oldest_window(
             &mut transaction,
@@ -1056,9 +1026,7 @@ WHERE id = ?
         checkpoint: &SessionCheckpoint,
     ) -> Result<(), SessionError> {
         let operation = "publish session checkpoint";
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context(operation)?;
         let configuration = load_turn_configuration(&mut transaction, session_id).await?;
@@ -1118,15 +1086,15 @@ ON CONFLICT(session_id) DO UPDATE SET
         loop {
             // Validate canonical history outside the writer transaction, then
             // revalidate its finished-turn boundary under the admission lock.
-            let mut snapshot = self.pool.begin().await.session_context(operation)?;
+            let mut snapshot = ag_sqlite::begin_read(&self.pool)
+                .await
+                .session_context(operation)?;
             load_turn_configuration(&mut snapshot, id).await?;
             let revision = latest_finished_turn(&mut snapshot, id).await?;
             check_switch_history(&mut snapshot, id, switch).await?;
             snapshot.commit().await.session_context(operation)?;
             self.reservation_observer.model_validated().await;
-            let mut transaction = self
-                .pool
-                .begin_with("BEGIN IMMEDIATE")
+            let mut transaction = ag_sqlite::begin_write(&self.pool)
                 .await
                 .session_context(operation)?;
             let now = self.timestamp_source.now_timestamp_seconds();
@@ -1180,9 +1148,7 @@ ON CONFLICT(session_id) DO UPDATE SET
         session_id: &str,
         host_id: &str,
     ) -> Result<Option<HostTurnRecord>, SessionError> {
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("recover host request")?;
         load_turn_configuration(&mut transaction, session_id).await?;
@@ -1224,9 +1190,7 @@ ON CONFLICT(session_id) DO UPDATE SET
             .iter()
             .map(EncodedMessage::from_message)
             .collect::<Result<Vec<_>, _>>()?;
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context(operation)?;
         let now = self.timestamp_source.now_timestamp_seconds();
@@ -1261,9 +1225,7 @@ ON CONFLICT(session_id) DO UPDATE SET
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
         let error_type = format!("{:?}", error.error_type());
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("fail persistent session turn")?;
         self.validate_owner(owner)?;
@@ -1321,9 +1283,7 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
         let root = root.as_os_str().as_bytes();
         let expected_hash = expected.map(content_hash);
         let resulting_hash = content_hash(resulting);
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("begin write intent")?;
         let now = self.timestamp_source.now_timestamp_seconds();
@@ -1405,9 +1365,7 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
         self.validate_owner(owner)?;
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("renew persistent session turn lease")?;
         let deadline = lease_deadline();
@@ -1428,9 +1386,7 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
 
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
         self.validate_owner(owner)?;
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let mut transaction = ag_sqlite::begin_write(&self.pool)
             .await
             .session_context("interrupt persistent session turn")?;
         interrupt_owned_turn(
@@ -1745,127 +1701,14 @@ fn store_error(
     }
 }
 
-fn connect_options(path: &Path) -> SqliteConnectOptions {
-    SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(true)
-        .busy_timeout(SQLITE_BUSY_TIMEOUT)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Full)
-        .foreign_keys(true)
-}
-
-/// Creates the database at `path` already in WAL mode, unless another opener
-/// created it first.
-///
-/// SQLite does not apply the busy timeout to the switch into WAL mode: it
-/// upgrades a read transaction to a write lock (`sqlite3BtreeSetVersion`), so
-/// concurrent first opens of one file fail at once with `database is locked`.
-/// Switching a private file and moving it into place without replacing
-/// anything gives every connection to `path` a file that is already in WAL
-/// mode.
-async fn create_wal_database(path: &Path) -> Result<(), SessionError> {
-    let operation = "create persistent session database";
-    let directory = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let staged = tempfile::Builder::new()
-        .prefix(".harness-")
-        .suffix(".db")
-        .tempfile_in(directory)?
-        .into_temp_path();
-    SqliteConnection::connect_with(&connect_options(&staged))
-        .await
-        .session_context(operation)?
-        .close()
-        .await
-        .session_context(operation)?;
-
-    match staged.persist_noclobber(path).map_err(|error| error.error) {
-        Err(error) if error.kind() != ErrorKind::AlreadyExists => Err(error.into()),
-        _ => Ok(()),
+/// Converts an open failure, keeping its `SQLx` or migration error as the
+/// store source so contention while migrating stays recognizable.
+fn open_error(error: ag_sqlite::Error) -> SessionError {
+    match error {
+        ag_sqlite::Error::Io(source) => SessionError::Io(source),
+        ag_sqlite::Error::Sqlx { operation, source } => store_error(operation, source),
+        ag_sqlite::Error::Migrate { operation, source } => store_error(operation, source),
     }
-}
-
-/// Applies `migrator`'s pending migrations while holding the database write
-/// lock, and only validates applied ones when none is pending.
-///
-/// `SQLx` does not lock SQLite migrations (its `Migrate::lock` for SQLite is a
-/// no-op), so concurrent opens would each list the same pending migrations and
-/// apply them twice. `BEGIN IMMEDIATE` serializes them: later openers wait (up
-/// to the busy timeout) for the lock, then find every migration applied. An
-/// up-to-date database is checked with reads alone, so opening it never waits
-/// behind another writer.
-async fn migrate(pool: &SqlitePool, migrator: &Migrator) -> Result<(), SessionError> {
-    const MIGRATE_OPERATION: &str = "migrate persistent session database";
-
-    // A migration opting out of transactions would silently run inside the
-    // lock below, where `VACUUM` fails and `PRAGMA foreign_keys` is ignored.
-    if let Some(migration) = migrator.iter().find(|migration| migration.no_tx) {
-        return Err(store_error(
-            MIGRATE_OPERATION,
-            MigrateError::Source(
-                format!(
-                    "migration {} opts out of transactions, which the locked migration path \
-                     cannot apply",
-                    migration.version
-                )
-                .into(),
-            ),
-        ));
-    }
-    if !has_pending_migration(pool, migrator).await? {
-        return migrator.run(pool).await.session_context(MIGRATE_OPERATION);
-    }
-    let operation = MIGRATE_OPERATION;
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .session_context(operation)?;
-    // `run_direct` is hidden from `SQLx`'s docs and semver. The public
-    // `migrator.run(&mut *transaction)` does not compile here: its `Acquire`
-    // bound trips rust-lang/rust#100013 in this `Send` future, and `SQLx` keeps
-    // `run_direct` for exactly that error. Inside the transaction, `SQLx`'s
-    // SQLite `Migrate::apply` nests each migration in a `SAVEPOINT`. Recheck
-    // both assumptions, and whether `Migrate::lock` still does nothing for
-    // SQLite, when upgrading `SQLx`; the contention tests fail if either
-    // breaks.
-    migrator
-        .run_direct(None, &mut *transaction, false)
-        .await
-        .session_context(operation)?;
-
-    transaction.commit().await.session_context(operation)
-}
-
-/// Returns whether `migrator` has a migration the database has not applied
-/// successfully, using reads only.
-async fn has_pending_migration(
-    pool: &SqlitePool,
-    migrator: &Migrator,
-) -> Result<bool, SessionError> {
-    let operation = "check persistent session migrations";
-    let mut connection = pool.acquire().await.session_context(operation)?;
-    let has_table = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
-         '_sqlx_migrations')",
-    )
-    .fetch_one(&mut *connection)
-    .await
-    .session_context(operation)?;
-    if !has_table {
-        return Ok(true);
-    }
-    let applied =
-        sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations WHERE success")
-            .fetch_all(&mut *connection)
-            .await
-            .session_context(operation)?;
-
-    Ok(migrator.iter().any(|migration| {
-        !migration.migration_type.is_down_migration() && !applied.contains(&migration.version)
-    }))
 }
 
 async fn load_request_from(

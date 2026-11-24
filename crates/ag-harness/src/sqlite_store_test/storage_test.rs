@@ -1,9 +1,11 @@
 //! Session storage tests: database setup and migrations, persisted data
 //! validation, and the message codec.
 
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use sqlx::migrate::MigrateError;
 use tempfile::tempdir;
 
 use super::support::{
@@ -13,10 +15,46 @@ use crate::context::HistoryTurn;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::request_option::OutputMode;
 use crate::session::{NewSession, SessionError};
-use crate::sqlite_store::{Database, EncodedMessage, SQLITE_BUSY_TIMEOUT, TimestampSource};
+use crate::sqlite_store::{
+    Database, EncodedMessage, SQLITE_BUSY_TIMEOUT, TimestampSource, open_error,
+};
 use crate::store::{SessionCheckpoint, StoreBackend as _};
 use crate::store_fixture::image_input;
 use crate::tool::ToolCall;
+
+#[test]
+fn open_failures_keep_their_backend_error_as_the_store_source() {
+    // Arrange
+    let io_error = ag_sqlite::Error::Io(io::Error::other("disk"));
+    let locked = ag_sqlite::Error::Sqlx {
+        operation: "migrate database",
+        source: sqlx::Error::PoolTimedOut,
+    };
+    let invalid = ag_sqlite::Error::Migrate {
+        operation: "migrate database",
+        source: MigrateError::VersionMissing(7),
+    };
+
+    // Act
+    let errors = [io_error, locked, invalid].map(open_error);
+
+    // Assert
+    assert!(matches!(errors[0], SessionError::Io(_)));
+    assert!(matches!(
+        &errors[1],
+        SessionError::Store {
+            operation: "migrate database",
+            source,
+        } if matches!(source.downcast_ref(), Some(sqlx::Error::PoolTimedOut))
+    ));
+    assert!(matches!(
+        &errors[2],
+        SessionError::Store {
+            operation: "migrate database",
+            source,
+        } if matches!(source.downcast_ref(), Some(MigrateError::VersionMissing(7)))
+    ));
+}
 
 #[test]
 fn session_config_exposes_values_and_system_prompt() {
