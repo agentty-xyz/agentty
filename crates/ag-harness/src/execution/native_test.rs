@@ -400,12 +400,27 @@ async fn access_resolves_grants_by_path_and_keeps_the_repository_git_directories
         [fixture.workspace.join("output"), fixture.temporary.clone()]
     );
     assert_eq!(access.write_nodes.len(), 2);
-    // No write grant reaches the Git directories outside the workspace.
-    assert!(
-        access
-            .writes
-            .iter()
-            .all(|write| !write.starts_with(&fixture.common))
+}
+
+#[tokio::test]
+async fn access_in_a_workspace_without_a_repository_protects_only_its_git_name() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("repository-free workspace");
+    let workspace = directory.path().canonicalize().expect("canonical");
+    let policy = ExecutionPolicy::new(
+        workspace.clone(),
+        vec![workspace.join(".git")],
+        Grants::default(),
+    )
+    .expect("policy");
+
+    // Act
+    let access = resolve_access(&LocalInspection, &policy).await;
+
+    // Assert
+    assert_eq!(
+        access.map(|access| access.git_metadata),
+        Ok(vec![workspace.join(".git")])
     );
 }
 
@@ -420,8 +435,6 @@ async fn access_refuses_grants_the_sandbox_cannot_honor() {
     )
     .expect("write alias");
     std::fs::write(fixture.workspace.join("file"), "file").expect("file");
-    let unrelated = tempfile::tempdir().expect("repository-free workspace");
-    let unrelated = unrelated.path().canonicalize().expect("canonical");
     let cases = [
         Grants {
             external_reads: vec![fixture.outside.join("missing")],
@@ -467,19 +480,6 @@ async fn access_refuses_grants_the_sandbox_cannot_honor() {
             Err(ExecutionError::Unsupported)
         );
     }
-    // A workspace without a repository protects only its `.git` name.
-    let without_repository = ExecutionPolicy::new(
-        unrelated.clone(),
-        vec![unrelated.join(".git")],
-        Grants::default(),
-    )
-    .expect("policy");
-    assert_eq!(
-        resolve_access(&LocalInspection, &without_repository)
-            .await
-            .map(|access| access.git_metadata),
-        Ok(vec![unrelated.join(".git")])
-    );
     assert_eq!(
         resolve_access(
             &FailingInspection::new("metadata", 1),

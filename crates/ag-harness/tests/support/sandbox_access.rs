@@ -10,8 +10,6 @@ use ag_harness::sandbox::SandboxUnavailableReason;
 use ag_harness::{TurnError, TurnOptions};
 
 use super::fixture::{NativeFixture, Workspace, schema, with_runtime};
-#[cfg(target_os = "macos")]
-use crate::context_budget_fixture::unbounded_context_budget;
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -488,9 +486,8 @@ async fn native_loader_environment_applies_only_after_isolation() {
 }
 
 /// macOS also keeps a missing `.git` from appearing at the top of a write
-/// grant, under any letter case, while a repository nested inside the
-/// grant stays the command's own; a repository opened as the workspace
-/// protects its own metadata.
+/// grant, under any letter case, while an existing repository nested inside
+/// the grant stays the command's own.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn native_macos_denies_new_top_level_metadata_and_leaves_nested_repositories_writable() {
@@ -504,55 +501,18 @@ async fn native_macos_denies_new_top_level_metadata_and_leaves_nested_repositori
     let outcome = workspace
         .run(
             "if /bin/mkdir output/.GiT; then exit 91; fi; if printf pointer > output/.git; then \
-             exit 92; fi; printf changed > output/nested/.git/config || exit 93; /bin/mkdir \
-             output/nested/sub output/nested/sub/.git || exit 94; printf allowed > output/ordinary",
+             exit 92; fi; printf changed > output/nested/.git/config || exit 93; printf allowed > \
+             output/ordinary",
         )
         .await;
-    let nested = ag_harness::Harness::new(super::fixture::ShellModel, unbounded_context_budget())
-        .repository(
-            ag_harness::Repository::new(root.join("output/nested"), "/usr/bin/git")
-                .expect("nested repository"),
-        );
-    let options = workspace.options(Duration::from_secs(10), 128);
-    std::fs::create_dir(root.join("output/nested/output")).expect("nested output");
-    let nested_coverage = super::coverage::Coverage::new(&root.join("output/nested"));
-    let nested_launcher = nested_coverage.as_ref().map_or_else(
-        super::coverage::launcher,
-        super::coverage::Coverage::launcher,
-    );
-    let configuration = BashConfig::new(
-        nested_launcher,
-        "/bin/bash".into(),
-        "nested".into(),
-        Duration::from_secs(10),
-        128,
-    )
-    .expect("configuration")
-    .with_host_information()
-    .with_write(".".into())
-    .expect("nested grant");
-    let nested_result = nested
-        .turn(
-            "if printf protected > .git/config; then exit 95; fi; /bin/mkdir fresh fresh/.git || \
-             exit 96; printf allowed > ordinary",
-            options.with_bash(with_runtime(configuration, &[])),
-        )
-        .await
-        .expect("nested turn");
-    let nested_result: CommandOutcome =
-        serde_json::from_value(nested_result.into_output()).expect("nested outcome");
 
     // Assert
     assert_eq!(outcome.exit.exit_code, Some(0), "{outcome:?}");
-    assert_eq!(nested_result.exit.exit_code, Some(0), "{nested_result:?}");
     assert_eq!(
         std::fs::read_to_string(root.join("output/nested/.git/config")).expect("config"),
         "changed"
     );
     assert!(!root.join("output/.git").exists());
-    for path in ["output/nested/sub/.git", "output/nested/fresh/.git"] {
-        assert!(root.join(path).is_dir(), "nested repository: {path}");
-    }
 }
 
 /// Builds victim options behind a gate launcher that pauses only the

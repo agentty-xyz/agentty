@@ -808,9 +808,10 @@ pub(crate) struct BashPolicySnapshot {
     )]
     pub(crate) executor: String,
     pub(crate) external_reads: Vec<PathBuf>,
-    /// Branch of the removed Git-writes grant, retained only so snapshots
-    /// recorded while it existed keep validating against their recorded
-    /// fingerprints; never set, because commands cannot write Git metadata.
+    /// Branch of the removed Git-writes grant, which only development builds
+    /// recorded, retained so their snapshots keep validating against their
+    /// recorded fingerprints; never set, because commands cannot write Git
+    /// metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) git_branch: Option<String>,
     /// [`BashConfig::with_hidden_path`] paths.

@@ -359,8 +359,8 @@ async fn resolve_access(
         if canonical != path {
             return Err(ExecutionError::Unsupported);
         }
-        // Linux protects Git metadata by mounting it read-only, so it
-        // protects a repository at the top of each write grant too.
+        // Both platforms keep a repository at the top of each write grant
+        // read-only; macOS also keeps a missing one from being created.
         access.git_metadata.push(canonical.join(".git"));
         access.writes.push(canonical);
         access.write_nodes.push(node);

@@ -27,11 +27,12 @@ const SESSION_BRANCH: &str = "wt/session";
 
 /// Shell function that runs a command which must fail because the sandbox
 /// refused one of its writes: it fails when the command succeeds or fails
-/// for another reason, such as a missing identity, and prints why.
+/// for another reason, such as a missing identity, and prints why. Some Git
+/// versions report a refused index write only as `could not write index`.
 const REFUSED: &str = "refused() { if \"$@\" 2> \"$TMPDIR/refusal\"; then echo \"ran: $*\" >&2; \
                        return 1; fi; grep -qiE 'not permitted|permission denied|read-only file \
-                       system' \"$TMPDIR/refusal\" || { cat \"$TMPDIR/refusal\" >&2; return 1; }; \
-                       }";
+                       system|could not write index' \"$TMPDIR/refusal\" || { cat \
+                       \"$TMPDIR/refusal\" >&2; return 1; }; }";
 
 /// A repository whose linked worktree holds symlinks, beside a
 /// per-session temporary directory, as a host would lay out one session.
@@ -465,6 +466,12 @@ async fn native_main_worktree_keeps_its_git_directory_read_only_and_in_place() {
     .expect("temporary directory");
     let configuration_before = std::fs::read(main.join(".git/config")).expect("configuration");
     let head_before = git(&main, &["rev-parse", "HEAD"]);
+    // The default macOS file systems also resolve `.GIT` to `.git`.
+    let alias = if cfg!(target_os = "macos") {
+        "refused sh -c 'printf x >> .GIT/config' || exit 95; "
+    } else {
+        ""
+    };
 
     // Act
     let output = refusing_harness(&main)
@@ -472,10 +479,10 @@ async fn native_main_worktree_keeps_its_git_directory_read_only_and_in_place() {
             format!(
                 "{REFUSED}; printf main > main-file || exit 80; git log --oneline -1 > /dev/null \
                  || exit 81; refused git add main-file || exit 90; refused sh -c 'printf x >> \
-                 .git/config' || exit 91; refused sh -c 'printf x > .git/packed-refs.lock' || \
-                 exit 92; for target in \"$TMPDIR/moved\" moved; do if /bin/mv .git \"$target\" \
-                 2> /dev/null; then exit 93; fi; done; if /bin/mv .git/hooks .git/objects/hooks \
-                 2> /dev/null; then exit 94; fi; printf confined"
+                 .git/config' || exit 91; {alias}refused sh -c 'printf x > .git/packed-refs.lock' \
+                 || exit 92; for target in \"$TMPDIR/moved\" moved; do if /bin/mv .git \
+                 \"$target\" 2> /dev/null; then exit 93; fi; done; if /bin/mv .git/hooks \
+                 .git/objects/hooks 2> /dev/null; then exit 94; fi; printf confined"
             ),
             options(configuration),
         )

@@ -5,7 +5,9 @@
 //! shared repository. Moving the base under the session would hide the
 //! session's changes from the review diff that Agentty commits, merges, and
 //! pushes from, so every Harness turn that is followed by commit or publish
-//! effects records the base before it runs and fails when it moved.
+//! effects records the base before it runs and fails when it moved. It does
+//! not check where the worktree's `HEAD` points, as Agentty does not for
+//! agent CLIs either.
 
 use std::path::Path;
 

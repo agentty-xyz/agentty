@@ -14,8 +14,8 @@
 //! enforcement. Git metadata includes `.git` entries, resolved Git
 //! directories, common directories, and linked-worktree administration, and
 //! no grant permits mutating it: the host commits what commands change.
-//! Applied
-//! workspace writes survive cancellation and failure; there is no rollback.
+//! Applied workspace writes survive cancellation and failure; there is no
+//! rollback.
 //! Aggregate memory, process-count, and disk quotas are outside this
 //! contract.
 
@@ -425,7 +425,9 @@ impl ExecutionPolicy {
 
     /// Reports lexical intent only; never use this as a filesystem access
     /// check. Protected metadata can be read only where a read grant
-    /// already exists, and Git metadata reports read-only. Relative, empty,
+    /// already exists, and every path with a `.git` component reports
+    /// read-only, conservatively including a nested repository inside a
+    /// grant that commands may write. Relative, empty,
     /// traversing, and NUL-containing paths report
     /// [`ExecutionAccess::Denied`].
     pub fn requested_access(&self, path: &Path) -> ExecutionAccess {
