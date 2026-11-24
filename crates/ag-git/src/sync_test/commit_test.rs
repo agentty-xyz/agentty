@@ -247,8 +247,8 @@ async fn stage_all_reports_failure_outside_repository() {
     assert!(matches!(
         result,
         Err(GitError::CommandFailed { ref command, ref stderr })
-            if command == "git ls-files -z --stage"
-                && stderr.starts_with("Failed to list staged files:")
+            if command == "git rev-parse --path-format=absolute --git-common-dir"
+                && stderr.starts_with("Failed to resolve the common Git directory:")
     ));
 }
 

@@ -2059,20 +2059,28 @@ fn stage_all_with_runner(
         });
     }
     // A repository that appeared after the listing, for example one a
-    // still-running command moved in, would have been staged anyway.
-    match gitlink_paths(repo_path)?
+    // still-running command moved in, would have been staged anyway, so it
+    // is unstaged again before staging stops.
+    let Some(path) = gitlink_paths(repo_path)?
         .into_iter()
         .find(|path| !staged_gitlinks.contains(path))
-    {
-        Some(path) => Err(GitError::EmbeddedRepository { path }),
-        None => Ok(()),
-    }
+    else {
+        return Ok(());
+    };
+    run_git_command_sync(
+        repo_path,
+        &["update-index", "--force-remove", "--", &path],
+        "Failed to unstage an embedded repository",
+    )?;
+
+    Err(GitError::EmbeddedRepository { path })
 }
 
 /// Returns pathspecs that keep `git add -A` away from every repository
 /// embedded in the worktree at `repo_path`: untracked ones, which
 /// `git ls-files --others` lists with a trailing slash instead of
-/// descending into them, and tracked gitlinks.
+/// descending into them, and tracked gitlinks other than initialized
+/// submodules.
 ///
 /// Staging an embedded repository would record it as a gitlink, and Git
 /// then runs `git status` inside it, and so its configuration such as
@@ -2081,7 +2089,8 @@ fn stage_all_with_runner(
 /// never stages one; listing them reads only the worktree and the index.
 ///
 /// # Errors
-/// Returns a [`GitError`] if either listing fails.
+/// Returns a [`GitError`] if a listing fails or the Git directory cannot be
+/// resolved.
 fn embedded_repository_exclusions(repo_path: &Path) -> Result<Vec<String>, GitError> {
     let untracked = git_records(
         repo_path,
@@ -2093,7 +2102,14 @@ fn embedded_repository_exclusions(repo_path: &Path) -> Result<Vec<String>, GitEr
         .filter_map(|path| path.strip_suffix(b"/"))
         .map(repository_path)
         .collect::<Result<Vec<_>, _>>()?;
-    repositories.extend(gitlink_paths(repo_path)?);
+    // An initialized submodule's recorded commit stays stageable, for
+    // example to resolve a conflicting submodule update.
+    let modules = submodule_store(repo_path)?;
+    repositories.extend(
+        gitlink_paths(repo_path)?
+            .into_iter()
+            .filter(|path| !is_initialized_submodule(repo_path, path, &modules)),
+    );
 
     Ok(repositories
         .into_iter()
@@ -2111,19 +2127,55 @@ fn embedded_repository_exclusions(repo_path: &Path) -> Result<Vec<String>, GitEr
 /// reliably. Agentty never initializes submodules in session worktrees, and
 /// sandboxed commands cannot write the submodule stores of the shared Git
 /// directory, so such a repository can only be one a session committed or
-/// moved there.
+/// moved there. An initialized submodule, whose `.git` file points into
+/// those stores, is the user's own and stays allowed.
 ///
 /// # Errors
 /// Returns [`GitError::EmbeddedRepository`] naming the first such path, or
-/// a [`GitError`] if the index cannot be listed.
+/// a [`GitError`] if the index or the Git directory cannot be read.
 pub(crate) fn refuse_embedded_gitlink_repositories(repo_path: &Path) -> Result<(), GitError> {
-    match gitlink_paths(repo_path)?
-        .into_iter()
-        .find(|path| std::fs::symlink_metadata(repo_path.join(path).join(".git")).is_ok())
-    {
+    let modules = submodule_store(repo_path)?;
+    match gitlink_paths(repo_path)?.into_iter().find(|path| {
+        std::fs::symlink_metadata(repo_path.join(path).join(".git")).is_ok()
+            && !is_initialized_submodule(repo_path, path, &modules)
+    }) {
         Some(path) => Err(GitError::EmbeddedRepository { path }),
         None => Ok(()),
     }
+}
+
+/// Returns the resolved directory where the repository at `repo_path` keeps
+/// its submodules' Git directories, `modules` in its common Git directory.
+///
+/// # Errors
+/// Returns a [`GitError`] if the common Git directory cannot be resolved.
+fn submodule_store(repo_path: &Path) -> Result<PathBuf, GitError> {
+    let common = run_git_command_sync(
+        repo_path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        "Failed to resolve the common Git directory",
+    )?;
+    let common = PathBuf::from(common.trim());
+
+    Ok(std::fs::canonicalize(&common)
+        .unwrap_or(common)
+        .join("modules"))
+}
+
+/// Returns whether the gitlink `path` of `repo_path` holds an initialized
+/// submodule: its `.git` is a file whose `gitdir:` resolves inside
+/// `modules`, which sandboxed commands cannot write.
+fn is_initialized_submodule(repo_path: &Path, path: &str, modules: &Path) -> bool {
+    let submodule = repo_path.join(path);
+    let Ok(pointer) = std::fs::read_to_string(submodule.join(".git")) else {
+        return false;
+    };
+
+    pointer
+        .trim()
+        .strip_prefix("gitdir: ")
+        .and_then(|target| std::fs::canonicalize(submodule.join(target)).ok())
+        .is_some_and(|target| target.starts_with(modules))
 }
 
 /// Returns the paths the index of `repo_path` records as gitlinks.

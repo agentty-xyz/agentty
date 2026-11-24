@@ -234,6 +234,7 @@ fn repositories_staged_after_the_listing_stop_staging() {
     let root = fixture.root();
     let late = fixture.embedded();
     let aside = fixture.directory.path().join("aside");
+    fixture.arm();
     fs::rename(&late, &aside).expect("failed to move repository aside");
     let mut runner = MockGitCommandRunner::new();
     runner
@@ -258,6 +259,53 @@ fn repositories_staged_after_the_listing_stop_staging() {
         result,
         Err(GitError::EmbeddedRepository { ref path }) if path == "late"
     ));
+    assert_eq!(index_entries(&root), "100644 README.md");
+    assert!(!fixture.marker().exists(), "the embedded fsmonitor ran");
+}
+
+#[tokio::test]
+async fn initialized_submodules_stay_stageable() {
+    // Arrange
+    let fixture = EmbeddedRepository::new("source");
+    let root = fixture.root();
+    let source = fixture.embedded();
+    fs::rename(&source, fixture.directory.path().join("source"))
+        .expect("failed to move submodule source out");
+    let source = fixture.directory.path().join("source");
+    run_git_command(
+        &root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &source.display().to_string(),
+            "vendor/library",
+        ],
+    );
+    run_git_command(&root, &["commit", "-q", "-m", "Add library"]);
+    let submodule = root.join("vendor/library");
+    run_git_command(
+        &submodule,
+        &["commit", "-q", "--allow-empty", "-m", "Move library"],
+    );
+    let moved = git_command_stdout(&submodule, &["rev-parse", "HEAD"]);
+
+    // Act
+    let staged = RealGitClient.stage_all(root.clone()).await;
+    let continued = RealGitClient.rebase_continue(root.clone()).await;
+
+    // Assert
+    assert!(staged.is_ok(), "{staged:?}");
+    assert_eq!(
+        git_command_stdout(&root, &["rev-parse", ":vendor/library"]),
+        moved
+    );
+    assert!(
+        !matches!(continued, Err(GitError::EmbeddedRepository { .. })),
+        "{continued:?}"
+    );
 }
 
 #[cfg(target_os = "linux")]
