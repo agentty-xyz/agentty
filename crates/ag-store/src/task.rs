@@ -9,7 +9,7 @@ use ag_session::{
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
-use crate::connection::begin_write;
+use crate::connection::{begin_read, begin_write};
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
 use crate::task_plan::TaskPlanStore;
@@ -405,7 +405,7 @@ impl TaskRepository for SqliteTaskRepository {
         session_id: &str,
         request: &SubmitAgentTaskRequest,
     ) -> Result<(), DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "verify agent task plan").await?;
         TaskPlanStore::verify(&mut transaction, session_id, request).await?;
         transaction.commit().await?;
 
@@ -416,7 +416,7 @@ impl TaskRepository for SqliteTaskRepository {
         &self,
         task_id: &str,
     ) -> Result<Option<TaskAgentHistoryRow>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "load agent task history").await?;
         let history = TaskAgentTurnStore::load(&mut transaction, task_id).await?;
         transaction.commit().await?;
 
@@ -454,7 +454,7 @@ impl TaskRepository for SqliteTaskRepository {
         request: &SubmitAgentTaskRequest,
     ) -> Result<bool, DbError> {
         let attempt = TaskAgentStore::attempt(request)?;
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "check agent task attempt").await?;
         let context = TaskAgentStore::load(&mut transaction, &request.task_id).await?;
         if let Some(context) = &context {
             TaskAgentStore::matches(context, session_id, request)?;
@@ -512,7 +512,7 @@ impl TaskRepository for SqliteTaskRepository {
     }
 
     async fn list_tasks(&self, session_id: &str) -> Result<Vec<Task>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "list tasks").await?;
         let rows = sqlx::query!(
             "SELECT id, session_id, objective, created_at, completed_at FROM task WHERE \
              session_id = ? ORDER BY created_at, rowid",
@@ -551,14 +551,14 @@ impl TaskRepository for SqliteTaskRepository {
         session_id: &str,
         request: &SubmitTaskRequest,
     ) -> Result<bool, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "check task attempt").await?;
         TaskAgentStore::require_ordinary(&mut transaction, &request.task_id).await?;
 
         Self::matching_attempt(&mut transaction, session_id, request, None).await
     }
 
     async fn load_task(&self, task_id: &str) -> Result<Option<Task>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "load task").await?;
         let row = sqlx::query!(
             "SELECT id, session_id, objective, created_at, completed_at FROM task WHERE id = ?",
             task_id

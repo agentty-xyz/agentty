@@ -1,0 +1,23 @@
+id: sqlite-transaction-helpers
+language: rust
+severity: error
+message: Begin SQLite transactions with `ag_sqlite::begin_write` or `ag_sqlite::begin_read`, not the pool's `begin` methods.
+note: |
+  Another process can share the database file. `begin_write` takes the write lock up front,
+  so a transaction that reads before writing waits for the lock instead of failing at once;
+  `begin_read` marks a read-only snapshot. In `ag-store`, call the labeling wrappers in
+  `crates/ag-store/src/connection.rs`; see `crates/ag-store/AGENTS.md`.
+files:
+  - crates/ag-harness/src/**/*.rs
+  - crates/ag-store/src/**/*.rs
+ignores:
+  - "**/*_test.rs"
+  - "**/*_test/**"
+rule:
+  kind: call_expression
+  has:
+    field: function
+    kind: field_expression
+    has:
+      field: field
+      regex: "^(try_)?begin(_with)?$"

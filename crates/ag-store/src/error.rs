@@ -47,6 +47,18 @@ pub enum DbError {
     },
 }
 
+impl From<ag_sqlite::Error> for DbError {
+    fn from(error: ag_sqlite::Error) -> Self {
+        match error {
+            ag_sqlite::Error::Io(source) => Self::Io(source),
+            ag_sqlite::Error::Sqlx { operation, source } => {
+                Self::QueryContext { operation, source }
+            }
+            ag_sqlite::Error::Migrate { source, .. } => Self::Migration(source),
+        }
+    }
+}
+
 /// Adds a semantic persistence-operation label to a query result.
 pub(crate) trait DbResultExt<T> {
     /// Maps a raw `SQLx` error into [`DbError::QueryContext`].

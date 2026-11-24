@@ -31,6 +31,7 @@ the module docstrings directly.
 | `ag-remote`      | Remote-control server, pairing, and embedded web client          |
 | `ag-router`      | Structured chat routing and provider transports                  |
 | `ag-session`     | Session models, policies, catalog, lifecycle API                 |
+| `ag-sqlite`      | Shared SQLite open, locked migration, and transaction helpers    |
 | `ag-store`       | Persistence contracts, SQLite adapters, migrations               |
 | `ag-telemetry`   | Content-free spans, async trace context, and opt-in OTLP export  |
 | `ag-tui-text`    | Markdown, forge HTML, terminal diagrams and text layout          |
