@@ -27,11 +27,11 @@ fn open_failures_keep_their_backend_error_as_the_store_source() {
     // Arrange
     let io_error = ag_sqlite::Error::Io(io::Error::other("disk"));
     let locked = ag_sqlite::Error::Sqlx {
-        operation: "migrate database",
+        operation: "migrate persistent session database",
         source: sqlx::Error::PoolTimedOut,
     };
     let invalid = ag_sqlite::Error::Migrate {
-        operation: "migrate database",
+        operation: "migrate persistent session database",
         source: MigrateError::VersionMissing(7),
     };
 
@@ -43,17 +43,41 @@ fn open_failures_keep_their_backend_error_as_the_store_source() {
     assert!(matches!(
         &errors[1],
         SessionError::Store {
-            operation: "migrate database",
+            operation: "migrate persistent session database",
             source,
         } if matches!(source.downcast_ref(), Some(sqlx::Error::PoolTimedOut))
     ));
     assert!(matches!(
         &errors[2],
         SessionError::Store {
-            operation: "migrate database",
+            operation: "migrate persistent session database",
             source,
         } if matches!(source.downcast_ref(), Some(MigrateError::VersionMissing(7)))
     ));
+}
+
+#[tokio::test]
+async fn open_failures_name_the_persistent_session_database() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory should be created");
+
+    // Act
+    let result = Database::open(directory.path()).await;
+
+    // Assert
+    let error = result
+        .err()
+        .expect("a directory should not open as a database");
+    assert!(
+        matches!(
+            error,
+            SessionError::Store {
+                operation: "open persistent session database",
+                ..
+            }
+        ),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -124,6 +148,7 @@ async fn on_disk_database_creates_parent_and_applies_connection_policy() {
         database.pool.options().get_acquire_timeout(),
         SQLITE_BUSY_TIMEOUT
     );
+    assert_eq!(database.pool.options().get_max_connections(), 4);
 }
 
 #[tokio::test]

@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_sqlite::OpenOptions;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
+use ag_sqlite::{OpenOptions, OperationLabels};
+use sqlx::sqlite::SqliteSynchronous;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::timestamp::system_timestamp_source;
@@ -117,7 +117,7 @@ impl Database {
     pub async fn open_in_memory_with_timestamp_source(
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Result<Self, DbError> {
-        let pool = open_in_memory_pool(1).await?;
+        let pool = open_in_memory_pool().await?;
 
         Ok(Self::from_pool(pool, timestamp_source))
     }
@@ -142,7 +142,9 @@ impl Database {
         timestamp_source: Arc<dyn TimestampSource>,
         busy_timeout: Duration,
     ) -> Result<Self, DbError> {
-        let pool = ag_sqlite::open(db_path, &MIGRATOR, open_options(busy_timeout)).await?;
+        let pool = ag_sqlite::open(db_path, &MIGRATOR, open_options(busy_timeout))
+            .await
+            .map_err(DbError::from_open)?;
 
         Ok(Self::from_pool(pool, timestamp_source))
     }
@@ -187,38 +189,33 @@ pub(crate) async fn begin_read(
     ag_sqlite::begin_read(pool).await.db_context(operation)
 }
 
-/// Opens an in-memory `SQLite` pool with migrations applied.
-///
-/// The caller chooses the connection cap so tests and runtime code can share
-/// the same setup logic while keeping their own concurrency requirements.
-/// Applies the same busy timeout as [`Database::open`] so pooled test
-/// connections exercise the same writer wait policy.
+/// Opens a migrated in-memory `SQLite` pool on one connection that the pool
+/// never evicts, with the interactive busy timeout.
 ///
 /// # Errors
 /// Returns an error if the in-memory database connection or migrations fail.
-pub(crate) async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePool, DbError> {
-    let pool = SqlitePoolOptions::new()
-        .max_connections(max_connections)
-        .acquire_timeout(INTERACTIVE_BUSY_TIMEOUT)
-        .connect_with(in_memory_connect_options())
-        .await?;
-
-    ag_sqlite::migrate(&pool, &MIGRATOR).await?;
-
-    Ok(pool)
-}
-
-/// Returns in-memory connection settings matching the interactive busy
-/// timeout, durability, and foreign-key policy.
-pub(crate) fn in_memory_connect_options() -> SqliteConnectOptions {
-    open_options(INTERACTIVE_BUSY_TIMEOUT).connect_options(Path::new(":memory:"))
+pub(crate) async fn open_in_memory_pool() -> Result<SqlitePool, DbError> {
+    ag_sqlite::open(
+        Path::new(":memory:"),
+        &MIGRATOR,
+        open_options(INTERACTIVE_BUSY_TIMEOUT),
+    )
+    .await
+    .map_err(DbError::from_open)
 }
 
 /// Returns the store's connection policy: `NORMAL` durability, at most
-/// [`DB_POOL_MAX_CONNECTIONS`] pooled connections, and `busy_timeout`.
-fn open_options(busy_timeout: Duration) -> OpenOptions {
+/// [`DB_POOL_MAX_CONNECTIONS`] pooled connections, `busy_timeout`, and labels
+/// naming the app database.
+pub(crate) fn open_options(busy_timeout: Duration) -> OpenOptions {
     OpenOptions {
         busy_timeout,
+        labels: OperationLabels {
+            check_migrations: "check app database migrations",
+            connect: "open app database",
+            create: "create app database",
+            migrate: "migrate app database",
+        },
         max_connections: DB_POOL_MAX_CONNECTIONS,
         synchronous: SqliteSynchronous::Normal,
     }

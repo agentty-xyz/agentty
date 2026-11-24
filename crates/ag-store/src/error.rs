@@ -47,8 +47,11 @@ pub enum DbError {
     },
 }
 
-impl From<ag_sqlite::Error> for DbError {
-    fn from(error: ag_sqlite::Error) -> Self {
+impl DbError {
+    /// Converts a failure to open the database into the matching category;
+    /// a migration failure keeps no label because the store has one
+    /// migration step.
+    pub(crate) fn from_open(error: ag_sqlite::Error) -> Self {
         match error {
             ag_sqlite::Error::Io(source) => Self::Io(source),
             ag_sqlite::Error::Sqlx { operation, source } => {

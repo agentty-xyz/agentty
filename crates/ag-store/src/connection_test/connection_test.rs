@@ -52,6 +52,30 @@ async fn db_error_display_includes_underlying_message() {
 }
 
 #[tokio::test]
+async fn open_failures_name_the_app_database() {
+    // Arrange
+    let temp = tempdir().expect("failed to create temp directory");
+
+    // Act
+    let result = Database::open(temp.path()).await;
+
+    // Assert
+    let error = result
+        .err()
+        .expect("a directory should not open as a database");
+    assert!(
+        matches!(
+            error,
+            DbError::QueryContext {
+                operation: "open app database",
+                ..
+            }
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[tokio::test]
 async fn open_configures_small_wal_pool_normal_synchronous_mode_and_busy_timeout() {
     // Arrange
     let temp = tempdir().expect("failed to create temp directory");

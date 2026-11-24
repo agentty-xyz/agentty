@@ -4,7 +4,7 @@
 //! take the lock their kind promises.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteSynchronous};
@@ -12,13 +12,20 @@ use sqlx::{Connection as _, SqlSafeStr as _, SqlitePool};
 use tempfile::tempdir;
 use tokio::task::JoinSet;
 
-use super::{Error, OpenOptions, begin_read, begin_write, create_wal_database, migrate, open};
+use super::{create_wal_database, migrate};
+use crate::{Error, OpenOptions, OperationLabels, begin_read, begin_write, open};
 
 const CONCURRENT_OPENS: usize = 8;
 
 /// Connection policy for tests that never wait out a lock.
 const OPTIONS: OpenOptions = OpenOptions {
     busy_timeout: Duration::from_secs(5),
+    labels: OperationLabels {
+        check_migrations: "check test migrations",
+        connect: "open test database",
+        create: "create test database",
+        migrate: "migrate test database",
+    },
     max_connections: 4,
     synchronous: SqliteSynchronous::Full,
 };
@@ -167,12 +174,14 @@ async fn pending_migrations_wait_for_the_write_lock_and_give_up_at_the_busy_time
     };
 
     // Act
+    let started = Instant::now();
     let result = tokio::time::timeout(
         REGRESSION_BOUND,
         open(&path, &migrator(&[CREATE_ITEM, CREATE_TAG]), impatient),
     )
     .await
     .expect("a pending migration should give up at the busy timeout");
+    let waited = started.elapsed();
 
     // Assert
     let error = result.expect_err("a pending migration should not apply while the lock is held");
@@ -180,11 +189,15 @@ async fn pending_migrations_wait_for_the_write_lock_and_give_up_at_the_busy_time
         matches!(
             &error,
             Error::Sqlx {
-                operation: "migrate database",
+                operation: "migrate test database",
                 source,
             } if source.to_string().contains("database is locked")
         ),
         "unexpected error: {error:?}"
+    );
+    assert!(
+        waited >= SHORT_BUSY_TIMEOUT,
+        "the opener should wait out its busy timeout, waited {waited:?}"
     );
     release_write_lock(&mut lock_holder).await;
 }
@@ -205,7 +218,7 @@ async fn a_failing_migration_rolls_back_every_migration_of_the_open() {
         matches!(
             error,
             Error::Migrate {
-                operation: "migrate database",
+                operation: "migrate test database",
                 source: MigrateError::ExecuteMigration(..),
             }
         ),
@@ -236,7 +249,7 @@ async fn migrations_opting_out_of_transactions_are_rejected() {
     )]);
 
     // Act
-    let result = migrate(&pool, &migrator).await;
+    let result = migrate(&pool, &migrator, &OPTIONS.labels).await;
 
     // Assert
     let error = result.expect_err("a no-transaction migration should be rejected");
@@ -244,7 +257,7 @@ async fn migrations_opting_out_of_transactions_are_rejected() {
         matches!(
             error,
             Error::Migrate {
-                operation: "migrate database",
+                operation: "migrate test database",
                 source: MigrateError::Source(_),
             }
         ),
@@ -261,12 +274,16 @@ async fn migrations_opting_out_of_transactions_are_rejected() {
 async fn an_up_to_date_database_still_validates_applied_migrations() {
     // Arrange
     let pool = memory_pool().await;
-    migrate(&pool, &migrator(&[CREATE_ITEM, CREATE_TAG]))
-        .await
-        .expect("both migrations should apply");
+    migrate(
+        &pool,
+        &migrator(&[CREATE_ITEM, CREATE_TAG]),
+        &OPTIONS.labels,
+    )
+    .await
+    .expect("both migrations should apply");
 
     // Act
-    let result = migrate(&pool, &migrator(&[CREATE_ITEM])).await;
+    let result = migrate(&pool, &migrator(&[CREATE_ITEM]), &OPTIONS.labels).await;
 
     // Assert
     let error = result.expect_err("an applied migration missing from the source should fail");
@@ -338,7 +355,7 @@ async fn opening_a_directory_reports_the_failed_connection() {
         matches!(
             error,
             Error::Sqlx {
-                operation: "connect to database",
+                operation: "open test database",
                 ..
             }
         ),
@@ -347,7 +364,7 @@ async fn opening_a_directory_reports_the_failed_connection() {
     assert!(
         error
             .to_string()
-            .starts_with("SQLite operation `connect to database` failed: ")
+            .starts_with("SQLite operation `open test database` failed: ")
     );
 }
 
