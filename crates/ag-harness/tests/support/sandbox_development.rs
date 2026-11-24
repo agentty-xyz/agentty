@@ -21,6 +21,11 @@ use tempfile::TempDir;
 use super::coverage::{self, Coverage};
 use super::fixture::{refusing_harness, schema};
 
+/// The linked worktree's branch, nested like a host's session branches so
+/// that Linux, which grants the directory holding it, keeps `main`
+/// read-only.
+const SESSION_BRANCH: &str = "wt/session";
+
 /// A repository whose linked worktree holds symlinks, beside a
 /// per-session temporary directory, as a host would lay out one session.
 struct LinkedWorktree {
@@ -45,7 +50,7 @@ impl LinkedWorktree {
         git(&main, &["commit", "-q", "-m", "initial"]);
         git(
             &main,
-            &["worktree", "add", "-q", "-b", "session", "../session"],
+            &["worktree", "add", "-q", "-b", SESSION_BRANCH, "../session"],
         );
         // Instrumented launchers write their profiles beneath `output`.
         std::fs::create_dir(root.join("session/output")).expect("profile parent");
@@ -92,7 +97,8 @@ impl LinkedWorktree {
         .expect("launcher grant")
         .with_write(".".into())
         .expect("worktree grant")
-        .with_git_writes()
+        .with_git_writes(SESSION_BRANCH.into())
+        .expect("Git writes")
         .with_temporary_directory(self.temporary())
         .expect("temporary directory")
     }
@@ -431,7 +437,8 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
         .expect("launcher grant")
         .with_write(write.into())
         .expect("worktree grant")
-        .with_git_writes()
+        .with_git_writes("main".into())
+        .expect("Git writes")
         .with_temporary_directory(fixture.temporary())
         .expect("temporary directory")
     };
@@ -566,6 +573,68 @@ async fn native_git_writes_keep_history_rewrites_read_only() {
     );
     assert!(!common.join("info/grafts").exists());
     assert!(!common.join("shallow").exists());
+}
+
+/// Commands commit to the session branch, even one only `packed-refs`
+/// holds, and write its reflog, but cannot move the base branch, create
+/// branches or tags, stash, or edit or rewrite `packed-refs`, so `git gc`
+/// fails without damaging the repository. macOS also keeps the session
+/// branch's siblings read-only; Linux grants the directory holding it.
+#[tokio::test]
+async fn native_git_writes_cover_only_the_session_branch() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let main = fixture.root().join("main");
+    git(&main, &["branch", "wt/other", "main"]);
+    git(&main, &["pack-refs", "--all"]);
+    let common = main.join(".git");
+    let packed_before = std::fs::read(common.join("packed-refs")).expect("packed references");
+    let base = git(&main, &["rev-parse", "main"]);
+    let sibling = if cfg!(target_os = "macos") {
+        "if git branch -f wt/other HEAD 2>/dev/null; then exit 92; fi; "
+    } else {
+        ""
+    };
+
+    // Act
+    let result = fixture
+        .run(
+            &format!(
+                "common=$(git rev-parse --path-format=absolute --git-common-dir); git -c \
+                 user.name=Sandbox -c user.email=sandbox@example.com -c commit.gpgsign=false \
+                 commit -q --allow-empty -m own || exit 90; if git update-ref refs/heads/main \
+                 HEAD 2>/dev/null; then exit 91; fi; {sibling}if printf x >> \
+                 \"$common/packed-refs\"; then exit 93; fi; if git tag sandboxed 2>/dev/null; \
+                 then exit 94; fi; if git checkout -q -b wt-new 2>/dev/null; then exit 95; fi; \
+                 printf changed >> tracked; if git stash -q 2>/dev/null; then exit 96; fi; grep \
+                 -q changed tracked || exit 97; if git pack-refs --all 2>/dev/null; then exit 98; \
+                 fi; if git gc -q 2>/dev/null; then exit 99; fi; printf confined"
+            ),
+            fixture.configuration(),
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "confined", "{result:?}");
+    assert_eq!(
+        git(&main, &["log", "-1", "--format=%s", SESSION_BRANCH]).trim(),
+        "own"
+    );
+    assert_eq!(
+        git(&main, &["log", "-g", "-1", "--format=%gs", SESSION_BRANCH]).trim(),
+        "commit: own"
+    );
+    assert_eq!(git(&main, &["rev-parse", "main"]), base);
+    assert_eq!(git(&main, &["rev-parse", "wt/other"]), base);
+    assert_eq!(
+        std::fs::read(common.join("packed-refs")).expect("packed references"),
+        packed_before
+    );
+    assert_eq!(git(&main, &["tag", "--list"]), "");
+    assert_eq!(git(&main, &["branch", "--list", "wt-new"]), "");
+    assert_eq!(git(&main, &["stash", "list"]), "");
+    git(&main, &["fsck", "--no-progress"]);
 }
 
 /// Git run outside the sandbox resumes a rebase from its to-do list, which

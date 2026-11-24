@@ -143,7 +143,7 @@ async fn run_session_turn(
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
     let sandbox = config
-        .session_sandbox(&session_id, &req.folder, &environment)
+        .session_sandbox(&session_id, &req, &environment)
         .await?;
     let options = RunOptions::new(profile, req.permission_mode, &environment, &sandbox)?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)

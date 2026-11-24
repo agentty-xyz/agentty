@@ -13,14 +13,18 @@ use std::os::unix::net::UnixStream;
 use rustix::io::Errno;
 use rustix::process::{Pid, WaitOptions, waitpid};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::branch_directories;
 #[cfg(target_os = "macos")]
 use super::seatbelt;
 use super::{ChildEvent, child_event, instruction, write_notice};
 #[cfg(target_os = "macos")]
 use crate::execution::contract::ReadScope;
-use crate::execution::wire::Notice;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::execution::wire::GitWrites;
 #[cfg(target_os = "macos")]
-use crate::execution::wire::{GitWrites, Launch};
+use crate::execution::wire::Launch;
+use crate::execution::wire::Notice;
 
 #[test]
 fn instruction_distinguishes_no_data_acknowledgment_eof_and_invalid_descriptor() {
@@ -160,10 +164,17 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
     for common in [invalid.into(), "/repo/.git\"".into(), "/repo/.git\n".into()] {
         configuration.git_writes = Some(GitWrites {
             admin: None,
+            branch: "wt/session".into(),
             common,
         });
         assert!(seatbelt(&configuration).is_err());
     }
+    configuration.git_writes = Some(GitWrites {
+        admin: None,
+        branch: "wt/session\"".into(),
+        common: "/repo/.git".into(),
+    });
+    assert!(seatbelt(&configuration).is_err());
 }
 
 #[cfg(target_os = "macos")]
@@ -179,6 +190,7 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         git_metadata: vec!["/workspace/.git".into()],
         git_writes: Some(GitWrites {
             admin: None,
+            branch: "wt/session.1".into(),
             common: "/workspace/.git".into(),
         }),
         hidden_paths: vec!["/sessions".into()],
@@ -201,16 +213,42 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
     let denial = profile
         .find("(deny file-write* (regex #\"(^|/)")
         .expect("metadata name denial");
+    // A main worktree reopens the files at the top of its Git directory, its
+    // own reflog and per-worktree references, the object store, and only
+    // the granted branch and its reflog, then denies the protected entries,
+    // packed references included.
     let reopened = profile
-        .find("(allow file-write* (subpath \"/workspace/.git\"))")
-        .expect("Git writes");
+        .find(
+            "(allow file-write* (regex \
+             #\"^/workspace/[.]git/([^/]+|logs/HEAD|refs/(bisect|worktree|rewritten)(/.*)?)$\"))",
+        )
+        .expect("main worktree state");
+    let objects = profile
+        .find("(allow file-write* (subpath \"/workspace/.git/objects\"))")
+        .expect("object store");
+    let branch = profile
+        .find(
+            "(allow file-write* (regex \
+             #\"^/workspace/[.]git/(logs/)?refs/heads/wt/session[.]1([.]lock)?$\"))",
+        )
+        .expect("branch reference");
     let protected = profile
-        .find("(deny file-write* (regex #\"^/workspace/[.]git/((config|")
+        .find(
+            "(deny file-write* (regex \
+             #\"^/workspace/[.]git/((config|hooks|modules|packed-refs|reftable|",
+        )
         .expect("protected Git files");
-    assert!(denial < reopened && reopened < protected, "{profile}");
-    // The protected entries and the directories holding them; no linked
-    // worktree administration to protect.
-    assert_eq!(profile.matches("(regex #\"^").count(), 2, "{profile}");
+    assert!(
+        denial < reopened && reopened < objects && objects < branch && branch < protected,
+        "{profile}"
+    );
+    assert!(
+        !profile.contains("(allow file-write* (subpath \"/workspace/.git\"))"),
+        "{profile}"
+    );
+    // The main worktree's state, the branch, the protected entries, and the
+    // directories holding them; no linked worktree administration.
+    assert_eq!(profile.matches("(regex #\"^").count(), 4, "{profile}");
     assert!(
         profile.contains(
             "(regex #\"^/workspace/[.]git(/(worktrees(/[^/]+)?|refs|objects(/info)?))?$\")"
@@ -244,6 +282,101 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         full_disk < hidden && metadata < hidden && hidden < writable,
         "{profile}"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_git_writes_in_a_linked_worktree_open_its_administration_and_branch_only() {
+    // Arrange
+    let configuration = Launch {
+        arguments: vec![],
+        directory: "/workspace".into(),
+        environment: BTreeMap::new(),
+        executable: "/bin/bash".into(),
+        external_reads: vec![],
+        git_metadata: vec![],
+        git_writes: Some(GitWrites {
+            admin: Some("/repo/.git/worktrees/session".into()),
+            branch: "session".into(),
+            common: "/repo/.git".into(),
+        }),
+        hidden_paths: vec![],
+        host_information: false,
+        launcher: "/launcher".into(),
+        linux_bubblewrap: None,
+        network: false,
+        read_scope: ReadScope::Granted,
+        system: false,
+        unix_sockets: vec![],
+        workspace: "/workspace".into(),
+        write_nodes: vec![],
+        writes: vec![],
+    };
+
+    // Act
+    let profile = seatbelt(&configuration).expect("profile");
+
+    // Assert
+    assert!(
+        profile.contains("(allow file-write* (subpath \"/repo/.git/worktrees/session\"))"),
+        "{profile}"
+    );
+    assert!(
+        profile.contains(
+            "(allow file-write* (regex #\"^/repo/[.]git/(logs/)?refs/heads/session([.]lock)?$\"))"
+        ),
+        "{profile}"
+    );
+    // The common directory's top-level files belong to the main worktree.
+    assert!(!profile.contains("([^/]+|logs/HEAD"), "{profile}");
+    assert!(
+        !profile.contains("(allow file-write* (subpath \"/repo/.git\"))"),
+        "{profile}"
+    );
+}
+
+#[test]
+fn branch_directories_are_created_without_following_links_or_files() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("repository");
+    let common = directory.path().canonicalize().expect("canonical");
+    let outside = common.join("outside");
+    std::fs::create_dir_all(common.join("refs/heads")).expect("references");
+    std::fs::create_dir(&outside).expect("outside");
+    std::os::unix::fs::symlink(&outside, common.join("refs/heads/linked")).expect("link");
+    let git = |common: &std::path::Path, branch: &str| GitWrites {
+        admin: None,
+        branch: branch.into(),
+        common: common.to_path_buf(),
+    };
+    let reftable = common.join("reftable-repository");
+    std::fs::create_dir_all(reftable.join("refs")).expect("reftable references");
+    std::fs::write(reftable.join("refs/heads"), "").expect("reftable heads file");
+
+    // Act
+    let nested = branch_directories(&git(&common, "wt/a/b")).expect("nested branch");
+    let top = branch_directories(&git(&common, "main")).expect("top-level branch");
+    let linked = branch_directories(&git(&common, "linked/x")).expect("linked directory");
+    let files = branch_directories(&git(&reftable, "wt/x")).expect("reftable repository");
+    let missing = branch_directories(&git(&common.join("missing/repository"), "wt/x"));
+
+    // Assert
+    assert_eq!(
+        nested,
+        [
+            common.join("refs/heads/wt/a"),
+            common.join("logs/refs/heads/wt/a")
+        ]
+    );
+    assert!(common.join("logs/refs/heads/wt/a").is_dir());
+    assert_eq!(
+        top,
+        [common.join("refs/heads"), common.join("logs/refs/heads")]
+    );
+    assert_eq!(linked, [common.join("logs/refs/heads/linked")]);
+    assert_eq!(std::fs::read_dir(&outside).expect("outside").count(), 0);
+    assert_eq!(files, [reftable.join("logs/refs/heads/wt")]);
+    assert!(missing.is_err());
 }
 
 #[cfg(target_os = "macos")]

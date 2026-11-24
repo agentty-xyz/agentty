@@ -2578,6 +2578,7 @@ fn switching_turn(folder: &Path, model: &str, prompt: &str) -> ag_contracts::Tur
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::UtilityPrompt,
         response_style: ag_contracts::ResponseStyle::default(),
+        session_branch: None,
         speed_mode: SpeedMode::Normal,
     }
 }

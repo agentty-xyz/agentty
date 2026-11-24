@@ -259,7 +259,7 @@ a key or sign-in is never chosen as the default.
   `bash`. Provider keys and endpoints are removed from the `bash` environment.
 - <a id="backends-harness-sandbox"></a> `bash` runs in the operating system's sandbox
   where it is available: Seatbelt on macOS, Bubblewrap on Linux. Commands can read the
-  disk but write only the session worktree, its Git metadata, and the session's own
+  disk but write only the session worktree, the session branch, and the session's own
   temporary directory. Credential stores such as `~/.ssh`, `~/.aws`, `~/.config/gh`, the
   keychains, and browser profiles stay hidden, and so do Agentty's database, pasted
   images, harness history, stored API keys, and ChatGPT sign-in. Agentty never reruns a
@@ -274,12 +274,15 @@ a key or sign-in is never chosen as the default.
   `DATABASE_URL`, and every `AWS_`, `GH_`, `GITHUB_`, and `GITLAB_` variable) never
   reach commands, besides the model providers' keys. The GitHub CLI is therefore
   unauthenticated inside a session.
-- Git writes stay limited: commands can commit on the session branch, but cannot write
-  Git configuration, hooks, replacement refs, grafts, or object alternates, and
-  Agentty's own Git ignores replacement refs and grafts. A turn, task, or graph node
-  that moves or deletes the session's base branch fails before Agentty commits or
-  publishes anything, with the commit to restore, and no turn starts while the base does
-  not resolve.
+- Git writes stay limited: commands can commit on the session branch, but cannot move
+  the base branch, create branches or tags, use `git stash`, or edit `packed-refs`, so
+  `git gc` fails without changing the repository. They cannot write Git configuration,
+  hooks, replacement refs, grafts, or object alternates either, and Agentty's own Git
+  ignores replacement refs and grafts. On Linux, commands can still move other sessions'
+  branches, since the sandbox there can only make the whole `wt/` directory writable. A
+  turn, task, or graph node that moves or deletes the session's base branch fails before
+  Agentty commits or publishes anything, with the commit to restore, and no turn starts
+  while the base does not resolve.
 - The temporary directory, `~/.agentty/harness/<session>/tmp/`, holds the Cargo
   (`CARGO_HOME`), npm, Go, pip, and `XDG_CACHE_HOME` caches of that session only, and is
   removed with the session; host tools and other sessions never read it. Each new

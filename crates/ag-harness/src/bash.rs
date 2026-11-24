@@ -44,6 +44,8 @@ const TEMPORARY_DIRECTORY_VARIABLE: &str = "TMPDIR";
 /// Most entries one configuration accepts in each path list and in its
 /// excluded commands.
 const MAX_PATH_GRANTS: usize = 64;
+/// Longest branch name [`BashConfig::with_git_writes`] accepts.
+const MAX_BRANCH_BYTES: usize = 255;
 
 /// Shell syntax that keeps a command from leaving the sandbox: operators,
 /// quotes, escapes, expansions, globs, history, and comments, whose meaning
@@ -227,6 +229,7 @@ impl BashConfig {
                 excluded_environment_names: Vec::new(),
                 executor: identity,
                 external_reads: Vec::new(),
+                git_branch: None,
                 hidden_paths: Vec::new(),
                 host_information: false,
                 launcher,
@@ -561,33 +564,52 @@ impl BashConfig {
         Ok(self)
     }
 
-    /// Grants writes to the workspace repository's Git directory and, for a
-    /// linked worktree, its common directory, so `git add` and `git commit`
-    /// work. Configuration, hooks, worktree links, submodule metadata, and
-    /// rebase and cherry-pick state stay read-only, because Git run later
-    /// outside the sandbox would otherwise execute or follow what a command
-    /// wrote there. So do replacement refs, object alternates, grafts, and
-    /// the shallow boundary, which would change the history that Git shows
-    /// without changing the objects it pushes; on Linux a missing
-    /// `refs/replace` directory or alternates file is created empty to hold
-    /// the read-only mount. Commands can still move any reference, including
-    /// other branches, and edit `packed-refs`, where a replacement ref can
-    /// also live on macOS, so hosts that review history should also run
-    /// their own Git with `GIT_NO_REPLACE_OBJECTS=1`. On Linux only a linked
-    /// worktree can stage and commit: Landlock cannot keep a main worktree's
-    /// Git directory from gaining a `commondir` link, so there only its object,
-    /// reference, and log stores are writable, and commands are refused while a
-    /// write grant contains a Git directory, such as `with_write(".")` in a
-    /// main worktree. A linked worktree whose repository enables
-    /// `extensions.worktreeConfig` needs its `config.worktree` to exist.
+    /// Grants the Git writes that committing to `branch` needs: the object
+    /// store, the `refs/heads/<branch>` reference and its reflog, and, for a
+    /// linked worktree, the worktree's own administration directory with its
+    /// index, `HEAD`, and per-worktree logs and references. For a main
+    /// worktree, macOS also opens the files at the top of its Git directory,
+    /// which hold that worktree's index and `HEAD`. Every other reference,
+    /// including other branches, tags, `refs/stash`, and `packed-refs`, stays
+    /// read-only, so commands cannot create branches, stash, or pack
+    /// references; Git reports those refusals as a failure to lock the
+    /// reference, before it changes anything else. Configuration, hooks,
+    /// worktree links, submodule metadata, and rebase and cherry-pick state
+    /// stay read-only too, because Git run later outside the sandbox would
+    /// otherwise execute or follow what a command wrote there, and so do
+    /// object alternates, grafts, and the shallow boundary, which would
+    /// change the history Git shows without changing the objects it pushes.
+    /// Repositories using the `reftable` reference backend keep every
+    /// reference read-only.
+    ///
+    /// Linux confines writes by directory, so there the directory holding
+    /// the branch stays writable: siblings of `wt/session`, such as
+    /// `wt/other`, can still be moved, while `main` cannot. Choose a nested
+    /// branch name to keep the base branch read-only, and keep checking
+    /// other branches in hosts that review history. The launcher creates
+    /// that directory and its reflog directory when missing. On Linux only a
+    /// linked worktree can stage and commit: Landlock cannot keep a main
+    /// worktree's Git directory from gaining a `commondir` link, so there
+    /// only its object store and branch are writable, and commands are
+    /// refused while a write grant contains a Git directory, such as
+    /// `with_write(".")` in a main worktree. A linked worktree whose
+    /// repository enables `extensions.worktreeConfig` needs its
+    /// `config.worktree` to exist.
     ///
     /// An executor other than the native sandbox that cannot keep these
     /// entries read-only must refuse a policy granting Git writes.
-    #[must_use]
-    pub fn with_git_writes(mut self) -> Self {
+    ///
+    /// # Errors
+    /// Rejects a `branch` that Git would not accept as a branch name, or
+    /// that holds a `"`.
+    pub fn with_git_writes(mut self, branch: String) -> Result<Self, BashError> {
+        if !valid_branch(&branch) {
+            return Err(BashError::InvalidPolicy);
+        }
         self.snapshot.capabilities.insert(Capability::GitWrites);
+        self.snapshot.git_branch = Some(branch);
 
-        self
+        Ok(self)
     }
 
     /// Grants one environment value. The policy revision identifies its value
@@ -817,6 +839,11 @@ pub(crate) struct BashPolicySnapshot {
     )]
     pub(crate) executor: String,
     pub(crate) external_reads: Vec<PathBuf>,
+    /// The branch [`BashConfig::with_git_writes`] grants. Snapshots recorded
+    /// before branch-scoped Git writes grant [`Capability::GitWrites`]
+    /// without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) git_branch: Option<String>,
     /// [`BashConfig::with_hidden_path`] paths.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) hidden_paths: Vec<PathBuf>,
@@ -968,6 +995,36 @@ fn valid_variable(environment: &BTreeMap<String, String>, name: &str, value: &st
             .saturating_add(value.len())
             <= 65536
         && !environment.contains_key(name)
+}
+
+/// Returns whether `branch` is a branch name Git accepts, following
+/// `git check-ref-format --branch`, without a `"`, which no sandbox profile
+/// can quote, and at most [`MAX_BRANCH_BYTES`] long.
+fn valid_branch(branch: &str) -> bool {
+    let has_valid_characters = !branch.chars().any(|character| {
+        character.is_ascii_control()
+            || matches!(
+                character,
+                ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\\' | '"'
+            )
+    });
+    // Case-insensitive file systems would also take `x.LOCK` for a lock file.
+    let has_valid_components = branch.split('/').all(|component| {
+        !component.is_empty()
+            && !component.starts_with('.')
+            && !Path::new(component)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("lock"))
+    });
+
+    has_valid_characters
+        && has_valid_components
+        && branch.len() <= MAX_BRANCH_BYTES
+        && branch != "@"
+        && !branch.starts_with('-')
+        && !branch.ends_with('.')
+        && !branch.contains("..")
+        && !branch.contains("@{")
 }
 
 fn has_git_component(path: &Path) -> bool {

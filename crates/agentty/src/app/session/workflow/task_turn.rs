@@ -267,6 +267,7 @@ async fn prepare(
             AgentRequestKind::SessionResume
         },
         response_style: turn::load_session_response_style(&context.db, &context.session_id).await,
+        session_branch: Some(env.branch),
         speed_mode: turn::load_session_speed_mode(&context.db, &context.session_id).await,
     };
 

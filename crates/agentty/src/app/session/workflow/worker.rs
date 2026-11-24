@@ -748,6 +748,8 @@ struct SessionWorkerRebaseAssistClient {
     main_checkout_root: Option<PathBuf>,
     /// Agent provider and model used for the rebase-assist utility prompt.
     session_agent: AgentSelection,
+    /// Validated session branch checked out in the worktree.
+    session_branch: String,
     /// Session identifier whose provider conversation is reused.
     session_id: SessionId,
     /// Per-app session update versions for targeted refresh events.
@@ -757,8 +759,13 @@ struct SessionWorkerRebaseAssistClient {
 }
 
 impl SessionWorkerRebaseAssistClient {
-    /// Clones the worker fields needed to run a rebase-assist utility turn.
-    fn from_context(context: &SessionWorkerContext, main_checkout_root: Option<PathBuf>) -> Self {
+    /// Clones the worker fields needed to run a rebase-assist utility turn
+    /// on the validated `session_branch`.
+    fn from_context(
+        context: &SessionWorkerContext,
+        main_checkout_root: Option<PathBuf>,
+        session_branch: String,
+    ) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
             cancel_token: Arc::clone(&context.cancel_token),
@@ -771,6 +778,7 @@ impl SessionWorkerRebaseAssistClient {
             session_update_versions: context.session_update_versions.clone(),
             session_id: context.session_id.clone(),
             session_agent: context.session_agent,
+            session_branch,
             transcript: Arc::clone(&context.transcript),
         }
     }
@@ -818,6 +826,7 @@ impl SessionWorkerRebaseAssistClient {
             reasoning_level,
             request_kind: AgentRequestKind::UtilityPrompt,
             response_style: ag_contracts::ResponseStyle::default(),
+            session_branch: Some(self.session_branch.clone()),
             speed_mode,
         };
         let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
@@ -2212,6 +2221,7 @@ impl SessionWorkerService {
         let assist_client = Arc::new(SessionWorkerRebaseAssistClient::from_context(
             context,
             validation.main_checkout,
+            validation.branch,
         ));
         SessionManager::run_rebase_command(RebaseCommandInput {
             app_event_tx: context.app_event_tx.clone(),

@@ -704,7 +704,8 @@ async fn canceled_rebase_does_not_start_another_assisted_turn() {
         .returning(|_| Box::pin(async { Ok(()) }));
     let (context, _db, _messages, _directory) =
         queue_test_context(channel, VecDeque::new(), Status::Rebasing).await;
-    let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+    let assist =
+        SessionWorkerRebaseAssistClient::from_context(&context, None, "wt/session".to_string());
     context.cancel_token.lock().expect("cancel token").cancel();
     // Act
     let result = assist
@@ -733,7 +734,8 @@ async fn rebase_assist_rejects_a_poisoned_operation_token() {
     channel.expect_run_turn().never();
     let (context, _db, _messages, _directory) =
         queue_test_context(channel, VecDeque::new(), Status::Rebasing).await;
-    let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+    let assist =
+        SessionWorkerRebaseAssistClient::from_context(&context, None, "wt/session".to_string());
     poison_lock(Arc::clone(&context.cancel_token));
 
     // Act
@@ -800,7 +802,8 @@ async fn rebase_assist_persists_cli_conversation_despite_usage_failures() {
     }
     context.db = db.clone();
     context.session_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
-    let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+    let assist =
+        SessionWorkerRebaseAssistClient::from_context(&context, None, "wt/session".to_string());
     enable_tracing_log_fallback();
 
     // Act
@@ -860,7 +863,8 @@ async fn rebase_assist_clears_live_activity_without_a_following_user_turn() {
             queue_test_context(channel, VecDeque::new(), Status::Rebasing).await;
         let (sender, mut receiver) = mpsc::unbounded_channel();
         context.app_event_tx = sender;
-        let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+        let assist =
+            SessionWorkerRebaseAssistClient::from_context(&context, None, "wt/session".to_string());
 
         // Act
         let result = assist.run_assist_turn("resolve conflict".into()).await;

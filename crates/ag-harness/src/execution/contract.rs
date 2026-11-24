@@ -198,7 +198,8 @@ impl ExecutionCommand {
 pub(super) struct Grants {
     pub(super) environment: Vec<(OsString, OsString)>,
     pub(super) external_reads: Vec<PathBuf>,
-    pub(super) git_writes: bool,
+    /// The branch the Git-writes grant opens; `None` grants no Git writes.
+    pub(super) git_branch: Option<String>,
     pub(super) host_information: bool,
     pub(super) hidden_paths: Vec<PathBuf>,
     pub(super) network: bool,
@@ -229,8 +230,8 @@ pub(super) enum ReadScope {
 pub struct ExecutionPolicy {
     environment: BTreeMap<OsString, OsString>,
     external_reads: Vec<PathBuf>,
+    git_branch: Option<String>,
     git_metadata: Vec<PathBuf>,
-    git_writes: bool,
     hidden_paths: Vec<PathBuf>,
     host_information: bool,
     network: bool,
@@ -332,8 +333,8 @@ impl ExecutionPolicy {
         Ok(Self {
             environment,
             external_reads: grants.external_reads,
+            git_branch: grants.git_branch,
             git_metadata,
-            git_writes: grants.git_writes,
             hidden_paths: grants.hidden_paths,
             host_information: grants.host_information,
             network: grants.network,
@@ -427,13 +428,20 @@ impl ExecutionPolicy {
         &self.unix_sockets
     }
 
-    /// Whether the host granted writes to the repository's Git directories,
-    /// except the entries `BashConfig::with_git_writes` keeps read-only:
-    /// Git configuration, hooks, worktree links, submodule metadata, and
-    /// rebase and cherry-pick state. An executor that cannot keep those
-    /// read-only must refuse a policy granting Git writes.
+    /// Whether the host granted the Git writes that committing to
+    /// [`Self::git_writes_branch`] needs. Every other reference stays
+    /// read-only, as do the entries `BashConfig::with_git_writes` lists: Git
+    /// configuration, hooks, worktree links, submodule metadata, and rebase
+    /// and cherry-pick state. An executor that cannot keep those read-only
+    /// must refuse a policy granting Git writes.
     pub fn allows_git_writes(&self) -> bool {
-        self.git_writes
+        self.git_branch.is_some()
+    }
+
+    /// The branch whose reference and reflog the Git-writes grant opens,
+    /// when [`Self::allows_git_writes`].
+    pub fn git_writes_branch(&self) -> Option<&str> {
+        self.git_branch.as_deref()
     }
 
     /// Reports lexical intent only; never use this as a filesystem access

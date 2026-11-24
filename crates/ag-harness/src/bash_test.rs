@@ -416,19 +416,21 @@ fn development_grants_validate_and_record_only_what_they_set() {
     let granted = valid
         .clone()
         .with_system_reads()
-        .with_git_writes()
+        .with_git_writes("wt/session".into())
+        .expect("Git writes")
         .with_network()
         .with_temporary_directory("/private/tmp/session".into())
         .expect("temporary directory");
 
     // Assert
-    for name in ["capabilities", "temporary_directory"] {
+    for name in ["capabilities", "git_branch", "temporary_directory"] {
         assert!(legacy.get(name).is_none(), "{name}");
     }
     assert_eq!(
         granted.fingerprint()["capabilities"],
         json!(["git_writes", "network", "system_reads"])
     );
+    assert_eq!(granted.fingerprint()["git_branch"], "wt/session");
     assert_eq!(
         granted.fingerprint()["temporary_directory"],
         "/private/tmp/session"
@@ -462,6 +464,57 @@ fn development_grants_validate_and_record_only_what_they_set() {
             .with_temporary_directory("/private/tmp/session".into())
             .is_err()
     );
+}
+
+#[test]
+fn git_writes_accept_only_branch_names_git_accepts() {
+    // Arrange
+    let long = "a".repeat(256);
+    let rejected = [
+        "",
+        "@",
+        "-session",
+        "session.",
+        "session.lock",
+        "wt/x.LOCK",
+        "wt/.hidden",
+        "wt//session",
+        "/wt",
+        "wt/",
+        "wt..session",
+        "wt@{1}",
+        "wt session",
+        "wt~1",
+        "wt^",
+        "wt:x",
+        "wt?",
+        "wt*",
+        "wt[x",
+        "wt\\x",
+        "wt\"x",
+        "wt\u{7f}",
+        "wt\nx",
+        &long,
+    ];
+
+    // Act / Assert
+    for branch in [
+        "session",
+        "wt/4175e5af",
+        "feature/a-b_c+d@e",
+        &"a".repeat(255),
+    ] {
+        assert!(
+            configuration().with_git_writes(branch.into()).is_ok(),
+            "{branch}"
+        );
+    }
+    for branch in rejected {
+        assert!(
+            configuration().with_git_writes(branch.into()).is_err(),
+            "{branch:?}"
+        );
+    }
 }
 
 /// A host executor that enforces the filesystem policy, hidden paths

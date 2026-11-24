@@ -7,7 +7,10 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
+use ag_contracts::{
+    AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, PermissionMode,
+    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
+};
 use ag_harness::catalog::ModelId;
 use ag_harness::lifecycle::LifecycleEvent;
 use ag_harness::model::{
@@ -1042,29 +1045,57 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
     assert_eq!(granted.len(), 102);
 }
 
+/// Returns a session turn request for `folder` on `session_branch`.
+fn session_request(folder: &Path, session_branch: Option<&str>) -> TurnRequest {
+    TurnRequest {
+        context_compaction: ContextCompaction::Off,
+        provider_call_budget: None,
+        execution_policy: ExecutionPolicy::default(),
+        continuation: TurnContinuation::fresh(),
+        folder: folder.to_path_buf(),
+        main_checkout_root: None,
+        model: "muse-spark-1.3".to_string(),
+        permission_mode: PermissionMode::AutoEdit,
+        agent_profile: AgentDefinitionPrompt::default(),
+        prompt: "Commit".into(),
+        reasoning_level: ReasoningLevel::default(),
+        request_kind: AgentRequestKind::SessionStart,
+        response_style: ResponseStyle::default(),
+        session_branch: session_branch.map(str::to_string),
+        speed_mode: SpeedMode::default(),
+    }
+}
+
 #[tokio::test]
 /// Gives each session one stable temporary directory beside its harness
-/// database, and rejects invalid session ids.
+/// database, grants Git writes only for the request's session branch, and
+/// rejects invalid session ids.
 async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     // Arrange
     let data_root = tempfile::tempdir().expect("data root");
     let workspace = tempfile::tempdir().expect("workspace");
     let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
     let environment = BTreeMap::new();
+    let request = session_request(workspace.path(), Some("wt/session"));
 
     // Act
     let first = config
-        .session_sandbox("session-1", workspace.path(), &environment)
+        .session_sandbox("session-1", &request, &environment)
         .await;
     let second = config
-        .session_sandbox("session-1", workspace.path(), &environment)
+        .session_sandbox("session-1", &request, &environment)
         .await;
     let other = config
-        .session_sandbox("session-2", workspace.path(), &environment)
+        .session_sandbox("session-2", &request, &environment)
         .await;
-    let invalid = config
-        .session_sandbox("a/b", workspace.path(), &environment)
+    let without_branch = config
+        .session_sandbox(
+            "session-1",
+            &session_request(workspace.path(), None),
+            &environment,
+        )
         .await;
+    let invalid = config.session_sandbox("a/b", &request, &environment).await;
 
     // Assert
     let policy = |sandbox: CommandSandbox| {
@@ -1080,6 +1111,10 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     let first = policy(first.expect("first sandbox"));
     assert_eq!(first, policy(second.expect("second sandbox")));
     assert_ne!(first, policy(other.expect("other session sandbox")));
+    assert_ne!(
+        first,
+        policy(without_branch.expect("sandbox without a branch"))
+    );
     assert!(data_root.path().join("session-1/tmp/cargo").is_dir());
     assert!(invalid.is_err());
 }
@@ -1143,7 +1178,11 @@ async fn session_sandbox_reports_temporary_directory_failures() {
 
     // Act
     let failure = config
-        .session_sandbox("session-1", workspace.path(), &BTreeMap::new())
+        .session_sandbox(
+            "session-1",
+            &session_request(workspace.path(), None),
+            &BTreeMap::new(),
+        )
         .await;
 
     // Assert

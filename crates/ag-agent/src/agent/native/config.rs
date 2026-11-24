@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{env, io};
 
-use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
+use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel, TurnRequest};
 use ag_harness::bash::BashConfig;
 use ag_harness::catalog::{
     Capabilities, ModelCatalog, ModelHandle, ModelId, ModelSelector, ModelSpec,
@@ -212,10 +212,11 @@ impl NativeHarnessConfig {
         Ok(directory.join(SESSION_DATABASE_FILE))
     }
 
-    /// Returns the sandbox of the session's commands run in `workspace`,
-    /// with the session's own temporary directory, which keeps one path for
-    /// the session's lifetime because the harness fingerprints it into the
-    /// policy, and goes with the session's harness directory.
+    /// Returns the sandbox of the session's commands run in the folder of
+    /// `request`, which may commit to its session branch, with the session's
+    /// own temporary directory, which keeps one path for the session's
+    /// lifetime because the harness fingerprints it into the policy, and
+    /// goes with the session's harness directory.
     ///
     /// # Errors
     /// Returns an error for an invalid session id or when the directory
@@ -223,7 +224,7 @@ impl NativeHarnessConfig {
     pub(crate) async fn session_sandbox(
         &self,
         session_id: &str,
-        workspace: &Path,
+        request: &TurnRequest,
         environment: &BTreeMap<String, String>,
     ) -> Result<CommandSandbox, String> {
         let database = self.session_database(session_id).await?;
@@ -234,7 +235,15 @@ impl NativeHarnessConfig {
                 format!("Failed to create the harness temporary directory: {error}")
             })?;
 
-        CommandSandbox::prepare(&self.data_root, temporary_directory, workspace, environment).await
+        let sandbox = CommandSandbox::prepare(
+            &self.data_root,
+            temporary_directory,
+            &request.folder,
+            environment,
+        )
+        .await?;
+
+        Ok(sandbox.with_git_branch(request.session_branch.clone()))
     }
 
     /// Returns the sandbox of one utility prompt's commands run in

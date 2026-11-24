@@ -1144,6 +1144,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ag_contracts::ResponseStyle::default(),
+        session_branch: None,
         speed_mode: crate::domain::agent::SpeedMode::default(),
     };
 
@@ -1157,7 +1158,8 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
     .await;
 
     *context.child_pid.lock().expect("PID slot") = Some(recycled_pid);
-    let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+    let assist =
+        SessionWorkerRebaseAssistClient::from_context(&context, None, "wt/session".to_string());
     let assist_result = assist
         .run_turn_with_cancellation(cancel_token, req, mpsc::unbounded_channel().0)
         .await;
@@ -1262,6 +1264,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
             response_style: ag_contracts::ResponseStyle::default(),
+            session_branch: None,
             speed_mode: crate::domain::agent::SpeedMode::default(),
         };
 
@@ -1277,7 +1280,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
         // delay. This test validates that the function does not block
         // indefinitely when `run_turn` never resolves.
         let result = if rebase_assist {
-            SessionWorkerRebaseAssistClient::from_context(&context, None)
+            SessionWorkerRebaseAssistClient::from_context(&context, None, "wt/session".to_string())
                 .run_turn_with_cancellation(cancel_token, req, mpsc::unbounded_channel().0)
                 .await
         } else {
