@@ -34,6 +34,7 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
                 "stop_turn",
                 "sync",
                 "settings",
+                "settings_agent",
                 "publish",
                 "sync_project",
                 "graphs",

@@ -1,7 +1,9 @@
 // Slash commands of the remote control client's composer. As in the
 // terminal, `/` at the start of the message lists the commands that
 // change the open session's settings; `/model`, `/reasoning` and `/style`
-// then list their values, and `/fast` toggles the speed. Every pick makes
+// then list their values, and `/fast` toggles the speed. With the
+// `settings_agent` capability and more than one agent, `/model` first
+// lists the agents, then the chosen one's models. Every pick makes
 // one `set_session_settings` change, held for a session not yet created,
 // so those commands need the same `settings` and `host` capabilities as
 // the settings sheet. `/graph`, offered with the `graph_proposal`
@@ -14,7 +16,10 @@
 import {
   REASONING_LEVELS,
   RESPONSE_STYLES,
+  agentModels,
   currentChoice,
+  modelAgents,
+  offersAgentChoice,
   offersSettings,
   offersSpeed,
   parseModels,
@@ -42,6 +47,7 @@ const BUSY_STATUSES = new Set(["InProgress", "Rebasing"]);
 // What each command with a value list chooses, as `currentChoice` names
 // it, and the list's title.
 const VALUE_COMMANDS = {
+  "/agent": { field: "agent", title: "Agent" },
   "/model": { field: "model", title: "Model" },
   "/reasoning": { field: "reasoning", title: "Reasoning" },
   "/style": { field: "style", title: "Style" },
@@ -135,20 +141,40 @@ export function toggledSpeed(session) {
   return currentChoice(session).speed === "fast" ? "normal" : "fast";
 }
 
+// The agents `/model` lets `session` choose among `models`, with its own
+// one; empty when there is only one to choose.
+export function slashAgents(session, models) {
+  const agents = withCurrent(modelAgents(models), currentChoice(session).agent);
+
+  return agents.length < 2 ? [] : agents;
+}
+
 // The choices `command` lists for `session`, as popup items with the
-// current one marked. Models are `parseModels` entries; the session's own
-// model stays listed, by its display name, when `models` lacks it.
-export function slashValues(command, session, models) {
+// current one marked. Models are `parseModels` entries; `/model` lists
+// those of `agent`, the session's own by default, `/agent` the agents
+// `slashAgents` offers. The session's own model stays listed, by its
+// display name, on its own agent when `models` lacks it.
+export function slashValues(command, session, models, agent = null) {
   const current = currentChoice(session);
+  if (command === "/agent") {
+    return slashAgents(session, models).map((value) => ({
+      detail: "",
+      isCurrent: value === current.agent,
+      key: value,
+      label: value,
+    }));
+  }
   if (command === "/model") {
-    const options = models.map((model) => ({ id: model.id, name: model.name }));
-    if (current.model && !options.some((option) => option.id === current.model)) {
-      options.unshift({ id: current.model, name: session.model || current.model });
+    const chosen = agent ?? current.agent;
+    const options = agentModels(models, chosen).map((model) => ({ id: model.id, name: model.name }));
+    const own = chosen === current.agent ? current.model : null;
+    if (own && !options.some((option) => option.id === own)) {
+      options.unshift({ id: own, name: session.model || own });
     }
 
     return options.map((option) => ({
       detail: option.name === option.id ? "" : option.id,
-      isCurrent: option.id === current.model,
+      isCurrent: option.id === own,
       key: option.id,
       label: option.name,
     }));
@@ -186,13 +212,16 @@ export function createSlashCommands({
   onGraph = null,
 }) {
   const state = {
+    // The agent `/model` lists the models of, once picked among several.
+    agent: null,
     // Text the user closed the menu on with `Escape`; it stays closed
     // until the text changes.
     dismissed: null,
     // Counts model loads, so an answer for an older one is dropped.
     loads: 0,
     models: [],
-    // The session the models were loaded for, and the load.
+    // The session the models were loaded for, with whether they span
+    // every agent, and the load.
     modelsFor: null,
     modelsLoad: null,
     // What the menu shows: `commands`, a command with a value list, or
@@ -203,8 +232,9 @@ export function createSlashCommands({
   };
 
   // What the menu may offer now: the open `session`, whether this device
-  // may change its settings (`canSettings`), and whether `/graph` may arm
-  // the composer (`canGraph`). `null` when it may offer nothing.
+  // may change its settings (`canSettings`) and their agent
+  // (`canChooseAgent`), and whether `/graph` may arm the composer
+  // (`canGraph`). `null` when it may offer nothing.
   function offer() {
     const { capabilities = [], isConnected = false, isGraphArmed = false, session = null } =
       context() ?? {};
@@ -212,12 +242,14 @@ export function createSlashCommands({
       return null;
     }
     const canSettings = offersSettings(capabilities);
+    const canChooseAgent = canSettings && offersAgentChoice(capabilities);
     const canGraph = onGraph !== null && offersGraph(capabilities, session);
 
-    return canSettings || canGraph ? { canGraph, canSettings, session } : null;
+    return canSettings || canGraph ? { canChooseAgent, canGraph, canSettings, session } : null;
   }
 
   function close() {
+    state.agent = null;
     if (state.stage !== null) {
       state.stage = null;
       state.text = null;
@@ -225,16 +257,18 @@ export function createSlashCommands({
     }
   }
 
-  function loadModels(session) {
-    if (state.modelsFor === session.id) {
+  function loadModels(session, canChooseAgent) {
+    const key = session.id + (canChooseAgent ? "\u0000*" : "");
+    if (state.modelsFor === key) {
       return state.modelsLoad;
     }
     const load = ++state.loads;
-    state.modelsFor = session.id;
+    state.modelsFor = key;
     state.modelsLoad = (async () => {
       let models = [];
       try {
-        models = parseModels(await request({ method: "get_host" }), session.agent);
+        const agent = canChooseAgent ? null : session.agent;
+        models = parseModels(await request({ method: "get_host" }), agent);
       } catch (error) {
         if (load !== state.loads) {
           return;
@@ -255,14 +289,23 @@ export function createSlashCommands({
   // Lists what `stage` offers under `current`, an `offer()`. A stage with
   // nothing to list yet stays current, closed, so the models from the host
   // can still fill it.
+  // `/model` lists the agents first while there are several to choose and
+  // none is chosen yet.
   function show(stage, current) {
-    const { canGraph, canSettings, session } = current;
+    const { canChooseAgent, canGraph, canSettings, session } = current;
+    if (stage === "commands") {
+      state.agent = null;
+    }
     state.stage = stage;
     state.text = input.value;
-    const options = { onDismiss: dismiss, onPick: (item) => pick(stage, item.key), owner: OWNER };
+    const listsAgents =
+      stage === "/model" && state.agent === null && canChooseAgent && slashAgents(session, state.models).length > 0;
+    const listed = listsAgents ? "/agent" : stage;
+    const options = { onDismiss: dismiss, onPick: (item) => pick(listed, item.key), owner: OWNER };
     if (stage === "commands") {
       const query = slashQuery(input.value) ?? "";
-      const canFast = offersSpeed(state.models, currentChoice(session).model);
+      const own = currentChoice(session);
+      const canFast = offersSpeed(state.models, own.model, own.agent);
       suggestions.show({
         items: slashCommands(query, { canFast, canGraph, canSettings }).map((command) => ({
           detail: command.description,
@@ -274,8 +317,8 @@ export function createSlashCommands({
       });
     } else {
       suggestions.show({
-        items: slashValues(stage, session, state.models),
-        title: VALUE_COMMANDS[stage].title,
+        items: slashValues(listed, session, state.models, state.agent),
+        title: VALUE_COMMANDS[listed].title,
         ...options,
       });
     }
@@ -304,7 +347,7 @@ export function createSlashCommands({
     // The same text keeps what the menu shows, such as a value list.
     if (state.stage === null || state.text !== text) {
       if (current.canSettings) {
-        void loadModels(current.session);
+        void loadModels(current.session, current.canChooseAgent);
       }
       show("commands", current);
     }
@@ -346,6 +389,13 @@ export function createSlashCommands({
       return;
     }
     const session = current.session;
+    if (stage === "/agent") {
+      // As in the terminal, the chosen agent's models follow.
+      state.agent = key;
+      show("/model", current);
+
+      return;
+    }
     if (stage === "commands" && key !== "/fast") {
       // The models from `get_host` replace the session's own one once
       // they arrive.
@@ -359,6 +409,9 @@ export function createSlashCommands({
       choice.speed = toggledSpeed(session);
     } else {
       choice[VALUE_COMMANDS[stage].field] = key;
+    }
+    if (stage === "/model" && state.agent) {
+      choice.agent = state.agent;
     }
     void apply(session, settingsChange(session, choice, state.models));
   }

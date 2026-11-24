@@ -72,6 +72,8 @@ function mountHome({
     settings: createSettings({
       document: document,
       elements: {
+        agent: byId("settings-agent"),
+        agentRow: byId("settings-agent-row"),
         apply: byId("settings-apply"),
         dialog: byId("settings-dialog"),
         error: byId("settings-error"),
@@ -114,6 +116,7 @@ test("parseHost keeps what home shows and refuses other answers", () => {
     baseBranch: "main",
     model: "claude-opus-5-5",
     modeModels: {},
+    models: [],
     modes: ["regular", "harness"],
     project: "agentty",
   });
@@ -121,6 +124,7 @@ test("parseHost keeps what home shows and refuses other answers", () => {
     baseBranch: "",
     model: "",
     modeModels: {},
+    models: [],
     modes: [],
     project: "p",
   });
@@ -430,7 +434,7 @@ function settingsLine(page) {
   return page.byId("home-composer-settings").textContent;
 }
 
-test("parseHost keeps each mode's starting settings and the models of its agent", () => {
+test("parseHost keeps each mode's starting settings and every agent's models", () => {
   const host = parseHost(PICKING_HOST);
 
   assert.deepEqual(host.modeModels, {
@@ -438,7 +442,6 @@ test("parseHost keeps each mode's starting settings and the models of its agent"
       agent: "harness",
       id: "kimi-k3",
       name: "Kimi K3",
-      options: [{ id: "kimi-k3", name: "Kimi K3", supportsFast: false }],
       reasoning: "high",
       speed: null,
       style: "concise",
@@ -447,15 +450,15 @@ test("parseHost keeps each mode's starting settings and the models of its agent"
       agent: "claude",
       id: "claude-opus-5-5",
       name: "Opus 5.5",
-      options: [
-        { id: "claude-opus-5-5", name: "Opus 5.5", supportsFast: true },
-        { id: "claude-sonnet-5-5", name: "Sonnet 5.5", supportsFast: false },
-      ],
       reasoning: "high",
       speed: "normal",
       style: "concise",
     },
   });
+  assert.deepEqual(
+    host.models.map((model) => [model.agent, model.id]),
+    PICKING_HOST.models.map((model) => [model.agent, model.model]),
+  );
 });
 
 test("newSession describes the session a mode would start, with the picks applied", () => {
@@ -484,6 +487,9 @@ test("newSession describes the session a mode would start, with the picks applie
       status: "Draft",
     },
   );
+  // A model of another agent shows by that agent's name for it.
+  const harness = newSession(host, "regular", { agent: "harness", model: "kimi-k3" });
+  assert.deepEqual([harness.agent, harness.model_id, harness.model], ["harness", "kimi-k3", "Kimi K3"]);
   // A model the host does not list shows by its id.
   assert.equal(newSession(host, "regular", { model: "claude-haiku-5-5" }).model, "claude-haiku-5-5");
   assert.equal(newSession(host, "draft"), null);
@@ -667,6 +673,26 @@ test("picked settings are applied before the first message is sent", async () =>
   ]);
   assert.deepEqual(page.created, [["new", null]]);
   assert.equal(page.byId("home-composer-settings").disabled, false);
+});
+
+test("an agent picked for the new session is sent with its model, and another mode drops it", async () => {
+  const page = mountHome({ host: PICKING_HOST, respond: createdThen() });
+  await page.home.setCapabilities([...PICKING_CAPABILITIES, "settings_agent"]);
+  await pick(page, { "settings-agent": "harness" });
+  assert.equal(settingsLine(page), "Kimi K3 [high]·concise·normal speed");
+
+  page.byId("home-modes").querySelector('[data-mode="harness"]').click();
+  page.byId("home-modes").querySelector('[data-mode="regular"]').click();
+  assert.equal(settingsLine(page), "Opus 5.5 [high]·concise·normal speed");
+  await pick(page, { "settings-agent": "codex" });
+  type(page, "Fix the relay");
+  page.byId("home-form").dispatchEvent(new FakeEvent("submit"));
+  await settle();
+
+  assert.deepEqual(
+    page.requests.filter((body) => body.method === "set_session_settings"),
+    [{ agent: "codex", method: "set_session_settings", model: "gpt-6.1-sol", session_id: "new" }],
+  );
 });
 
 test("keeping the starting settings sends no settings change", async () => {

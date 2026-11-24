@@ -204,6 +204,7 @@ cases! {
         operation: Some(SessionOperation::SessionSettings),
         order: Order::Queued,
         sample: RemoteRequest::SetSessionSettings {
+            agent: Some("vi".to_string()),
             model: Some("vim".to_string()),
             reasoning: Some("huge".to_string()),
             response_style: None,

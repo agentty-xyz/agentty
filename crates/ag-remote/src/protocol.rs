@@ -218,10 +218,15 @@ pub enum RemoteRequest {
     /// reports, except that `model` is the snapshot's `model_id`. Reasoning
     /// and style apply at once; a model or speed change waits while the
     /// session still has accepted work, as in the terminal. Offered through
-    /// the `settings` capability.
+    /// the `settings` capability; `agent` is understood only by a server
+    /// that also offers `settings_agent`.
     SetSessionSettings {
-        /// Model identifier to switch to, one `get_host` lists for the
-        /// session's agent.
+        /// Agent to run `model`, as `get_host` names it; omitted, the
+        /// session keeps its own. Sent only together with `model`, since
+        /// agents share model ids.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+        /// Model identifier to switch to, one `get_host` lists for `agent`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         /// Reasoning level, such as `high`.
@@ -344,8 +349,9 @@ pub struct RemoteModeModel {
 /// One model a session can switch to, as `get_host` lists it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteModelOption {
-    /// Agent that runs the model; a session switches only among the models
-    /// of its own `agent`, as the terminal's `/model` offers them.
+    /// Agent that runs the model. A session switches to the models of
+    /// another agent by naming it in `set_session_settings`, which a server
+    /// accepts when it offers `settings_agent`.
     pub agent: String,
     /// Short description of the model.
     pub description: String,

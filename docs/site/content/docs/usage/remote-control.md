@@ -79,12 +79,12 @@ then asks what the agent should work on in the active project and base branch, w
 choice of session type when Agentty offers more than one. Its message box is the open
 session's: the line under it shows the new session's model, reasoning level, answer
 style, and speed, and when the device may change session settings, the line and the
-slash commands change them, with models from the agent that session type starts on.
-Because the session has no worktree yet, `@` lists the files in the active project's
-checkout, as it does for a draft in the terminal. Sending creates the session, applies
-the settings you changed, sends your text as its first message, and opens it. If the
-settings or the message do not go through, the new session opens with your text still in
-its box.
+slash commands change them, with the agent that session type starts on, or another one
+when this Agentty lets devices change it. Because the session has no worktree yet, `@`
+lists the files in the active project's checkout, as it does for a draft in the
+terminal. Sending creates the session, applies the settings you changed, sends your text
+as its first message, and opens it. If the settings or the message do not go through,
+the new session opens with your text still in its box.
 
 The header of the open session shows its size and changed lines, a merge conflict with
 its base branch, the session branch and its base branch, the remote branch it was
@@ -147,13 +147,15 @@ sheet offers `Sync with` the base branch, which asks first and rebases the sessi
 branch, after the running turn if there is one.
 
 When this Agentty lets devices change settings, the line under the message box is a
-button. It opens a sheet with the models of the session's agent, the reasoning level,
-the answer style, and the speed when the chosen model can run fast. `Apply` sends only
-what you changed; during a running turn, the changes apply from the next turn. Typing
-`/` at the start of the message box also lists `/model`, `/reasoning`, `/style`, and,
-when the model can run fast, `/fast`, as in the terminal: type any of a command's
-letters in order to narrow the list, pick one with the arrow keys and `Enter`, or tap
-it, then pick a value; `/fast` toggles the speed at once.
+button. It opens a sheet with the agent, such as `claude` or `harness`, the chosen
+agent's models, the reasoning level, the answer style, and the speed when the chosen
+model can run fast. An older Agentty offers only the models of the session's own agent.
+`Apply` sends only what you changed; during a running turn, the changes apply from the
+next turn. Typing `/` at the start of the message box also lists `/model`, `/reasoning`,
+`/style`, and, when the model can run fast, `/fast`, as in the terminal: type any of a
+command's letters in order to narrow the list, pick one with the arrow keys and `Enter`,
+or tap it, then pick a value. `/model` asks for the agent first, then the model; `/fast`
+toggles the speed at once.
 
 When this Agentty lets devices ask for graph proposals, the `/` list in an open session
 also offers `/graph`, except while the session runs a turn or a sync, as in the
@@ -389,11 +391,10 @@ device can:
   kept but discards the messages queued behind the turn;
 - sync a session branch, which rebases it onto its base branch and starts an agent turn
   to resolve any conflicts;
-- change a session's model, reasoning level, response style, and speed wherever the
-  terminal's composer could, choosing among the models `/model` offers for the session's
-  agent, including the most expensive model and fast mode; reasoning and style apply at
-  once, while a model or speed change waits for the running turn as it does in the
-  terminal;
+- change a session's agent, model, reasoning level, response style, and speed wherever
+  the terminal's composer could, choosing among the agents and models `/model` offers,
+  including the most expensive model and fast mode; reasoning and style apply at once,
+  while a model or speed change waits for the running turn as it does in the terminal;
 - cancel a session, which deletes its worktree and branch;
 - merge a session, which lands its changes on the base branch;
 - create a session in the active project, which adds a worktree and branch;

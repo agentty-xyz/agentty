@@ -133,6 +133,8 @@ const GRAPH_IDS = {
 
 // Element names `createSettings` takes, by the id each has in index.html.
 const SETTINGS_IDS = {
+  agent: "settings-agent",
+  agentRow: "settings-agent-row",
   apply: "settings-apply",
   dialog: "settings-dialog",
   error: "settings-error",

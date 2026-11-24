@@ -432,13 +432,16 @@ impl SessionBackend for RecordingBackend {
         session_id: &SessionId,
         change: SessionSettingsChange,
     ) -> Result<(), SessionError> {
+        let agent = change
+            .agent
+            .map_or_else(|| "-".to_string(), |agent| agent.to_string());
         let model = change.model.map_or("-", AgentModel::as_str);
         let reasoning = change.reasoning_level.map_or("-", ReasoningLevel::as_str);
         let style = change.response_style.map_or("-", ResponseStyle::as_str);
         let speed = change.speed_mode.map_or("-", SpeedMode::as_str);
 
         self.record(
-            format!("settings:{session_id}:{model}:{reasoning}:{style}:{speed}"),
+            format!("settings:{session_id}:{agent}:{model}:{reasoning}:{style}:{speed}"),
             (),
         )
     }

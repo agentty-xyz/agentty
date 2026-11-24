@@ -10,7 +10,7 @@
 import { settingsParts } from "./format.mjs";
 import { createMentions } from "./mention.mjs";
 import { separator } from "./session_list.mjs";
-import { offersSettings } from "./settings.mjs";
+import { offersAgentChoice, offersSettings } from "./settings.mjs";
 import { createSlashCommands, offersGraph } from "./slash.mjs";
 import { createSuggestions } from "./suggest.mjs";
 
@@ -453,12 +453,13 @@ export function createComposer({
   }
 
   function openSettings() {
-    const { isConnected = false, isRunning = false, session = null } = context();
+    const { capabilities = [], isConnected = false, isRunning = false, session = null } = context();
     if (!isConnected || isLocked || !canChangeSettings()) {
       return;
     }
     settings.open(session, {
       apply: (change) => applySettings(session, change),
+      canChooseAgent: offersAgentChoice(capabilities),
       isRunning: isRunning,
     });
   }

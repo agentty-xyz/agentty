@@ -1,8 +1,11 @@
 // Settings sheet of the remote control client: with the `settings` and
 // `host` capabilities, the settings line under the message box opens a
 // sheet that changes the model, reasoning level, answer style and speed of
-// the open session, or of the session home is about to start. The models come from `get_host`, and their names only
-// ever become text nodes. Only the settings the user changed are sent.
+// the open session, or of the session home is about to start. With the
+// `settings_agent` capability too, it also changes the agent that runs the
+// model, as the terminal's `/model` does. The agents and models come from
+// `get_host`, and their names only ever become text nodes. Only the
+// settings the user changed are sent.
 // Functions take `document` as a parameter, so the Node tests in
 // crates/ag-remote/tests/web/settings.test.mjs pass the fake DOM.
 
@@ -18,9 +21,15 @@ export function offersSettings(capabilities) {
   return capabilities.includes("settings") && capabilities.includes("host");
 }
 
-// The models in `get_host`'s answer that a session on `agent` can switch
-// to, as `{ id, name, supportsFast }`. A session switches only among its
-// own agent's models; without an agent, every model is listed.
+// Whether the host lets a session switch to another agent's models: it
+// then takes the `agent` of `set_session_settings`.
+export function offersAgentChoice(capabilities) {
+  return capabilities.includes("settings_agent");
+}
+
+// The models in `get_host`'s answer, as `{ agent, id, name, supportsFast }`.
+// With `agent`, only that agent's models are listed, for a host that
+// switches a session only among its own agent's models.
 export function parseModels(result, agent = null) {
   if (result?.kind !== "host" || !Array.isArray(result.models)) {
     return [];
@@ -29,15 +38,28 @@ export function parseModels(result, agent = null) {
   return result.models
     .filter((model) => text(model?.model) && (!agent || model.agent === agent))
     .map((model) => ({
+      agent: text(model.agent),
       id: model.model,
       name: text(model.name) || model.model,
       supportsFast: model.supports_fast === true,
     }));
 }
 
+// The agents that run `models`, in the order `get_host` lists them.
+export function modelAgents(models) {
+  return [...new Set(models.map((model) => model.agent).filter(Boolean))];
+}
+
+// The entries of `models` that `agent` runs; all of them without an
+// agent.
+export function agentModels(models, agent) {
+  return agent ? models.filter((model) => model.agent === agent) : models;
+}
+
 // What the sheet starts with for `session`: its current settings.
 export function currentChoice(session) {
   return {
+    agent: text(session?.agent),
     model: text(session?.model_id),
     reasoning: text(session?.reasoning),
     speed: text(session?.speed_mode),
@@ -45,19 +67,26 @@ export function currentChoice(session) {
   };
 }
 
-// Whether speed is a choice for model `modelId`: only a model `models`
-// lists as able to run fast offers it.
-export function offersSpeed(models, modelId) {
-  return models.some((model) => model.id === modelId && model.supportsFast);
+// Whether speed is a choice for model `modelId` on `agent`: only a model
+// `models` lists as able to run fast offers it. Agents share model ids,
+// so the agent counts when given.
+export function offersSpeed(models, modelId, agent = null) {
+  return agentModels(models, agent).some((model) => model.id === modelId && model.supportsFast);
 }
 
 // The fields of `set_session_settings` that `choice` changes from
-// `session`'s settings, named as the request names them. Speed counts only
-// while the chosen model offers it. An empty object means nothing changed.
+// `session`'s settings, named as the request names them. Another agent is
+// sent together with its model, even one with the same id, since agents
+// share model ids. Speed counts only while the chosen model offers it. An
+// empty object means nothing changed.
 export function settingsChange(session, choice, models) {
   const current = currentChoice(session);
   const change = {};
-  if (choice.model && choice.model !== current.model) {
+  const agent = choice.agent ?? current.agent;
+  if (choice.model && agent && agent !== current.agent) {
+    change.agent = agent;
+    change.model = choice.model;
+  } else if (choice.model && choice.model !== current.model) {
     change.model = choice.model;
   }
   if (choice.reasoning && choice.reasoning !== current.reasoning) {
@@ -66,7 +95,7 @@ export function settingsChange(session, choice, models) {
   if (choice.style && choice.style !== current.style) {
     change.response_style = choice.style;
   }
-  if (choice.speed && choice.speed !== current.speed && offersSpeed(models, choice.model)) {
+  if (choice.speed && choice.speed !== current.speed && offersSpeed(models, choice.model, agent)) {
     change.speed_mode = choice.speed;
   }
 
@@ -79,18 +108,22 @@ export function withCurrent(values, current) {
   return current && !values.includes(current) ? [...values, current] : values;
 }
 
-// Wires the settings sheet. `elements` holds `dialog`, `form`, `model`,
-// `reasoning`, `style`, `speedRow`, `speed`, `note`, `error` and `apply`,
-// the nodes with the ids named in index.html. `request(body)` sends one
-// request and resolves with its result.
+// Wires the settings sheet. `elements` holds `dialog`, `form`, `agentRow`,
+// `agent`, `model`, `reasoning`, `style`, `speedRow`, `speed`, `note`,
+// `error` and `apply`, the nodes with the ids named in index.html.
+// `request(body)` sends one request and resolves with its result.
 //
-// Returns `open(session, { isRunning, apply })`, `update(session, {
-// isRunning })` for a newer snapshot of the open session, and `close()`.
-// `apply(change)` applies the `set_session_settings` change and resolves
-// once it has; without it, the sheet sends the request.
+// Returns `open(session, { isRunning, apply, canChooseAgent })`,
+// `update(session, { isRunning })` for a newer snapshot of the open
+// session, and `close()`. `apply(change)` applies the
+// `set_session_settings` change and resolves once it has; without it, the
+// sheet sends the request. With `canChooseAgent`, the sheet lists every
+// agent's models and offers the agent as a choice too.
 export function createSettings({ document, elements, request }) {
   const state = {
     apply: null,
+    // Whether the host takes another agent for the session.
+    canChooseAgent: false,
     choice: currentChoice(null),
     isApplying: false,
     // Whether the model list is on its way.
@@ -106,19 +139,50 @@ export function createSettings({ document, elements, request }) {
     if (!session) {
       return;
     }
+    renderAgents();
     renderModels();
     renderChoices(elements.reasoning, withCurrent(REASONING_LEVELS, currentChoice(session).reasoning), "reasoning");
     renderChoices(elements.style, withCurrent(RESPONSE_STYLES, currentChoice(session).style), "style");
-    elements.speedRow.hidden = !offersSpeed(state.models, state.choice.model);
+    elements.speedRow.hidden = !offersSpeed(state.models, state.choice.model, chosenAgent());
     renderChoices(elements.speed, SPEED_MODES, "speed");
     renderApply();
   }
 
-  // The session's own model stays listed, by its display name, while the
-  // host's list is loading or when it lacks that model.
+  // The agent the chosen model runs on: the picked one, or the session's.
+  function chosenAgent() {
+    return state.choice.agent ?? currentChoice(state.session).agent;
+  }
+
+  // The agents the host runs models on, with the session's own one, while
+  // the sheet may change the agent and there is more than one.
+  function renderAgents() {
+    const agents = state.canChooseAgent
+      ? withCurrent(modelAgents(state.models), currentChoice(state.session).agent)
+      : [];
+    elements.agentRow.hidden = agents.length < 2;
+    renderChoices(elements.agent, agents.length < 2 ? [] : agents, "agent", chooseAgent);
+  }
+
+  // Picks `agent` and a model it runs: the chosen one when it runs that id
+  // too, the session's own on the session's agent, otherwise its first.
+  // Every other agent listed runs at least one model.
+  function chooseAgent(agent) {
+    const own = currentChoice(state.session);
+    const models = agentModels(state.models, agent);
+    state.choice.agent = agent;
+    if (!models.some((model) => model.id === state.choice.model)) {
+      state.choice.model = agent === own.agent ? own.model : models[0].id;
+    }
+  }
+
+  // The chosen agent's models. The session's own model stays listed, by
+  // its display name, on the session's agent while the host's list is
+  // loading or when it lacks that model.
   function renderModels() {
-    const options = state.models.map((model) => ({ id: model.id, name: model.name }));
-    const current = currentChoice(state.session).model;
+    const agent = chosenAgent();
+    const options = agentModels(state.models, agent).map((model) => ({ id: model.id, name: model.name }));
+    const own = currentChoice(state.session);
+    const current = agent === own.agent ? own.model : null;
     if (current && !options.some((option) => option.id === current)) {
       options.unshift({ id: current, name: text(state.session.model) || current });
     }
@@ -144,10 +208,11 @@ export function createSettings({ document, elements, request }) {
     elements.model.setAttribute("aria-busy", String(state.isLoading));
   }
 
-  // Shows `values` as toggle buttons for `key`. The buttons are rebuilt
-  // only when the values change; otherwise they are updated in place, so
-  // the focused one keeps its focus.
-  function renderChoices(group, values, key) {
+  // Shows `values` as toggle buttons for `key`, which a click sets, or
+  // `pick(value)` when given. The buttons are rebuilt only when the values
+  // change; otherwise they are updated in place, so the focused one keeps
+  // its focus.
+  function renderChoices(group, values, key, pick = null) {
     const shown = Array.from(group.children, (button) => button.dataset.value);
     if (shown.join("\u0000") !== values.join("\u0000")) {
       group.replaceChildren(
@@ -157,7 +222,11 @@ export function createSettings({ document, elements, request }) {
           button.textContent = value;
           button.dataset.value = value;
           button.addEventListener("click", () => {
-            state.choice[key] = value;
+            if (pick) {
+              pick(value);
+            } else {
+              state.choice[key] = value;
+            }
             render();
           });
 
@@ -185,7 +254,8 @@ export function createSettings({ document, elements, request }) {
     const load = ++state.loads;
     let models = [];
     try {
-      models = parseModels(await request({ method: "get_host" }), text(session.agent));
+      const agent = state.canChooseAgent ? null : text(session.agent);
+      models = parseModels(await request({ method: "get_host" }), agent);
     } catch (error) {
       if (load === state.loads) {
         elements.error.textContent = "Could not list the models: " + error.message;
@@ -223,8 +293,9 @@ export function createSettings({ document, elements, request }) {
     }
   }
 
-  function open(session, { isRunning = false, apply = null } = {}) {
+  function open(session, { isRunning = false, apply = null, canChooseAgent = false } = {}) {
     state.session = session;
+    state.canChooseAgent = canChooseAgent;
     state.apply =
       apply ?? ((change) => request({ method: "set_session_settings", session_id: session.id, ...change }));
     state.choice = currentChoice(session);
