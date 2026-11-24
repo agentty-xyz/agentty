@@ -38,6 +38,7 @@ integration tests exercise supported APIs without exposing private implementatio
 | Process sampling               | `ResourceClient`                |
 | Remote-control listener        | `RemoteControlLauncher`         |
 | Paired remote devices          | `DeviceStore`                   |
+| Relay host resolution, dials   | `NetworkClient`                 |
 | Agentty Platform API           | `PlatformClient`                |
 | Persistence                    | Repository traits in `ag-store` |
 | Storage timestamps             | `TimestampSource`               |

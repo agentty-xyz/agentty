@@ -22,6 +22,7 @@
 
 mod connection;
 mod device;
+mod dial;
 mod encrypted;
 mod entropy;
 mod pairing;

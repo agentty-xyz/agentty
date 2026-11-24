@@ -4,6 +4,13 @@
 //! The paths and control messages mirror the relay's `/v1` contract. The
 //! relay is untrusted, so every read and write on its sockets is bounded in
 //! size and time.
+//!
+//! Each socket dials every address of the relay host, staggered as
+//! [`crate::dial`] describes, and for `wss` each attempt includes the TLS
+//! handshake. An address that does not answer, or that accepts TCP and
+//! then stalls, such as an IPv6 address behind a route that drops packets,
+//! therefore cannot keep the link from registering through another address
+//! of the same host.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,17 +18,19 @@ use std::time::Duration;
 use ag_noise::{Handshake, PublicKey, StaticKeypair};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, RootCertStore};
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
-};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_with_config};
 
 use crate::connection::{self, DeviceProof};
+use crate::dial::{self, RealNetworkClient, TlsTarget};
 use crate::encrypted::{EncryptedTransport, MessageCarrier};
 use crate::server::{ConnectionOrigin, HandshakeSlot, ServerState};
 
@@ -173,27 +182,45 @@ fn tls_config() -> Arc<ClientConfig> {
 
 /// Opens `WebSocket` connections to one relay with shared TLS settings and
 /// size limits.
+///
+/// Each dial resolves the relay host itself and connects through
+/// [`dial::connect`]: attempts alternate address families and start one
+/// after another, the next when any running attempt fails or
+/// [`dial::ATTEMPT_DELAY`] after the latest one started. For `wss` an
+/// attempt includes the TLS handshake, so an address that accepts TCP and
+/// then stalls loses to one that completes TLS. The `WebSocket` upgrade
+/// runs once, on the winning connection only: two upgrades to the same
+/// accept path could both be answered while the relay joins only one of
+/// them to the device.
 #[derive(Clone)]
 struct Dialer {
     base_url: String,
-    /// Shared TLS settings; `None` lets each dial load its own.
+    /// Shared TLS settings; `None` when loading them in the background
+    /// failed, which fails every secure dial without connecting.
     tls: Option<Arc<ClientConfig>>,
 }
 
 impl Dialer {
-    /// Connects to `path` on the relay.
+    /// Connects to `path` on the relay, or returns `None` when no address
+    /// of the relay host connects or a handshake fails.
     async fn open(&self, path: &str) -> Option<RelayStream> {
+        let request = format!("{}{path}", self.base_url)
+            .into_client_request()
+            .ok()?;
+        let endpoint = Self::endpoint(request.uri())?;
+        let tls = if endpoint.is_secure {
+            Some(self.tls_target(endpoint.host)?)
+        } else {
+            None
+        };
+        let network = RealNetworkClient { tls };
+        let stream = dial::connect(&network, endpoint.host, endpoint.port).await?;
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_RELAY_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_RELAY_MESSAGE_BYTES));
-        let (socket, _) = connect_async_tls_with_config(
-            format!("{}{path}", self.base_url),
-            Some(config),
-            true,
-            self.tls.clone().map(Connector::Rustls),
-        )
-        .await
-        .ok()?;
+        let (socket, _) = client_async_with_config(request, stream, Some(config))
+            .await
+            .ok()?;
 
         Some(RelayStream {
             is_broken: false,
@@ -201,6 +228,47 @@ impl Dialer {
             socket,
         })
     }
+
+    /// Where to dial for `uri`: its host, and its explicit port or else 443
+    /// for `wss` and 80 for `ws`. An IPv6 literal host loses its brackets,
+    /// as the resolver and the TLS server name expect. Returns `None`
+    /// without a host or for another scheme.
+    fn endpoint(uri: &Uri) -> Option<RelayEndpoint<'_>> {
+        let is_secure = match uri.scheme_str()? {
+            "wss" => true,
+            "ws" => false,
+            _ => return None,
+        };
+        let host = uri.host()?;
+        let host = host
+            .strip_prefix('[')
+            .and_then(|literal| literal.strip_suffix(']'))
+            .unwrap_or(host);
+        let port = uri.port_u16().unwrap_or(if is_secure { 443 } else { 80 });
+
+        Some(RelayEndpoint {
+            host,
+            is_secure,
+            port,
+        })
+    }
+
+    /// TLS settings and server name for a secure dial to `host`, a name or
+    /// an IP literal. Returns `None` without shared TLS settings or when
+    /// `host` is not a valid server name.
+    fn tls_target(&self, host: &str) -> Option<TlsTarget> {
+        Some(TlsTarget {
+            config: self.tls.clone()?,
+            server_name: ServerName::try_from(host).ok()?.to_owned(),
+        })
+    }
+}
+
+/// Host, port, and transport security of a relay URL.
+struct RelayEndpoint<'url> {
+    host: &'url str,
+    is_secure: bool,
+    port: u16,
 }
 
 /// How one registration attempt ended.

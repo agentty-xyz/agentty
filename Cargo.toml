@@ -69,6 +69,7 @@ prost = "0.14"
 pulldown-cmark = { version = "0.13.6", default-features = false }
 qrcode = { version = "0.15", default-features = false, features = ["std"] }
 ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "layout-cache", "std", "underline-color"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
 regex = "1"
 roxmltree = "0.21"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls-no-provider"] }
@@ -93,6 +94,7 @@ tempfile = "3.27"
 thiserror = "2"
 time = { version = "0.3", default-features = false, features = ["local-offset", "std"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["__rustls-tls", "connect", "handshake"] }
 tokio-util = { version = "0.7", default-features = false }
 toml = { version = "1.2", default-features = false, features = ["parse", "serde"] }
