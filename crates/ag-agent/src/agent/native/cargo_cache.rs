@@ -19,6 +19,7 @@ use std::fmt::Write as _;
 use std::io::{self, Read as _, Write as _};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -127,8 +128,11 @@ impl TrustedCargoCache {
     /// name, for a synthetic workspace that pins exactly those packages, so
     /// that no path, Git, or other registry source is reached. It reads no
     /// Cargo configuration and no credentials at all: it runs in a fresh
-    /// directory under the host's temporary directory (`environment`'s
-    /// `TMPDIR`, else the system's), skipped when one of
+    /// directory under the first of `environment`'s `XDG_RUNTIME_DIR` and
+    /// `TMPDIR` whose every ancestor only root or the current user can
+    /// change, so that no other user can plant configuration above it (a
+    /// shared `/tmp` does not qualify); it is skipped without such a
+    /// directory, or when one of
     /// its ancestors holds Cargo configuration or a toolchain file, with
     /// the cache as a `CARGO_HOME` that holds neither, and with only the
     /// allowed host variables: `PATH`, `HOME`, the `rustup` home and
@@ -164,27 +168,30 @@ impl TrustedCargoCache {
                 _ => {}
             }
         }
-        let temporary = environment
-            .get("TMPDIR")
-            .map(PathBuf::from)
-            .filter(|directory| directory.is_absolute())
-            .unwrap_or_else(std::env::temp_dir);
+        let candidates = ["XDG_RUNTIME_DIR", "TMPDIR"]
+            .iter()
+            .filter_map(|name| environment.get(*name).map(PathBuf::from))
+            .collect::<Vec<_>>();
         let work = tokio::task::spawn_blocking(move || {
+            let Some(parent) = candidates
+                .into_iter()
+                .find(|parent| Self::is_private(parent))
+            else {
+                return io::Result::Ok(None);
+            };
             let work = tempfile::Builder::new()
                 .prefix(WORK_PREFIX)
-                .tempdir_in(temporary)?;
-            let configured = Self::reads_configuration(work.path());
+                .tempdir_in(parent)?;
 
-            io::Result::Ok((work, configured))
+            Ok((!Self::reads_configuration(work.path())).then_some(work))
         })
         .await
         .map_err(io::Error::other)??;
-        let (work, configured) = work;
-        if configured {
-            tracing::debug!("Cargo configuration above the fetch directory; not caching");
+        let Some(work) = work else {
+            tracing::debug!("No private directory free of Cargo configuration; not caching");
 
             return Ok(());
-        }
+        };
         let fetch_environment = self.fetch_environment(environment, work.path());
         let variant = Self::variant(cargo, work.path(), &fetch_environment).await?;
         let previous = Generation::load(&self.root).await;
@@ -339,6 +346,23 @@ impl TrustedCargoCache {
         );
 
         fetch_environment
+    }
+
+    /// Returns whether `directory` resolves to a path whose every ancestor
+    /// is owned by root or the current user and writable by neither its
+    /// group nor others, so that no other user can create entries above
+    /// it.
+    fn is_private(directory: &Path) -> bool {
+        let Ok(directory) = std::fs::canonicalize(directory) else {
+            return false;
+        };
+        let user = rustix::process::geteuid().as_raw();
+
+        directory.ancestors().all(|ancestor| {
+            std::fs::metadata(ancestor).is_ok_and(|metadata| {
+                (metadata.uid() == 0 || metadata.uid() == user) && metadata.mode() & 0o022 == 0
+            })
+        })
     }
 
     /// Returns whether `work` or one of its ancestors holds Cargo

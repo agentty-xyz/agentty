@@ -54,7 +54,8 @@ impl Fixture {
     /// `FAKE_VERSION_SLEEP`, fails with `FAKE_EXIT` or `-V` with
     /// `FAKE_VERSION_EXIT`, and leaves out `twig` under `FAKE_SKIP_TWIG`.
     fn new() -> Self {
-        let root = tempfile::tempdir().expect("root");
+        let root = private_directory();
+        std::fs::create_dir_all(root.path().join("tmp")).expect("temporary directory");
         let worktree = root.path().join("worktree");
         std::fs::create_dir_all(&worktree).expect("worktree");
         std::fs::write(
@@ -149,6 +150,10 @@ impl Fixture {
                 "HOME".to_string(),
                 self.root.path().join("home").display().to_string(),
             ),
+            (
+                "TMPDIR".to_string(),
+                self.root.path().join("tmp").display().to_string(),
+            ),
         ]);
         for (name, value) in extra.iter().filter(|(name, _)| !name.starts_with("FAKE_")) {
             environment.insert((*name).to_string(), (*value).to_string());
@@ -222,6 +227,27 @@ impl Fixture {
     fn generation(&self) -> Option<String> {
         std::fs::read_to_string(self.cache.root.join("generation")).ok()
     }
+}
+
+/// Returns a fresh directory where the fetch may run: under the first of
+/// the test process's `TMPDIR`, `XDG_RUNTIME_DIR`, CI runner temporary
+/// directory, and home directory that only its owner can change and that
+/// has no Cargo configuration above it, since a shared `/tmp` does not
+/// qualify.
+fn private_directory() -> TempDir {
+    let parent = ["TMPDIR", "XDG_RUNTIME_DIR", "RUNNER_TEMP", "HOME"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .find(|parent| {
+            TrustedCargoCache::is_private(parent) && !TrustedCargoCache::reads_configuration(parent)
+        })
+        .expect("a private temporary directory");
+
+    tempfile::Builder::new()
+        .prefix("cargo-cache-test-")
+        .tempdir_in(parent)
+        .expect("private directory")
 }
 
 /// Opens `path` as a session `CARGO_HOME` handle, creating it.
@@ -410,6 +436,72 @@ async fn refresh_covers_worktrees_cumulatively_per_toolchain() {
         fetched
     });
     assert_eq!(fetched, [true, true, false, true]);
+}
+
+#[test]
+/// Accepts only a directory whose every ancestor its owner alone can
+/// change: a group- or world-writable ancestor, as a shared `/tmp` is, or a
+/// missing directory fails.
+fn private_directories_admit_no_other_writer() {
+    // Arrange
+    let root = private_directory();
+    let world = root.path().join("world");
+    let group = root.path().join("group");
+    for (directory, mode) in [(&world, 0o1777), (&group, 0o770)] {
+        std::fs::create_dir_all(directory.join("child")).expect("directory");
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode))
+            .expect("permissions");
+    }
+
+    // Act
+    let private = TrustedCargoCache::is_private(root.path());
+    let below_world = TrustedCargoCache::is_private(&world.join("child"));
+    let below_group = TrustedCargoCache::is_private(&group.join("child"));
+    let missing = TrustedCargoCache::is_private(&root.path().join("missing"));
+
+    // Assert
+    assert!(private);
+    assert!(!below_world && !below_group && !missing);
+}
+
+#[tokio::test]
+/// Fetches nothing, and does not even read the Cargo version, when neither
+/// `XDG_RUNTIME_DIR` nor `TMPDIR` names a private directory, and fetches in
+/// a private `XDG_RUNTIME_DIR` before `TMPDIR`.
+async fn refresh_runs_only_in_a_private_directory() {
+    // Arrange
+    let fixture = Fixture::new();
+    let world = fixture.root.path().join("world");
+    std::fs::create_dir_all(&world).expect("shared directory");
+    std::fs::set_permissions(&world, std::fs::Permissions::from_mode(0o1777)).expect("permissions");
+    let runtime = fixture.root.path().join("runtime");
+    std::fs::create_dir_all(&runtime).expect("runtime directory");
+    let world_value = world.display().to_string();
+    let runtime_value = runtime.display().to_string();
+
+    // Act
+    let shared = fixture
+        .refresh(&[
+            ("XDG_RUNTIME_DIR", &world_value),
+            ("TMPDIR", &world_value),
+            ("PATH", "/nonexistent"),
+        ])
+        .await;
+    let private = fixture
+        .refresh(&[
+            ("XDG_RUNTIME_DIR", &runtime_value),
+            ("TMPDIR", &world_value),
+        ])
+        .await;
+
+    // Assert
+    assert!(shared.0.is_ok() && !shared.1);
+    assert!(private.0.is_ok() && private.1, "{private:?}");
+    let work = PathBuf::from(fixture.recorded("").lines().next().unwrap_or_default());
+    assert_eq!(
+        work.parent(),
+        Some(std::fs::canonicalize(&runtime).expect("runtime").as_path())
+    );
 }
 
 #[tokio::test]

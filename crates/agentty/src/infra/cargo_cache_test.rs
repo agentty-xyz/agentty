@@ -13,11 +13,13 @@ const LOCKFILE: &str = "version = 4\n\n[[package]]\nname = \"leaf\"\nversion = \
 
 #[tokio::test]
 /// Fetches nothing for a worktree without a `Cargo.lock`, and reports a
-/// Cargo that cannot run without starting a fetch.
+/// cache that cannot be written without starting a fetch.
 async fn refresh_reports_only_real_failures() {
     // Arrange
     let root = tempfile::tempdir().expect("root");
-    let client = RealCargoCacheClient::new(root.path().join("cache"), "/nonexistent/cargo");
+    let file_root = root.path().join("file");
+    std::fs::write(&file_root, "").expect("file in place of the cache root");
+    let client = RealCargoCacheClient::new(file_root, "/nonexistent/cargo");
     let unlocked = root.path().join("unlocked");
     let locked = root.path().join("locked");
     for worktree in [&unlocked, &locked] {

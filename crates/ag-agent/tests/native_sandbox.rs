@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{self, Write as _};
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -240,7 +240,7 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
 async fn session_gets_verified_copies_and_cannot_reach_the_cache() -> TestResult {
     // Arrange
     let fixture = Fixture::new()?;
-    let host = fixture.host_cargo()?;
+    let (host, _temporary) = fixture.host_cargo()?;
     let cache_root = fixture.agentty_root.path().join("cache/cargo");
     let cache = TrustedCargoCache::for_project(&cache_root, fixture.repository.path());
     let fetched = AtomicBool::new(false);
@@ -467,8 +467,9 @@ impl Fixture {
 
     /// Locks `leaf` from crates.io in the worktree and returns a host
     /// environment whose `cargo` stores [`CACHED_ARCHIVE`] as that crate's
-    /// archive in a canonical crates.io registry, as a fetch would.
-    fn host_cargo(&self) -> TestResult<BTreeMap<String, String>> {
+    /// archive in a canonical crates.io registry, as a fetch would, and
+    /// whose `TMPDIR` is a private directory, kept until the guard drops.
+    fn host_cargo(&self) -> TestResult<(BTreeMap<String, String>, TempDir)> {
         std::fs::write(
             self.worktree.join("Cargo.lock"),
             format!(
@@ -494,11 +495,16 @@ impl Fixture {
             ),
         )?;
         std::fs::set_permissions(bin.join("cargo"), std::fs::Permissions::from_mode(0o755))?;
+        let temporary = private_temporary_directory()?;
+        let environment = BTreeMap::from([
+            (
+                "PATH".to_string(),
+                format!("{}:/usr/bin:/bin", bin.display()),
+            ),
+            ("TMPDIR".to_string(), temporary.path().display().to_string()),
+        ]);
 
-        Ok(BTreeMap::from([(
-            "PATH".to_string(),
-            format!("{}:/usr/bin:/bin", bin.display()),
-        )]))
+        Ok((environment, temporary))
     }
 
     /// Returns where the session's `CARGO_HOME` holds its copy of the
@@ -537,6 +543,42 @@ impl Fixture {
     fn escape(&self) -> PathBuf {
         self.outside.path().join("escape")
     }
+}
+
+/// Returns a fresh directory where the trusted Cargo fetch may run: under
+/// the first of the test process's `TMPDIR`, `XDG_RUNTIME_DIR`, CI runner
+/// temporary directory, and home directory whose every ancestor only root
+/// or the current user can change and has no Cargo configuration or
+/// toolchain file, since a shared `/tmp` does not qualify.
+fn private_temporary_directory() -> TestResult<TempDir> {
+    let user = rustix::process::geteuid().as_raw();
+    let is_private = |parent: &Path| {
+        std::fs::canonicalize(parent).is_ok_and(|parent| {
+            parent.ancestors().all(|ancestor| {
+                let owned = std::fs::metadata(ancestor).is_ok_and(|metadata| {
+                    (metadata.uid() == 0 || metadata.uid() == user) && metadata.mode() & 0o022 == 0
+                });
+                let configured = [
+                    ".cargo/config.toml",
+                    ".cargo/config",
+                    "rust-toolchain.toml",
+                    "rust-toolchain",
+                ]
+                .iter()
+                .any(|name| ancestor.join(name).exists());
+
+                owned && !configured
+            })
+        })
+    };
+    let parent = ["TMPDIR", "XDG_RUNTIME_DIR", "RUNNER_TEMP", "HOME"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .find(|parent| is_private(parent))
+        .ok_or("no private temporary directory")?;
+
+    Ok(tempfile::tempdir_in(parent)?)
 }
 
 /// Runs `git` in `directory` with a fixed identity.

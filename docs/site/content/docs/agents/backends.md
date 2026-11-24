@@ -295,7 +295,9 @@ a key or sign-in is never chosen as the default.
   never the worktree's manifest, so Git dependencies, path dependencies, and other
   registries a session names are never fetched. It also reads none of your Cargo
   configuration or credentials: it runs your default toolchain's `cargo` in a fresh
-  temporary directory with its own empty Cargo home, passing on only `PATH`, `HOME`, the
+  directory under `XDG_RUNTIME_DIR` or `TMPDIR`, used only when no other user can write
+  above it (a shared `/tmp` does not qualify, so without such a directory Agentty does
+  not cache), with its own empty Cargo home, passing on only `PATH`, `HOME`, the
   `rustup` settings, and proxy and certificate variables, and it keeps only archives
   from crates.io itself. If your network reaches crates.io only through a mirror, the
   fetch fails quietly and sessions keep downloading per session. From the next turn,
