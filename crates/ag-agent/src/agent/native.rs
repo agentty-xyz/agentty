@@ -4,6 +4,7 @@ mod activity;
 mod api_key;
 mod cargo_cache;
 mod cargo_lockfile;
+mod command_exit;
 mod config;
 mod output;
 mod run_projector;

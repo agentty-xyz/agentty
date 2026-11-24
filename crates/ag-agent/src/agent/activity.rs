@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
-use ag_contracts::{ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus, DiffStat};
+use ag_contracts::{
+    ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
+};
 use ag_session::AgentKind;
 use serde_json::Value;
 
@@ -89,25 +91,24 @@ impl ActivityObserver {
         let Some(id) = item.get("id").and_then(Value::as_str) else {
             return;
         };
-        // A nonzero exit code alone leaves the item completed for the
-        // event's outcome to judge, so a search that found nothing stays
-        // completed.
-        let status = if !completed {
-            ActivityStatus::Running
-        } else if matches!(
-            item.get("status").and_then(Value::as_str),
-            Some("interrupted" | "canceled" | "cancelled")
-        ) {
-            ActivityStatus::Interrupted
-        } else if matches!(
-            item.get("status").and_then(Value::as_str),
-            Some("failed" | "declined" | "denied")
-        ) || item.get("success").and_then(Value::as_bool) == Some(false)
+        let item_status = item.get("status").and_then(Value::as_str);
+        let exit_code = item.get("exitCode").and_then(Value::as_i64);
+        // Codex reports every nonzero exit as `failed`. A command with an
+        // exit code stays completed for the event's outcome to judge, so a
+        // search that found nothing stays completed.
+        let (status, failure) = if !completed {
+            (ActivityStatus::Running, None)
+        } else if matches!(item_status, Some("interrupted" | "canceled" | "cancelled")) {
+            (ActivityStatus::Interrupted, None)
+        } else if matches!(item_status, Some("declined" | "denied")) {
+            (ActivityStatus::Failed, Some(ActivityFailure::Denied))
+        } else if (item_status == Some("failed") && exit_code.is_none())
+            || item.get("success").and_then(Value::as_bool) == Some(false)
             || item.get("error").is_some_and(|value| !value.is_null())
         {
-            ActivityStatus::Failed
+            (ActivityStatus::Failed, Some(ActivityFailure::Error))
         } else {
-            ActivityStatus::Completed
+            (ActivityStatus::Completed, None)
         };
         let name = match item.get("server").and_then(Value::as_str) {
             Some(server) => format!("{server}/{name}"),
@@ -122,8 +123,9 @@ impl ActivityObserver {
                 .or_else(|| item.get("result").filter(|value| !value.is_null()))
                 .or_else(|| item.get("contentItems").filter(|value| !value.is_null()))
                 .or_else(|| item.get("error")),
-            item.get("exitCode").and_then(Value::as_i64),
+            exit_code,
         );
+        details.facts.failure = failure;
         details.facts.duration = item
             .get("durationMs")
             .and_then(Value::as_u64)

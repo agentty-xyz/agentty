@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{ActivityKind, ActivityStatus, DiffStat, LineRange};
+use ag_contracts::{ActivityFailure, ActivityKind, ActivityStatus, DiffStat, LineRange};
 use ag_session::AgentKind;
 use serde_json::json;
 
@@ -294,11 +294,24 @@ fn codex_terminal_variants_and_unknown_claude_results_are_retained() {
     observer.observe(AgentKind::Claude, &json!({"content":[{"type":"tool_result","tool_use_id":"orphan"},{"type":"tool_use","id":"unnamed-skill","name":"Skill"}]}));
 
     // Assert
-    assert_eq!(observer.calls["0"].status, ActivityStatus::Failed);
-    assert_eq!(observer.calls["1"].status, ActivityStatus::Failed);
-    assert_eq!(observer.calls["2"].status, ActivityStatus::Interrupted);
-    assert_eq!(observer.calls["3"].status, ActivityStatus::Failed);
-    assert_eq!(observer.calls["4"].status, ActivityStatus::Failed);
+    let state = |id: &str| (observer.calls[id].status, observer.calls[id].facts.failure);
+    assert_eq!(
+        state("0"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Error))
+    );
+    assert_eq!(
+        state("1"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Error))
+    );
+    assert_eq!(state("2"), (ActivityStatus::Interrupted, None));
+    assert_eq!(
+        state("3"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Denied))
+    );
+    assert_eq!(
+        state("4"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Denied))
+    );
     assert_eq!(observer.calls["orphan"].name, "tool");
     assert_eq!(observer.calls["unnamed-skill"].kind, ActivityKind::Skill);
 }
@@ -608,6 +621,43 @@ fn codex_command_actions_report_exploration_kinds_and_durations() {
         (ActivityKind::Command, Some("cargo build --release"))
     );
     assert_eq!(observer.calls["build"].facts.duration, None);
+}
+
+#[test]
+fn codex_failed_commands_with_an_exit_code_are_judged_by_their_outcome() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let items = [
+        json!({"id":"search","type":"commandExecution","command":"rg -n render src","status":"failed","exitCode":1,
+            "aggregatedOutput":"","durationMs":12,
+            "commandActions":[{"type":"search","command":"rg","query":"render","path":"src"}]}),
+        json!({"id":"test","type":"commandExecution","command":"cargo test","status":"failed","exitCode":1,
+            "aggregatedOutput":"test result: FAILED","durationMs":900,
+            "commandActions":[{"type":"unknown","command":"cargo test"}]}),
+        json!({"id":"spawn","type":"commandExecution","command":"missing-tool","status":"failed","exitCode":null,
+            "aggregatedOutput":null,"commandActions":[]}),
+    ];
+
+    // Act
+    for item in &items {
+        observer.observe(
+            AgentKind::Codex,
+            &json!({"method":"item/completed","params":{"item":item}}),
+        );
+    }
+
+    // Assert
+    let state = |id: &str| {
+        let call = &observer.calls[id];
+
+        (call.outcome(), call.facts.failure)
+    };
+    assert_eq!(state("search"), (ActivityStatus::Completed, None));
+    assert_eq!(state("test"), (ActivityStatus::Failed, None));
+    assert_eq!(
+        state("spawn"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Error))
+    );
 }
 
 #[test]

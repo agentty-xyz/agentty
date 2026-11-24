@@ -8,11 +8,11 @@ use ag_contracts::{
     ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
     TurnEvent,
 };
-use ag_harness::bash::{CommandExit, CommandTermination};
 use ag_harness::event::{Item, RunSummary, ToolCallItem, ToolCallOutcome, ToolCallStatus};
 use ag_harness::{ErrorKind, RunEventKind};
 use serde_json::Value;
 
+use super::command_exit::apply_command_exit;
 use super::output::{OutputProjector, turn_notice};
 use super::sandbox::notice as sandbox_notice;
 use super::tool_description::ToolDescription;
@@ -168,10 +168,7 @@ impl ToolRows {
         row.facts.duration = call.duration;
         match &call.outcome {
             Some(ToolCallOutcome::Command(exit)) => {
-                row.exit_code = exit.exit_code.map(i64::from);
-                row.facts.pipe_status = exit.pipe_status.iter().copied().map(i64::from).collect();
-                row.facts.signal = exit.signal.map(i64::from);
-                Self::record_termination(row, exit);
+                apply_command_exit(&mut row.status, &mut row.exit_code, &mut row.facts, exit);
             }
             Some(ToolCallOutcome::Write {
                 lines_added,
@@ -185,23 +182,6 @@ impl ToolRows {
             }
             _ => {}
         }
-    }
-
-    /// Judges a completed command that did not run to its end: one that hit
-    /// its deadline or failed to run failed, with how it exited as the
-    /// reason, and a cancelled one was interrupted.
-    fn record_termination(row: &mut ActivityEvent, exit: &CommandExit) {
-        let (status, failure) = match exit.termination {
-            CommandTermination::Deadline => {
-                (ActivityStatus::Failed, Some(ActivityFailure::TimedOut))
-            }
-            CommandTermination::Failed => (ActivityStatus::Failed, Some(ActivityFailure::Error)),
-            CommandTermination::Cancelled => (ActivityStatus::Interrupted, None),
-            _ => return,
-        };
-        row.status = status;
-        row.facts.failure = failure;
-        row.facts.reason = failure.and_then(|_| first_line(&exit.to_string()));
     }
 
     /// Returns the last lines of a failed call's result: a command's

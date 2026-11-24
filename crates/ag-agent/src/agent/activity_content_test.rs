@@ -1,5 +1,8 @@
 //! Tool-content preview extraction, bounding, and sanitization unit tests.
 
+use std::time::SystemTime;
+
+use ag_contracts::{ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus};
 use serde_json::json;
 
 use super::{ActivityDetails, PREVIEW_LIMIT, TRUNCATED, append_output, bounded, preview};
@@ -68,4 +71,34 @@ fn structured_arrays_remain_json_and_obey_the_preview_bound() {
     }
     let oversized = json!([{"path":"界".repeat(PREVIEW_LIMIT)}]);
     assert_eq!(preview(&oversized), Some(bounded(&oversized.to_string())));
+}
+
+#[test]
+fn later_updates_keep_a_reported_failure_and_reason() {
+    // Arrange
+    let mut event = ActivityEvent {
+        attempt_id: "attempt".into(),
+        exit_code: None,
+        facts: Box::new(ActivityFacts {
+            failure: Some(ActivityFailure::Denied),
+            reason: Some("declined by policy".into()),
+            ..ActivityFacts::default()
+        }),
+        id: "patch".into(),
+        input: None,
+        kind: ActivityKind::FileChange,
+        name: "apply_patch".into(),
+        observed_at: SystemTime::UNIX_EPOCH,
+        output: None,
+        parent_id: None,
+        status: ActivityStatus::Failed,
+    };
+
+    // Act
+    ActivityDetails::new(None, Some(&json!("later output")), None).apply(&mut event);
+
+    // Assert
+    assert_eq!(event.facts.failure, Some(ActivityFailure::Denied));
+    assert_eq!(event.facts.reason.as_deref(), Some("declined by policy"));
+    assert_eq!(event.output.as_deref(), Some("later output"));
 }

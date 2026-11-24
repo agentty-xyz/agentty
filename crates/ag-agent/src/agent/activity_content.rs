@@ -72,12 +72,14 @@ impl ActivityDetails {
 
     /// Applies the reported fields to `event`, keeping its earlier values
     /// for the fields this update leaves out. Provider protocols report no
-    /// pipeline statuses, signals, or rejection reasons, so those stay unset.
+    /// pipeline statuses or signals, so those stay unset.
     pub(super) fn apply(self, event: &mut ActivityEvent) {
         let facts = &mut event.facts;
         facts.diff_stat = self.facts.diff_stat.or(facts.diff_stat);
         facts.duration = self.facts.duration.or(facts.duration);
+        facts.failure = self.facts.failure.or(facts.failure);
         facts.lines = self.facts.lines.or(facts.lines);
+        facts.reason = self.facts.reason.or(facts.reason.take());
         facts.target = self.facts.target.or(facts.target.take());
         event.input = self.input.or(event.input.take());
         event.output = self.output.or(event.output.take());

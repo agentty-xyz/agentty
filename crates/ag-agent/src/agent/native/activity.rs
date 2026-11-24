@@ -8,6 +8,7 @@ use ag_contracts::{ActivityEvent, ActivityFacts, ActivityFailure, ActivityStatus
 use ag_harness::bash::CommandExit;
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver, ToolErrorType};
 
+use super::command_exit::apply_command_exit;
 use super::tool_description::ToolDescription;
 
 /// Lifecycle observer that reports model waits, and optionally tool
@@ -139,15 +140,18 @@ impl ToolUpdate {
         }
     }
 
-    /// Reports a call that completed after `duration`, with how a command
-    /// exited.
+    /// Reports a call that completed after `duration`, judged by how a
+    /// command exited.
     fn completed(duration: Duration, exit: Option<&CommandExit>) -> Self {
         let mut update = Self::status(ActivityStatus::Completed);
         update.facts.duration = Some(duration);
         if let Some(exit) = exit {
-            update.exit_code = exit.exit_code.map(i64::from);
-            update.facts.pipe_status = exit.pipe_status.iter().copied().map(i64::from).collect();
-            update.facts.signal = exit.signal.map(i64::from);
+            apply_command_exit(
+                &mut update.status,
+                &mut update.exit_code,
+                &mut update.facts,
+                exit,
+            );
         }
 
         update

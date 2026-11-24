@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use ag_contracts::{ActivityFailure, ActivityStatus};
-use ag_harness::bash::CommandExit;
+use ag_harness::bash::{CommandExit, CommandTermination};
 use ag_harness::lifecycle::ToolErrorType;
 
 use super::ToolUpdate;
@@ -23,6 +23,29 @@ fn completed_updates_carry_the_duration_and_a_command_exit() {
     assert_eq!(command.facts.duration, Some(Duration::from_secs(2)));
     assert_eq!(read.exit_code, None);
     assert_eq!(read.facts.duration, Some(Duration::from_millis(5)));
+}
+
+#[test]
+fn completed_updates_judge_commands_that_did_not_run_to_their_end() {
+    // Arrange
+    let exit = |termination| CommandExit::new(None, Some(9)).with_termination(termination);
+
+    // Act
+    let timed_out = ToolUpdate::completed(
+        Duration::from_secs(600),
+        Some(&exit(CommandTermination::Deadline)),
+    );
+    let cancelled = ToolUpdate::completed(
+        Duration::from_secs(1),
+        Some(&exit(CommandTermination::Cancelled)),
+    );
+
+    // Assert
+    assert_eq!(timed_out.status, ActivityStatus::Failed);
+    assert_eq!(timed_out.facts.failure, Some(ActivityFailure::TimedOut));
+    assert_eq!(timed_out.facts.duration, Some(Duration::from_secs(600)));
+    assert_eq!(cancelled.status, ActivityStatus::Interrupted);
+    assert_eq!(cancelled.facts.failure, None);
 }
 
 #[test]
