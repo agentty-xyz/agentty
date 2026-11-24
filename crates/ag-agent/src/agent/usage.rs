@@ -7,6 +7,9 @@ use ag_harness::provider::ModelProvider;
 use ag_harness::{Cost, Usage};
 use ag_session::AgentKind;
 
+use crate::agent::ParsedResponse;
+use crate::agent::claude_usage::{self, ClaudeRun};
+
 /// Returns the shared estimate of a harness cost.
 pub(crate) fn cost_estimate(cost: Cost) -> CostEstimate {
     CostEstimate {
@@ -19,40 +22,65 @@ pub(crate) fn cost_estimate(cost: Cost) -> CostEstimate {
     }
 }
 
-/// Returns the list price of `model` served by `provider` from the harness
-/// provider catalog, or `None` for a model it does not price.
-pub(crate) fn catalog_pricing(provider: ModelProvider, model: &str) -> Option<Pricing> {
-    provider.model_spec(model)?.pricing()
+/// Returns the usage of one CLI turn's processes on `model`, in the order
+/// they ran: the turn's own process and its protocol repairs.
+///
+/// Claude Code's runs are charged their share of its `modelUsage` totals,
+/// as [`claude_usage::turn_usage`] describes, continuing from `checkpoint`
+/// when the turn continued the session (`resumed`). Other agents' runs are
+/// summed at list price.
+pub(crate) fn cli_turn_usage(
+    kind: AgentKind,
+    model: &str,
+    resumed: bool,
+    checkpoint: Option<&str>,
+    runs: &[&ParsedResponse],
+) -> TurnUsage {
+    if kind == AgentKind::Claude {
+        return claude_usage::turn_usage(
+            model,
+            resumed,
+            checkpoint,
+            runs.iter().map(|run| ClaudeRun {
+                main_loop: &run.usage,
+                totals: run.totals.as_ref(),
+            }),
+        );
+    }
+    let mut usage = TurnUsage::default();
+    for run in runs {
+        usage.merge(&priced_turn_usage(run.usage.clone(), model, kind));
+    }
+
+    usage
 }
 
 /// Returns the usage an agent reported without naming its model recorded
-/// under the requested `model` and priced: at `reported_cost`, the agent's
-/// own estimate of this usage in micro-USD, when it has one, else at the
-/// catalog list price when the provider `kind` runs is cataloged. Claude
-/// Code runs Anthropic models and Codex runs `OpenAI` models.
-pub(crate) fn priced_turn_usage(
-    mut usage: ModelUsage,
-    model: &str,
-    kind: AgentKind,
-    reported_cost: Option<u64>,
-) -> TurnUsage {
-    let provider = match kind {
-        AgentKind::Claude => Some(ModelProvider::Anthropic),
-        AgentKind::Codex => Some(ModelProvider::OpenAi),
-        _ => None,
-    };
+/// under the requested `model`, priced at the catalog list price when the
+/// provider `kind` runs is cataloged: Codex runs `OpenAI` models and Claude
+/// Code runs Anthropic models.
+pub(crate) fn priced_turn_usage(mut usage: ModelUsage, model: &str, kind: AgentKind) -> TurnUsage {
     usage.model = model.to_string();
-    usage.cost = match reported_cost {
-        Some(micro_usd) => Some(CostEstimate {
-            basis: CostBasis::AgentReported,
-            micro_usd,
-        }),
-        None => provider
-            .and_then(|provider| catalog_pricing(provider, model))
-            .map(|pricing| price(&usage, pricing)),
+    usage.cost = match kind {
+        AgentKind::Claude => list_price(&usage, ModelProvider::Anthropic),
+        AgentKind::Codex => list_price(&usage, ModelProvider::OpenAi),
+        _ => None,
     };
 
     TurnUsage::single(usage)
+}
+
+/// Returns the list price of `usage` at the prices `provider` publishes for
+/// its model in the harness provider catalog, or `None` for a model the
+/// catalog does not price and for usage whose every request went
+/// unreported, whose charge is unknown rather than zero.
+pub(crate) fn list_price(usage: &ModelUsage, provider: ModelProvider) -> Option<CostEstimate> {
+    if usage.unreported_requests >= usage.requests {
+        return None;
+    }
+    let pricing = provider.model_spec(&usage.model)?.pricing()?;
+
+    Some(price(usage, pricing))
 }
 
 /// Prices `usage` with `pricing` as the harness prices one request: cache

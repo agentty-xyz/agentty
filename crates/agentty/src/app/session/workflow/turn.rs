@@ -502,6 +502,13 @@ async fn load_turn_continuation(
         .await
         .ok()
         .flatten();
+    let usage_checkpoint = context
+        .db
+        .sessions()
+        .get_session_usage_checkpoint(&context.session_id)
+        .await
+        .ok()
+        .flatten();
 
     TurnContinuation::provider(
         Some(live_transcript_source(&context.transcript)),
@@ -509,6 +516,7 @@ async fn load_turn_continuation(
         provider_conversation_id,
         replay_transcript,
     )
+    .with_usage_checkpoint(usage_checkpoint)
 }
 
 /// Marks an executing session turn in progress and clears resumed questions.

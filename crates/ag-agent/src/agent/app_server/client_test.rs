@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode, TurnUsage};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::{Mutex, MutexGuard, mpsc};
@@ -18,7 +19,6 @@ use crate::app_server::{
     AppServerStreamEvent, AppServerTurnRequest, BorrowedAppServerFuture, TurnSteeringInbox,
 };
 use crate::telemetry::TRACER_PROVIDER_LOCK;
-use crate::test_support::token_usage;
 
 // Counter assertions share one async lock across complete test scenarios.
 static COUNTER_LOCK: Mutex<()> = Mutex::const_new(());

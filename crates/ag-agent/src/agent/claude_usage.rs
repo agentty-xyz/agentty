@@ -1,36 +1,55 @@
 //! Usage accounting for Claude Code `stream-json` output.
 //!
-//! Claude Code reports, per its cost-tracking documentation, the usage of
-//! each API response on its assistant messages, which share one message id
-//! when a response calls several tools, and each turn's main-loop usage on
-//! that turn's `result`. Both use the Anthropic Messages usage shape, whose
-//! `input_tokens` leave out `cache_read_input_tokens` and
-//! `cache_creation_input_tokens`; this module counts input with both
-//! included. An assistant message's `output_tokens` is a placeholder until
-//! the turn's `result` reports the real count.
+//! Claude Code reports, per its Agent SDK cost-tracking documentation:
+//!
+//! - the usage of each API response on its assistant messages, which share one
+//!   message id when a response calls several tools, and whose `output_tokens`
+//!   is a placeholder;
+//! - each turn's main-loop usage on that turn's `result`, which leaves out
+//!   subagents;
+//! - on each `result`, `modelUsage`: per model, the tokens and `costUSD` of the
+//!   whole process so far, subagents included, plus a resumed session's earlier
+//!   totals on Claude Code 2.1.277 and later.
+//!
+//! The Messages usage shape leaves cache reads and writes out of
+//! `input_tokens`; this module counts input with both included. A turn's own
+//! per-model usage is the difference between its `modelUsage` totals and the
+//! totals after the session's previous resumed turn, which the host keeps as
+//! an opaque checkpoint. Live updates use the main-loop usage at list price;
+//! the turn result switches to Claude Code's own per-model figures.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use ag_contracts::{ContextFill, ModelUsage};
+use ag_contracts::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage};
+use ag_harness::provider::ModelProvider;
+use semver::Version;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agent::usage::list_price;
+
+/// First Claude Code release whose resumed sessions restore their earlier
+/// totals into `modelUsage`; earlier releases start each process at zero.
+const CUMULATIVE_RESUME_VERSION: Version = Version::new(2, 1, 277);
+
 /// Folds Claude Code stream events into the run's usage, under an empty
-/// model name.
+/// model name, and its `modelUsage` totals.
 #[derive(Default)]
 pub(crate) struct ClaudeUsageMeter {
     /// Fill of the latest main-loop response.
     context: Option<ContextFill>,
     /// Model of the latest main-loop response.
     context_model: Option<String>,
-    /// Claude Code's own running cost estimate of each model, in micro-USD,
-    /// from the latest result's `modelUsage`.
-    reported_costs: BTreeMap<String, u64>,
-    /// Summed usage of the run's turn results.
+    /// Per-model totals of the latest result's `modelUsage`.
+    model_totals: BTreeMap<String, ModelTotals>,
+    /// Summed main-loop usage of the run's turn results.
     results: Option<ModelUsage>,
     /// Ids of the main-loop responses already counted.
     seen_messages: HashSet<String>,
     /// Summed usage of the main-loop responses, with placeholder output.
     steps: Option<ModelUsage>,
+    /// Claude Code release from the `system/init` event.
+    version: Option<Version>,
     /// Context window of each model, from a result's `modelUsage`.
     windows: HashMap<String, u64>,
 }
@@ -39,17 +58,22 @@ impl ClaudeUsageMeter {
     /// Folds one stream event and returns whether it reported usage: a
     /// main-loop response not counted yet, or a turn result.
     pub(crate) fn observe(&mut self, event: &Value) -> bool {
+        if event.get("type").and_then(Value::as_str) == Some("system")
+            && let Some(version) = event
+                .get("claude_code_version")
+                .and_then(Value::as_str)
+                .and_then(|version| Version::parse(version).ok())
+        {
+            self.version = Some(version);
+        }
         if let Some(model_usage) = event.get("modelUsage").and_then(Value::as_object) {
+            self.model_totals.clear();
             for (model, usage) in model_usage {
                 if let Some(window) = usage.get("contextWindow").and_then(Value::as_u64) {
                     self.windows.insert(model.clone(), window);
                 }
-                if let Some(cost) = usage
-                    .get("costUSD")
-                    .and_then(Value::as_f64)
-                    .and_then(micro_usd)
-                {
-                    self.reported_costs.insert(model.clone(), cost);
+                if let Some(totals) = ModelTotals::parse(usage) {
+                    self.model_totals.insert(model.clone(), totals);
                 }
             }
         }
@@ -77,9 +101,9 @@ impl ClaudeUsageMeter {
         }
     }
 
-    /// Returns the run's usage: its results' usage, or before any result
-    /// the responses observed so far, or one unreported request when Claude
-    /// reported nothing.
+    /// Returns the run's main-loop usage: its results' usage, or before any
+    /// result the responses observed so far, or one unreported request when
+    /// Claude reported nothing.
     pub(crate) fn usage(&self) -> ModelUsage {
         let mut usage = self
             .results
@@ -100,17 +124,13 @@ impl ClaudeUsageMeter {
         usage
     }
 
-    /// Returns Claude Code's own cost estimate of every model, subagents
-    /// included, in micro-USD, or `None` before a result reports one.
-    ///
-    /// The estimate is cumulative: it counts every turn of the process, and
-    /// a resumed session's earlier spend that Claude Code restores, so a
-    /// turn's own cost is the difference from the previous turn's estimate.
-    pub(crate) fn reported_cost(&self) -> Option<u64> {
-        (!self.reported_costs.is_empty()).then(|| {
-            self.reported_costs
-                .values()
-                .fold(0, |total: u64, cost| total.saturating_add(*cost))
+    /// Returns the run's `modelUsage` totals, or `None` before a result
+    /// reports them.
+    pub(crate) fn totals(&self) -> Option<AgentTotals> {
+        (!self.model_totals.is_empty()).then(|| AgentTotals {
+            context_model: self.context_model.clone(),
+            models: self.model_totals.clone(),
+            version: self.version.clone(),
         })
     }
 
@@ -148,6 +168,203 @@ impl ClaudeUsageMeter {
 
         true
     }
+}
+
+/// The `modelUsage` totals one Claude Code process reported.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AgentTotals {
+    /// Model of the run's latest main-loop response, whose row carries the
+    /// run's context fill.
+    context_model: Option<String>,
+    /// Cumulative totals of each model.
+    models: BTreeMap<String, ModelTotals>,
+    /// Claude Code release, when the run reported it.
+    version: Option<Version>,
+}
+
+/// One model's cumulative counts in a result's `modelUsage`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ModelTotals {
+    /// Input tokens read from the prompt cache.
+    cache_read: u64,
+    /// Input tokens written to the prompt cache.
+    cache_write: u64,
+    /// Claude Code's cost estimate in micro-USD, when reported.
+    cost: Option<u64>,
+    /// Input tokens without the cache.
+    input: u64,
+    /// Output tokens, thinking included.
+    output: u64,
+    /// Thinking tokens, when reported.
+    thinking: Option<u64>,
+}
+
+impl ModelTotals {
+    /// Totals of a model a process has not used yet.
+    const UNUSED: Self = Self {
+        cache_read: 0,
+        cache_write: 0,
+        cost: Some(0),
+        input: 0,
+        output: 0,
+        thinking: Some(0),
+    };
+
+    /// Parses one `modelUsage` entry, which must report input and output.
+    fn parse(usage: &Value) -> Option<Self> {
+        let count = |field: &str| usage.get(field).and_then(Value::as_u64);
+
+        Some(Self {
+            cache_read: count("cacheReadInputTokens").unwrap_or(0),
+            cache_write: count("cacheCreationInputTokens").unwrap_or(0),
+            cost: usage
+                .get("costUSD")
+                .and_then(Value::as_f64)
+                .and_then(micro_usd),
+            input: count("inputTokens")?,
+            output: count("outputTokens")?,
+            thinking: count("thinkingTokens"),
+        })
+    }
+
+    /// Returns these totals minus the `earlier` ones, or `None` when a total
+    /// went down, as it does when the totals restarted.
+    fn since(self, earlier: Self) -> Option<Self> {
+        let optional = |current: Option<u64>, earlier: Option<u64>| match (current, earlier) {
+            (Some(current), Some(earlier)) => current.checked_sub(earlier).map(Some),
+            _ => Some(None),
+        };
+
+        Some(Self {
+            cache_read: self.cache_read.checked_sub(earlier.cache_read)?,
+            cache_write: self.cache_write.checked_sub(earlier.cache_write)?,
+            cost: optional(self.cost, earlier.cost)?,
+            input: self.input.checked_sub(earlier.input)?,
+            output: self.output.checked_sub(earlier.output)?,
+            thinking: optional(self.thinking, earlier.thinking)?,
+        })
+    }
+
+    /// Returns whether these counts include any token.
+    fn has_tokens(self) -> bool {
+        self.input > 0 || self.output > 0 || self.cache_read > 0 || self.cache_write > 0
+    }
+
+    /// Returns these counts as `model`'s usage of one request, priced at
+    /// Claude Code's estimate when it reported one, else at list price.
+    fn model_usage(self, model: &str) -> ModelUsage {
+        let mut usage = ModelUsage {
+            cache_read_tokens: Some(self.cache_read),
+            cache_write_tokens: Some(self.cache_write),
+            input_tokens: self
+                .input
+                .saturating_add(self.cache_read)
+                .saturating_add(self.cache_write),
+            output_tokens: self.output,
+            reasoning_tokens: self.thinking,
+            requests: 1,
+            ..ModelUsage::new(model)
+        };
+        usage.cost = match self.cost {
+            Some(micro_usd) => Some(CostEstimate {
+                basis: CostBasis::AgentReported,
+                micro_usd,
+            }),
+            None => list_price(&usage, ModelProvider::Anthropic),
+        };
+
+        usage
+    }
+}
+
+/// One Claude Code process of a turn: its main-loop usage and its
+/// `modelUsage` totals, when reported.
+pub(crate) struct ClaudeRun<'a> {
+    /// Main-loop usage, under an empty model name.
+    pub(crate) main_loop: &'a ModelUsage,
+    /// `modelUsage` totals of the process.
+    pub(crate) totals: Option<&'a AgentTotals>,
+}
+
+/// Returns the usage of one turn's Claude Code processes on `model`, in the
+/// order they ran, and the checkpoint the next resumed turn needs.
+///
+/// A process that continued the session (`resumed`) is charged the
+/// difference from `checkpoint`, the totals after the session's previous
+/// resumed process, and its totals become the next checkpoint. Any other
+/// process, such as a utility prompt, starts at zero and is charged its own
+/// totals. A process whose share cannot be trusted, because it reported no
+/// totals, its release is unknown, no checkpoint precedes it, or a total
+/// went down, is charged its main-loop usage at list price instead.
+pub(crate) fn turn_usage<'a>(
+    model: &str,
+    resumed: bool,
+    checkpoint: Option<&str>,
+    runs: impl IntoIterator<Item = ClaudeRun<'a>>,
+) -> TurnUsage {
+    let mut previous = checkpoint.and_then(|checkpoint| serde_json::from_str(checkpoint).ok());
+    let mut usage = TurnUsage::default();
+    for run in runs {
+        let models = run
+            .totals
+            .and_then(|totals| run_share(totals, resumed, previous.as_ref()))
+            .unwrap_or_else(|| {
+                let mut main_loop = ModelUsage {
+                    model: model.to_string(),
+                    ..run.main_loop.clone()
+                };
+                main_loop.cost = list_price(&main_loop, ModelProvider::Anthropic);
+
+                vec![main_loop]
+            });
+        let context_model = run
+            .totals
+            .and_then(|totals| totals.context_model.as_deref())
+            .filter(|context_model| models.iter().any(|usage| usage.model == *context_model))
+            .unwrap_or(model);
+        for mut model_usage in models {
+            if model_usage.model == context_model {
+                model_usage.context = run.main_loop.context;
+                model_usage.requests = model_usage.requests.max(run.main_loop.requests);
+            }
+            usage.record(&model_usage);
+        }
+        if resumed && let Some(totals) = run.totals {
+            usage.checkpoint = serde_json::to_string(&totals.models).ok();
+            previous = Some(totals.models.clone());
+        }
+    }
+
+    usage
+}
+
+/// Returns each model's share of one process's `totals`, or `None` when it
+/// cannot be trusted. Models without new work are left out.
+fn run_share(
+    totals: &AgentTotals,
+    resumed: bool,
+    previous: Option<&BTreeMap<String, ModelTotals>>,
+) -> Option<Vec<ModelUsage>> {
+    let restores_earlier_totals = resumed && totals.version.as_ref()? >= &CUMULATIVE_RESUME_VERSION;
+    let empty = BTreeMap::new();
+    let previous = if restores_earlier_totals {
+        previous?
+    } else {
+        &empty
+    };
+
+    totals
+        .models
+        .iter()
+        .map(|(model, current)| {
+            let earlier = previous.get(model).copied().unwrap_or(ModelTotals::UNUSED);
+
+            current
+                .since(earlier)
+                .map(|share| share.has_tokens().then(|| share.model_usage(model)))
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|shares| shares.into_iter().flatten().collect())
 }
 
 /// Converts one Messages usage object into one request's usage, with input

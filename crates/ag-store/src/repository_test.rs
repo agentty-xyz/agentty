@@ -5,13 +5,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use ag_contracts::UsagePurpose;
+use ag_contracts::test_support::token_usage;
 use ag_session::SessionMessageKind;
 use ag_worker::MockOperationRepository;
 use sqlx::SqlitePool;
 
 use crate::connection::{Database, MIGRATOR, open_in_memory_pool};
 use crate::repository::{AppRepositories, RepositorySet};
-use crate::test_support::token_usage;
 use crate::timestamp::TimestampSource;
 
 /// Timestamp fixture used to verify persistence composition

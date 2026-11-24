@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{OneShotError, PermissionMode};
+use ag_contracts::{OneShotError, PermissionMode, UsagePurpose};
 use ag_git::{GitError, MockGitClient};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
@@ -21,7 +21,7 @@ use super::support::{commit_fallback_transcript, insert_review_session, one_shot
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
 use crate::app::service::HarnessModels;
-use crate::app::test_support::purpose_recording_run_worker;
+use crate::app::test_support::persisting_run_worker;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::COMMITTING_PROGRESS_LABEL;
@@ -607,22 +607,18 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let child_pid = Arc::new(Mutex::new(Some(4242)));
-        let mut run_client = MockRunClient::new();
-        run_client
-            .expect_submit()
-            .times(1)
-            .returning(move |request| {
-                assert!(request.prompt.contains("commit failed"));
-                assert!(
-                    request.child_pid.is_none(),
-                    "isolated runtime must not receive the session PID slot"
-                );
-                if assist_fails {
-                    Err(OneShotError::new("assist failed"))
-                } else {
-                    Ok(one_shot_submission("Fixed the commit failure", 3, 2))
-                }
-            });
+        let run_client = persisting_run_worker(database.runs(), move |request| {
+            assert!(request.prompt.contains("commit failed"));
+            assert!(
+                request.child_pid.is_none(),
+                "isolated runtime must not receive the session PID slot"
+            );
+            if assist_fails {
+                Err(OneShotError::new("assist failed"))
+            } else {
+                Ok(one_shot_submission("Fixed the commit failure", 3, 2))
+            }
+        });
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let context = AssistContext {
             app_event_tx,
@@ -633,7 +629,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
             folder: PathBuf::from("project"),
             git_client: Arc::new(MockGitClient::new()),
             id: "session-id".to_string(),
-            run_client: Arc::new(run_client),
+            run_client: run_client.clone(),
             session_agent: model_fixture::codex_selection(),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
@@ -642,6 +638,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         // Act
         let result =
             SessionTaskService::run_commit_assist_for_error(&context, "commit failed").await;
+        run_client.shutdown().await;
 
         // Assert
         assert_eq!(result.is_err(), assist_fails);
@@ -1111,30 +1108,54 @@ async fn commit_message_generation_records_its_utility_purpose() {
         .expect_head_short_hash()
         .once()
         .returning(|_| Box::pin(async { Ok("abc123".into()) }));
-    let (run_worker, purposes) = purpose_recording_run_worker("Add change");
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
+    let run_worker = persisting_run_worker(database.runs(), |_| {
+        Ok(one_shot_submission("Add change", 5, 3))
+    });
 
-    // Act
-    let outcome = SessionTaskService::commit_session_changes(
-        &git_client,
-        Path::new("project"),
-        UNPUBLISHED,
-        (
-            model_fixture::codex_selection(),
-            ReasoningLevel::Low,
-            SpeedMode::Normal,
+    // Act: the session command scope owns the session and a fallback purpose.
+    let outcome = ag_worker::in_scope(
+        ag_worker::RunScope {
+            session_id: Some("session-id".to_string()),
+            usage_purpose: Some(UsagePurpose::Other),
+            ..ag_worker::RunScope::default()
+        },
+        SessionTaskService::commit_session_changes(
+            &git_client,
+            Path::new("project"),
+            UNPUBLISHED,
+            (
+                model_fixture::codex_selection(),
+                ReasoningLevel::Low,
+                SpeedMode::Normal,
+            ),
+            run_worker.as_ref(),
+            false,
+            &Mutex::new(SessionTranscript::default()),
         ),
-        &run_worker,
-        false,
-        &Mutex::new(SessionTranscript::default()),
     )
     .await
     .expect("commit should succeed");
+    run_worker.shutdown().await;
 
     // Assert
+    let purposes: Vec<String> = sqlx::query_scalar("SELECT purpose FROM agent_run")
+        .fetch_all(&pool)
+        .await
+        .expect("recorded runs");
     assert_eq!(outcome.commit_message, "Add change");
+    assert_eq!(purposes, ["commit message"]);
     assert_eq!(
-        *purposes.lock().expect("recorded purposes"),
-        ["commit message"]
+        session_usage_by_purpose(&pool, "session-id").await,
+        [(
+            "fixture-model".to_string(),
+            "commit_assist".to_string(),
+            5,
+            3
+        )]
     );
 }
 

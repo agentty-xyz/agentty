@@ -1436,11 +1436,9 @@ async fn accepted_implementation(
                     .to_string(),
                 harness_turn_report: None,
                 instruction_conversation_id: None,
-                input_tokens: 0,
-                output_tokens: 0,
                 provider_conversation_id: None,
+                usage: ag_contracts::TurnUsage::default(),
             },
-            &ag_contracts::TurnUsage::default(),
         )
         .await
         .expect("plan response");

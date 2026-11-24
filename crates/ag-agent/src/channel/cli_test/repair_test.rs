@@ -14,7 +14,7 @@ use super::support::make_turn_request;
 use crate::agent::{AgentBackend, BuildCommandRequest, MockAgentBackend};
 use crate::app_server::steering::TurnSteeringRegistry;
 use crate::channel::cli::{
-    CliAgentChannel, ReportedCosts, execute_cli_repair_command, execute_cli_repair_turn,
+    CliAgentChannel, execute_cli_repair_command, execute_cli_repair_turn,
     parse_or_repair_cli_response,
 };
 
@@ -63,6 +63,7 @@ async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {
     });
     let backend: Arc<dyn AgentBackend> = Arc::new(backend);
     let (events, mut event_receiver) = mpsc::unbounded_channel();
+    let mut repairs = Vec::new();
 
     // Act
     let error = parse_or_repair_cli_response(
@@ -71,6 +72,7 @@ async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {
         &request,
         &backend,
         &events,
+        &mut repairs,
     )
     .await
     .expect_err("a failing repair transport should fail the turn");
@@ -86,6 +88,10 @@ async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {
         event_receiver.try_recv(),
         Ok(TurnEvent::ThoughtDelta(_))
     ));
+    assert!(
+        repairs.is_empty(),
+        "a failed repair process reports no usage"
+    );
 }
 
 #[tokio::test]
@@ -116,6 +122,7 @@ async fn test_execute_cli_repair_turn_reports_non_zero_exit() {
         &tokio::sync::mpsc::unbounded_channel().0,
     )
     .await
+    .map(|repair| repair.content)
     .expect_err("repair command should fail");
 
     // Assert
@@ -144,6 +151,7 @@ async fn test_execute_cli_repair_turn_reports_signal() {
         &tokio::sync::mpsc::unbounded_channel().0,
     )
     .await
+    .map(|repair| repair.content)
     .expect_err("repair command should be interrupted");
 
     // Assert
@@ -190,6 +198,7 @@ async fn test_execute_cli_repair_turn_cleans_up_stdin_writer_after_timeout() {
         &tokio::sync::mpsc::unbounded_channel().0,
     )
     .await
+    .map(|repair| repair.content)
     .expect_err("repair command should time out");
 
     // Assert
@@ -216,7 +225,6 @@ async fn test_run_turn_recovers_wrapped_structured_output_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -257,7 +265,6 @@ async fn test_run_turn_returns_error_for_invalid_structured_output_for_claude() 
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -300,23 +307,32 @@ async fn repair_receives_complete_response_and_rejects_oversize_before_execution
     let backend: Arc<dyn AgentBackend> = Arc::new(backend);
     let (events, _receiver) = mpsc::unbounded_channel();
     let malformed = format!("{} preserved tail", "x".repeat(2048));
+    let mut repairs = Vec::new();
 
     // Act
-    let repaired =
-        parse_or_repair_cli_response(AgentKind::Claude, &malformed, &request, &backend, &events)
-            .await
-            .expect("repair");
+    let repaired = parse_or_repair_cli_response(
+        AgentKind::Claude,
+        &malformed,
+        &request,
+        &backend,
+        &events,
+        &mut repairs,
+    )
+    .await
+    .expect("repair");
     let rejected = parse_or_repair_cli_response(
         AgentKind::Claude,
         &"x".repeat(128 * 1024 + 1),
         &request,
         &backend,
         &events,
+        &mut repairs,
     )
     .await;
 
     // Assert
     assert_eq!(repaired.answer, "repaired");
+    assert_eq!(repairs.len(), 1, "only the executed repair is kept");
     assert!(
         rejected
             .expect_err("too large")
@@ -327,7 +343,8 @@ async fn repair_receives_complete_response_and_rejects_oversize_before_execution
 
 #[tokio::test]
 /// Verifies Claude turns recover valid output when the initial parse fails
-/// but the protocol-repair retry returns valid protocol JSON.
+/// but the protocol-repair retry returns valid protocol JSON, and charge the
+/// turn both processes.
 async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_claude() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
@@ -341,11 +358,14 @@ async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_claude() {
             let mut command = std::process::Command::new("sh");
 
             if call_number == 0 {
-                command.arg("-c").arg("printf 'plain non-json response'");
+                command.arg("-c").arg(
+                    r#"printf '%s' '{"result":"plain non-json response","usage":{"input_tokens":2,"output_tokens":1}}'"#,
+                );
             } else {
-                command
-                    .arg("-c")
-                    .arg(r#"printf '{"answer":"Repaired response","questions":[]}'"#);
+                command.arg("-c").arg(concat!(
+                    r#"printf '%s' '{"result":"{\"answer\":\"Repaired response\",\"questions\":[]}","#,
+                    r#""usage":{"input_tokens":3,"output_tokens":2}}'"#,
+                ));
             }
 
             Ok(command)
@@ -355,7 +375,6 @@ async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -371,5 +390,10 @@ async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_claude() {
     assert_eq!(
         result.assistant_message.to_display_text(),
         "Repaired response"
+    );
+    let usage = &result.usage.models[0];
+    assert_eq!(
+        (usage.input_tokens, usage.output_tokens, usage.requests),
+        (5, 3, 2)
     );
 }

@@ -221,6 +221,12 @@ impl ModelUsage {
 /// context fill describes what the most recent request saw.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct TurnUsage {
+    /// Opaque cumulative totals an agent reported after continuing the
+    /// session, which the host stores and passes back through
+    /// [`crate::TurnContinuation::with_usage_checkpoint`] so the session's
+    /// next continued turn can derive its own share; `None` for agents and
+    /// runs that report per-turn usage.
+    pub checkpoint: Option<String>,
     /// One entry per model.
     pub models: Vec<ModelUsage>,
 }
@@ -229,6 +235,7 @@ impl TurnUsage {
     /// Returns the usage of one model.
     pub fn single(usage: ModelUsage) -> Self {
         Self {
+            checkpoint: None,
             models: vec![usage],
         }
     }
@@ -252,10 +259,14 @@ impl TurnUsage {
         self.models.push(entry);
     }
 
-    /// Folds every entry of the later usage `next` into this one.
+    /// Folds every entry of the later usage `next` into this one; a later
+    /// checkpoint replaces this one.
     pub fn merge(&mut self, next: &Self) {
         for usage in &next.models {
             self.record(usage);
+        }
+        if next.checkpoint.is_some() {
+            self.checkpoint.clone_from(&next.checkpoint);
         }
     }
 

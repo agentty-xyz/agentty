@@ -246,7 +246,7 @@ async fn run_turn_with_timeout<Transport: AppServerRuntimeTransport>(
 
             return Ok((
                 assistant_message,
-                priced_turn_usage(usage, &state.model, AgentKind::Antigravity, None),
+                priced_turn_usage(usage, &state.model, AgentKind::Antigravity),
             ));
         }
     })

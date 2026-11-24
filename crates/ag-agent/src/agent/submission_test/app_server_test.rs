@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, OneShotRequest, PermissionMode,
     ReasoningLevel, SpeedMode,
@@ -19,7 +20,6 @@ use crate::agent::submission::{
 use crate::app_server::{
     AppServerError, AppServerStreamEvent, AppServerTurnResponse, MockAppServerClient,
 };
-use crate::test_support::token_usage;
 
 #[tokio::test]
 /// Verifies app-server-backed one-shot execution returns the parsed

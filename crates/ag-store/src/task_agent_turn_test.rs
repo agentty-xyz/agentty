@@ -2,9 +2,10 @@
 //! and per-task history.
 
 use ag_contracts::TurnUsage;
+use ag_contracts::test_support::token_usage;
 use ag_session::{SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus};
 
-use crate::test_support::{agent_task_request, task_database_fixture, token_usage};
+use crate::test_support::{agent_task_request, task_database_fixture};
 use crate::{Database, TaskAgentTurnMetadata};
 
 #[tokio::test]
@@ -26,7 +27,7 @@ async fn task_response_preserves_ordinary_conversation_and_uses_captured_model()
     // Act
     database
         .tasks()
-        .persist_agent_turn("first", &metadata, &turn_usage())
+        .persist_agent_turn("first", &metadata)
         .await
         .expect("response");
     let history = database
@@ -92,7 +93,7 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
     let first = metadata("first");
     let first_recorded = database
         .tasks()
-        .persist_agent_turn("first", &first, &turn_usage())
+        .persist_agent_turn("first", &first)
         .await
         .expect("first response");
     database
@@ -103,21 +104,20 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
     running_attempt(&database, "second").await;
     let second = TaskAgentTurnMetadata {
         harness_turn_report: None,
-        input_tokens: 0,
         instruction_conversation_id: None,
-        output_tokens: 0,
+        usage: TurnUsage::default(),
         ..metadata("second")
     };
     database
         .tasks()
-        .persist_agent_turn("second", &second, &TurnUsage::default())
+        .persist_agent_turn("second", &second)
         .await
         .expect("second response");
 
     // Act
     let duplicate_recorded = database
         .tasks()
-        .persist_agent_turn("first", &first, &turn_usage())
+        .persist_agent_turn("first", &first)
         .await
         .expect("late duplicate");
     let history = database
@@ -159,7 +159,7 @@ async fn conflicting_response_cannot_replace_observed_output_or_provider_state()
     let original = metadata("first");
     database
         .tasks()
-        .persist_agent_turn("first", &original, &turn_usage())
+        .persist_agent_turn("first", &original)
         .await
         .expect("response");
     let before = database
@@ -181,7 +181,7 @@ async fn conflicting_response_cannot_replace_observed_output_or_provider_state()
             ..original.clone()
         },
         TaskAgentTurnMetadata {
-            input_tokens: 9,
+            usage: token_usage("gpt-6.1-sol", 9, 3),
             ..original.clone()
         },
         TaskAgentTurnMetadata {
@@ -191,10 +191,7 @@ async fn conflicting_response_cannot_replace_observed_output_or_provider_state()
     ];
     for changed in changes {
         // Act
-        let result = database
-            .tasks()
-            .persist_agent_turn("first", &changed, &turn_usage())
-            .await;
+        let result = database.tasks().persist_agent_turn("first", &changed).await;
 
         // Assert
         assert!(result.is_err());
@@ -263,7 +260,7 @@ async fn response_requires_a_running_uncanceled_role_attempt() {
         // Act
         let result = database
             .tasks()
-            .persist_agent_turn("first", &metadata("first"), &turn_usage())
+            .persist_agent_turn("first", &metadata("first"))
             .await;
 
         // Assert
@@ -288,11 +285,11 @@ async fn invalid_response_metadata_is_rejected_without_storage() {
             ..valid.clone()
         },
         TaskAgentTurnMetadata {
-            input_tokens: u64::MAX,
+            usage: token_usage("gpt-6.1-sol", u64::MAX, 3),
             ..valid.clone()
         },
         TaskAgentTurnMetadata {
-            output_tokens: u64::MAX,
+            usage: token_usage("gpt-6.1-sol", 7, u64::MAX),
             ..valid
         },
     ];
@@ -300,7 +297,7 @@ async fn invalid_response_metadata_is_rejected_without_storage() {
         // Act
         let result = database
             .tasks()
-            .persist_agent_turn("first", &metadata, &turn_usage())
+            .persist_agent_turn("first", &metadata)
             .await;
 
         // Assert
@@ -333,7 +330,7 @@ async fn failed_usage_write_rolls_back_response_continuation_and_counters() {
     // Act
     let result = database
         .tasks()
-        .persist_agent_turn("first", &metadata, &turn_usage())
+        .persist_agent_turn("first", &metadata)
         .await;
     let history = database
         .tasks()
@@ -360,7 +357,7 @@ async fn failed_usage_write_rolls_back_response_continuation_and_counters() {
         .expect("restore writes");
     database
         .tasks()
-        .persist_agent_turn("first", &metadata, &turn_usage())
+        .persist_agent_turn("first", &metadata)
         .await
         .expect("retry persistence");
 
@@ -376,7 +373,7 @@ async fn corrupted_task_replay_and_usage_fail_closed() {
     let metadata = metadata("first");
     database
         .tasks()
-        .persist_agent_turn("first", &metadata, &turn_usage())
+        .persist_agent_turn("first", &metadata)
         .await
         .expect("response");
     sqlx::query("PRAGMA ignore_check_constraints = ON")
@@ -403,7 +400,7 @@ async fn corrupted_task_replay_and_usage_fail_closed() {
         let load = database.tasks().load_agent_history("task").await;
         let duplicate = database
             .tasks()
-            .persist_agent_turn("first", &metadata, &turn_usage())
+            .persist_agent_turn("first", &metadata)
             .await;
 
         // Assert
@@ -452,7 +449,7 @@ async fn responses_in_the_same_session_stay_in_their_own_task_histories() {
     for attempt in ["first", "second"] {
         database
             .tasks()
-            .persist_agent_turn(attempt, &metadata(attempt), &turn_usage())
+            .persist_agent_turn(attempt, &metadata(attempt))
             .await
             .expect("response");
     }
@@ -502,19 +499,13 @@ async fn running_attempt(database: &Database, attempt_id: &str) {
         .expect("running");
 }
 
-/// Returns the usage detail of the response [`metadata`] describes.
-fn turn_usage() -> TurnUsage {
-    token_usage("gpt-6.1-sol", 7, 3)
-}
-
 fn metadata(label: &str) -> TaskAgentTurnMetadata {
     TaskAgentTurnMetadata {
         assistant_message: serde_json::json!({"answer": label, "questions": []}).to_string(),
         harness_turn_report: Some("content-free harness report".to_string()),
         instruction_conversation_id: Some(format!("bootstrap-{label}")),
-        input_tokens: 7,
-        output_tokens: 3,
         provider_conversation_id: Some(format!("thread-{label}")),
+        usage: token_usage("gpt-6.1-sol", 7, 3),
     }
 }
 

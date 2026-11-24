@@ -600,6 +600,7 @@ impl RealSyncAssistClient {
         let _ = ag_worker::in_scope(
             ag_worker::RunScope {
                 purpose: Some("rebase conflict assistance".to_string()),
+                usage_purpose: Some(UsagePurpose::Rebase),
                 ..ag_worker::RunScope::default()
             },
             run_client.submit(ag_contracts::OneShotRequest {

@@ -3,26 +3,29 @@
 
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{OneShotSubmission, UsagePurpose};
 use ag_git::MockGitClient;
-use ag_worker::MockRunClient;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
 use super::{AssistContext, FailureTracker, format_detail_lines, run_agent_assist};
 use crate::app::service::HarnessModels;
+use crate::app::test_support::persisting_run_worker;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
-use crate::test_support::{session_usage_by_purpose, token_usage};
+use crate::test_support::session_usage_by_purpose;
 
 #[tokio::test]
 async fn test_run_agent_assist_uses_injected_run_client_and_records_usage_under_purpose() {
     // Arrange
     let temp_directory = tempdir().expect("failed to create temp dir");
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
-    let mut run_client = MockRunClient::new();
-    run_client.expect_submit().times(1).returning(|request| {
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let run_client = persisting_run_worker(db.runs(), |request| {
         assert_eq!(request.prompt, "Resolve the conflict");
 
         Ok(OneShotSubmission {
@@ -30,9 +33,6 @@ async fn test_run_agent_assist_uses_injected_run_client_and_records_usage_under_
             usage: token_usage("assist-model", 11, 4),
         })
     });
-    let (db, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
     let project_id = db
         .projects()
         .upsert_project("project", None)
@@ -52,7 +52,7 @@ async fn test_run_agent_assist_uses_injected_run_client_and_records_usage_under_
         folder: temp_directory.path().to_path_buf(),
         git_client: Arc::new(MockGitClient::new()),
         id: "session-id".to_string(),
-        run_client: Arc::new(run_client),
+        run_client: run_client.clone(),
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
@@ -60,6 +60,7 @@ async fn test_run_agent_assist_uses_injected_run_client_and_records_usage_under_
 
     // Act
     let result = run_agent_assist(&context, "Resolve the conflict", UsagePurpose::Rebase).await;
+    run_client.shutdown().await;
 
     // Assert
     result.expect("assist should succeed");

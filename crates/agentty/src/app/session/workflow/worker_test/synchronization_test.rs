@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentError, MockAgentChannel, TurnEvent,
     TurnResult,
@@ -45,9 +46,7 @@ use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
-use crate::test_support::{
-    enable_tracing_log_fallback, poison_lock, session_usage_by_purpose, token_usage,
-};
+use crate::test_support::{enable_tracing_log_fallback, poison_lock, session_usage_by_purpose};
 
 #[tokio::test]
 /// Verifies completed turns keep a linked open PR/MR title and

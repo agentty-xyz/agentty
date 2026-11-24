@@ -5,7 +5,7 @@ use std::future::{Future, poll_fn};
 use std::sync::Arc;
 use std::task::Poll;
 
-use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
+use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission, UsagePurpose};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, TraceContextExt as _};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -29,6 +29,9 @@ pub struct RunScope {
     pub purpose: Option<String>,
     /// Owning session, when applicable.
     pub session_id: Option<String>,
+    /// Work the run's usage is recorded under for its session; runs without
+    /// one, or without a session, record none.
+    pub usage_purpose: Option<UsagePurpose>,
 }
 
 /// Captured ownership and every independently cancelable enclosing scope.
@@ -83,6 +86,7 @@ impl RunContext {
             project_id: self.scope.project_id.or(parent.scope.project_id),
             purpose: self.scope.purpose.or(parent.scope.purpose),
             session_id: self.scope.session_id.or(parent.scope.session_id),
+            usage_purpose: self.scope.usage_purpose.or(parent.scope.usage_purpose),
         };
 
         self

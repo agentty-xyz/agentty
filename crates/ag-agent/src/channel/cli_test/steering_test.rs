@@ -194,6 +194,12 @@ async fn claude_session_turn_keeps_primary_answer_when_a_follow_up_reply_is_malf
         result.assistant_message.to_display_text(),
         "first\n\nplain follow-up"
     );
+    let usage = &result.usage.models[0];
+    assert_eq!(
+        (usage.requests, usage.unreported_requests),
+        (2, 2),
+        "the follow-up repair process is charged to the turn"
+    );
 }
 
 #[test]

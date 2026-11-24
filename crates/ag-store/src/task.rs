@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use ag_contracts::TurnUsage;
 use ag_session::{
     AcceptTaskPlanRequest, AcceptedTaskPlan, CreateTaskRequest, DurableMessageVisibility,
     SessionId, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus,
@@ -67,15 +66,12 @@ pub trait TaskRepository: Send + Sync {
     /// transaction; standalone role responses remain task-only.
     /// Returns `true` only when this call recorded the response, so callers
     /// can run once-only follow-up effects; identical repeats return `false`.
-    /// `usage` is the detail of the response's token counts, recorded as a
-    /// session turn's usage once.
     async fn persist_agent_turn(
         &self,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
-        usage: &TurnUsage,
     ) -> Result<bool, DbError> {
-        let _ = (attempt_id, metadata, usage);
+        let _ = (attempt_id, metadata);
         Err(TaskAgentStore::invalid(
             "Host does not support role-aware tasks",
         ))
@@ -431,12 +427,11 @@ impl TaskRepository for SqliteTaskRepository {
         &self,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
-        usage: &TurnUsage,
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = begin_write(&self.pool, "persist task agent turn").await?;
         let recorded =
-            TaskAgentTurnStore::save(&mut transaction, attempt_id, metadata, usage, now).await?;
+            TaskAgentTurnStore::save(&mut transaction, attempt_id, metadata, now).await?;
         transaction.commit().await?;
 
         Ok(recorded)

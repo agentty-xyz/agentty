@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{
     AgentError, AgentRequestKind, MockAgentChannel, OneShotSubmission, PermissionMode, TurnResult,
 };
@@ -39,7 +40,6 @@ use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
-use crate::test_support::token_usage;
 
 /// Shared Env gates for stand-alone worker host tests.
 pub(super) fn test_graph_resources() -> Arc<ag_worker::GraphResources> {

@@ -47,11 +47,6 @@ impl UsageTracker {
         }
     }
 
-    /// Returns the optional detail counters.
-    fn details_mut(&mut self) -> [&mut DetailCounter; 3] {
-        [&mut self.cache_write, &mut self.cached, &mut self.reasoning]
-    }
-
     /// Discards stale baselines after turns lacking complete cumulative usage.
     /// A new snapshot still establishes a baseline when this turn's total is
     /// unknown.
@@ -206,6 +201,11 @@ impl UsageTracker {
                 i64::try_from(cached).unwrap_or(i64::MAX),
             );
         }
+    }
+
+    /// Returns the optional detail counters.
+    fn details_mut(&mut self) -> [&mut DetailCounter; 3] {
+        [&mut self.cache_write, &mut self.cached, &mut self.reasoning]
     }
 }
 

@@ -4,6 +4,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use ag_contracts::UsagePurpose;
+use ag_contracts::test_support::token_usage;
 use ag_worker::{RunInfo, RunState};
 
 use crate::Database;
@@ -177,6 +179,93 @@ async fn recovery_fails_abandoned_runs_and_preserves_cancellation() {
     );
     assert!(repository.recover().await.is_err());
     assert!(repository.close_session("closed").await.is_err());
+}
+
+#[tokio::test]
+async fn recorded_run_usage_accumulates_under_its_purpose() {
+    // Arrange
+    let db = crate::test_support::task_database_fixture().await;
+    let repository = db.runs();
+
+    // Act
+    for (purpose, input_tokens) in [
+        (UsagePurpose::Title, 3),
+        (UsagePurpose::Title, 4),
+        (UsagePurpose::Review, 5),
+    ] {
+        repository
+            .record_usage("session", purpose, &token_usage("model", input_tokens, 1))
+            .await
+            .expect("usage");
+    }
+
+    // Assert
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT purpose, input_tokens, output_tokens, invocation_count FROM session_usage WHERE \
+         session_id = 'session' ORDER BY purpose",
+    )
+    .fetch_all(db.pool())
+    .await
+    .expect("usage rows");
+    assert_eq!(
+        rows,
+        [("review".into(), 5, 1, 1), ("title".into(), 7, 2, 2)]
+    );
+}
+
+#[tokio::test]
+async fn failed_run_usage_write_reports_a_persistence_error() {
+    // Arrange
+    let db = crate::test_support::task_database_fixture().await;
+    let repository = db.runs();
+    let usage = token_usage("model", 3, 1);
+    let mut errors = Vec::new();
+
+    // Act
+    sqlx::raw_sql(
+        "CREATE TABLE empty_parent (id TEXT PRIMARY KEY); CREATE TABLE deferred_check (session_id \
+         TEXT REFERENCES empty_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER \
+         defer_usage_failure AFTER INSERT ON session_usage BEGIN INSERT INTO deferred_check \
+         (session_id) VALUES (NEW.session_id); END;",
+    )
+    .execute(db.pool())
+    .await
+    .expect("commit failure injection");
+    errors.push(
+        repository
+            .record_usage("session", UsagePurpose::Title, &usage)
+            .await,
+    );
+    sqlx::raw_sql("DROP TRIGGER defer_usage_failure; DROP TABLE session_usage;")
+        .execute(db.pool())
+        .await
+        .expect("write failure injection");
+    errors.push(
+        repository
+            .record_usage("session", UsagePurpose::Title, &usage)
+            .await,
+    );
+    db.pool().close().await;
+    errors.push(
+        repository
+            .record_usage("session", UsagePurpose::Title, &usage)
+            .await,
+    );
+
+    // Assert
+    let prefixes = [
+        "Agent run persistence failed",
+        "Agent run usage persistence failed",
+        "Agent run usage persistence failed",
+    ];
+    for (result, prefix) in errors.iter().zip(prefixes) {
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.to_string().starts_with(prefix)),
+            "{result:?} should start with {prefix}"
+        );
+    }
 }
 
 #[tokio::test]

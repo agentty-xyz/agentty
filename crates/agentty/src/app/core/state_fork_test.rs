@@ -1,13 +1,10 @@
 //! Session fork snapshot preparation and source validation unit tests.
 
-use ag_contracts::UsagePurpose;
-
 use super::App;
 use crate::app::AppError;
 use crate::domain::session::{SessionDiffState, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::presentation::app_mode::AppMode;
-use crate::test_support::token_usage;
 
 /// Prompt text copied through fork snapshot tests.
 const FORK_SOURCE_PROMPT: &str = "Build the fork workflow";
@@ -76,16 +73,6 @@ async fn persist_fork_source_runtime_linkage(app: &App, source_session_id: &str)
         .expect("failed to persist upstream ref");
     app.services
         .db()
-        .usage()
-        .upsert_session_usage(
-            source_session_id,
-            UsagePurpose::Turn,
-            &token_usage("source-model", 13, 21),
-        )
-        .await
-        .expect("failed to persist source usage");
-    app.services
-        .db()
         .sessions()
         .update_session_diff_stats(1, 0, true, source_session_id, "XS")
         .await
@@ -135,15 +122,6 @@ async fn assert_forked_session_snapshot(app: &App, forked_session_id: &str) {
             && session.stats.deleted_lines == 0
             && session.stats.diff_state == SessionDiffState::Empty
     ));
-    let forked_row = app
-        .services
-        .db()
-        .sessions()
-        .load_session(forked_session_id)
-        .await
-        .expect("failed to load forked session row")
-        .expect("missing forked session row");
-    assert_eq!((forked_row.input_tokens, forked_row.output_tokens), (0, 0));
     let forked_session = app
         .sessions
         .session_for_id(forked_session_id)

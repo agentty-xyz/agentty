@@ -1420,6 +1420,7 @@ impl SessionTaskService {
                 ag_worker::in_scope(
                     ag_worker::RunScope {
                         purpose: Some("commit message".to_string()),
+                        usage_purpose: Some(UsagePurpose::CommitAssist),
                         ..ag_worker::RunScope::default()
                     },
                     run_client.submit(ag_contracts::OneShotRequest {
@@ -1484,6 +1485,7 @@ impl SessionTaskService {
             ag_worker::RunScope {
                 session_id: Some(id.clone()),
                 purpose: Some("agent assistance".to_string()),
+                usage_purpose: Some(purpose),
                 ..ag_worker::RunScope::default()
             },
         );
@@ -1533,19 +1535,7 @@ impl SessionTaskService {
             .await;
         }
 
-        let assist_submission = assist_submission?;
-        if let Err(error) = db
-            .usage()
-            .upsert_session_usage(&id, purpose, &assist_submission.usage)
-            .await
-        {
-            warn!(
-                session_id = id,
-                model = %session_agent.model().as_str(),
-                error = %error,
-                "failed to persist session usage after utility prompt"
-            );
-        }
+        assist_submission?;
 
         Ok(())
     }

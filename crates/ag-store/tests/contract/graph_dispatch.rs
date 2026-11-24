@@ -10,9 +10,10 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
-use ag_contracts::{ModelUsage, PermissionMode, ProviderCallBudget, TurnUsage};
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{PermissionMode, ProviderCallBudget};
 use ag_protocol::ProtocolRequestProfile;
-use ag_session::{GraphContext, GraphResultState, GraphWorkspaceAccess};
+use ag_session::{AgentModel, GraphContext, GraphResultState, GraphWorkspaceAccess};
 use ag_store::{Database, GraphEvidence, TaskAgentTurnMetadata};
 use ag_worker::{
     GraphAdmission, GraphExecutor, GraphResources, GraphUtilityRunner, HeartbeatClock, RunScope,
@@ -43,7 +44,7 @@ async fn graph_task_history_is_immutable_and_accounts_usage_before_effects()
     assert!(
         database
             .graphs()
-            .record_task_turn(&missing, &metadata, &TurnUsage::default())
+            .record_task_turn(&missing, &metadata)
             .await
             .is_err()
     );
@@ -115,7 +116,7 @@ async fn graph_task_history_is_immutable_and_accounts_usage_before_effects()
     assert!(
         database
             .graphs()
-            .record_task_turn(&utility, &metadata, &TurnUsage::default())
+            .record_task_turn(&utility, &metadata)
             .await
             .is_err()
     );
@@ -159,9 +160,9 @@ async fn task_history_fixture() -> Result<TaskHistoryFixture, Box<dyn Error>> {
             .to_string(),
         harness_turn_report: None,
         instruction_conversation_id: Some("task-instructions".into()),
-        input_tokens: 3,
-        output_tokens: 7,
         provider_conversation_id: Some("task-provider".into()),
+        // The node's model, under which a reloaded receipt reports its totals.
+        usage: token_usage(AgentModel::Gpt61Sol.as_str(), 3, 7),
     };
 
     Ok(TaskHistoryFixture {
@@ -169,16 +170,6 @@ async fn task_history_fixture() -> Result<TaskHistoryFixture, Box<dyn Error>> {
         dispatch: *dispatch,
         graph,
         metadata,
-    })
-}
-
-/// Returns the usage detail matching the token totals of `metadata`.
-fn usage_of(metadata: &TaskAgentTurnMetadata) -> TurnUsage {
-    TurnUsage::single(ModelUsage {
-        input_tokens: metadata.input_tokens,
-        output_tokens: metadata.output_tokens,
-        requests: 1,
-        ..ModelUsage::new("gpt-6.1-sol")
     })
 }
 
@@ -220,7 +211,7 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, metadata, &usage_of(metadata))
+            .record_task_turn(dispatch, metadata)
             .await
             .is_err()
     );
@@ -229,7 +220,7 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(&invalid, metadata, &TurnUsage::default())
+            .record_task_turn(&invalid, metadata)
             .await
             .is_err()
     );
@@ -247,20 +238,20 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, &malformed, &TurnUsage::default())
+            .record_task_turn(dispatch, &malformed)
             .await
             .is_err()
     );
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, metadata, &usage_of(metadata))
+            .record_task_turn(dispatch, metadata)
             .await?
     );
     assert!(
         !database
             .graphs()
-            .record_task_turn(dispatch, metadata, &usage_of(metadata))
+            .record_task_turn(dispatch, metadata)
             .await?
     );
     assert_eq!(
@@ -275,7 +266,7 @@ async fn assert_task_turn_admission(
     assert!(
         database
             .graphs()
-            .record_task_turn(dispatch, &conflicting, &TurnUsage::default())
+            .record_task_turn(dispatch, &conflicting)
             .await
             .is_err()
     );

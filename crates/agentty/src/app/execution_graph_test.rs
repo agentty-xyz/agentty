@@ -466,7 +466,7 @@ impl GraphScenario {
                                 context_reset: false,
                                 harness_report: None,
                                 provider_conversation_id: Some("isolated-provider".into()),
-                                usage: crate::test_support::token_usage("graph-model", 3, 5),
+                                usage: ag_contracts::test_support::token_usage("graph-model", 3, 5),
                             })
                         })
                     });

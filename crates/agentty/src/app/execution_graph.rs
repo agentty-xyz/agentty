@@ -839,6 +839,7 @@ impl AppServices {
                     cancellation: Some(cancellation.clone()),
                     session_id: Some(graph.session_id.to_string()),
                     parent_id: Some(graph.id.clone()),
+                    usage_purpose: Some(ag_contracts::UsagePurpose::Other),
                     ..ag_worker::RunScope::default()
                 },
                 executor.run_ready(&graph.id, graph.revision, &session.folder, permission),

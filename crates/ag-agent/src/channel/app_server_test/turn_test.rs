@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{AgentChannel, AgentError, ReasoningLevel, StartSessionRequest, TurnEvent};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::AgentKind;
@@ -15,7 +16,6 @@ use crate::app_server::{
     AppServerTurnResponse, MockAppServerClient,
 };
 use crate::channel::app_server::AppServerAgentChannel;
-use crate::test_support::token_usage;
 
 #[tokio::test]
 async fn session_start_is_lazy_and_shutdown_releases_the_client_session() {

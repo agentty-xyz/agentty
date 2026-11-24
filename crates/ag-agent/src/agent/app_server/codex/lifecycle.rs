@@ -958,7 +958,6 @@ impl CodexTurnEventLoopState {
             self.usage.turn_usage(fallback),
             &self.model,
             AgentKind::Codex,
-            None,
         )
     }
 }

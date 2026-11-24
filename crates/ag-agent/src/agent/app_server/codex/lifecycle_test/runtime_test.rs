@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{ContextFill, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::test_support as model_fixture;
@@ -27,7 +28,6 @@ use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as 
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::AppServerTransportError;
 use crate::telemetry::TRACER_PROVIDER_LOCK;
-use crate::test_support::token_usage;
 
 #[tokio::test]
 async fn codex_turn_processing_traces_only_operations_from_the_active_turn_and_thread() {

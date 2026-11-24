@@ -375,6 +375,7 @@ impl AppServices {
             self.run_client(),
             ag_worker::RunScope {
                 session_id: Some(session_id.to_string()),
+                usage_purpose: Some(ag_contracts::UsagePurpose::Other),
                 ..ag_worker::RunScope::default()
             },
         )

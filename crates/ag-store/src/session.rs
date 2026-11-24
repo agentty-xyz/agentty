@@ -47,7 +47,8 @@ pub struct SessionTurnMetadata {
     pub questions_json: String,
     /// Review-comment operations committed with this completed turn.
     pub review_comment_resolutions: Vec<NewSessionReviewCommentResolution>,
-    /// Usage of every model the completed turn used.
+    /// Usage of every model the completed turn used; its checkpoint, when
+    /// present, replaces the session's.
     pub usage: TurnUsage,
 }
 
@@ -191,14 +192,10 @@ session_rows! {
         pub in_progress_started_at: Option<i64>,
         /// Completed active-work duration in whole seconds.
         pub in_progress_total_seconds: i64,
-        /// Total input tokens accumulated for the session.
-        pub input_tokens: i64,
         /// Whether the session is still an explicit draft.
         pub is_draft: bool,
         /// Persisted agent model identifier.
         pub model: String,
-        /// Total output tokens accumulated for the session.
-        pub output_tokens: i64,
         /// Owning project identifier, when present.
         pub project_id: Option<i64>,
     }
@@ -309,6 +306,10 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         &self,
         id: &str,
     ) -> Result<Option<String>, DbError>;
+
+    /// Returns the usage checkpoint the session's latest continued turn
+    /// reported, when present.
+    async fn get_session_usage_checkpoint(&self, id: &str) -> Result<Option<String>, DbError>;
 
     /// Inserts a newly created draft-session row.
     async fn insert_draft_session(
@@ -981,6 +982,15 @@ WHERE id = ?
         Ok(value)
     }
 
+    async fn get_session_usage_checkpoint(&self, id: &str) -> Result<Option<String>, DbError> {
+        let value = sqlx::query_scalar!(r"SELECT usage_checkpoint FROM session WHERE id = ?", id)
+            .fetch_optional(&self.0)
+            .await?
+            .flatten();
+
+        Ok(value)
+    }
+
     async fn insert_draft_session(
         &self,
         id: &str,
@@ -1104,10 +1114,8 @@ SELECT session.base_branch AS base_branch,
        session.id AS id,
        session.in_progress_started_at,
        session.in_progress_total_seconds AS in_progress_total_seconds,
-       session.input_tokens AS input_tokens,
        session.is_draft AS is_draft,
        session.model AS model,
-       session.output_tokens AS output_tokens,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1179,10 +1187,8 @@ SELECT session.base_branch AS base_branch,
        session.id AS id,
        session.in_progress_started_at,
        session.in_progress_total_seconds AS in_progress_total_seconds,
-       session.input_tokens AS input_tokens,
        session.is_draft AS "is_draft: bool",
        session.model AS model,
-       session.output_tokens AS output_tokens,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1239,10 +1245,8 @@ SELECT session.base_branch AS base_branch,
        session.id AS id,
        session.in_progress_started_at,
        session.in_progress_total_seconds AS in_progress_total_seconds,
-       session.input_tokens AS input_tokens,
        session.is_draft AS "is_draft: bool",
        session.model AS model,
-       session.output_tokens AS output_tokens,
        session.project_id,
        '' AS "prompt!: String",
        session.reasoning_level AS reasoning_level_override,
@@ -1311,10 +1315,8 @@ SELECT session.base_branch AS base_branch,
        session.id AS id,
        session.in_progress_started_at,
        session.in_progress_total_seconds AS in_progress_total_seconds,
-       session.input_tokens AS input_tokens,
        session.is_draft AS is_draft,
        session.model AS model,
-       session.output_tokens AS output_tokens,
        session.project_id,
        '' AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1643,12 +1645,14 @@ UPDATE session
 SET questions = ?,
     provider_conversation_id = ?,
     app_server_instruction_provider_conversation_id = ?,
+    usage_checkpoint = COALESCE(?, usage_checkpoint),
     updated_at = ?
 WHERE id = ?
 ",
             turn_metadata.questions_json.as_str(),
             turn_metadata.provider_conversation_id.as_deref(),
             turn_metadata.instruction_conversation_id.as_deref(),
+            turn_metadata.usage.checkpoint.as_deref(),
             now,
             session_id
         )
@@ -2702,10 +2706,8 @@ struct SessionJoinRow {
     id: String,
     in_progress_started_at: Option<i64>,
     in_progress_total_seconds: i64,
-    input_tokens: i64,
     is_draft: bool,
     model: String,
-    output_tokens: i64,
     project_id: Option<i64>,
     prompt: String,
     published_upstream_ref: Option<String>,
@@ -2777,10 +2779,8 @@ impl SessionJoinRow {
             id,
             in_progress_started_at,
             in_progress_total_seconds,
-            input_tokens,
             is_draft,
             model,
-            output_tokens,
             project_id,
             prompt,
             published_upstream_ref,
@@ -2827,10 +2827,8 @@ impl SessionJoinRow {
             id,
             in_progress_started_at,
             in_progress_total_seconds,
-            input_tokens,
             is_draft,
             model,
-            output_tokens,
             project_id,
             published_upstream_ref,
             reasoning_level_override,

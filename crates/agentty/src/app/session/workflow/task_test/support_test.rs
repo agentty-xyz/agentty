@@ -5,11 +5,11 @@ use std::sync::{Mutex, Mutex as StdMutex};
 use std::time::{Instant, SystemTime};
 
 use ag_contracts::OneShotSubmission;
+use ag_contracts::test_support::token_usage;
 
 use crate::app::session::Clock;
 use crate::db::AppRepositories;
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
-use crate::test_support::token_usage;
 
 /// Mutable test clock used to drive deterministic status-transition timing
 /// assertions.

@@ -19,8 +19,7 @@ use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver, CliS
 use crate::agent::{MockAgentBackend, create_backend};
 use crate::app_server::steering::TurnSteeringRegistry;
 use crate::channel::cli::{
-    CliAgentChannel, CliTurnObserver, ReportedCosts, build_command_request,
-    map_cli_turn_execution_error,
+    CliAgentChannel, CliTurnObserver, build_command_request, map_cli_turn_execution_error,
 };
 
 /// Delivers one stdout line with the payload the shared executor parses.
@@ -124,7 +123,6 @@ async fn test_run_turn_spawn_failure_returns_err_without_delta() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -164,7 +162,6 @@ async fn test_run_turn_kill_signal_returns_err_without_stopped_delta() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -210,7 +207,6 @@ async fn test_run_turn_clean_exit_returns_ok_result_without_context_reset() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -244,7 +240,6 @@ async fn test_run_turn_writes_large_stdin_concurrently_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -283,7 +278,6 @@ async fn test_run_turn_writes_prompt_to_stdin_for_claude() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -331,7 +325,6 @@ async fn resumed_claude_turn_delivers_legacy_instruction_withdrawal_over_stdin()
         active: Arc::default(),
         backend: Arc::new(backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let mut request = make_turn_request(directory.path().to_path_buf());
@@ -371,7 +364,6 @@ async fn test_run_turn_preserves_child_error_after_broken_pipe() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -435,7 +427,6 @@ async fn test_run_turn_returns_claude_auth_guidance_for_expired_token() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -473,7 +464,6 @@ async fn test_run_turn_returns_exit_error_for_non_zero_status() {
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
@@ -503,7 +493,7 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
         command.arg("-c").arg(concat!(
             r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash"}]}}';"#,
             r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"streamed fragment"}]}}';"#,
-            r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3},"modelUsage":{"claude-sonnet-5-5":{"costUSD":0.0125}}}'"#,
+            r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":5,"outputTokens":3,"costUSD":0.0125}}}'"#,
         ));
 
         Ok(command)
@@ -512,7 +502,6 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
         active: Arc::default(),
         backend: Arc::new(mock_backend),
         kind: AgentKind::Claude,
-        reported_costs: ReportedCosts::default(),
         steering: TurnSteeringRegistry::default(),
     };
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -623,26 +612,61 @@ fn repair_activity_is_forwarded_without_private_loader_text() {
     );
 }
 
-#[test]
-fn reported_costs_attribute_each_turn_its_share_of_the_cumulative_estimate() {
+#[tokio::test]
+/// Verifies a resumed Claude turn is charged the difference from the usage
+/// checkpoint its continuation carries, and returns the next checkpoint.
+async fn resumed_claude_turn_continues_from_the_usage_checkpoint() {
     // Arrange
-    let costs = ReportedCosts::default();
-    let turns = [
-        ("fresh", None, false, None),
-        ("fresh", Some(500), false, Some(500)),
-        ("fresh", Some(800), true, Some(300)),
-        ("fresh", Some(100), true, Some(100)),
-        ("resumed", Some(900), true, None),
-        ("resumed", Some(950), true, Some(50)),
-    ];
+    let directory = tempdir().expect("temporary folder");
+    let mut backend = MockAgentBackend::new();
+    backend.expect_build_command().times(1).returning(|_| {
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(concat!(
+            r#"printf '%s\n' '{"type":"system","subtype":"init","claude_code_version":"2.1.300"}' "#,
+            r#"'{"type":"result","result":"{\"answer\":\"ok\",\"questions\":[]}","usage":{"input_tokens":30,"output_tokens":40},"#,
+            r#""modelUsage":{"claude-sonnet-5-5":{"inputTokens":130,"outputTokens":50,"costUSD":0.015}}}'"#,
+        ));
 
-    for (session_id, cumulative, resumed, expected) in turns {
-        // Act
-        let share = costs.turn_share(session_id, cumulative, resumed);
+        Ok(command)
+    });
+    let channel = CliAgentChannel::with_backend(Arc::new(backend), AgentKind::Claude);
+    let mut request = make_turn_request(directory.path().to_path_buf());
+    request.request_kind = AgentRequestKind::SessionResume;
+    request.continuation = TurnContinuation::fresh().with_usage_checkpoint(Some(
+        r#"{"claude-sonnet-5-5":{"cache_read":0,"cache_write":0,"cost":5000,"input":100,"output":10,"thinking":null}}"#
+            .to_string(),
+    ));
 
-        // Assert
-        assert_eq!(share, expected, "{session_id} {cumulative:?}");
-    }
+    // Act
+    let result = channel
+        .run_turn("session".into(), request, mpsc::unbounded_channel().0)
+        .await
+        .expect("resumed turn");
+
+    // Assert
+    let usage = &result.usage.models[0];
+    assert_eq!(
+        (
+            usage.model.as_str(),
+            usage.input_tokens,
+            usage.output_tokens
+        ),
+        ("claude-sonnet-5-5", 30, 40)
+    );
+    assert_eq!(
+        usage.cost,
+        Some(ag_contracts::CostEstimate {
+            basis: ag_contracts::CostBasis::AgentReported,
+            micro_usd: 10_000,
+        })
+    );
+    assert!(
+        result
+            .usage
+            .checkpoint
+            .as_deref()
+            .is_some_and(|checkpoint| checkpoint.contains(r#""input":130"#))
+    );
 }
 
 #[test]

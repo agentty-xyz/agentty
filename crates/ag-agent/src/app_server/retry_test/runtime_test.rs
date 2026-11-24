@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnUsage};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
@@ -22,7 +23,6 @@ use crate::app_server::retry::{
     RuntimeInspector, build_attempt_prompt, finish_prompt_preparation, run_turn_with_restart_retry,
 };
 use crate::telemetry::TRACER_PROVIDER_LOCK;
-use crate::test_support::token_usage;
 
 #[tokio::test]
 async fn cancellation_during_startup_stops_the_runtime_before_the_first_attempt() {

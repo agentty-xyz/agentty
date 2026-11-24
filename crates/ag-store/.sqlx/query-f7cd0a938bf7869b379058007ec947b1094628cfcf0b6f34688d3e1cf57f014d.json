@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT usage_checkpoint FROM session WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "usage_checkpoint",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "usage_checkpoint"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "f7cd0a938bf7869b379058007ec947b1094628cfcf0b6f34688d3e1cf57f014d"
+}

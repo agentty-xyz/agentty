@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, ModelUsage, TurnUsage};
+use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};
 use ag_git as git;
 use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
 use ag_worker::test_support::{AppServerClient, MockAppServerClient};
@@ -365,16 +365,6 @@ pub(crate) fn session_fixture_with_folder(session_folder: PathBuf) -> Session {
 /// Returns a mock app-server client wrapped in `Arc` for test injection.
 pub(crate) fn mock_app_server() -> Arc<dyn AppServerClient> {
     Arc::new(MockAppServerClient::new())
-}
-
-/// Returns turn usage of one `model` with the given input and output tokens
-/// and every other detail unknown.
-pub(crate) fn token_usage(model: &str, input_tokens: u64, output_tokens: u64) -> TurnUsage {
-    TurnUsage::single(ModelUsage {
-        input_tokens,
-        output_tokens,
-        ..ModelUsage::new(model)
-    })
 }
 
 /// Loads `(model, purpose, input_tokens, output_tokens)` of every persisted

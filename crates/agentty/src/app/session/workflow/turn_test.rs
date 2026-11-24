@@ -88,6 +88,7 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
             prepared.request.continuation.replay_transcript(),
             Some("Ordinary chat history")
         );
+        assert_eq!(prepared.request.continuation.usage_checkpoint(), None);
     }
 
     // Act: use the ordinary successful-turn persistence boundary.
@@ -103,7 +104,10 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
                 provider_conversation_id: Some("old-context".into()),
                 questions_json: "[]".into(),
                 review_comment_resolutions: Vec::new(),
-                usage: TurnUsage::default(),
+                usage: TurnUsage {
+                    checkpoint: Some("cumulative-totals".into()),
+                    ..TurnUsage::default()
+                },
             },
         )
         .await
@@ -118,10 +122,14 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
     )
     .await;
 
-    // Assert
+    // Assert: the next turn continues from the stored usage checkpoint.
     assert_eq!(
         prepared.request.agent_profile,
         AgentDefinitionPrompt::default()
+    );
+    assert_eq!(
+        prepared.request.continuation.usage_checkpoint(),
+        Some("cumulative-totals")
     );
 }
 

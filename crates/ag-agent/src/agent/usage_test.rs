@@ -6,7 +6,18 @@ use ag_harness::provider::ModelProvider;
 use ag_harness::{Cost, Usage};
 use ag_session::AgentKind;
 
-use crate::agent::usage::{catalog_pricing, cost_estimate, price, priced_turn_usage};
+use crate::agent::ParsedResponse;
+use crate::agent::usage::{cli_turn_usage, cost_estimate, list_price, priced_turn_usage};
+
+/// Returns one reported request's token totals under an empty model name.
+fn request_usage(input_tokens: u64, output_tokens: u64) -> ModelUsage {
+    ModelUsage {
+        input_tokens,
+        output_tokens,
+        requests: 1,
+        ..ModelUsage::new("")
+    }
+}
 
 #[test]
 fn cost_sources_map_to_bases() {
@@ -23,67 +34,68 @@ fn cost_sources_map_to_bases() {
 }
 
 #[test]
-fn catalog_prices_claude_cache_reads_and_writes() {
+fn list_price_needs_a_priced_model_and_a_reported_request() {
     // Arrange
-    let pricing =
-        catalog_pricing(ModelProvider::Anthropic, "claude-opus-5-5").expect("Opus is priced");
-    let usage = ModelUsage {
+    let opus = ModelUsage {
         cache_read_tokens: Some(500_000),
         cache_write_tokens: Some(100_000),
-        input_tokens: 1_000_000,
-        output_tokens: 100_000,
-        ..ModelUsage::new("claude-opus-5-5")
+        model: "claude-opus-5-5".to_string(),
+        ..request_usage(1_000_000, 100_000)
     };
-
-    // Act
-    let cost = price(&usage, pricing);
-
-    // Assert
-    assert_eq!(
-        cost,
-        CostEstimate {
-            basis: CostBasis::ListPrice,
-            micro_usd: 4_200_000,
-        }
-    );
-}
-
-#[test]
-fn priced_turn_usage_names_the_model_and_prefers_the_agent_reported_cost() {
-    // Arrange
-    let usage = ModelUsage {
-        input_tokens: 1_000_000,
-        output_tokens: 100_000,
-        requests: 1,
-        ..ModelUsage::new("")
-    };
-    let opus_list_price = price(
-        &usage,
-        catalog_pricing(ModelProvider::Anthropic, "claude-opus-5-5").expect("Opus is priced"),
-    );
     let cases = [
         (
-            "claude-opus-5-5",
-            AgentKind::Claude,
-            Some(12_500),
+            opus.clone(),
+            ModelProvider::Anthropic,
             Some(CostEstimate {
-                basis: CostBasis::AgentReported,
-                micro_usd: 12_500,
+                basis: CostBasis::ListPrice,
+                micro_usd: 4_200_000,
             }),
         ),
         (
-            "claude-opus-5-5",
-            AgentKind::Claude,
+            ModelUsage::unreported("claude-opus-5-5", 1),
+            ModelProvider::Anthropic,
             None,
-            Some(opus_list_price),
         ),
-        ("not-a-model", AgentKind::Codex, None, None),
-        ("gemini-model", AgentKind::Antigravity, None, None),
+        (
+            ModelUsage {
+                model: "not-a-model".to_string(),
+                ..opus
+            },
+            ModelProvider::OpenAi,
+            None,
+        ),
     ];
 
-    for (model, kind, reported_cost, expected_cost) in cases {
+    for (usage, provider, expected) in cases {
         // Act
-        let priced = priced_turn_usage(usage.clone(), model, kind, reported_cost);
+        let cost = list_price(&usage, provider);
+
+        // Assert
+        assert_eq!(cost, expected);
+    }
+}
+
+#[test]
+fn priced_turn_usage_names_the_model_and_prices_cataloged_providers() {
+    // Arrange
+    let usage = request_usage(1_000_000, 100_000);
+    let opus_list_price = list_price(
+        &ModelUsage {
+            model: "claude-opus-5-5".to_string(),
+            ..usage
+        },
+        ModelProvider::Anthropic,
+    )
+    .expect("Opus is priced");
+    let cases = [
+        ("claude-opus-5-5", AgentKind::Claude, Some(opus_list_price)),
+        ("not-a-model", AgentKind::Codex, None),
+        ("gemini-model", AgentKind::Antigravity, None),
+    ];
+
+    for (model, kind, expected_cost) in cases {
+        // Act
+        let priced = priced_turn_usage(usage.clone(), model, kind);
 
         // Assert
         assert_eq!(
@@ -98,10 +110,34 @@ fn priced_turn_usage_names_the_model_and_prefers_the_agent_reported_cost() {
 }
 
 #[test]
-fn unknown_models_have_no_catalog_price() {
-    // Arrange, Act
-    let pricing = catalog_pricing(ModelProvider::OpenAi, "not-a-model");
+fn cli_turn_usage_sums_other_agents_runs_under_the_model() {
+    // Arrange
+    let run = |input_tokens, output_tokens| ParsedResponse {
+        content: String::new(),
+        follow_up_contents: Vec::new(),
+        totals: None,
+        usage: request_usage(input_tokens, output_tokens),
+    };
+    let turn = run(100, 10);
+    let repair = run(40, 4);
+
+    // Act
+    let usage = cli_turn_usage(
+        AgentKind::Codex,
+        "not-a-model",
+        true,
+        None,
+        &[&turn, &repair],
+    );
 
     // Assert
-    assert_eq!(pricing, None);
+    assert_eq!(
+        usage,
+        TurnUsage::single(ModelUsage {
+            input_tokens: 140,
+            output_tokens: 14,
+            requests: 2,
+            ..ModelUsage::new("not-a-model")
+        })
+    );
 }

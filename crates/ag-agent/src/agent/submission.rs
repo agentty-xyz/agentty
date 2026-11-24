@@ -29,7 +29,7 @@ use super::cli::execution::{
 };
 use super::native::NativeHarnessConfig;
 use super::submission_pool::{SubmissionLease, SubmissionPool};
-use super::usage::priced_turn_usage;
+use super::usage::cli_turn_usage;
 use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
 
@@ -386,20 +386,14 @@ async fn submit_one_shot_with_backend(
             }
         };
 
-    // Each attempt is a fresh, unresumed process, so the agent's own cost
-    // estimate covers that attempt alone.
-    let mut usage = parsed_response.usage;
-    let mut reported_cost = parsed_response.reported_cost;
-    if let Some(repair) = repair_response {
-        usage.add(&repair.usage);
-        reported_cost = reported_cost
-            .zip(repair.reported_cost)
-            .map(|(cost, repair_cost)| cost.saturating_add(repair_cost));
-    }
+    // Each attempt is a fresh process that continues no session.
+    let runs = std::iter::once(&parsed_response)
+        .chain(repair_response.as_ref())
+        .collect::<Vec<_>>();
 
     Ok(OneShotSubmission {
         response: agent_response,
-        usage: priced_turn_usage(usage, &model, agent_kind, reported_cost),
+        usage: cli_turn_usage(agent_kind, &model, false, None, &runs),
     })
 }
 

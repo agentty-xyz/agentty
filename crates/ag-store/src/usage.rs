@@ -11,8 +11,8 @@ use crate::connection::begin_write;
 use crate::session::persist_turn_usage;
 use crate::timestamp::TimestampSource;
 
-/// Row returned when loading per-model token usage from the `session_usage`
-/// table.
+/// Row returned when loading one model's token usage for one purpose from
+/// the `session_usage` table.
 pub struct SessionUsageRow {
     /// Row creation timestamp in Unix seconds.
     pub created_at: i64,
@@ -24,6 +24,9 @@ pub struct SessionUsageRow {
     pub model: String,
     /// Accumulated output-token count.
     pub output_tokens: i64,
+    /// Persisted label of the work the usage served, as
+    /// [`UsagePurpose::as_str`] writes it.
+    pub purpose: String,
     /// Owning session identifier, when present.
     pub session_id: Option<String>,
 }
@@ -32,7 +35,8 @@ pub struct SessionUsageRow {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait UsageRepository: Send + Sync {
-    /// Loads per-model token usage rows for a session, ordered by model name.
+    /// Loads a session's token usage rows, one per model and purpose,
+    /// ordered by model and purpose.
     async fn load_session_usage(&self, session_id: &str) -> Result<Vec<SessionUsageRow>, DbError>;
 
     /// Records one invocation's usage of every model under `purpose`, and
@@ -69,10 +73,10 @@ impl UsageRepository for SqliteUsageRepository {
         let rows = sqlx::query_as!(
             SessionUsageRow,
             r#"
-SELECT session_id, model, created_at, input_tokens, invocation_count, output_tokens
+SELECT session_id, model, purpose, created_at, input_tokens, invocation_count, output_tokens
 FROM session_usage
 WHERE session_id = ?
-ORDER BY model
+ORDER BY model, purpose
             "#,
             session_id
         )

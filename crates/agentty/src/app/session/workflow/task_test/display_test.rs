@@ -170,11 +170,4 @@ async fn test_run_agent_assist_task_rejects_plain_text_output() {
         .unwrap_or_default();
     assert!(output_text.contains("[Error] Agent assistance failed."));
     assert!(!output_text.contains("plain text"));
-    let sessions = database
-        .sessions()
-        .load_sessions()
-        .await
-        .expect("failed to load sessions");
-    assert_eq!(sessions[0].input_tokens, 0);
-    assert_eq!(sessions[0].output_tokens, 0);
 }

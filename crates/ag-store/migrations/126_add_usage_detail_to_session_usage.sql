@@ -52,3 +52,8 @@ DROP TABLE session_usage_legacy;
 -- context window, kept across restarts.
 ALTER TABLE session ADD COLUMN context_tokens INTEGER;
 ALTER TABLE session ADD COLUMN context_window_tokens INTEGER;
+
+-- Opaque cumulative usage totals an agent reported after the session's
+-- latest continued turn, from which its next continued turn derives its own
+-- share.
+ALTER TABLE session ADD COLUMN usage_checkpoint TEXT;

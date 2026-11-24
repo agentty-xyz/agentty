@@ -1716,6 +1716,7 @@ impl SessionWorkerService {
                 ag_worker::RunScope {
                     parent_id: Some(operation_id.clone()),
                     session_id: Some(context.session_id.to_string()),
+                    usage_purpose: Some(ag_contracts::UsagePurpose::Other),
                     ..ag_worker::RunScope::default()
                 },
                 Box::pin(Self::execute_session_command(context, run_client, command)),

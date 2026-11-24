@@ -2006,20 +2006,8 @@ async fn retirement_closes_active_work_timers() {
 #[tokio::test]
 async fn usage_detail_migration_keeps_rows_as_turns_with_unknown_detail() {
     // Arrange
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect("sqlite::memory:")
-        .await
-        .expect("legacy pool");
-    let migrations = MIGRATOR
-        .iter()
-        .filter(|migration| migration.version < 126)
-        .cloned()
-        .collect::<Vec<_>>();
-    Migrator::with_migrations(migrations)
-        .run(&pool)
-        .await
-        .expect("legacy schema");
+    let database = pre_usage_detail_database().await;
+    let pool = database.pool();
     sqlx::raw_sql(
         r"
 INSERT INTO project (id, path) VALUES (1, 'project');
@@ -2029,39 +2017,69 @@ INSERT INTO session_usage (session_id, model, created_at, input_tokens, invocati
 VALUES ('session-a', 'gpt-5.6-sol', 12, 40, 3, 9);
 ",
     )
-    .execute(&pool)
+    .execute(pool)
     .await
     .expect("legacy usage");
 
     // Act
-    MIGRATOR.run(&pool).await.expect("usage detail migration");
+    MIGRATOR.run(pool).await.expect("usage detail migration");
     sqlx::query(
         "INSERT INTO session_usage (session_id, model, purpose, created_at) VALUES ('session-a', \
          'gpt-5.6-sol', 'title', 13)",
     )
-    .execute(&pool)
+    .execute(pool)
     .await
     .expect("purposes share a model");
-    let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64, Option<i64>, Option<i64>)>(
+    let rows = sqlx::query_as::<_, MigratedUsageRow>(
         r"
-SELECT purpose, created_at, input_tokens, invocation_count, detailed_invocation_count,
-       cache_read_tokens, cost_micro_usd
+SELECT session_id, model, purpose, created_at, input_tokens, output_tokens, invocation_count,
+       detailed_invocation_count, cache_read_tokens, cost_micro_usd
 FROM session_usage
 ORDER BY purpose DESC
 ",
     )
-    .fetch_all(&pool)
+    .fetch_all(pool)
     .await
     .expect("migrated usage rows");
-    let context = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
-        "SELECT context_tokens, context_window_tokens FROM session WHERE id = 'session-a'",
+    let session = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<String>)>(
+        "SELECT context_tokens, context_window_tokens, usage_checkpoint FROM session WHERE id = \
+         'session-a'",
     )
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     .expect("session context");
 
     // Assert
-    assert_eq!(rows[0], ("turn".to_string(), 12, 40, 3, 0, None, None));
-    assert_eq!(rows[1].0, "title");
-    assert_eq!(context, (None, None));
+    assert_eq!(
+        rows[0],
+        (
+            Some("session-a".to_string()),
+            "gpt-5.6-sol".to_string(),
+            "turn".to_string(),
+            12,
+            40,
+            9,
+            3,
+            0,
+            None,
+            None
+        )
+    );
+    assert_eq!(rows[1].2, "title");
+    assert_eq!(session, (None, None, None));
 }
+
+/// Session, model, purpose, and accumulated columns of one migrated usage
+/// row.
+type MigratedUsageRow = (
+    Option<String>,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    Option<i64>,
+);

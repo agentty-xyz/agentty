@@ -171,6 +171,34 @@ fn turn_usage_orders_models_by_latest_request() {
 }
 
 #[test]
+fn merging_keeps_the_latest_checkpoint() {
+    // Arrange
+    let cases = [
+        (None, None, None),
+        (Some("earlier"), None, Some("earlier")),
+        (None, Some("later"), Some("later")),
+        (Some("earlier"), Some("later"), Some("later")),
+    ];
+
+    for (current, next, expected) in cases {
+        let mut usage = TurnUsage {
+            checkpoint: current.map(str::to_string),
+            ..TurnUsage::default()
+        };
+        let later = TurnUsage {
+            checkpoint: next.map(str::to_string),
+            ..TurnUsage::default()
+        };
+
+        // Act
+        usage.merge(&later);
+
+        // Assert
+        assert_eq!(usage.checkpoint.as_deref(), expected);
+    }
+}
+
+#[test]
 fn empty_usage_records_nothing() {
     // Arrange, Act
     let usage = TurnUsage::default();

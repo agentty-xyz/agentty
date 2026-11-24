@@ -40,6 +40,7 @@ fn test_turn_continuation_fresh_has_no_context() {
     assert_eq!(continuation.replay_transcript(), None);
     assert_eq!(continuation.provider_conversation_id(), None);
     assert_eq!(continuation.persisted_instruction_conversation_id(), None);
+    assert_eq!(continuation.usage_checkpoint(), None);
     assert!(parts.live_transcript.is_none());
     assert_eq!(parts.persisted_instruction_conversation_id, None);
     assert_eq!(parts.provider_conversation_id, None);
@@ -62,6 +63,19 @@ fn test_normalize_instruction_conversation_id_trims_and_drops_blank_ids() {
         // Assert
         assert_eq!(normalized, expected);
     }
+}
+
+#[test]
+fn turn_continuation_carries_the_usage_checkpoint() {
+    // Arrange
+    let continuation = TurnContinuation::replaying("prior turn".to_string());
+
+    // Act
+    let continuation = continuation.with_usage_checkpoint(Some("{}".to_string()));
+
+    // Assert
+    assert_eq!(continuation.usage_checkpoint(), Some("{}"));
+    assert_eq!(continuation.replay_transcript(), Some("prior turn"));
 }
 
 #[test]

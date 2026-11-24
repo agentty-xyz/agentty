@@ -14,9 +14,6 @@ mod model;
 #[cfg(test)]
 #[path = "telemetry_test.rs"]
 mod telemetry;
-#[cfg(test)]
-#[path = "test_support_test.rs"]
-mod test_support;
 
 pub(crate) use ag_contracts::is_input_size_error;
 #[cfg(any(test, feature = "test-utils"))]

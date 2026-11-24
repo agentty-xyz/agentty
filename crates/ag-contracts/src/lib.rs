@@ -13,6 +13,10 @@ mod permission;
 mod provider_call_budget;
 mod reasoning;
 mod session;
+/// Shared usage fixtures for deterministic consumer tests.
+#[cfg(any(test, feature = "test-utils"))]
+#[path = "test_support_test.rs"]
+pub mod test_support;
 mod usage;
 
 pub use activity::{

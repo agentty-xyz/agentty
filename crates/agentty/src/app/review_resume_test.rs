@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
     ReasoningLevel, SpeedMode, TurnUsage,
@@ -16,7 +17,6 @@ use ag_worker::{MockRunClient, RunClient};
 
 use super::ReviewResumeClient;
 use crate::app::review_graph::test_support::ReviewGraphFixture;
-use crate::test_support::token_usage;
 
 fn request() -> OneShotRequest {
     OneShotRequest {

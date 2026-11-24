@@ -1,5 +1,6 @@
 //! Fork session snapshot tests that verify source-specific state is reset.
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{TurnUsage, UsagePurpose};
 use ag_session::{FocusedReviewStatus, ResponseStyle};
 use sqlx::SqlitePool;
@@ -7,7 +8,7 @@ use sqlx::SqlitePool;
 use crate::AppRepositories;
 use crate::review::SessionReviewRequestRow;
 use crate::session::{ForkSessionSnapshot, SessionRow, SessionTurnMetadata};
-use crate::test_support::{review_request_fixture, token_usage};
+use crate::test_support::review_request_fixture;
 
 #[tokio::test]
 async fn test_fork_session_snapshot_resets_source_specific_state() {
@@ -70,11 +71,14 @@ struct ForkResetRow {
     focused_review_text: Option<String>,
     in_progress_started_at: Option<i64>,
     in_progress_total_seconds: i64,
+    input_tokens: i64,
     is_draft: bool,
     merged_commit_hash: Option<String>,
+    output_tokens: i64,
     provider_conversation_id: Option<String>,
     published_upstream_ref: Option<String>,
     questions: Option<String>,
+    usage_checkpoint: Option<String>,
 }
 
 /// Loads reset-sensitive fork columns that are not exposed by public
@@ -88,11 +92,14 @@ SELECT app_server_instruction_provider_conversation_id,
        focused_review_text,
        in_progress_started_at,
        in_progress_total_seconds,
+       input_tokens,
        is_draft AS "is_draft: bool",
        merged_commit_hash,
+       output_tokens,
        provider_conversation_id,
        published_upstream_ref,
-       questions
+       questions,
+       usage_checkpoint
 FROM session
 WHERE id = ?
 "#,
@@ -152,7 +159,10 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
-                usage: TurnUsage::default(),
+                usage: TurnUsage {
+                    checkpoint: Some("source-checkpoint".to_string()),
+                    ..TurnUsage::default()
+                },
             },
         )
         .await
@@ -256,6 +266,17 @@ fn assert_source_reset_state(
     assert_eq!(source_row.size, "S");
     assert!(source_reset_row.is_draft);
     assert_eq!(
+        (
+            source_reset_row.input_tokens,
+            source_reset_row.output_tokens
+        ),
+        (11, 29)
+    );
+    assert_eq!(
+        source_reset_row.usage_checkpoint.as_deref(),
+        Some("source-checkpoint")
+    );
+    assert_eq!(
         source_reset_row.provider_conversation_id.as_deref(),
         Some("provider-thread")
     );
@@ -302,8 +323,11 @@ fn assert_fork_reset_state(
 ) {
     assert_eq!(fork_row.status, "Review");
     assert!(!fork_row.is_draft);
-    assert_eq!(fork_row.input_tokens, 0);
-    assert_eq!(fork_row.output_tokens, 0);
+    assert_eq!(
+        (fork_reset_row.input_tokens, fork_reset_row.output_tokens),
+        (0, 0)
+    );
+    assert_eq!(fork_reset_row.usage_checkpoint, None);
     assert_eq!(fork_row.added_lines, 0);
     assert_eq!(fork_row.deleted_lines, 0);
     assert_eq!(fork_row.has_diff, None);

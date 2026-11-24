@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult, TurnUsage};
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
@@ -32,7 +33,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
-use crate::test_support::{session_usage_by_purpose, token_usage};
+use crate::test_support::session_usage_by_purpose;
 
 #[tokio::test]
 /// Verifies failed turn-metadata persistence forces a refresh and skips
@@ -287,7 +288,10 @@ async fn test_apply_turn_result_persists_harness_turn_report_and_usage() {
         context_reset: false,
         harness_report: Some(report.to_string()),
         provider_conversation_id: None,
-        usage: token_usage(AgentModel::MuseSpark13.as_str(), 30, 7),
+        usage: TurnUsage {
+            checkpoint: Some("cumulative-totals".to_string()),
+            ..token_usage(AgentModel::MuseSpark13.as_str(), 30, 7)
+        },
     });
     let turn_metadata = TurnMetadata {
         session_agent,
@@ -304,8 +308,14 @@ async fn test_apply_turn_result_persists_harness_turn_report_and_usage() {
             .await
             .expect("reports should load");
     let usage = session_usage_by_purpose(&pool, "sess1").await;
+    let usage_checkpoint = db
+        .sessions()
+        .get_session_usage_checkpoint("sess1")
+        .await
+        .expect("checkpoint should load");
 
     // Assert
+    assert_eq!(usage_checkpoint.as_deref(), Some("cumulative-totals"));
     assert_eq!(
         stored,
         [(

@@ -3,12 +3,12 @@
 
 use std::path::PathBuf;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnEvent, TurnRequest};
 use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
 
 use crate::app_server::AppServerTurnResponse;
-use crate::test_support::token_usage;
 
 pub(super) fn make_turn_request() -> TurnRequest {
     TurnRequest {

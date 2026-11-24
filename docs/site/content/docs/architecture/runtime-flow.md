@@ -169,9 +169,13 @@ model request whose usage the backend reports while the turn runs (native harnes
 requests, Codex `thread/tokenUsage/updated` notifications, and Claude Code assistant
 messages), the runtime sends `TurnEvent::UsageUpdated` with the turn's cumulative usage;
 the final `TurnResult.usage` supersedes it. Post-turn handling persists the final usage
-per model and purpose (session turn, commit assistance, or rebase assistance) and
-records the latest context fill on the session. No model call is added: usage is a
-consequence of the turns that run.
+per model under the session-turn purpose and records the latest context fill on the
+session. An agent whose usage totals run across a resumed session, such as Claude Code,
+also returns an opaque checkpoint that the session stores and passes back with its next
+turn's continuation. Utility runs record their usage through the Run Worker: a
+`RunScope` names the session and the purpose (title, commit assistance, review, rebase
+assistance, or other), and the worker's run repository records each successful run under
+it. No model call is added: usage is a consequence of the turns that run.
 
 Sandbox notices travel the same path as `TurnEvent::Notice`. Session turns, sync
 assistance turns, and execution-graph and task turns relay the turn's events before the

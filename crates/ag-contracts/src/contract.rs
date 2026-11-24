@@ -145,6 +145,7 @@ pub enum AgentDefinitionPromptUpdate {
 #[derive(Clone, Debug)]
 pub struct TurnContinuation {
     kind: TurnContinuationKind,
+    usage_checkpoint: Option<String>,
 }
 
 impl TurnContinuation {
@@ -153,6 +154,7 @@ impl TurnContinuation {
     pub fn fresh() -> Self {
         Self {
             kind: TurnContinuationKind::Fresh,
+            usage_checkpoint: None,
         }
     }
 
@@ -161,7 +163,24 @@ impl TurnContinuation {
     pub fn replaying(replay_transcript: String) -> Self {
         Self {
             kind: TurnContinuationKind::Replay { replay_transcript },
+            usage_checkpoint: None,
         }
+    }
+
+    /// Carries the [`crate::TurnUsage::checkpoint`] of the session's previous
+    /// continued turn, from which the agent derives this turn's own usage.
+    #[must_use]
+    pub fn with_usage_checkpoint(mut self, usage_checkpoint: Option<String>) -> Self {
+        self.usage_checkpoint = usage_checkpoint;
+
+        self
+    }
+
+    /// Returns the usage checkpoint of the session's previous continued
+    /// turn, when the host stored one.
+    #[must_use]
+    pub fn usage_checkpoint(&self) -> Option<&str> {
+        self.usage_checkpoint.as_deref()
     }
 
     /// Creates continuation state for a provider runtime that may resume a
@@ -180,6 +199,7 @@ impl TurnContinuation {
                 provider_conversation_id,
                 replay_transcript,
             },
+            usage_checkpoint: None,
         }
     }
 

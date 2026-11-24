@@ -343,64 +343,6 @@ async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
 }
 
 #[tokio::test]
-/// Verifies assist output stays successful when its usage cannot be
-/// persisted.
-async fn test_run_agent_assist_task_tolerates_usage_persistence_failure() {
-    // Arrange
-    enable_tracing_log_fallback();
-    let (database, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
-    insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
-    sqlx::query("DROP TABLE session_usage")
-        .execute(&pool)
-        .await
-        .expect("failing usage fixture");
-    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-    let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
-    let mut run_client = MockRunClient::new();
-    run_client
-        .expect_submit()
-        .once()
-        .returning(|_| Ok(one_shot_submission("Resolved the conflict", 5, 7)));
-
-    // Act
-    let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-        app_event_tx,
-        child_pid: Arc::new(Mutex::new(None)),
-        db: database.clone(),
-        folder: PathBuf::from("/tmp/project"),
-        id: "session-id".to_string(),
-        run_client: Arc::new(run_client),
-        prompt: "Resolve conflict".to_string(),
-        purpose: UsagePurpose::Rebase,
-        session_agent: model_fixture::codex_selection(),
-        session_update_versions: Arc::default(),
-        transcript: Arc::clone(&transcript),
-    })
-    .await;
-    let session_row = database
-        .sessions()
-        .load_sessions()
-        .await
-        .expect("failed to load sessions")
-        .into_iter()
-        .find(|row| row.id == "session-id")
-        .expect("missing session row");
-
-    // Assert
-    result.expect("assist output should survive persistence failures");
-    assert_eq!(session_row.input_tokens, 0);
-    assert!(
-        transcript
-            .lock()
-            .expect("transcript lock should not be poisoned")
-            .replay_text()
-            .is_some_and(|text| text.contains("Resolved the conflict"))
-    );
-}
-
-#[tokio::test]
 /// Verifies a poisoned live status lock is recovered and still transitions.
 async fn test_status_transition_recovers_poisoned_status_lock() {
     // Arrange

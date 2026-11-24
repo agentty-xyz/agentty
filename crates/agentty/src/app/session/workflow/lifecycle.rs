@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::AgentRequestKind;
+use ag_contracts::{AgentRequestKind, UsagePurpose};
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
@@ -2866,6 +2866,7 @@ impl SessionManager {
             ag_worker::RunScope {
                 session_id: Some(persisted_session_id.to_string()),
                 purpose: Some("session title".to_string()),
+                usage_purpose: Some(UsagePurpose::Title),
                 ..ag_worker::RunScope::default()
             },
         );

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET questions = ?,\n    provider_conversation_id = ?,\n    app_server_instruction_provider_conversation_id = ?,\n    usage_checkpoint = COALESCE(?, usage_checkpoint),\n    updated_at = ?\nWHERE id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "804b212f071c189377d03c02ae7c50dc93123ced3d19131fb908167054031f27"
+}

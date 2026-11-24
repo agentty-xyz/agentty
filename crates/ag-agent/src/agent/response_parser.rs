@@ -6,7 +6,7 @@ use ag_protocol::{FocusedReview, ReviewMetadata, UtilityResponse};
 use serde::Deserialize;
 
 use crate::agent::app_server::AntigravityTokenUsage;
-use crate::agent::claude_usage::ClaudeUsageMeter;
+use crate::agent::claude_usage::{AgentTotals, ClaudeUsageMeter};
 
 /// Parsed agent response including content text and usage statistics.
 pub(crate) struct ParsedResponse {
@@ -15,10 +15,10 @@ pub(crate) struct ParsedResponse {
     /// Final response texts of later turns the same run answered, in order,
     /// such as Claude replying to a steering prompt after its turn ended.
     pub follow_up_contents: Vec<String>,
-    /// The agent's own cumulative cost estimate in micro-USD, as
-    /// [`ClaudeUsageMeter::reported_cost`] describes; `None` when the agent
-    /// reports none.
-    pub reported_cost: Option<u64>,
+    /// Claude Code's per-model `modelUsage` totals of the run, which
+    /// [`crate::agent::claude_usage::turn_usage`] turns into the turn's own
+    /// usage; `None` for other agents and runs that reported none.
+    pub totals: Option<AgentTotals>,
     /// Usage of every returned content, under an empty model name that
     /// [`crate::agent::usage::priced_turn_usage`] replaces. A run that
     /// reported no usage counts as one unreported request.
@@ -62,7 +62,7 @@ pub(super) fn parse_claude_response_with_fallback(stdout: &str, stderr: &str) ->
     parse_claude_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
-        reported_cost: None,
+        totals: None,
         usage: ModelUsage::unreported("", 1),
     })
 }
@@ -72,7 +72,7 @@ pub(super) fn parse_codex_response_with_fallback(stdout: &str, stderr: &str) -> 
     parse_codex_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
-        reported_cost: None,
+        totals: None,
         usage: ModelUsage::unreported("", 1),
     })
 }
@@ -86,7 +86,7 @@ pub(super) fn parse_antigravity_response_with_fallback(
     parse_antigravity_response(stdout).unwrap_or_else(|| ParsedResponse {
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
-        reported_cost: None,
+        totals: None,
         usage: ModelUsage::unreported("", 1),
     })
 }
@@ -166,7 +166,7 @@ fn parse_antigravity_response(stdout: &str) -> Option<ParsedResponse> {
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        reported_cost: None,
+        totals: None,
         usage,
     })
 }
@@ -328,14 +328,14 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
         }
     }
 
-    let reported_cost = usage.reported_cost();
+    let totals = usage.totals();
     let usage = usage.usage();
     let mut turn_contents = turn_contents.into_iter();
     if let Some(content) = turn_contents.next() {
         return Some(ParsedResponse {
             content,
             follow_up_contents: turn_contents.collect(),
-            reported_cost,
+            totals,
             usage,
         });
     }
@@ -348,7 +348,7 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        reported_cost,
+        totals,
         usage,
     })
 }
@@ -428,7 +428,7 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
         .map(|content| ParsedResponse {
             content,
             follow_up_contents: Vec::new(),
-            reported_cost: None,
+            totals: None,
             usage,
         })
 }
@@ -546,7 +546,7 @@ fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        reported_cost: usage.reported_cost(),
+        totals: usage.totals(),
         usage: usage.usage(),
     })
 }
@@ -593,7 +593,7 @@ fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
     Some(ParsedResponse {
         content,
         follow_up_contents: Vec::new(),
-        reported_cost: usage.reported_cost(),
+        totals: usage.totals(),
         usage: usage.usage(),
     })
 }

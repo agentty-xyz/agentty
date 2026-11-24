@@ -72,10 +72,8 @@ fn list_and_detail_mappings_preserve_all_shared_columns() {
         assert_eq!(row.id, "session-a");
         assert_eq!(row.in_progress_started_at, None);
         assert_eq!(row.in_progress_total_seconds, 0);
-        assert_eq!(row.input_tokens, 11);
         assert!(!row.is_draft);
         assert_eq!(row.model, "gpt-5.6-sol");
-        assert_eq!(row.output_tokens, 29);
         assert_eq!(row.project_id, Some(7));
         assert_eq!(
             row.published_upstream_ref.as_deref(),
@@ -122,10 +120,8 @@ impl SessionJoinRow {
             id: "session-a".to_string(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
-            input_tokens: 11,
             is_draft: false,
             model: "gpt-5.6-sol".to_string(),
-            output_tokens: 29,
             project_id: Some(7),
             prompt: "Implement feature".to_string(),
             published_upstream_ref: Some("origin/session-a".to_string()),

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
+use ag_contracts::{ModelUsage, TurnUsage};
 use ag_session::{ExecutionGraph, GraphExecutionRef, GraphOutputReplyOutcome, GraphResultRef};
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -48,14 +49,12 @@ pub trait GraphRepository: Send + Sync {
     /// cascades their receipts. Legacy links never allocate runtime resources.
     async fn list_task_context_ids(&self, session_id: &str) -> Result<Vec<String>, DbError>;
     /// Records an isolated task's observed response and provider continuation
-    /// before ordered effects. Requires the exact running graph claim;
-    /// `usage` is accounted once as a session turn's usage. This does not
-    /// settle execution or release gates.
+    /// before ordered effects. Requires the exact running graph claim; usage
+    /// is accounted once. This does not settle execution or release gates.
     async fn record_task_turn(
         &self,
         dispatch: &ag_worker::GraphDispatch,
         metadata: &crate::TaskAgentTurnMetadata,
-        usage: &ag_contracts::TurnUsage,
     ) -> Result<bool, DbError>;
 
     /// Reads an observed task turn, including a response whose effects failed.
@@ -350,9 +349,8 @@ impl GraphRepository for SqliteGraphRepository {
         &self,
         dispatch: &ag_worker::GraphDispatch,
         metadata: &crate::TaskAgentTurnMetadata,
-        usage: &ag_contracts::TurnUsage,
     ) -> Result<bool, DbError> {
-        self.save_task_turn(dispatch, metadata, usage).await
+        self.save_task_turn(dispatch, metadata).await
     }
 
     async fn load_task_turn(
@@ -360,7 +358,7 @@ impl GraphRepository for SqliteGraphRepository {
         execution: &GraphExecutionRef,
     ) -> Result<Option<crate::TaskAgentTurnMetadata>, DbError> {
         let mut connection = self.pool.acquire().await?;
-        let Some((id, _)) = Self::execution(&mut connection, execution).await? else {
+        let Some((id, record)) = Self::execution(&mut connection, execution).await? else {
             return Ok(None);
         };
         let metadata: Option<String> = sqlx::query_scalar(
@@ -369,29 +367,38 @@ impl GraphRepository for SqliteGraphRepository {
         .bind(id)
         .fetch_optional(&mut *connection)
         .await?;
+        let Some(metadata) = metadata else {
+            return Ok(None);
+        };
+        let (
+            assistant_message,
+            harness_turn_report,
+            instruction_conversation_id,
+            input_tokens,
+            output_tokens,
+            provider_conversation_id,
+        ) = serde_json::from_str(&metadata).map_err(|error| Self::invalid(error.to_string()))?;
+        // The receipt keeps only the token totals, recorded under the node's
+        // model.
+        let graph = Self::current(&mut connection, &record.graph_id, record.graph_revision).await?;
+        let model = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == record.node_id)
+            .map_or_default(|node| node.agent.model().as_str().to_string());
 
-        metadata
-            .map(|metadata| {
-                let (
-                    assistant_message,
-                    harness_turn_report,
-                    instruction_conversation_id,
-                    input_tokens,
-                    output_tokens,
-                    provider_conversation_id,
-                ) = serde_json::from_str(&metadata)
-                    .map_err(|error| Self::invalid(error.to_string()))?;
-
-                Ok(crate::TaskAgentTurnMetadata {
-                    assistant_message,
-                    harness_turn_report,
-                    instruction_conversation_id,
-                    input_tokens,
-                    output_tokens,
-                    provider_conversation_id,
-                })
-            })
-            .transpose()
+        Ok(Some(crate::TaskAgentTurnMetadata {
+            assistant_message,
+            harness_turn_report,
+            instruction_conversation_id,
+            provider_conversation_id,
+            usage: TurnUsage::single(ModelUsage {
+                input_tokens,
+                output_tokens,
+                requests: 1,
+                ..ModelUsage::new(model)
+            }),
+        }))
     }
 
     async fn task_question_message_id(

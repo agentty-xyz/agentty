@@ -104,7 +104,7 @@ fn test_harness_parsers_return_no_content() {
     // Assert
     assert_eq!(response.content, "");
     assert_eq!(response.usage, ModelUsage::new(""));
-    assert_eq!(response.reported_cost, None);
+    assert_eq!(response.totals, None);
     assert_eq!(stream_line, None);
 }
 

@@ -1,10 +1,10 @@
 //! Project persistence tests for session stats, favorites, and last-opened
 //! timestamps.
 
+use ag_contracts::test_support::token_usage;
 use ag_session::test_support as model_fixture;
 
 use crate::connection::Database;
-use crate::test_support::token_usage;
 use crate::{AppRepositories, SessionTurnMetadata};
 
 #[tokio::test]

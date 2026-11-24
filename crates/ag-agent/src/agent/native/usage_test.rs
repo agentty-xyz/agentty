@@ -8,8 +8,8 @@ use ag_harness::RunEventKind;
 use ag_harness::provider::ModelProvider;
 use serde_json::{Value, json};
 
-use super::UsageMeter;
 use crate::agent::native::ModelSelection;
+use crate::agent::native::usage::UsageMeter;
 
 /// Returns a `model_request_completed` event answered by `model`.
 fn request(model: &Value, cost: &Value, input: u64, unreported_requests: u32) -> RunEventKind {
@@ -120,22 +120,41 @@ fn summary_requests_keep_their_model_price_and_window() {
 }
 
 #[test]
-fn unreported_requests_of_uncataloged_models_stay_unpriced() {
+fn unreported_requests_keep_only_reported_counts_and_stay_unpriced() {
     // Arrange
-    let mut meter = meter("openai-compatible/qwen3:latest");
+    let cases = [
+        ("openai-compatible/qwen3:latest", 0, None),
+        (
+            "anthropic/claude-opus-5-5",
+            2_000,
+            Some(ContextFill::of_request(
+                2_000,
+                anthropic_window("claude-opus-5-5"),
+            )),
+        ),
+    ];
 
-    // Act
-    let usage = meter
-        .observe(&request(&Value::Null, &Value::Null, 0, 1))
-        .cloned()
-        .expect("request folded");
+    for (key, input, expected_context) in cases {
+        let mut meter = meter(key);
 
-    // Assert
-    let model = &usage.models[0];
-    assert_eq!(model.model, "openai-compatible/qwen3:latest");
-    assert_eq!((model.requests, model.unreported_requests), (1, 1));
-    assert_eq!(model.context, None);
-    assert_eq!(model.cost, None);
+        // Act
+        let usage = meter
+            .observe(&request(&Value::Null, &Value::Null, input, 1))
+            .cloned()
+            .expect("request folded");
+
+        // Assert
+        assert_eq!(
+            usage.models,
+            [ModelUsage {
+                context: expected_context,
+                input_tokens: input,
+                output_tokens: 100,
+                ..ModelUsage::unreported(ModelSelection::model_id_of(key), 1)
+            }],
+            "{key}"
+        );
+    }
 }
 
 #[test]

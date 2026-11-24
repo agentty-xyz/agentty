@@ -1,7 +1,8 @@
 //! Claude response and stream-line parsing unit tests.
 
-use ag_contracts::{ContextFill, ModelUsage};
+use ag_contracts::ModelUsage;
 
+use crate::agent::claude_usage::ClaudeUsageMeter;
 use crate::agent::cli::execution::CliStdoutPayload;
 use crate::agent::response_parser::{
     parse_claude_response_with_fallback, parse_claude_stream_payload,
@@ -218,54 +219,34 @@ fn test_claude_parse_response_recovers_stream_text_and_falls_back_without_it() {
         // Assert
         assert_eq!(parsed.content, expected_content, "stdout: {stdout:?}");
         assert_eq!(parsed.usage, ModelUsage::unreported("", 1));
-        assert_eq!(parsed.reported_cost, None);
+        assert_eq!(parsed.totals, None);
     }
 }
 
 #[test]
-fn test_claude_parse_response_normalizes_cache_dedups_messages_and_reads_model_usage() {
+fn test_claude_parse_response_feeds_each_stream_line_to_the_usage_meter() {
     // Arrange
-    let first_response = concat!(
+    let assistant_line = concat!(
         r#"{"type":"assistant","message":{"id":"msg-1","model":"claude-opus-5-5","content":[],"#,
-        r#""usage":{"input_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10,"output_tokens":1}}}"#
+        r#""usage":{"input_tokens":5,"output_tokens":1}}}"#
     );
-    let stdout = [
-        first_response,
-        first_response,
-        concat!(
-            r#"{"type":"assistant","message":{"id":"msg-2","model":"claude-opus-5-5","content":[],"#,
-            r#""usage":{"input_tokens":20,"cache_read_input_tokens":1015,"cache_creation_input_tokens":0,"output_tokens":1}}}"#
-        ),
-        concat!(
-            r#"{"type":"result","result":"Done","#,
-            r#""usage":{"input_tokens":25,"cache_read_input_tokens":2015,"cache_creation_input_tokens":10,"output_tokens":50},"#,
-            r#""modelUsage":{"claude-opus-5-5":{"contextWindow":200000,"costUSD":0.0125}}}"#
-        ),
-    ]
-    .join("\n");
+    let result_line = concat!(
+        r#"{"type":"result","result":"Done","usage":{"input_tokens":25,"output_tokens":50},"#,
+        r#""modelUsage":{"claude-opus-5-5":{"inputTokens":25,"outputTokens":50}}}"#
+    );
+    let mut meter = ClaudeUsageMeter::default();
+    for line in [assistant_line, result_line] {
+        meter.observe(&serde_json::from_str(line).expect("valid event"));
+    }
 
     // Act
-    let parsed = parse_claude_response_with_fallback(&stdout, "");
+    let parsed = parse_claude_response_with_fallback(&[assistant_line, result_line].join("\n"), "");
 
     // Assert
     assert_eq!(parsed.content, "Done");
-    assert_eq!(parsed.reported_cost, Some(12_500));
-    assert_eq!(
-        parsed.usage,
-        ModelUsage {
-            cache_read_tokens: Some(2_015),
-            cache_write_tokens: Some(10),
-            context: Some(ContextFill {
-                last_input_tokens: 1_035,
-                peak_input_tokens: 1_035,
-                window_tokens: Some(200_000),
-            }),
-            input_tokens: 2_050,
-            output_tokens: 50,
-            requests: 2,
-            ..ModelUsage::new("")
-        }
-    );
+    assert_eq!(parsed.usage, meter.usage());
+    assert!(parsed.totals.is_some());
+    assert_eq!(parsed.totals, meter.totals());
 }
 
 #[test]

@@ -41,8 +41,8 @@ pub struct TaskAgentHistoryRow {
 /// Observed response and provider state to commit before post-processing.
 ///
 /// The host owns response-schema validation. This adapter stores the exact
-/// serialized response with its token totals; the usage detail passed beside
-/// it is accounted once as a session turn's usage.
+/// serialized response with its token totals, and accounts its usage once as
+/// a session turn's usage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskAgentTurnMetadata {
     /// Exact host-serialized structured response.
@@ -51,12 +51,11 @@ pub struct TaskAgentTurnMetadata {
     pub harness_turn_report: Option<String>,
     /// Task-scoped instruction bootstrap marker.
     pub instruction_conversation_id: Option<String>,
-    /// Reported input tokens; must fit SQLite's signed integer range.
-    pub input_tokens: u64,
-    /// Reported output tokens; must fit SQLite's signed integer range.
-    pub output_tokens: u64,
     /// Task-scoped provider conversation to resume on the next attempt.
     pub provider_conversation_id: Option<String>,
+    /// Usage of the response; its token totals must fit SQLite's signed
+    /// integer range.
+    pub usage: TurnUsage,
 }
 
 /// Helpers run inside the task repository's read or write transaction.
@@ -112,15 +111,14 @@ impl TaskAgentTurnStore {
         transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
-        usage: &TurnUsage,
         now: i64,
     ) -> Result<bool, DbError> {
         let connection = &mut **transaction;
         if metadata.assistant_message.trim().is_empty() {
             return Err(Self::invalid("Task response must be nonempty"));
         }
-        let input_tokens = Self::write_count(metadata.input_tokens)?;
-        let output_tokens = Self::write_count(metadata.output_tokens)?;
+        let input_tokens = Self::write_count(metadata.usage.input_tokens())?;
+        let output_tokens = Self::write_count(metadata.usage.output_tokens())?;
         // Acquire the writer lock before testing lifecycle or idempotency.
         let inserted = sqlx::query!(
             r#"INSERT INTO task_agent_turn (
@@ -155,15 +153,20 @@ impl TaskAgentTurnStore {
                     "Task attempt is not running or has no assigned context",
                 ));
             };
-            let recorded = TaskAgentTurnMetadata {
-                assistant_message: row.assistant_message,
-                harness_turn_report: row.harness_turn_report,
-                instruction_conversation_id: row.instruction_conversation_id,
-                input_tokens: Self::read_count(row.input_tokens)?,
-                output_tokens: Self::read_count(row.output_tokens)?,
-                provider_conversation_id: row.provider_conversation_id,
-            };
-            if recorded != *metadata {
+            let recorded_tokens = (
+                Self::read_count(row.input_tokens)?,
+                Self::read_count(row.output_tokens)?,
+            );
+            if row.assistant_message != metadata.assistant_message
+                || row.harness_turn_report != metadata.harness_turn_report
+                || row.instruction_conversation_id != metadata.instruction_conversation_id
+                || row.provider_conversation_id != metadata.provider_conversation_id
+                || recorded_tokens
+                    != (
+                        metadata.usage.input_tokens(),
+                        metadata.usage.output_tokens(),
+                    )
+            {
                 return Err(Self::invalid(
                     "Task response was already recorded with different output",
                 ));
@@ -194,7 +197,7 @@ impl TaskAgentTurnStore {
             &owner.session_id,
             UsagePurpose::Turn,
             now,
-            usage,
+            &metadata.usage,
         )
         .await?;
         session::persist_harness_turn_report(

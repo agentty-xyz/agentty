@@ -89,17 +89,27 @@ impl UsageMeter {
         } else {
             spec.as_ref().and_then(ModelSpec::context_window)
         };
-        let input_reported = usage.unreported_requests == 0 || usage.input > 0;
+        let model = ModelSelection::model_id_of(key);
+        // A request whose provider omitted its counts leaves every detail
+        // and its charge unknown; one that omitted only its output still
+        // reports what the model saw.
+        if usage.unreported_requests > 0 {
+            return ModelUsage {
+                context: (usage.input > 0).then(|| ContextFill::of_request(usage.input, window)),
+                input_tokens: usage.input,
+                output_tokens: usage.output,
+                ..ModelUsage::unreported(model, 1)
+            };
+        }
         let mut request = ModelUsage {
             cache_read_tokens: Some(usage.cache_read),
             cache_write_tokens: usage.cache_write,
-            context: input_reported.then(|| ContextFill::of_request(usage.input, window)),
+            context: Some(ContextFill::of_request(usage.input, window)),
             input_tokens: usage.input,
             output_tokens: usage.output,
             reasoning_tokens: Some(usage.reasoning),
             requests: 1,
-            unreported_requests: usage.unreported_requests,
-            ..ModelUsage::new(ModelSelection::model_id_of(key))
+            ..ModelUsage::new(model)
         };
         request.cost = cost.map(cost_estimate).or_else(|| {
             spec.and_then(|spec| spec.pricing())

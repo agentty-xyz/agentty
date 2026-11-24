@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode,
 };
@@ -15,7 +16,6 @@ use crate::app_server::{
     AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     AppServerTurnResponse, MockAppServerClient,
 };
-use crate::test_support::token_usage;
 
 fn request() -> OneShotRequest {
     OneShotRequest {

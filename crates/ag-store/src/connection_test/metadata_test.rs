@@ -1,13 +1,14 @@
 //! Session metadata persistence tests for conversation IDs, upstream refs,
 //! merged commits, and turn metadata.
 
+use ag_contracts::TurnUsage;
+use ag_contracts::test_support::token_usage;
 use ag_session::test_support as model_fixture;
 
 use super::support::insert_session_fixture;
 use crate::SessionTurnMetadata;
 use crate::connection::Database;
 use crate::error::DbError;
-use crate::test_support::token_usage;
 
 /// Verifies `load_sessions_metadata()` counts sessions in every project while
 /// taking the latest `updated_at` from the requested project only.
@@ -367,7 +368,10 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 provider_conversation_id: Some("thread-123".to_string()),
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
                 review_comment_resolutions: Vec::new(),
-                usage: token_usage(model_fixture::CODEX_MODEL.as_str(), 3, 5),
+                usage: TurnUsage {
+                    checkpoint: Some("checkpoint".to_string()),
+                    ..token_usage(model_fixture::CODEX_MODEL.as_str(), 3, 5)
+                },
             },
         )
         .await;
@@ -384,13 +388,92 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .get_session_provider_conversation_id("session-a")
         .await
         .expect("failed to load provider conversation id");
+    let usage_checkpoint = database
+        .sessions()
+        .get_session_usage_checkpoint("session-a")
+        .await
+        .expect("failed to load usage checkpoint");
+    let token_totals: (i64, i64) =
+        sqlx::query_as("SELECT input_tokens, output_tokens FROM session WHERE id = 'session-a'")
+            .fetch_one(database.pool())
+            .await
+            .expect("failed to load session token totals");
 
     // Assert
     assert!(matches!(result, Err(DbError::Query(_))));
     assert_eq!(session.questions.as_deref(), None);
-    assert_eq!(session.input_tokens, 0);
-    assert_eq!(session.output_tokens, 0);
+    assert_eq!(token_totals, (0, 0));
     assert_eq!(provider_conversation_id.as_deref(), None);
+    assert_eq!(usage_checkpoint, None);
+}
+
+/// Verifies a turn's reported usage checkpoint replaces the session's, a
+/// turn without one keeps it, and a missing session reads none.
+#[tokio::test]
+async fn test_persist_session_turn_metadata_stores_and_keeps_usage_checkpoint() {
+    // Arrange
+    let database = Database::in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", None)
+        .await
+        .expect("failed to upsert project");
+    database
+        .sessions()
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    let initial = database
+        .sessions()
+        .get_session_usage_checkpoint("session-a")
+        .await
+        .expect("failed to load initial checkpoint");
+    let mut checkpoints = Vec::new();
+
+    // Act
+    for checkpoint in [Some("first"), Some("second"), None] {
+        database
+            .sessions()
+            .persist_session_turn_metadata(
+                "session-a",
+                &SessionTurnMetadata {
+                    harness_turn_report: None,
+                    instruction_conversation_id: None,
+                    model: "gpt-5.6-sol".to_string(),
+                    provider_conversation_id: None,
+                    questions_json: String::new(),
+                    review_comment_resolutions: Vec::new(),
+                    usage: TurnUsage {
+                        checkpoint: checkpoint.map(str::to_string),
+                        ..TurnUsage::default()
+                    },
+                },
+            )
+            .await
+            .expect("failed to persist turn metadata");
+        checkpoints.push(
+            database
+                .sessions()
+                .get_session_usage_checkpoint("session-a")
+                .await
+                .expect("failed to load checkpoint"),
+        );
+    }
+    let missing = database
+        .sessions()
+        .get_session_usage_checkpoint("missing")
+        .await
+        .expect("failed to load missing session checkpoint");
+
+    // Assert
+    assert_eq!(initial, None);
+    assert_eq!(
+        checkpoints,
+        [Some("first"), Some("second"), Some("second")].map(|value| value.map(str::to_string))
+    );
+    assert_eq!(missing, None);
 }
 
 /// Verifies a harness turn report is stored with its turn and outlives the
