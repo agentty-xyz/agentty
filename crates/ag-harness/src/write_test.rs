@@ -751,6 +751,25 @@ fn line_changes_count_the_applied_hunks_additions_and_removals() {
              file\n+b\n",
             (1, 1),
         ),
+        // Other patch forms count their translated hunks the same way.
+        (
+            "file.txt",
+            Some(b"a\nb\nc\n".as_slice()),
+            "*** Begin Patch\n*** Update File: file.txt\n@@\n a\n-b\n+B\n+B2\n*** End Patch\n",
+            (2, 1),
+        ),
+        (
+            "new.txt",
+            None,
+            "*** Begin Patch\n*** Add File: new.txt\n+one\n+two\n*** End Patch\n",
+            (2, 0),
+        ),
+        (
+            "file.txt",
+            Some(b"a\nb\n".as_slice()),
+            "@@ -1,2 +1,1 @@\n a\n-b\n",
+            (0, 1),
+        ),
     ] {
         // Act
         let patched = apply_unified_diff(path, current, patch).expect("patch should apply");
