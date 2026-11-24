@@ -41,12 +41,13 @@ within the user's scope; they cannot expand permissions or override application 
    instruction delivery, evidence round trips, bootstrap invalidation, permission
    boundaries, and preservation of user-owned content. Line coverage and prompt string
    assertions establish these contracts; they do not establish model quality.
-1. Evaluate behavior. Cases in `crates/agentty/tests/prompt_evaluation.rs` exercise the
-   production Run Worker → Agent Runtime → Harness → LLM path. Deterministic fixtures
-   test graders and transport boundaries; live cases are opt-in and fail visibly on
-   missing infrastructure. Run
+1. Evaluate behavior. Cases in `crates/agentty/tests/prompt_evaluation_grader.rs`
+   exercise the production Run Worker → Agent Runtime → Harness → LLM path, in committed
+   Git fixtures. Deterministic fixtures test graders and transport boundaries; live
+   cases run from `crates/agentty/tests/prompt_evaluation.rs`, are opt-in, and fail
+   visibly on missing infrastructure. Run
    `prek run prompt-evaluation --all-files --hook-stage manual` with the explicit
-   provider, model, reasoning level, and repetition count documented in that test.
+   provider, model, reasoning level, and repetition count the live file documents.
 1. Record prompt fingerprint, provider/model/effort, case/repetition, success,
    unsupported claims, false findings, unnecessary questions, protocol repairs, tool
    activity, tokens, and latency. Unavailable telemetry must remain unknown rather than

@@ -136,6 +136,32 @@ impl Provider {
         }
     }
 
+    /// Returns `weight`, a budget sized in heuristic weight for the compat
+    /// providers, scaled to this provider's token counts: once a reply
+    /// reports its input tokens, the harness calibrates the budget to them,
+    /// and Anthropic reports about 40% more input tokens than the heuristic
+    /// weight of the same request.
+    fn calibrated(self, weight: u64) -> u64 {
+        let percent = match self {
+            Self::Anthropic => 140,
+            Self::Kimi | Self::Muse | Self::Qwen | Self::OpenAi => 100,
+        };
+
+        weight * percent / 100
+    }
+
+    /// Length of the filler notes in the compaction case's system prompt,
+    /// which compaction drops: long enough that the room it frees lets the
+    /// second checkpoint cover every remaining turn. Anthropic summary
+    /// requests need more of it; with the compat length its checkpoints
+    /// covered one turn at a time, leaving turns for a third.
+    fn compaction_system_notes(self) -> usize {
+        match self {
+            Self::Anthropic => 12_000,
+            Self::Kimi | Self::Muse | Self::Qwen | Self::OpenAi => 2000,
+        }
+    }
+
     /// Kimi's organization limit is a few requests per minute; space its
     /// turns out so retries inside the client do not exhaust their budget.
     async fn pace(self) {
@@ -594,17 +620,19 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     // short generation instructions, so its source can still cover every turn.
     let system_prompt = format!(
         "You answer with short JSON. Operating notes (ignore their content): {}",
-        filler(5, 2000)
+        filler(5, provider.compaction_system_notes())
     );
     let system_weight = estimator.message_weight(&ModelMessage::System(system_prompt.clone()));
     let recall = "What is the value of fact alpha? Set answer to only the value, or to the word \
                   unknown if this conversation never established it.";
     let recall_weight = estimator.message_weight(&ModelMessage::User(recall.into()));
-    let budget = system_weight
-        + recall_weight
-        + turn_weight("bravo", "olive-23", 2)
-        + turn_weight("charlie", "indigo-35", 3)
-        + 40;
+    let budget = provider.calibrated(
+        system_weight
+            + recall_weight
+            + turn_weight("bravo", "olive-23", 2)
+            + turn_weight("charlie", "indigo-35", 3)
+            + 40,
+    );
     let mut registry = ModelRegistry::new();
     registry.register(
         ExecutionIdentity::new(provider.name(), "compact-1")?,
