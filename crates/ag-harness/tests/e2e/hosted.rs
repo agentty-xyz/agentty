@@ -308,8 +308,10 @@ async fn reasoning_replay(provider: Provider) -> Result<String, DynError> {
     )
     .await?;
     let transcript = session.transcript(TurnRange::All).await?;
-    // Encrypted reasoning without a summary shows no transcript item, so
-    // the provider's reasoning tokens also count as recorded reasoning.
+    // Claude's thinking stays readable in the transcript. Encrypted `OpenAI`
+    // reasoning without a summary shows no transcript item, so for it the
+    // reported reasoning tokens show only that the model reasoned; the
+    // follow-up turns below then check that its replay was accepted.
     let reasoning = transcript.first().map_or(0, |turn| {
         turn.items
             .iter()
@@ -328,7 +330,8 @@ async fn reasoning_replay(provider: Provider) -> Result<String, DynError> {
         answer(&second),
         answer(&third)
     );
-    if reasoning == 0 && reasoning_tokens == 0 {
+    let reasoned = reasoning > 0 || (provider == Provider::OpenAi && reasoning_tokens > 0);
+    if !reasoned {
         return Err(format!("the first turn recorded no reasoning: {summary}").into());
     }
     if !answer(&first).contains("406")

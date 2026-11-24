@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ag_router::ReasoningView;
 use futures_core::Stream;
 use schemars::JsonSchema;
 use serde::de::Error as _;
@@ -468,9 +469,9 @@ impl Item {
     /// carry no summary, so opaque replay data never reaches a transcript.
     pub(crate) fn reasoning_text(reasoning_content: &str) -> Option<String> {
         match ag_router::reasoning_view(reasoning_content) {
-            ag_router::ReasoningView::Text(text) => Some(text.to_string()),
-            ag_router::ReasoningView::Summary(summary) => Some(summary),
-            ag_router::ReasoningView::Opaque => None,
+            ReasoningView::Text(text) => Some(text.to_string()),
+            ReasoningView::Summary(summary) => Some(summary),
+            ReasoningView::Opaque => None,
         }
     }
 }

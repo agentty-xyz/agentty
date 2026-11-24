@@ -565,6 +565,12 @@ async fn test_harness_session_runs_on_a_local_openai_compatible_server() -> E2eR
 
 /// Returns one streamed Responses API response completing with `items`.
 fn responses_stream(items: &[serde_json::Value]) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_raw(responses_events(items), "text/event-stream")
+}
+
+/// Formats one completed Responses stream of the output `items` as
+/// server-sent events.
+fn responses_events(items: &[serde_json::Value]) -> String {
     let mut events = items
         .iter()
         .map(|item| json!({"type": "response.output_item.done", "item": item}))
@@ -577,13 +583,11 @@ fn responses_stream(items: &[serde_json::Value]) -> ResponseTemplate {
             "usage": {"input_tokens": 30, "output_tokens": 7, "total_tokens": 37}
         }
     }));
-    let body = events.iter().fold(String::new(), |mut body, event| {
+    events.iter().fold(String::new(), |mut body, event| {
         let _ = write!(body, "data: {event}\n\n");
 
         body
-    });
-
-    ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+    })
 }
 
 /// Returns one assistant message item carrying `output` as JSON text.
@@ -717,6 +721,148 @@ async fn test_harness_session_runs_on_openai_with_an_api_key() -> E2eResult {
     assert!(body.contains(r#""store":false"#));
 
     Ok(())
+}
+
+/// Prompt of the encrypted-reasoning scenario.
+const REASONING_PROMPT: &str = "Create reasoned notes";
+/// Summary of the encrypted reasoning the gated `OpenAI` provider returns.
+const REASONING_SUMMARY: &str = "Planning the notes file.";
+
+/// Serves the `OpenAI` Responses API on a local port and returns its base
+/// URL.
+///
+/// The session turn's first request gets a write call with encrypted,
+/// summarized reasoning; the request carrying its result is held until
+/// `gate` is released, so the turn's live output stays on screen. The
+/// commit-message utility gets its own answer and every other request
+/// `404 Not Found`.
+fn gated_openai_provider(gate: ReleaseGate) -> std::io::Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let gate = gate.clone();
+            std::thread::spawn(move || serve_gated_openai(stream, &gate));
+        }
+    });
+
+    Ok(format!("http://{address}/v1"))
+}
+
+/// Answers one provider connection for [`gated_openai_provider`].
+fn serve_gated_openai(mut stream: TcpStream, gate: &ReleaseGate) {
+    let Some(body) = read_request_body(&mut stream) else {
+        return;
+    };
+    let items = if body.contains("Generate the canonical session commit message") {
+        vec![responses_message(&json!({"answer": "Add harness notes"}))]
+    } else if body.contains(r#""type":"function_call_output""#) {
+        // A scenario that never opens the gate sees the request fail.
+        if !gate.wait_blocking(Duration::from_secs(60)) {
+            return;
+        }
+
+        vec![responses_message(
+            &json!({"answer": HARNESS_ANSWER, "questions": []}),
+        )]
+    } else if body.contains(REASONING_PROMPT) {
+        vec![
+            json!({
+                "type": "reasoning",
+                "id": "rs_e2e",
+                "summary": [{"type": "summary_text", "text": REASONING_SUMMARY}],
+                "encrypted_content": "gAAAA-e2e"
+            }),
+            json!({
+                "type": "function_call",
+                "call_id": "call-write",
+                "name": "write",
+                "arguments": json!({
+                    "path": "notes.txt",
+                    "patch": "--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1 @@\n+harness\n"
+                })
+                .to_string()
+            }),
+        ]
+    } else {
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+        return;
+    };
+    let _ = stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+    );
+    let _ = stream.write_all(responses_events(&items).as_bytes());
+}
+
+#[tokio::test]
+async fn test_harness_session_shows_reasoning_summaries_without_encrypted_items() -> E2eResult {
+    // Arrange
+    let gate = ReleaseGate::new()?;
+    let server = gated_openai_provider(gate.clone())?;
+    let git_directory = git_only_path()?;
+
+    // Act, Assert
+    FeatureTest::new("harness_openai_reasoning")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("OPENAI_COMPATIBLE_MODEL", "")
+        .env("OPENAI_API_KEY", "test-openai-key")
+        .env("OPENAI_BASE_URL", server)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text(REASONING_PROMPT)
+                    .wait_for_text(REASONING_PROMPT, 3000)
+                    .press_key("Enter")
+                    // The provider holds the request after the write call,
+                    // so the turn's live output, reasoning included, stays
+                    // on screen.
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, REASONING_SUMMARY, &full)
+                        },
+                    )
+                    .wait_for_stable_frame(500, 10000)
+                    .eventually(
+                        Duration::from_secs(1),
+                        Duration::from_millis(100),
+                        |frame| assertion::match_not_visible(frame, "encrypted_content"),
+                    )
+                    .compose(&gate.release())
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(frame, HARNESS_ANSWER, &full)
+                        },
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    assertion::assert_not_visible(frame, "encrypted_content");
+                })
+            },
+        )
+        .await
 }
 
 /// Returns one streamed Anthropic Messages response of the whole content

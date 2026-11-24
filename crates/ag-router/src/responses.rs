@@ -388,22 +388,33 @@ impl<'spec> ResponsesBackend<'spec> {
 
 /// Returns the readable view of reasoning content holding Responses
 /// reasoning items, exactly as requests replay them, or `None` for other
-/// content: their summary text, with parts separated by blank lines, or
-/// [`ReasoningView::Opaque`] when no item has any.
+/// content: their summary text, or else the `reasoning_text` content parts
+/// some endpoints return in the clear, with parts separated by blank lines,
+/// or [`ReasoningView::Opaque`] when no item has either.
 pub(crate) fn reasoning_view(reasoning_content: &str) -> Option<ReasoningView<'static>> {
     let items = reasoning_items(reasoning_content)?;
-    let summaries: Vec<&str> = items
-        .iter()
-        .filter_map(|item| item.get("summary").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .filter(|text| !text.trim().is_empty())
-        .collect();
-    if summaries.is_empty() {
+    // Summary parts of any type count; content parts only as reasoning text.
+    let texts = |field: &str, part_type: Option<&str>| -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| item.get(field).and_then(Value::as_array))
+            .flatten()
+            .filter(|part| {
+                part_type.is_none_or(|kind| part.get("type").and_then(Value::as_str) == Some(kind))
+            })
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .filter(|text| !text.trim().is_empty())
+            .collect()
+    };
+    let mut parts = texts("summary", None);
+    if parts.is_empty() {
+        parts = texts("content", Some("reasoning_text"));
+    }
+    if parts.is_empty() {
         return Some(ReasoningView::Opaque);
     }
 
-    Some(ReasoningView::Summary(summaries.join("\n\n")))
+    Some(ReasoningView::Summary(parts.join("\n\n")))
 }
 
 /// Returns the reasoning items a prior response stored in its reasoning
