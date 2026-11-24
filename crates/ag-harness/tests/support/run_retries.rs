@@ -143,8 +143,8 @@ async fn streams_each_retry_before_the_run_completes() -> Result<(), Box<dyn Err
 #[tokio::test]
 async fn streams_a_connection_retry_before_the_failed_completion() -> Result<(), Box<dyn Error>> {
     // Arrange
-    // The listener keeps its port from concurrent tests' servers, and closes
-    // every connection before it answers.
+    // Holding the listener stops concurrent tests' servers from taking its
+    // port; it closes each connection before answering.
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let closing = listener.local_addr()?;
     tokio::spawn(async move {

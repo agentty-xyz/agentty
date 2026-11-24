@@ -310,6 +310,10 @@ async fn test_large_review_partial_retry() -> E2eResult {
                     .wait_for_text("Processed files: 1/1.", 30000)
                     .press_key("g")
                     .wait_for_text("Cross-file check completed.", 30000)
+                    .step(common::wait_for_frame_text(
+                        &["Cross-file check completed.", "Preserved batch finding."],
+                        &["Partial review:", "Review assist unavailable"],
+                    ))
                     .capture_labeled("retried_review", "Retry completes the original diff review")
             },
             |frame, report| {
@@ -424,6 +428,10 @@ async fn test_boundary_review_partial_retry() -> E2eResult {
                     .wait_for_text("Regenerate focused review?", 5000)
                     .press_key("y")
                     .wait_for_text("Consolidation completed.", 30000)
+                    .step(common::wait_for_frame_text(
+                        &["Consolidation completed."],
+                        &["Partial review:", "Review assist unavailable"],
+                    ))
                     .capture_labeled(
                         "retried_boundary_review",
                         "Retry reuses completed discovery and finishes consolidation",
@@ -521,6 +529,14 @@ async fn test_large_review_budget_and_shared_context() -> E2eResult {
                     .press_key("Enter")
                     .press_key("f")
                     .wait_for_text("Review completed within budget.", 60000)
+                    .step(common::wait_for_frame_text(
+                        &[
+                            "Review completed within budget.",
+                            "Shared caller and callee contract mismatch.",
+                            "Processed files: 40/40",
+                        ],
+                        &["Partial review:", "Review assist unavailable"],
+                    ))
                     .capture_labeled(
                         "complete_large_review",
                         "Shared context survives a complete large review",
@@ -1103,6 +1119,13 @@ async fn focused_review_honors_resolved_session_decisions() -> E2eResult {
                     .wait_for_text("Keep the println call", 5000)
                     .press_key("f")
                     .wait_for_text("Suggestions", 30000)
+                    .step(common::wait_for_frame_text(
+                        &[RESOLVED_DECISION_REVIEW_TEXT, "Suggestions", "- None"],
+                        &[
+                            MISSING_DECISION_CONTEXT_POLICY_TEXT,
+                            MISSING_RESOLVED_DECISION_HISTORY_TEXT,
+                        ],
+                    ))
                     .viewing_pause_ms(1000)
                     .capture_labeled(
                         "resolved_decision_honored",
