@@ -37,13 +37,13 @@ env:
 jobs:
   validate:
     name: Workspace validation
-    runs-on: blacksmith-4vcpu-ubuntu-2604
+    runs-on: ubuntu-latest
     env:
       TRUNK_API_TOKEN_AVAILABLE: ${{ secrets.TRUNK_API_TOKEN != '' }}
 
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@75c49b6ed30ce59336e9252425796cfcfac155f8 # v1.8.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The first parent is the base the migration-edit check compares
           # against: the target branch for a pull request's merge commit.
