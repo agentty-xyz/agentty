@@ -45,7 +45,9 @@ fn sends_a_header_safe_cache_key_as_the_session_id_where_the_spec_asks() {
         let session_id = headers
             .get("session-id")
             .and_then(|value| value.to_str().ok());
-        assert_eq!(session_id, expected, "{}: {key:?}", spec.id());
+        // A failure prints no key, which code scanning reads as a secret.
+        let sent_as_expected = session_id == expected;
+        assert!(sent_as_expected);
     }
 }
 

@@ -297,12 +297,6 @@ fn rejects_specifications_no_request_can_be_sent_with() {
             responses().with_fallback_max_tokens(NonZeroU32::MIN),
             "the Responses protocol cannot express a fallback `max_tokens`",
         ),
-        (
-            responses()
-                .with_session_id_header()
-                .with_header("Session-Id", "host-chosen"),
-            "header `Session-Id` is set by the router or the authentication",
-        ),
     ];
     let valid = [
         chat()
@@ -324,6 +318,26 @@ fn rejects_specifications_no_request_can_be_sent_with() {
     for spec in valid {
         assert!(spec.validate().is_ok(), "{spec:?}");
     }
+}
+
+/// Unlike [`rejects_specifications_no_request_can_be_sent_with`], a failure
+/// here prints no specification, which code scanning reads as a secret.
+#[test]
+fn rejects_a_host_session_id_header_where_the_router_sends_one() {
+    // Arrange
+    let spec = responses()
+        .with_session_id_header()
+        .with_header("Session-Id", "host-chosen");
+
+    // Act
+    let result = spec.validate();
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(ModelError::InvalidProviderConfig { reason })
+            if reason == "header `Session-Id` is set by the router or the authentication"
+    ));
 }
 
 #[test]
