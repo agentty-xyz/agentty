@@ -516,6 +516,13 @@ async fn enabling_without_a_sign_in_for_this_platform_shows_signed_out_and_calls
         app.platform.view().state,
         PlatformState::SignedOut { notice: None }
     );
+    // The frame renders the Platform tab from this state.
+    assert_eq!(
+        app.view_snapshot()
+            .platform
+            .map(|view| view.platform.state.clone()),
+        Some(PlatformState::SignedOut { notice: None })
+    );
 }
 
 #[tokio::test]

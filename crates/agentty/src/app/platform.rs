@@ -22,7 +22,7 @@ use crate::app::link_copy::LinkCopy;
 use crate::app::{App, AppEvent, spawn};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::BrowserClient;
-use crate::infra::db::DbError;
+use crate::infra::db::{DbError, SettingRepository};
 use crate::infra::platform::{
     AccessToken, DeviceAuthorization, PlatformClient, PlatformError, RemoteControlService, SignIn,
 };
@@ -305,8 +305,9 @@ impl App {
     /// control off also connects now, after an account check; turning it
     /// off leaves running remote control alone.
     pub(crate) async fn toggle_platform_keep_on(&mut self) {
+        let platform = &mut self.platform;
         let (PlatformState::SignedIn(account), Some(token)) =
-            (&mut self.platform.view.state, self.platform.token.clone())
+            (&mut platform.view.state, platform.token.as_ref())
         else {
             return;
         };
@@ -314,13 +315,18 @@ impl App {
             return;
         }
         account.keep_on = !account.keep_on;
-        let keep_on = account.keep_on;
-        let is_registered = matches!(account.access, PlatformAccess::Registered { .. });
-        let saved = self.save_platform_sign_in(&token, keep_on).await;
-        if let PlatformState::SignedIn(account) = &mut self.platform.view.state {
-            account.keep_on_notice = saved.is_err().then(|| KEEP_ON_NOT_SAVED.to_string());
-        }
-        if keep_on && is_registered && self.remote_control.view().listener.is_none() {
+        let saved = save_sign_in(
+            self.services.db().settings(),
+            &platform.view.platform_url,
+            token,
+            account.keep_on,
+        )
+        .await;
+        account.keep_on_notice = saved.is_err().then(|| KEEP_ON_NOT_SAVED.to_string());
+        let connects = account.keep_on
+            && matches!(account.access, PlatformAccess::Registered { .. })
+            && self.remote_control.view().listener.is_none();
+        if connects {
             self.refresh_platform(true).await;
         }
     }
@@ -353,26 +359,6 @@ impl App {
                 update: PlatformUpdate::SignInFinished { request_id, result },
             });
         }));
-    }
-
-    /// Saves `token` as the sign-in for the configured platform, with
-    /// `keep_on`.
-    async fn save_platform_sign_in(
-        &self,
-        token: &AccessToken,
-        keep_on: bool,
-    ) -> Result<(), DbError> {
-        let stored = serde_json::json!({
-            "access_token": token.expose(),
-            "keep_on": keep_on,
-            "platform_url": self.platform.view.platform_url,
-        });
-
-        self.services
-            .db()
-            .settings()
-            .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
-            .await
     }
 
     /// Reads the account in the background and registers this Agentty
@@ -565,9 +551,13 @@ impl App {
                 return;
             }
         };
-        let saved = self
-            .save_platform_sign_in(&sign_in.access_token, false)
-            .await;
+        let saved = save_sign_in(
+            self.services.db().settings(),
+            &self.platform.view.platform_url,
+            &sign_in.access_token,
+            false,
+        )
+        .await;
         self.platform.token = Some(sign_in.access_token);
         self.platform.view.state =
             PlatformState::SignedIn(PlatformAccountView::checking(Some(sign_in.login)));
@@ -754,6 +744,25 @@ pub(crate) async fn check_account(
     };
 
     (Some(account.login), result)
+}
+
+/// Saves `token` as the sign-in for the platform at `platform_url`, with
+/// `keep_on`.
+async fn save_sign_in(
+    settings: &dyn SettingRepository,
+    platform_url: &str,
+    token: &AccessToken,
+    keep_on: bool,
+) -> Result<(), DbError> {
+    let stored = serde_json::json!({
+        "access_token": token.expose(),
+        "keep_on": keep_on,
+        "platform_url": platform_url,
+    });
+
+    settings
+        .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
+        .await
 }
 
 #[cfg(test)]
