@@ -202,7 +202,7 @@ async fn assert_provider_protocol_compliance(
     config: &RuntimeConfig,
 ) -> Result<(), String> {
     let folder = resolve_workspace_folder()?;
-    // Harness model ids such as `openai/gpt-6-luna` name their provider, and
+    // Harness model ids such as `chatgpt/gpt-6-luna` name their provider, and
     // a harness session id must be one path component.
     let session_id = format!(
         "protocol-e2e-{}",

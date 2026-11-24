@@ -158,9 +158,10 @@ where
 // Streaming
 // ---------------------------------------------------------------------------
 
-/// Text deltas must arrive while the response is generated: they must span
-/// at least [`MIN_STREAMED_SPREAD`] before the request completes, which a
-/// response buffered and then replayed as deltas cannot.
+/// Text deltas must arrive while the response is generated: the first must
+/// arrive before the request completes and the last at least
+/// [`MIN_STREAMED_SPREAD`] after it, which a response buffered and then
+/// replayed as deltas cannot.
 async fn streamed_turn(provider: Provider) -> Result<String, DynError> {
     let harness = provider.harness(&provider.model())?.build()?;
     let request = RunRequest::new(

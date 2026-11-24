@@ -437,6 +437,7 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
     let mut session = harness.session("budget", answer_schema()?).create().await?;
     let mut latest = facts[0];
     let mut stored_facts = 0;
+    let mut budget_evicted = false;
     for (index, fact) in facts.iter().enumerate() {
         provider.pace().await;
         let stored = session
@@ -444,7 +445,8 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
             .await?;
         latest = *fact;
         stored_facts = index + 1;
-        if stored_facts >= 4 && stored.report().history().evicted_turns() >= 1 {
+        budget_evicted |= stored.report().history().evicted_turns() >= 1;
+        if stored_facts >= 4 && budget_evicted {
             break;
         }
     }
@@ -482,10 +484,12 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
     // the evictions its own request made; earlier ones show as prior turns
     // that are not replayed. The facts and the recent recall precede it.
     let prior_turns = stored_facts + 1;
-    if evicted_history.replayed_turns() >= prior_turns {
+    budget_evicted |= recent_history.evicted_turns() >= 1 || evicted_history.evicted_turns() >= 1;
+    if !budget_evicted || evicted_history.replayed_turns() >= prior_turns {
         return Err(format!(
-            "budget {budget} replayed all {prior_turns} prior turns after {stored_facts} facts: \
-             lower the reasoning allowance"
+            "budget {budget} never evicted a turn after {stored_facts} facts (replayed {} of \
+             {prior_turns} prior turns): lower the reasoning allowance",
+            evicted_history.replayed_turns()
         )
         .into());
     }
