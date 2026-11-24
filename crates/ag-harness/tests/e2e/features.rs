@@ -6,12 +6,14 @@
 
 use std::io::{self, Write as _};
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use ag_harness::bash::{BashConfig, CommandTermination, UnsandboxedExecutor};
+use ag_harness::bash::{
+    BashConfig, CommandOutcome, CommandRecord, CommandTermination, UnsandboxedExecutor,
+};
 use ag_harness::model::{
     ContextBudget, ContextEstimator, HeuristicContextEstimator, ModelCapabilities, ModelClient,
     ModelCompletion, ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
@@ -22,6 +24,7 @@ use ag_harness::provider::{
     MuseConfig, QWEN_PLUS, QwenConfig,
 };
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
+use ag_harness::store::SessionCheckpoint;
 use ag_harness::tool::ToolCall;
 use ag_harness::turn::ToolActivity;
 use ag_harness::{
@@ -148,12 +151,14 @@ impl Provider {
             .unwrap_or(40);
         let wait = LAST_KIMI_TURN
             .lock()
-            .expect("kimi pacing")
+            .unwrap_or_else(PoisonError::into_inner)
             .and_then(|last| Duration::from_secs(pace).checked_sub(last.elapsed()));
         if let Some(wait) = wait {
             tokio::time::sleep(wait).await;
         }
-        *LAST_KIMI_TURN.lock().expect("kimi pacing") = Some(Instant::now());
+        *LAST_KIMI_TURN
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
     }
 }
 
@@ -227,7 +232,8 @@ impl Report {
         started: Instant,
     ) {
         let ms = started.elapsed().as_millis();
-        let line = match &result {
+        let failed = result.is_err();
+        let line = match result {
             Ok(detail) => format!(
                 "LIVE case={} provider={label} round={round} result=pass ms={ms} detail={detail}",
                 self.case
@@ -238,7 +244,7 @@ impl Report {
             ),
         };
         let _ = writeln!(io::stdout().lock(), "{line}");
-        if result.is_err() {
+        if failed {
             self.failures.push(line);
         }
     }
@@ -392,21 +398,23 @@ pub(crate) fn fact_turn(name: &str, value: &str, seed: u8) -> String {
     )
 }
 
+/// Facts the context budget case stores in order until one is evicted.
+const BUDGET_FACTS: [(&str, &str); 12] = [
+    ("alpha", "maroon-11"),
+    ("bravo", "olive-23"),
+    ("charlie", "indigo-35"),
+    ("delta", "amber-47"),
+    ("echo", "cobalt-59"),
+    ("foxtrot", "sienna-61"),
+    ("golf", "violet-73"),
+    ("hotel", "ochre-85"),
+    ("india", "teal-97"),
+    ("juliet", "coral-13"),
+    ("kilo", "umber-29"),
+    ("lima", "azure-31"),
+];
+
 async fn context_budget_projection(provider: Provider) -> Result<String, DynError> {
-    let facts = [
-        ("alpha", "maroon-11"),
-        ("bravo", "olive-23"),
-        ("charlie", "indigo-35"),
-        ("delta", "amber-47"),
-        ("echo", "cobalt-59"),
-        ("foxtrot", "sienna-61"),
-        ("golf", "violet-73"),
-        ("hotel", "ochre-85"),
-        ("india", "teal-97"),
-        ("juliet", "coral-13"),
-        ("kilo", "umber-29"),
-        ("lima", "azure-31"),
-    ];
     let estimator = HeuristicContextEstimator::DEFAULT;
     let turn_weight = |name: &str, value: &str, seed: u8| {
         estimator.message_weight(&ModelMessage::User(fact_turn(name, value, seed)))
@@ -435,21 +443,8 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
         .database(directory.path().join("budget.db"))
         .max_history_bytes(production_history_bytes()?);
     let mut session = harness.session("budget", answer_schema()?).create().await?;
-    let mut latest = facts[0];
-    let mut stored_facts = 0;
-    let mut budget_evicted = false;
-    for (index, fact) in facts.iter().enumerate() {
-        provider.pace().await;
-        let stored = session
-            .send(fact_turn(fact.0, fact.1, index as u8 + 1))
-            .await?;
-        latest = *fact;
-        stored_facts = index + 1;
-        budget_evicted |= stored.report().history().evicted_turns() >= 1;
-        if stored_facts >= 4 && budget_evicted {
-            break;
-        }
-    }
+    let (latest, stored_facts, mut budget_evicted) =
+        store_until_eviction(provider, &mut session).await?;
 
     provider.pace().await;
     let recent = session.send(recall(latest.0)).await?;
@@ -500,7 +495,58 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
         .into());
     }
 
-    // Mandatory content larger than the whole budget fails before any request.
+    let elapsed = reject_oversized(&mut session, budget).await?;
+    provider.pace().await;
+    let after = session.send(recall(latest.0)).await?;
+    if !answer(after.output()).contains(latest.1) {
+        return Err(format!(
+            "session unusable after budget rejection: {}",
+            after.output()
+        )
+        .into());
+    }
+
+    Ok(format!(
+        "budget={budget} facts={stored_facts} {} recalled (replayed {} evicted {}); alpha evicted \
+         (replayed {} evicted {}, model answered `{evicted_answer}`); oversized rejected in \
+         {elapsed:?}; session still usable",
+        latest.0,
+        recent_history.replayed_turns(),
+        recent_history.evicted_turns(),
+        evicted_history.replayed_turns(),
+        evicted_history.evicted_turns()
+    ))
+}
+
+/// Stores `BUDGET_FACTS` in order until at least four are stored and some
+/// stored turn reported an eviction; returns the latest fact, how many were
+/// stored, and whether any turn evicted.
+async fn store_until_eviction(
+    provider: Provider,
+    session: &mut Session,
+) -> Result<((&'static str, &'static str), usize, bool), DynError> {
+    let mut latest = BUDGET_FACTS[0];
+    let mut stored_facts = 0;
+    let mut budget_evicted = false;
+    for (index, fact) in BUDGET_FACTS.iter().enumerate() {
+        provider.pace().await;
+        let stored = session
+            .send(fact_turn(fact.0, fact.1, u8::try_from(index + 1)?))
+            .await?;
+        latest = *fact;
+        stored_facts = index + 1;
+        budget_evicted |= stored.report().history().evicted_turns() >= 1;
+        if stored_facts >= 4 && budget_evicted {
+            break;
+        }
+    }
+
+    Ok((latest, stored_facts, budget_evicted))
+}
+
+/// Checks that mandatory content larger than the whole budget fails before
+/// any request; returns how long the rejection took.
+async fn reject_oversized(session: &mut Session, budget: u64) -> Result<Duration, DynError> {
     let oversized = format!(
         "{} Reply stored.",
         filler(9, usize::try_from(budget * 4 + 4096)?)
@@ -528,26 +574,8 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
             );
         }
     }
-    provider.pace().await;
-    let after = session.send(recall(latest.0)).await?;
-    if !answer(after.output()).contains(latest.1) {
-        return Err(format!(
-            "session unusable after budget rejection: {}",
-            after.output()
-        )
-        .into());
-    }
 
-    Ok(format!(
-        "budget={budget} facts={stored_facts} {} recalled (replayed {} evicted {}); alpha evicted \
-         (replayed {} evicted {}, model answered `{evicted_answer}`); oversized rejected in \
-         {elapsed:?}; session still usable",
-        latest.0,
-        recent_history.replayed_turns(),
-        recent_history.evicted_turns(),
-        evicted_history.replayed_turns(),
-        evicted_history.evicted_turns()
-    ))
+    Ok(elapsed)
 }
 
 #[tokio::test]
@@ -644,7 +672,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
         let stored = send(
             provider,
             &mut session,
-            &fact_turn(name, value, index as u8 + 1),
+            &fact_turn(name, value, u8::try_from(index + 1)?),
         )
         .await?;
         let _ = stored;
@@ -655,22 +683,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
         return Err(format!("alpha should be evicted before compaction: {before}").into());
     }
 
-    provider.pace().await;
-    let checkpoint = session
-        .compact()
-        .await?
-        .ok_or("compact returned None with uncovered turns")?;
-    let summary = checkpoint.summary().clone();
-    let covered = checkpoint.covered_through();
-    if checkpoint.provider().is_none() || checkpoint.model().is_none() {
-        return Err(format!("checkpoint lacks model identity: {checkpoint:?}").into());
-    }
-    if !summary["context"].is_string()
-        || !summary["decisions"].is_array()
-        || !summary["state"].is_string()
-    {
-        return Err(format!("summary violates schema: {summary}").into());
-    }
+    let (summary, covered) = first_checkpoint(provider, &mut session).await?;
     let summary_text = summary.to_string().to_lowercase();
     let mentioned = facts
         .iter()
@@ -683,7 +696,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
         .database(&database)
         .resume("compact")
         .await?;
-    let loaded = resumed.checkpoint().map(|loaded| loaded.covered_through());
+    let loaded = resumed.checkpoint().map(SessionCheckpoint::covered_through);
     if loaded != Some(covered) {
         return Err(format!("resumed handle did not load the checkpoint: {loaded:?}").into());
     }
@@ -696,29 +709,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     let after_answer = answer(after.output());
     let recovered = after_answer.contains("maroon-11");
 
-    // The recall turn is now uncovered: a second compaction advances the
-    // boundary, and a third with nothing new returns None.
-    provider.pace().await;
-    let second = resumed
-        .compact()
-        .await?
-        .ok_or("second compaction returned None")?;
-    if second.covered_through() <= covered {
-        return Err(format!(
-            "second checkpoint did not advance: {} <= {covered}",
-            second.covered_through()
-        )
-        .into());
-    }
-    let third = resumed.compact().await?;
-    if let Some(third) = third {
-        return Err(format!(
-            "third compaction ran without uncovered turns: covered {covered}->{}->{}",
-            second.covered_through(),
-            third.covered_through()
-        )
-        .into());
-    }
+    let advanced = advance_checkpoint(provider, &mut resumed, covered).await?;
     if !recovered {
         return Err(format!(
             "alpha not recovered from summary (summary mentioned {mentioned}/3 facts; answer \
@@ -729,9 +720,66 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
 
     Ok(format!(
         "budget={budget} evicted before (`{before_answer}`), recovered after compaction; summary \
-         mentions {mentioned}/3 facts; covered {covered}->{}",
-        second.covered_through()
+         mentions {mentioned}/3 facts; covered {covered}->{advanced}"
     ))
+}
+
+/// Compacts every uncovered turn and returns the checkpoint's summary and
+/// boundary after checking its model identity and summary schema.
+async fn first_checkpoint(
+    provider: Provider,
+    session: &mut Session,
+) -> Result<(Value, i64), DynError> {
+    provider.pace().await;
+    let checkpoint = session
+        .compact()
+        .await?
+        .ok_or("compact returned None with uncovered turns")?;
+    let summary = checkpoint.summary().clone();
+    if checkpoint.provider().is_none() || checkpoint.model().is_none() {
+        return Err(format!("checkpoint lacks model identity: {checkpoint:?}").into());
+    }
+    if !summary["context"].is_string()
+        || !summary["decisions"].is_array()
+        || !summary["state"].is_string()
+    {
+        return Err(format!("summary violates schema: {summary}").into());
+    }
+
+    Ok((summary, checkpoint.covered_through()))
+}
+
+/// Checks that, with the recall turn now uncovered, a second compaction
+/// advances the boundary past `covered` and a third with nothing new returns
+/// None; returns the advanced boundary.
+async fn advance_checkpoint(
+    provider: Provider,
+    session: &mut Session,
+    covered: i64,
+) -> Result<i64, DynError> {
+    provider.pace().await;
+    let second = session
+        .compact()
+        .await?
+        .ok_or("second compaction returned None")?;
+    if second.covered_through() <= covered {
+        return Err(format!(
+            "second checkpoint did not advance: {} <= {covered}",
+            second.covered_through()
+        )
+        .into());
+    }
+    let third = session.compact().await?;
+    if let Some(third) = third {
+        return Err(format!(
+            "third compaction ran without uncovered turns: covered {covered}->{}->{}",
+            second.covered_through(),
+            third.covered_through()
+        )
+        .into());
+    }
+
+    Ok(second.covered_through())
 }
 
 #[tokio::test]
@@ -772,34 +820,7 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
         "granite-73",
         "harbor-89",
     ];
-    let workspace = tempfile::tempdir()?;
-    let root = workspace.path().canonicalize()?;
-    let init = tokio::process::Command::new(GIT_EXECUTABLE)
-        .args(["init", "--quiet"])
-        .current_dir(&root)
-        .status()
-        .await?;
-    if !init.success() {
-        return Err("git init failed".into());
-    }
-    for (index, code) in codes.iter().enumerate() {
-        let seed = u8::try_from(index)?;
-        let mut lines: Vec<String> = (0..72).map(|line| filler(seed + line, 80)).collect();
-        lines.insert(36, format!("The code word of this part is {code}."));
-        std::fs::write(
-            root.join(format!("part{}.txt", index + 1)),
-            lines.join("\n"),
-        )?;
-    }
-    // The large file's code word opens its only line, which alone outweighs
-    // the budget. A read that cannot show that line whole shows its first
-    // bytes, so any result naming the code word must be cut, whatever offset,
-    // limit, or search the model chooses.
-    let large = format!(
-        "The code word of the large file is ivory-97. {}\n",
-        filler(3, 36_000)
-    );
-    std::fs::write(root.join("large.txt"), large)?;
+    let (_workspace, root) = code_word_workspace(&codes).await?;
     let directory = tempfile::tempdir()?;
     let budget =
         ContextBudget::new(NonZeroU64::new(7_000).ok_or("budget")?).with_reserved_output(500)?;
@@ -880,6 +901,50 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
     Ok(summary)
 }
 
+/// Creates a Git workspace with one part file per code word, each naming its
+/// code word in the middle, and a large file whose single line names
+/// `ivory-97`; returns the workspace guard and its canonical root.
+async fn code_word_workspace(codes: &[&str]) -> Result<(tempfile::TempDir, PathBuf), DynError> {
+    let (workspace, root) = git_workspace().await?;
+    for (index, code) in codes.iter().enumerate() {
+        let seed = u8::try_from(index)?;
+        let mut lines: Vec<String> = (0..72).map(|line| filler(seed + line, 80)).collect();
+        lines.insert(36, format!("The code word of this part is {code}."));
+        std::fs::write(
+            root.join(format!("part{}.txt", index + 1)),
+            lines.join("\n"),
+        )?;
+    }
+    // The large file's code word opens its only line, which alone outweighs
+    // the budget. A read that cannot show that line whole shows its first
+    // bytes, so any result naming the code word must be cut, whatever offset,
+    // limit, or search the model chooses.
+    let large = format!(
+        "The code word of the large file is ivory-97. {}\n",
+        filler(3, 36_000)
+    );
+    std::fs::write(root.join("large.txt"), large)?;
+
+    Ok((workspace, root))
+}
+
+/// Creates an empty Git repository in a temporary directory; returns the
+/// directory guard and its canonical root.
+async fn git_workspace() -> Result<(tempfile::TempDir, PathBuf), DynError> {
+    let workspace = tempfile::tempdir()?;
+    let root = workspace.path().canonicalize()?;
+    let init = tokio::process::Command::new(GIT_EXECUTABLE)
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .status()
+        .await?;
+    if !init.success() {
+        return Err("git init failed".into());
+    }
+
+    Ok((workspace, root))
+}
+
 #[tokio::test]
 #[ignore = "requires live provider credentials"]
 async fn test_long_tool_loop_refit() -> Result<(), DynError> {
@@ -942,16 +1007,7 @@ async fn malformed_tool_arguments(
     provider: Provider,
     raw: &'static str,
 ) -> Result<String, DynError> {
-    let workspace = tempfile::tempdir()?;
-    let root = workspace.path().canonicalize()?;
-    let init = tokio::process::Command::new(GIT_EXECUTABLE)
-        .args(["init", "--quiet"])
-        .current_dir(&root)
-        .status()
-        .await?;
-    if !init.success() {
-        return Err("git init failed".into());
-    }
+    let (_workspace, root) = git_workspace().await?;
     std::fs::write(root.join("notes.txt"), "The code word is lantern-58.\n")?;
     let directory = tempfile::tempdir()?;
     let model = MalformedFirstCall {
@@ -1169,16 +1225,8 @@ impl Model for RepeatingFirstCalls {
 }
 
 /// Creates a Git repository whose `notes.txt` names a code word.
-pub(crate) fn notes_repository() -> Result<(tempfile::TempDir, Repository), DynError> {
-    let workspace = tempfile::tempdir()?;
-    let root = workspace.path().canonicalize()?;
-    let init = std::process::Command::new(GIT_EXECUTABLE)
-        .args(["init", "--quiet"])
-        .current_dir(&root)
-        .status()?;
-    if !init.success() {
-        return Err("git init failed".into());
-    }
+pub(crate) async fn notes_repository() -> Result<(tempfile::TempDir, Repository), DynError> {
+    let (workspace, root) = git_workspace().await?;
     std::fs::write(root.join("notes.txt"), "The code word is lantern-58.\n")?;
     let repository = Repository::new(&root, GIT_EXECUTABLE)?;
 
@@ -1188,7 +1236,7 @@ pub(crate) fn notes_repository() -> Result<(tempfile::TempDir, Repository), DynE
 /// Injects three identical reads; the live provider must accept the nudge
 /// that follows their results and answer from what it already read.
 async fn injected_repetition(provider: Provider) -> Result<String, DynError> {
-    let (_workspace, repository) = notes_repository()?;
+    let (_workspace, repository) = notes_repository().await?;
     let model = RepeatingFirstCalls {
         inner: provider.client()?,
         injected: AtomicUsize::new(0),
@@ -1223,7 +1271,7 @@ async fn injected_repetition(provider: Provider) -> Result<String, DynError> {
 /// Asks the live model itself to repeat one read; when it does, the harness
 /// must nudge it or, if it keeps going, stop the turn.
 async fn requested_repetition(provider: Provider) -> Result<String, DynError> {
-    let (_workspace, repository) = notes_repository()?;
+    let (_workspace, repository) = notes_repository().await?;
     let harness = Harness::new(provider.client()?, unbounded_context_budget())
         .repository(repository)
         .tools(ToolSet::empty().with_read());
@@ -1350,16 +1398,7 @@ impl Model for ScriptedPartReads {
 }
 
 async fn context_overflow_recovery(provider: Provider) -> Result<String, DynError> {
-    let workspace = tempfile::tempdir()?;
-    let root = workspace.path().canonicalize()?;
-    let init = tokio::process::Command::new(GIT_EXECUTABLE)
-        .args(["init", "--quiet"])
-        .current_dir(&root)
-        .status()
-        .await?;
-    if !init.success() {
-        return Err("git init failed".into());
-    }
+    let (_workspace, root) = git_workspace().await?;
     let parts = provider.overflow_parts();
     let words = incompressible_text(parts * OVERFLOW_PART_BYTES);
     let mut remaining = words.as_str();
@@ -1403,7 +1442,7 @@ async fn context_overflow_recovery(provider: Provider) -> Result<String, DynErro
             {
                 observed
                     .lock()
-                    .expect("retries lock")
+                    .unwrap_or_else(PoisonError::into_inner)
                     .push((*rejected_weight, *retry_weight));
             }
         });
@@ -1421,7 +1460,7 @@ async fn context_overflow_recovery(provider: Provider) -> Result<String, DynErro
         .map_err(|error| {
             format!(
                 "{error} (retries={:?})",
-                retries.lock().expect("retries lock")
+                retries.lock().unwrap_or_else(PoisonError::into_inner)
             )
         })?;
     let report = outcome.report();
@@ -1438,7 +1477,7 @@ async fn context_overflow_recovery(provider: Provider) -> Result<String, DynErro
     let summary = format!(
         "parts={parts} recoveries={} retries={:?} live_input_tokens={input_tokens:?} answer={}",
         report.context_overflow_recoveries(),
-        retries.lock().expect("retries lock"),
+        retries.lock().unwrap_or_else(PoisonError::into_inner),
         answer(outcome.output())
     );
     if report.context_overflow_recoveries() == 0 {
@@ -1498,7 +1537,7 @@ impl Provider {
 
 /// Appends every Rust source under `directory`, outside build output, to
 /// `files`.
-fn rust_sources(directory: &std::path::Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+fn rust_sources(directory: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
         if path.ends_with("target") {
@@ -1530,16 +1569,7 @@ async fn estimate_margin_near_window(provider: Provider) -> Result<String, DynEr
                 .with_request_tokens(rates.3)
                 .with_output_schema_in_prompt(),
         );
-    let workspace = tempfile::tempdir()?;
-    let root = workspace.path().canonicalize()?;
-    let init = tokio::process::Command::new(GIT_EXECUTABLE)
-        .args(["init", "--quiet"])
-        .current_dir(&root)
-        .status()
-        .await?;
-    if !init.success() {
-        return Err("git init failed".into());
-    }
+    let (_workspace, root) = git_workspace().await?;
     let mut files = Vec::new();
     rust_sources(
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
@@ -1690,47 +1720,34 @@ struct BashStep {
     capture: usize,
 }
 
-fn bash_options(executor: Executor, step: &BashStep) -> Result<TurnOptions, DynError> {
-    Ok(TurnOptions::from_output(stdout_schema()?)
-        .with_tools(ToolSet::empty().with_bash())
-        .with_bash(executor.config(step.timeout, step.capture)?))
-}
-
-fn bash_prompt(command: &str) -> String {
-    format!(
-        "Use the bash tool exactly once to run this command verbatim, without changing or adding \
-         anything:\n{command}\nThen return the command's stdout in the answer, even if it is \
-         empty or the command failed."
-    )
-}
-
-async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String, DynError> {
-    let steps = [
-        BashStep {
+impl BashStep {
+    /// Steps every executor runs in order, each checked by `succeeded`.
+    const ALL: [Self; 5] = [
+        Self {
             label: "write-grant",
             command: "tr a-z A-Z < input.txt > output/result.txt; cat output/result.txt",
             timeout: Duration::from_secs(20),
             capture: 4096,
         },
-        BashStep {
+        Self {
             label: "denied-write",
             command: "echo leak > escaped.txt 2>/dev/null; echo status=$?",
             timeout: Duration::from_secs(20),
             capture: 4096,
         },
-        BashStep {
+        Self {
             label: "network",
             command: "bash -c 'exec 3<>/dev/tcp/1.1.1.1/80' 2>/dev/null; echo net=$?",
             timeout: Duration::from_secs(20),
             capture: 4096,
         },
-        BashStep {
+        Self {
             label: "deadline",
             command: "sleep 30; echo finished",
             timeout: Duration::from_secs(3),
             capture: 4096,
         },
-        BashStep {
+        Self {
             label: "truncation",
             command: "for i in $(seq 1 400); do echo \"line $i of the sandbox output stream\"; \
                       done",
@@ -1738,6 +1755,65 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
             capture: 2048,
         },
     ];
+
+    /// Asks the model to run this step's command verbatim once and return its
+    /// stdout.
+    fn prompt(&self) -> String {
+        format!(
+            "Use the bash tool exactly once to run this command verbatim, without changing or \
+             adding anything:\n{}\nThen return the command's stdout in the answer, even if it is \
+             empty or the command failed.",
+            self.command
+        )
+    }
+
+    /// Turn options that allow only Bash, run through `executor` with this
+    /// step's deadline and capture limit.
+    fn options(&self, executor: Executor) -> Result<TurnOptions, DynError> {
+        Ok(TurnOptions::from_output(stdout_schema()?)
+            .with_tools(ToolSet::empty().with_bash())
+            .with_bash(executor.config(self.timeout, self.capture)?))
+    }
+
+    /// Whether the journaled `result`, the workspace under `root`, and the
+    /// model's reported stdout match this step's contract for `executor`.
+    fn succeeded(
+        &self,
+        executor: Executor,
+        root: &Path,
+        result: &CommandOutcome,
+        model_stdout: &str,
+    ) -> io::Result<bool> {
+        let stdout = result.stdout.trim();
+        let ok = match (self.label, executor) {
+            ("write-grant", _) => {
+                std::fs::read_to_string(root.join("output/result.txt"))? == "SEED=42\n"
+                    && result.termination == CommandTermination::Completed
+                    && result.exit_code == Some(0)
+                    && stdout.contains("SEED=42")
+                    && model_stdout.contains("SEED=42")
+            }
+            ("denied-write", Executor::Native) => {
+                !root.join("escaped.txt").exists() && stdout.contains("status=1")
+            }
+            ("denied-write", Executor::Unsandboxed) => {
+                // Documented contract: no enforcement, the write lands.
+                root.join("escaped.txt").exists() && stdout.contains("status=0")
+            }
+            ("network", Executor::Native) => stdout.contains("net=1"),
+            ("network", Executor::Unsandboxed) => stdout.starts_with("net="),
+            ("deadline", _) => {
+                result.termination == CommandTermination::Deadline && !stdout.contains("finished")
+            }
+            ("truncation", _) => result.truncated && result.stdout.len() <= self.capture,
+            _ => false,
+        };
+
+        Ok(ok)
+    }
+}
+
+async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String, DynError> {
     let workspace = tempfile::tempdir()?;
     let root = workspace.path().canonicalize()?;
     std::fs::create_dir(root.join(".git"))?;
@@ -1753,11 +1829,11 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
     let mut details = Vec::new();
     let mut compliance = Vec::new();
 
-    for (index, step) in steps.iter().enumerate() {
+    for (index, step) in BashStep::ALL.iter().enumerate() {
         provider.pace().await;
         let outcome = session
-            .turn(bash_prompt(step.command))
-            .options(bash_options(executor, step)?)
+            .turn(step.prompt())
+            .options(step.options(executor)?)
             .await
             .map_err(|error| format!("{} turn failed: {error}", step.label))?;
         let commands = session.commands().await?;
@@ -1781,33 +1857,8 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
             return Err(format!("{}: snapshot executor `{policy_executor}`", step.label).into());
         }
         let stdout = result.stdout.trim().to_string();
-        let ok = match (step.label, executor) {
-            ("write-grant", _) => {
-                std::fs::read_to_string(root.join("output/result.txt"))? == "SEED=42\n"
-                    && result.termination == CommandTermination::Completed
-                    && result.exit_code == Some(0)
-                    && stdout.contains("SEED=42")
-                    && outcome.output()["stdout"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .contains("SEED=42")
-            }
-            ("denied-write", Executor::Native) => {
-                !root.join("escaped.txt").exists() && stdout.contains("status=1")
-            }
-            ("denied-write", Executor::Unsandboxed) => {
-                // Documented contract: no enforcement, the write lands.
-                root.join("escaped.txt").exists() && stdout.contains("status=0")
-            }
-            ("network", Executor::Native) => stdout.contains("net=1"),
-            ("network", Executor::Unsandboxed) => stdout.starts_with("net="),
-            ("deadline", _) => {
-                result.termination == CommandTermination::Deadline && !stdout.contains("finished")
-            }
-            ("truncation", _) => result.truncated && result.stdout.len() <= step.capture,
-            _ => false,
-        };
-        if !ok {
+        let model_stdout = outcome.output()["stdout"].as_str().unwrap_or_default();
+        if !step.succeeded(executor, &root, result, model_stdout)? {
             return Err(format!(
                 "{}: unexpected outcome termination={:?} exit={:?} truncated={} stdout={stdout:?} \
                  stderr={:?} model_output={}",
@@ -1835,11 +1886,12 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
         .resume("bash")
         .await?;
     let records = reopened.commands().await?;
-    if records.len() != steps.len() || records.iter().any(|record| record.blocks_admission()) {
+    let blocking = records.iter().any(CommandRecord::blocks_admission);
+    if records.len() != BashStep::ALL.len() || blocking {
         return Err(format!(
             "reopened journal has {} records, blocking={}",
             records.len(),
-            records.iter().any(|record| record.blocks_admission())
+            blocking
         )
         .into());
     }
@@ -1854,7 +1906,7 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
 
     Ok(format!(
         "{} steps ok, journal survives reopen: {}{compliance}",
-        steps.len(),
+        BashStep::ALL.len(),
         details.join(", ")
     ))
 }
