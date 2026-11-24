@@ -1141,14 +1141,15 @@ impl App {
         if result.is_err() {
             // A staged draft keeps its images when its start fails, so the
             // retried start still finds them.
-            if let Some(session) = self.sessions.session_for_id(session_id) {
-                image_paths.retain(|path| {
-                    !session
-                        .draft_attachments
-                        .iter()
-                        .any(|attachment| &attachment.local_image_path == path)
-                });
-            }
+            let draft_attachments = self
+                .sessions
+                .session_for_id(session_id)
+                .map_or_default(|session| session.draft_attachments.as_slice());
+            image_paths.retain(|path| {
+                !draft_attachments
+                    .iter()
+                    .any(|attachment| &attachment.local_image_path == path)
+            });
             SessionManager::cleanup_prompt_attachment_paths(self.services.fs_client(), image_paths)
                 .await;
         }

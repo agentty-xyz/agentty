@@ -90,7 +90,7 @@ async function encodeImage(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
   for (let offset = 0; offset < bytes.length; offset += ENCODE_CHUNK_BYTES) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + ENCODE_CHUNK_BYTES));
+    binary += String.fromCodePoint(...bytes.subarray(offset, offset + ENCODE_CHUNK_BYTES));
   }
 
   return btoa(binary);
