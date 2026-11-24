@@ -1,8 +1,8 @@
 //! Session metadata persistence tests for conversation IDs, upstream refs,
 //! merged commits, and turn metadata.
 
-use ag_contracts::TurnUsage;
 use ag_contracts::test_support::token_usage;
+use ag_contracts::{TurnUsage, UsagePurpose};
 use ag_session::test_support as model_fixture;
 
 use super::support::insert_session_fixture;
@@ -407,10 +407,11 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
     assert_eq!(usage_checkpoint, None);
 }
 
-/// Verifies each turn's reported usage checkpoint replaces the session's, a
-/// turn without one clears it, and a missing session reads none.
+/// Verifies the session keeps one usage checkpoint that every recorded
+/// invocation reporting one replaces, chat turns and utility prompts alike,
+/// an invocation without one keeps it, and a missing session reads none.
 #[tokio::test]
-async fn test_persist_session_turn_metadata_replaces_usage_checkpoint() {
+async fn test_recorded_usage_replaces_the_single_session_checkpoint() {
     // Arrange
     let database = Database::in_memory()
         .await
@@ -433,26 +434,40 @@ async fn test_persist_session_turn_metadata_replaces_usage_checkpoint() {
     let mut checkpoints = Vec::new();
 
     // Act
-    for checkpoint in [Some("first"), Some("second"), None] {
-        database
-            .sessions()
-            .persist_session_turn_metadata(
-                "session-a",
-                &SessionTurnMetadata {
-                    harness_turn_report: None,
-                    instruction_conversation_id: None,
-                    model: "gpt-5.6-sol".to_string(),
-                    provider_conversation_id: None,
-                    questions_json: String::new(),
-                    review_comment_resolutions: Vec::new(),
-                    usage: TurnUsage {
-                        checkpoint: checkpoint.map(str::to_string),
-                        ..TurnUsage::default()
+    for (is_turn, checkpoint) in [
+        (true, Some("first")),
+        (false, Some("utility")),
+        (true, None),
+        (false, None),
+    ] {
+        let usage = TurnUsage {
+            checkpoint: checkpoint.map(str::to_string),
+            ..TurnUsage::default()
+        };
+        if is_turn {
+            database
+                .sessions()
+                .persist_session_turn_metadata(
+                    "session-a",
+                    &SessionTurnMetadata {
+                        harness_turn_report: None,
+                        instruction_conversation_id: None,
+                        model: "gpt-5.6-sol".to_string(),
+                        provider_conversation_id: None,
+                        questions_json: String::new(),
+                        review_comment_resolutions: Vec::new(),
+                        usage,
                     },
-                },
-            )
-            .await
-            .expect("failed to persist turn metadata");
+                )
+                .await
+                .expect("failed to persist turn metadata");
+        } else {
+            database
+                .usage()
+                .upsert_session_usage("session-a", UsagePurpose::CommitAssist, &usage)
+                .await
+                .expect("failed to record utility usage");
+        }
         checkpoints.push(
             database
                 .sessions()
@@ -471,7 +486,13 @@ async fn test_persist_session_turn_metadata_replaces_usage_checkpoint() {
     assert_eq!(initial, None);
     assert_eq!(
         checkpoints,
-        [Some("first"), Some("second"), None].map(|value| value.map(str::to_string))
+        [
+            Some("first"),
+            Some("utility"),
+            Some("utility"),
+            Some("utility")
+        ]
+        .map(|value| value.map(str::to_string))
     );
     assert_eq!(missing, None);
 }

@@ -245,7 +245,15 @@ async fn prepare(
         history.provider_conversation_id.clone(),
         if persistent { None } else { replay },
     )
-    .with_usage_checkpoint(history.usage_checkpoint.clone());
+    // Task and chat turns share the worktree's most recent conversation, so
+    // they share the session's usage checkpoint.
+    .with_usage_checkpoint(
+        context
+            .db
+            .sessions()
+            .get_session_usage_checkpoint(&context.session_id)
+            .await?,
+    );
     let prepared = TurnRequest {
         // Task agents run bounded assignments, and no transcript shows their
         // compaction notices.

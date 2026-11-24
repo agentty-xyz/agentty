@@ -47,8 +47,7 @@ pub struct SessionTurnMetadata {
     pub questions_json: String,
     /// Review-comment operations committed with this completed turn.
     pub review_comment_resolutions: Vec<NewSessionReviewCommentResolution>,
-    /// Usage of every model the completed turn used; its checkpoint replaces
-    /// the session's, so a turn that reported none leaves none.
+    /// Usage of every model the completed turn used.
     pub usage: TurnUsage,
 }
 
@@ -1645,14 +1644,12 @@ UPDATE session
 SET questions = ?,
     provider_conversation_id = ?,
     app_server_instruction_provider_conversation_id = ?,
-    usage_checkpoint = ?,
     updated_at = ?
 WHERE id = ?
 ",
             turn_metadata.questions_json.as_str(),
             turn_metadata.provider_conversation_id.as_deref(),
             turn_metadata.instruction_conversation_id.as_deref(),
-            turn_metadata.usage.checkpoint.as_deref(),
             now,
             session_id
         )
@@ -2850,14 +2847,19 @@ impl SessionJoinRow {
     }
 }
 
-/// Records one invocation's usage under `purpose` without replacing any
-/// conversation state.
+/// Records one invocation's usage under `purpose`.
 ///
 /// Each model's row accumulates the invocation; a detail stays known only
 /// while every invocation of the row reported it. Models whose usage is
 /// empty are skipped, but a model whose requests went unreported is
 /// recorded. The session's token totals grow by every model's tokens, and a
 /// session turn also records the context fill of its latest request.
+///
+/// Every invocation recorded for a session runs in its worktree, where the
+/// next continued turn resumes the most recent conversation, whether a chat
+/// turn, task turn, or utility prompt left it. A checkpoint the invocation
+/// reported therefore replaces the session's single one; an invocation
+/// without one leaves it.
 pub(crate) async fn persist_turn_usage(
     connection: &mut SqliteConnection,
     session_id: &str,
@@ -2865,6 +2867,15 @@ pub(crate) async fn persist_turn_usage(
     now: i64,
     usage: &TurnUsage,
 ) -> Result<(), DbError> {
+    if let Some(checkpoint) = usage.checkpoint.as_deref() {
+        sqlx::query!(
+            "UPDATE session SET usage_checkpoint = ? WHERE id = ?",
+            checkpoint,
+            session_id
+        )
+        .execute(&mut *connection)
+        .await?;
+    }
     let models = usage
         .models
         .iter()

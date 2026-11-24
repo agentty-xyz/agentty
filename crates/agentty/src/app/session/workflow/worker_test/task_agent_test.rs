@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, ContextCompaction,
-    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest,
+    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest, TurnUsage, UsagePurpose,
 };
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem};
@@ -94,6 +94,9 @@ async fn planner_execution_uses_captured_model_own_history_and_read_only_permiss
             expected_kind,
         )
         .await;
+        if attempt == "first" {
+            interleave_chat_turn_checkpoint(&app, &session_id).await;
+        }
     }
     assert_task_admission_rejections(&mut app, &service, &session_id).await;
     assert_unloaded_claim_fails(&mut app, &service, &session_id).await;
@@ -296,9 +299,37 @@ fn assert_planner_request(turn: &TurnRequest, attempt: &str, expected_kind: &Age
         if attempt == "first" {
             None
         } else {
-            Some("task-checkpoint")
+            Some("chat-checkpoint")
         }
     );
+}
+
+/// Verifies the task turn left its checkpoint on the session, then records a
+/// chat turn that becomes the worktree's most recent conversation, whose
+/// checkpoint the next task turn must continue from.
+async fn interleave_chat_turn_checkpoint(app: &App, session_id: &SessionId) {
+    let sessions = app.services.db().sessions();
+    assert_eq!(
+        sessions
+            .get_session_usage_checkpoint(session_id)
+            .await
+            .expect("task checkpoint")
+            .as_deref(),
+        Some("task-checkpoint")
+    );
+    app.services
+        .db()
+        .usage()
+        .upsert_session_usage(
+            session_id,
+            UsagePurpose::Turn,
+            &TurnUsage {
+                checkpoint: Some("chat-checkpoint".to_string()),
+                ..TurnUsage::default()
+            },
+        )
+        .await
+        .expect("chat turn usage");
 }
 
 async fn assert_ordinary_continuation(app: &App, session_id: &SessionId) {

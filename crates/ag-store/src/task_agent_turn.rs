@@ -36,9 +36,6 @@ pub struct TaskAgentHistoryRow {
     pub provider_conversation_id: Option<String>,
     /// Observed responses in attempt-admission order; excludes session chat.
     pub turns: Vec<TaskAgentTurnRow>,
-    /// Usage checkpoint the task's latest turn reported, from which its next
-    /// continued turn derives its own usage.
-    pub usage_checkpoint: Option<String>,
 }
 
 /// Observed response and provider state to commit before post-processing.
@@ -73,8 +70,8 @@ impl TaskAgentTurnStore {
             return Ok(None);
         };
         let continuation = sqlx::query!(
-            "SELECT provider_conversation_id, instruction_conversation_id, usage_checkpoint FROM \
-             task_agent_context WHERE task_id = ?",
+            "SELECT provider_conversation_id, instruction_conversation_id FROM task_agent_context \
+             WHERE task_id = ?",
             task_id
         )
         .fetch_one(&mut *connection)
@@ -105,7 +102,6 @@ impl TaskAgentTurnStore {
             instruction_conversation_id: continuation.instruction_conversation_id,
             provider_conversation_id: continuation.provider_conversation_id,
             turns,
-            usage_checkpoint: continuation.usage_checkpoint,
         }))
     }
 
@@ -189,10 +185,9 @@ impl TaskAgentTurnStore {
         .await?;
         sqlx::query!(
             "UPDATE task_agent_context SET provider_conversation_id = ?, \
-             instruction_conversation_id = ?, usage_checkpoint = ? WHERE task_id = ?",
+             instruction_conversation_id = ? WHERE task_id = ?",
             metadata.provider_conversation_id,
             metadata.instruction_conversation_id,
-            metadata.usage.checkpoint,
             owner.task_id
         )
         .execute(&mut *connection)

@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ag_contracts::{AgentRequestKind, ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage};
 use ag_harness::provider::ModelProvider;
-use ag_protocol::ProtocolRequestProfile;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,6 +31,10 @@ use crate::agent::usage::list_price;
 /// First Claude Code release whose resumed sessions restore their earlier
 /// totals into `modelUsage`; earlier releases start each process at zero.
 const CUMULATIVE_RESUME_VERSION: Version = Version::new(2, 1, 277);
+
+/// Checkpoint of a process that reported no totals. It names no totals, so
+/// the turn that continues its conversation falls back to list price.
+const UNKNOWN_CHECKPOINT: &str = "unknown";
 
 /// Folds Claude Code stream events into the run's usage, under an empty
 /// model name, and its `modelUsage` totals.
@@ -299,9 +302,12 @@ pub(crate) struct ClaudeRun<'a> {
 /// first turn or a utility prompt, starts at zero and is charged its own
 /// totals. A process whose share cannot be trusted, because it reported no
 /// totals, its release is unknown, no checkpoint precedes it, or a total
-/// went down, is charged its main-loop usage at list price instead. The
-/// totals of a session turn's processes, started or continued, become the
-/// next checkpoint; other requests never set one.
+/// went down, is charged its main-loop usage at list price instead.
+///
+/// Claude Code continues the most recent conversation in the directory, so
+/// every process, whatever its request kind, leaves the checkpoint the next
+/// continued turn there needs: its totals, or [`UNKNOWN_CHECKPOINT`] when it
+/// reported none.
 pub(crate) fn turn_usage<'a>(
     model: &str,
     request_kind: &AgentRequestKind,
@@ -309,7 +315,6 @@ pub(crate) fn turn_usage<'a>(
     runs: impl IntoIterator<Item = ClaudeRun<'a>>,
 ) -> TurnUsage {
     let resumed = request_kind.is_resume();
-    let session_turn = request_kind.protocol_profile() == ProtocolRequestProfile::SessionTurn;
     let mut previous = checkpoint.and_then(|checkpoint| serde_json::from_str(checkpoint).ok());
     let mut usage = TurnUsage::default();
     for run in runs {
@@ -337,10 +342,13 @@ pub(crate) fn turn_usage<'a>(
             }
             usage.record(&model_usage);
         }
-        if session_turn && let Some(totals) = run.totals {
-            usage.checkpoint = serde_json::to_string(&totals.models).ok();
-            previous = Some(totals.models.clone());
-        }
+        previous = run.totals.map(|totals| totals.models.clone());
+        usage.checkpoint = Some(
+            previous
+                .as_ref()
+                .and_then(|models| serde_json::to_string(models).ok())
+                .unwrap_or_else(|| UNKNOWN_CHECKPOINT.to_string()),
+        );
     }
 
     usage

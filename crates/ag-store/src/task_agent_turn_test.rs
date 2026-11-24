@@ -53,7 +53,14 @@ async fn task_response_preserves_ordinary_conversation_and_uses_captured_model()
         history.instruction_conversation_id,
         metadata.instruction_conversation_id
     );
-    assert_eq!(history.usage_checkpoint, metadata.usage.checkpoint);
+    assert_eq!(
+        database
+            .sessions()
+            .get_session_usage_checkpoint("session")
+            .await
+            .expect("checkpoint"),
+        metadata.usage.checkpoint
+    );
     assert_eq!(history.turns.len(), 1);
     assert_eq!(history.turns[0].attempt_id, "first");
     assert_eq!(

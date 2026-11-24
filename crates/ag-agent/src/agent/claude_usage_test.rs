@@ -6,7 +6,7 @@ use ag_contracts::{AgentRequestKind, ContextFill, CostBasis, ModelUsage, TurnUsa
 use semver::Version;
 use serde_json::{Value, json};
 
-use super::{ModelTotals, micro_usd};
+use super::{ModelTotals, UNKNOWN_CHECKPOINT, micro_usd};
 use crate::agent::claude_usage::{AgentTotals, ClaudeRun, ClaudeUsageMeter, turn_usage};
 
 /// Model a turn requests, which untrusted runs are charged under.
@@ -24,7 +24,8 @@ type Row<'a> = (&'a str, u64, u64, u32, Option<CostBasis>, Option<u64>);
 struct TurnCase {
     /// Checkpoint the host passed in.
     checkpoint: Option<String>,
-    /// Index of the run whose totals become the new checkpoint.
+    /// Index of the run whose totals become the new checkpoint, or `None`
+    /// when the last run reported none and leaves an unknown checkpoint.
     checkpoint_run: Option<usize>,
     /// Scenario label for assertion messages.
     name: &'static str,
@@ -137,11 +138,14 @@ fn assert_turn_case(case: &TurnCase) {
         .iter()
         .map(|(version, model_usage)| claude_run(*version, model_usage.clone()))
         .collect::<Vec<_>>();
-    let expected_checkpoint = case.checkpoint_run.map(|index| {
-        let totals = runs[index].1.as_ref().expect("the run reports totals");
+    let expected_checkpoint = Some(case.checkpoint_run.map_or_else(
+        || UNKNOWN_CHECKPOINT.to_string(),
+        |index| {
+            let totals = runs[index].1.as_ref().expect("the run reports totals");
 
-        serde_json::to_string(&totals.models).expect("totals serialize")
-    });
+            serde_json::to_string(&totals.models).expect("totals serialize")
+        },
+    ));
 
     // Act
     let usage = turn_usage(
@@ -351,8 +355,8 @@ fn turn_usage_charges_each_run_its_share_of_the_totals() {
     let cases = [
         TurnCase {
             checkpoint: earlier.clone(),
-            checkpoint_run: None,
-            name: "fresh runs are charged absolute totals",
+            checkpoint_run: Some(0),
+            name: "fresh runs are charged absolute totals and set the checkpoint",
             request_kind: AgentRequestKind::UtilityPrompt,
             rows: vec![haiku, context_row(CONTEXT_MODEL, 1_100, 50, 2, reported)],
             runs: vec![(
@@ -402,7 +406,7 @@ fn turn_usage_charges_each_run_its_share_of_the_totals() {
         },
         TurnCase {
             checkpoint: None,
-            checkpoint_run: None,
+            checkpoint_run: Some(0),
             name: "context falls back to the requested model",
             request_kind: AgentRequestKind::UtilityPrompt,
             rows: vec![context_row(REQUESTED, 40, 4, 2, CostBasis::ListPrice)],
@@ -445,7 +449,7 @@ fn turn_usage_checkpoints_started_sessions_and_prices_unmatched_costs_at_list_pr
         },
         TurnCase {
             checkpoint: None,
-            checkpoint_run: None,
+            checkpoint_run: Some(0),
             name: "a cost no price table matched is priced at list price",
             request_kind: AgentRequestKind::UtilityPrompt,
             rows: vec![context_row(REQUESTED, 40, 4, 2, CostBasis::ListPrice)],
@@ -489,6 +493,12 @@ fn turn_usage_charges_untrusted_runs_their_main_loop_at_list_price() {
         case(
             "unparsable checkpoint",
             Some("{"),
+            Some(CUMULATIVE),
+            current.clone(),
+        ),
+        case(
+            "a conversation left by a run without totals",
+            Some(UNKNOWN_CHECKPOINT),
             Some(CUMULATIVE),
             current,
         ),

@@ -324,7 +324,17 @@ async fn claude_repair_folds_both_attempts_into_the_usage() {
 
     // Assert
     assert_eq!(submission.response.answers(), vec!["Repaired".to_string()]);
-    assert_eq!(submission.usage.checkpoint, None);
+    // The repair process leaves the folder's most recent conversation, so its
+    // totals become the checkpoint a later continued turn there needs.
+    assert!(
+        submission
+            .usage
+            .checkpoint
+            .as_deref()
+            .is_some_and(|checkpoint| checkpoint.contains("\"input\":3")),
+        "{:?}",
+        submission.usage.checkpoint
+    );
     assert_eq!(submission.usage.models.len(), 1);
     let usage = &submission.usage.models[0];
     assert_eq!(usage.model, AgentModel::ClaudeSonnet55.as_str());
