@@ -850,9 +850,10 @@ fn codex_target(text: &str) -> Option<&str> {
 ///
 /// A patch holds one `*** Add File:` operation whose lines all start with
 /// `+`, or one `*** Update File:` operation whose hunks each start with
-/// `@@`, optionally followed by a line to find first. Hunks carry no line
-/// numbers, so each is searched after the previous hunk for its context and
-/// removed lines, exactly or else ignoring trailing whitespace. A hunk with
+/// `@@`, optionally followed by a line to find first, compared ignoring
+/// surrounding whitespace so it may leave out its indentation. Hunks carry no
+/// line numbers, so each is searched after the previous hunk for its context
+/// and removed lines, exactly or else ignoring trailing whitespace. A hunk with
 /// an `@@` line applies at the first match after that line, as in Codex; a
 /// hunk without one must match exactly one place after the previous hunk,
 /// so a short, repeated hunk is rejected rather than applied to the wrong
@@ -1064,8 +1065,8 @@ impl CodexPlacement<'_, '_> {
                 content: anchor.to_string(),
                 newline: true,
             };
-            let found = self.matches_after(number, self.cursor, &[&anchor_line], 1)?;
-            let found = found.first().copied().ok_or_else(|| {
+            let found = self.anchor_after(number, anchor)?;
+            let found = found.ok_or_else(|| {
                 self.mismatch(
                     &[&anchor_line],
                     &format!(
@@ -1141,6 +1142,28 @@ impl CodexPlacement<'_, '_> {
         };
 
         Ok(self.hunk(start, start + 1, codex_hunk))
+    }
+
+    /// Returns the first source line after the previous hunk that equals
+    /// `anchor` once surrounding whitespace is ignored on both, as Codex
+    /// matches an `@@` line, which models write with or without the line's
+    /// indentation.
+    ///
+    /// # Errors
+    /// Returns why hunk `number` cannot be located once the comparison
+    /// budget runs out.
+    fn anchor_after(&mut self, number: usize, anchor: &str) -> Result<Option<usize>, WriteError> {
+        for (offset, line) in self.searched[self.cursor..].iter().enumerate() {
+            self.comparisons_left = self
+                .comparisons_left
+                .checked_sub(1)
+                .ok_or_else(|| too_repetitive(number))?;
+            if line.trim() == anchor {
+                return Ok(Some(self.cursor + offset));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Returns up to `limit` indexes, in order, from `from` where `original`
@@ -1572,8 +1595,8 @@ fn too_repetitive(number: usize) -> WriteError {
 /// model can copy them instead of reading the file again.
 ///
 /// The nearest match is the place where the most non-blank lines of the
-/// hunk match the target ignoring trailing whitespace, the one closest to
-/// `near` among equals; finding it spends the patch's comparison budget, and
+/// hunk match the target ignoring surrounding whitespace, the one closest
+/// to `near` among equals; finding it spends the patch's comparison budget, and
 /// once that runs out the lines around `near` are shown. At most
 /// [`MAX_SHOWN_LINES`] whole lines within [`MAX_SHOWN_BYTES`] are shown.
 fn context_mismatch(
@@ -1615,7 +1638,7 @@ fn context_mismatch(
 }
 
 /// Returns the start index where the most non-blank `original` lines match
-/// `lines` ignoring trailing whitespace, the one closest to `near` among
+/// `lines` ignoring surrounding whitespace, the one closest to `near` among
 /// equals, or `None` when no line matches or the comparison budget runs out.
 fn nearest_match(
     lines: &[&str],
@@ -1629,9 +1652,7 @@ fn nearest_match(
         for (source, expected) in lines[start..].iter().zip(original) {
             *comparisons_left = comparisons_left.checked_sub(1)?;
             let source = strip_patch_newline(source);
-            if !expected.content.trim().is_empty()
-                && source.trim_end() == expected.content.trim_end()
-            {
+            if !expected.content.trim().is_empty() && source.trim() == expected.content.trim() {
                 score += 1;
             }
         }

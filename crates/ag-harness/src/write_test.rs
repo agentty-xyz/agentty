@@ -1541,6 +1541,31 @@ fn rejects_malformed_codex_patches() {
 }
 
 #[test]
+fn finds_codex_anchors_with_or_without_their_indentation() {
+    // Arrange
+    let current =
+        "class A:\n    def f(self):\n        return 1\n    def g(self):\n        return 1\n";
+    let anchors = ["@@ def g(self):", "@@     def g(self):"];
+
+    // Act
+    let results = anchors.map(|anchor| {
+        apply_codex(
+            Some(current),
+            &codex_update(&format!("{anchor}\n-        return 1\n+        return 2\n")),
+        )
+        .expect("anchored hunk should apply")
+    });
+
+    // Assert
+    for result in results {
+        assert_eq!(
+            result,
+            "class A:\n    def f(self):\n        return 1\n    def g(self):\n        return 2\n"
+        );
+    }
+}
+
+#[test]
 fn applies_crlf_codex_patches_and_rejects_lone_carriage_returns() {
     // Arrange
     let crlf = codex_update(" a\n-b\n+c\n").replace('\n', "\r\n");
@@ -1565,14 +1590,30 @@ fn rejects_codex_hunks_too_repetitive_to_locate() {
     // Arrange
     let current = "x\n".repeat(100_000);
     let patch = codex_update(&format!("@@\n{}-y\n", " x\n".repeat(100)));
+    // The first hunk is found after nearly the whole budget, so the second
+    // hunk's anchor search runs out of it.
+    let spent_current = format!("{}y\n{}", "x\n".repeat(50_000), "x\n".repeat(100_000));
+    let spent_patch = codex_update(&format!("@@ x\n{}-y\n@@ missing\n x\n", " x\n".repeat(166)));
 
     // Act
-    let error = apply_codex(Some(&current), &patch).expect_err("search should exhaust its budget");
+    let errors = [(current, patch), (spent_current, spent_patch)].map(|(current, patch)| {
+        apply_codex(Some(&current), &patch).expect_err("search should exhaust its budget")
+    });
 
     // Assert
     assert!(
-        error.to_string().contains("too repetitive to locate"),
-        "{error}"
+        errors[0]
+            .to_string()
+            .contains("hunk 1 is too repetitive to locate"),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[1]
+            .to_string()
+            .contains("hunk 2 is too repetitive to locate"),
+        "{}",
+        errors[1]
     );
 }
 
