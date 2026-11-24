@@ -2607,7 +2607,6 @@ pub ag_harness::tool::WriteError::BinaryTarget
 pub ag_harness::tool::WriteError::BinaryTarget::path: alloc::string::String
 pub ag_harness::tool::WriteError::ContextMismatch
 pub ag_harness::tool::WriteError::ContextMismatch::content: alloc::string::String
-pub ag_harness::tool::WriteError::ContextMismatch::end_line: usize
 pub ag_harness::tool::WriteError::ContextMismatch::reason: alloc::string::String
 pub ag_harness::tool::WriteError::ContextMismatch::start_line: usize
 pub ag_harness::tool::WriteError::Encode(serde_json::error::Error)

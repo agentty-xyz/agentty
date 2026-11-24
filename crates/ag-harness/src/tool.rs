@@ -937,6 +937,8 @@ impl WriteArguments {
     }
 }
 
+/// Wire form of [`WriteArguments`], whose `path` may be left out for the
+/// patch headers to name.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WriteArgumentsWire {

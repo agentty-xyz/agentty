@@ -490,7 +490,13 @@ fn write_arguments_take_a_missing_path_from_the_patch_headers() {
     for arguments in inferred {
         assert_eq!(arguments.expect("path from headers").path(), "src/lib.rs");
     }
-    assert!(rejected[0].is_err());
+    assert!(
+        rejected[0]
+            .as_ref()
+            .expect_err("an unsafe header path is rejected")
+            .to_string()
+            .contains("parent-directory components")
+    );
     assert!(
         rejected[1]
             .as_ref()

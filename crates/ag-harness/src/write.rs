@@ -94,19 +94,18 @@ pub enum WriteError {
         /// Repository-relative target path.
         path: String,
     },
-    /// A hunk's context and removed lines match nowhere in the target. The
-    /// model-facing result shows the target's current lines where they most
-    /// nearly match, or around the hunk's header line, so the model can
-    /// correct the hunk without reading the file again.
+    /// A hunk's context and removed lines match nowhere in the target.
+    /// `content` holds the target's current lines where they most nearly
+    /// match, or around the hunk's position, and the model-facing result
+    /// shows them so the model can correct the hunk without reading the
+    /// file again.
     #[error("invalid patch: {reason}")]
     ContextMismatch {
-        /// Current target lines shown, each with its line ending.
+        /// Current target lines, each with its line ending.
         content: String,
-        /// One-based last line of `content`.
-        end_line: usize,
         /// Bounded validation diagnostic.
         reason: String,
-        /// One-based first line of `content`.
+        /// One-based line number of the first line of `content`.
         start_line: usize,
     },
     /// The bounded tool result could not be encoded for the model.
@@ -210,23 +209,33 @@ impl WriteError {
             status: &'static str,
         }
 
-        let current = match self {
+        let error = schema_contract::bounded_diagnostic(self);
+        let (current, error) = match self {
             Self::ContextMismatch {
                 content,
-                end_line,
                 start_line,
                 ..
-            } => Some(CurrentLines {
-                content,
-                end_line: *end_line,
-                start_line: *start_line,
-            }),
-            _ => None,
+            } => {
+                let end_line = start_line + content.split_inclusive('\n').count() - 1;
+
+                (
+                    Some(CurrentLines {
+                        content,
+                        end_line,
+                        start_line: *start_line,
+                    }),
+                    format!(
+                        "{error}; `current` holds lines {start_line}-{end_line} of the file as it \
+                         is now; copy context and removed lines exactly from it"
+                    ),
+                )
+            }
+            _ => (None, error),
         };
 
         serde_json::to_string(&RejectedWrite {
             current,
-            error: schema_contract::bounded_diagnostic(self),
+            error,
             path,
             status: "rejected",
         })
@@ -369,6 +378,24 @@ impl WriteTool {
 
         Ok(Some(content))
     }
+}
+
+/// Returns the repository path the file headers of `patch` name as its
+/// result, for a `write` call that left out its `path`: the `+++` header
+/// without its `b/` prefix, or the path of a Codex patch's
+/// `*** Update File:` or `*** Add File:` line. Only lines before the first
+/// hunk count, and `/dev/null` names no path.
+pub(crate) fn header_target(patch: &str) -> Option<&str> {
+    patch
+        .lines()
+        .take_while(|line| !line.starts_with("@@"))
+        .find_map(|line| {
+            line.strip_prefix("+++ ")
+                .map(|header| header_path(header.split('\t').next().unwrap_or_default()))
+                .or_else(|| codex_target(line))
+        })
+        .map(str::trim_end)
+        .filter(|path| !path.is_empty() && *path != "/dev/null")
 }
 
 /// Hunk that applied away from its header line or only after ignoring
@@ -656,17 +683,12 @@ impl<'a> HunkApplier<'a> {
                 return Ok(header_index);
             }
         }
-        let too_repetitive = || {
-            patch_error(format!(
-                "hunk {number} is too repetitive to locate within the comparison limit; add \
-                 distinctive context lines or split the patch into smaller writes"
-            ))
-        };
+        let repetitive = || too_repetitive(number);
         let remaining = &self.source_lines[self.source_index..];
         self.comparisons_left = self
             .comparisons_left
             .checked_sub(self.output.len() + remaining.len())
-            .ok_or_else(too_repetitive)?;
+            .ok_or_else(repetitive)?;
         let evolving: Vec<&str> = self
             .output
             .iter()
@@ -676,7 +698,7 @@ impl<'a> HunkApplier<'a> {
         for line_match in [LineMatch::Exact, LineMatch::IgnoringTrailingWhitespace] {
             let candidates =
                 find_matches(&evolving, original, line_match, &mut self.comparisons_left)
-                    .ok_or_else(too_repetitive)?;
+                    .ok_or_else(repetitive)?;
             match candidates.as_slice() {
                 [] => {}
                 [candidate] => {
@@ -775,31 +797,17 @@ fn apply_unified_diff(
     Ok(patched)
 }
 
-/// Returns the repository path the file headers of `patch` name as its
-/// result, for a `write` call that left out its `path`: the `+++` header
-/// without its `b/` prefix, or the path of a Codex patch's
-/// `*** Update File:` or `*** Add File:` line. Only lines before the first
-/// hunk count, and `/dev/null` names no path.
-pub(crate) fn header_target(patch: &str) -> Option<&str> {
-    patch
-        .lines()
-        .take_while(|line| !line.starts_with("@@"))
-        .find_map(|line| {
-            line.strip_prefix("+++ ")
-                .map(|header| header_path(header.split('\t').next().unwrap_or_default()))
-                .or_else(|| codex_target(line))
-        })
-        .map(str::trim_end)
-        .filter(|path| !path.is_empty() && *path != "/dev/null")
-}
-
 /// Parses `text` in the form it is written in: a unified diff, which may
 /// leave out its file headers or sit inside Codex's `*** Begin Patch` and
 /// `*** End Patch` lines, or a Codex `apply_patch` patch, resolved against
 /// `current`, the target's text when it exists. Blank lines that end the
-/// patch are ignored.
+/// patch are ignored, and a carriage return outside a `\r\n` line ending
+/// rejects every form.
 fn parse_patch(path: &str, current: Option<&str>, text: &str) -> Result<UnifiedDiff, WriteError> {
     let normalized = text.replace("\r\n", "\n");
+    if normalized.contains('\r') {
+        return Err(patch_error("patch contains unsupported carriage returns"));
+    }
     let body = normalized.trim_end_matches('\n');
     let body = match body.strip_prefix(CODEX_BEGIN) {
         Some(operations) if codex_target(operations).is_some() => {
@@ -843,12 +851,15 @@ fn codex_target(text: &str) -> Option<&str> {
 /// A patch holds one `*** Add File:` operation whose lines all start with
 /// `+`, or one `*** Update File:` operation whose hunks each start with
 /// `@@`, optionally followed by a line to find first. Hunks carry no line
-/// numbers: as in Codex, each applies at the first place after the previous
-/// hunk where its context and removed lines match, exactly or else ignoring
-/// trailing whitespace, and `*** End of File` makes a hunk match only at the
-/// end of the file. A hunk of only added lines appends to the file. Deleting
-/// or moving a file, and changing several files in one call, are rejected
-/// with a correction.
+/// numbers, so each is searched after the previous hunk for its context and
+/// removed lines, exactly or else ignoring trailing whitespace. A hunk with
+/// an `@@` line applies at the first match after that line, as in Codex; a
+/// hunk without one must match exactly one place after the previous hunk,
+/// so a short, repeated hunk is rejected rather than applied to the wrong
+/// place. `*** End of File` makes a hunk match only at the end of the file.
+/// A hunk of only added lines appends to the file. Deleting or moving a
+/// file, and changing several files in one call, are rejected with a
+/// correction.
 fn parse_codex_patch(
     path: &str,
     current: Option<&str>,
@@ -878,7 +889,9 @@ fn parse_codex_patch(
     }
     if operation.starts_with(CODEX_DELETE_FILE) {
         return Err(WriteError::Unsupported {
-            reason: "file deletion is not supported".to_string(),
+            reason: "`write` cannot delete files; delete it with `bash` if that is available, or \
+                     tell the user it should be deleted"
+                .to_string(),
         });
     }
 
@@ -939,7 +952,9 @@ fn codex_update_file(
         Some((line, rest)) if line.starts_with(CODEX_MOVE_TO) => {
             if line[CODEX_MOVE_TO.len()..].trim() != path {
                 return Err(WriteError::Unsupported {
-                    reason: "file rename is not supported".to_string(),
+                    reason: "`write` cannot move files; create the file at its new path with `*** \
+                             Add File:`, then delete the old one with `bash` if that is available"
+                        .to_string(),
                 });
             }
 
@@ -1049,8 +1064,8 @@ impl CodexPlacement<'_, '_> {
                 content: anchor.to_string(),
                 newline: true,
             };
-            let found = self.first_match(self.cursor, &[&anchor_line]);
-            let found = found.ok_or_else(|| {
+            let found = self.matches_after(number, self.cursor, &[&anchor_line], 1)?;
+            let found = found.first().copied().ok_or_else(|| {
                 self.mismatch(
                     &[&anchor_line],
                     &format!(
@@ -1088,38 +1103,86 @@ impl CodexPlacement<'_, '_> {
         } else {
             self.cursor
         };
-        let found = self.first_match(from, &original);
-        let start = found.ok_or_else(|| {
-            let place = if codex_hunk.end_of_file {
-                " at the end of the file"
-            } else {
-                ""
-            };
-            self.mismatch(
-                &original,
-                &format!(
-                    "hunk {number} context and removed lines do not occur after the previous \
-                     hunk{place}"
-                ),
-            )
-        })?;
+        // An `@@` line or the end of the file already pins the place.
+        let limit = if codex_hunk.anchor.is_some() || codex_hunk.end_of_file {
+            1
+        } else {
+            2
+        };
+        let start = match self
+            .matches_after(number, from, &original, limit)?
+            .as_slice()
+        {
+            [start] => *start,
+            [] => {
+                let place = if codex_hunk.end_of_file {
+                    " at the end of the file"
+                } else {
+                    ""
+                };
+
+                return Err(self.mismatch(
+                    &original,
+                    &format!(
+                        "hunk {number} context and removed lines do not occur after the previous \
+                         hunk{place}"
+                    ),
+                ));
+            }
+            [first, second, ..] => {
+                return Err(patch_error(format!(
+                    "hunk {number} matches more than one place after the previous hunk, at lines \
+                     {} and {}; add an `@@` line naming a line above the change, such as its \
+                     enclosing function, or add context lines",
+                    first + 1,
+                    second + 1
+                )));
+            }
+        };
 
         Ok(self.hunk(start, start + 1, codex_hunk))
     }
 
-    /// Returns the first index from `from` where `original` matches the
-    /// source exactly or, failing that, ignoring trailing whitespace; a
-    /// search that exhausts the comparison budget finds nothing.
-    fn first_match(&mut self, from: usize, original: &[&TextLine]) -> Option<usize> {
-        let remaining = &self.searched[from..];
+    /// Returns up to `limit` indexes, in order, from `from` where `original`
+    /// matches the source exactly or, when it matches nowhere exactly,
+    /// ignoring trailing whitespace.
+    ///
+    /// # Errors
+    /// Returns why hunk `number` cannot be located once the comparison
+    /// budget runs out.
+    fn matches_after(
+        &mut self,
+        number: usize,
+        from: usize,
+        original: &[&TextLine],
+        limit: usize,
+    ) -> Result<Vec<usize>, WriteError> {
+        let Some(last) = self.searched.len().checked_sub(original.len()) else {
+            return Ok(Vec::new());
+        };
+        for line_match in [LineMatch::Exact, LineMatch::IgnoringTrailingWhitespace] {
+            let mut found = Vec::new();
+            'starts: for start in from..=last {
+                for (source, expected) in self.searched[start..].iter().zip(original) {
+                    self.comparisons_left = self
+                        .comparisons_left
+                        .checked_sub(1)
+                        .ok_or_else(|| too_repetitive(number))?;
+                    if !line_match.matches(source, expected) {
+                        continue 'starts;
+                    }
+                }
+                found.push(start);
+                if found.len() == limit {
+                    break;
+                }
+            }
+            if !found.is_empty() {
+                return Ok(found);
+            }
+        }
 
-        [LineMatch::Exact, LineMatch::IgnoringTrailingWhitespace]
-            .into_iter()
-            .find_map(|line_match| {
-                find_matches(remaining, original, line_match, &mut self.comparisons_left)?
-                    .first()
-                    .map(|offset| from + offset)
-            })
+        Ok(Vec::new())
     }
 
     fn mismatch(&mut self, original: &[&TextLine], problem: &str) -> WriteError {
@@ -1494,6 +1557,15 @@ fn ambiguous_hunk_error(number: usize, candidates: &[usize], line_match: LineMat
     ))
 }
 
+/// Returns the error for hunk `number` when locating it exhausts the
+/// patch's comparison budget.
+fn too_repetitive(number: usize) -> WriteError {
+    patch_error(format!(
+        "hunk {number} is too repetitive to locate within the comparison limit; add distinctive \
+         context lines or split the patch into smaller writes"
+    ))
+}
+
 /// Returns the error for a hunk whose `original` lines match nowhere,
 /// described by `problem`, with the target's current lines where those
 /// lines most nearly match or, failing that, around index `near`, so the
@@ -1524,27 +1596,20 @@ fn context_mismatch(
         }
         content.push_str(line);
     }
-    let shown = content.split_inclusive('\n').count();
-    if shown == 0 {
+    if content.is_empty() {
         return patch_error(format!(
             "{problem}; re-read the file and copy those lines exactly"
         ));
     }
     let place = if nearest.is_some() {
-        "where the hunk most nearly matches"
+        "the lines where the hunk most nearly matches are attached"
     } else {
-        "around the hunk's position"
+        "the lines around the hunk's position are attached"
     };
-    let end_line = start + shown;
 
     WriteError::ContextMismatch {
         content,
-        end_line,
-        reason: schema_contract::bounded_diagnostic(format!(
-            "{problem}; `current` shows the target's lines {}-{end_line} {place}; copy context \
-             and removed lines exactly from it",
-            start + 1
-        )),
+        reason: schema_contract::bounded_diagnostic(format!("{problem}; {place}")),
         start_line: start + 1,
     }
 }

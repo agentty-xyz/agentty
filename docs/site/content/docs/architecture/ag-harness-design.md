@@ -300,7 +300,10 @@ still describes the call by the model's arguments. A denial answers the model wi
   file again. The tool also accepts patch forms models trained on other harnesses send:
   a diff without file headers or with blank context lines, a diff inside Codex's
   `*** Begin Patch` envelope, and Codex's `apply_patch` format for one added or updated
-  file. A missing `path` is taken from the patch headers.
+  file. Codex hunks carry no line numbers: one after an `@@` line applies at the first
+  match after it, as in Codex, and any other must match exactly one place after the
+  previous hunk. A missing `path` is taken from the patch headers. `bash` likewise
+  accepts and ignores a `timeout` or `timeout_ms` argument; the host sets the deadline.
 - Comparisons (`diff`, `show(base)`) additionally require a host-pinned `ComparisonBase`
   commit; no base is ever chosen implicitly.
 - `bash` — requires an explicit per-turn `BashConfig` naming an executor: the native
