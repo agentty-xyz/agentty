@@ -315,6 +315,62 @@ async fn test_persist_message_image_writes_device_image_under_its_extension() {
     assert_eq!(persisted.parent(), Some(expected_directory.as_path()));
 }
 
+/// Verifies a device image whose write fails partway, or whose path does
+/// not resolve, leaves no file behind, and the original error is returned.
+#[tokio::test]
+async fn test_persist_message_image_removes_its_file_when_persisting_fails() {
+    for is_write_failing in [true, false] {
+        // Arrange
+        let image = MessageImage::new(PNG_SIGNATURE.to_vec()).expect("PNG image");
+        let clock = FixedClock {
+            system_time: std::time::SystemTime::UNIX_EPOCH,
+        };
+        let written_path = Arc::new(std::sync::Mutex::new(None));
+        let removed_path = Arc::new(std::sync::Mutex::new(None));
+        let mut fs_client = fs::MockFsClient::new();
+        fs_client
+            .expect_create_dir_all()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let written = Arc::clone(&written_path);
+        fs_client.expect_write_file().returning(move |path, _| {
+            *written.lock().expect("written path") = Some(path);
+
+            Box::pin(async move {
+                if is_write_failing {
+                    return Err(fs::FsError::Io(std::io::Error::other("disk full")));
+                }
+
+                Ok(())
+            })
+        });
+        fs_client.expect_canonicalize().returning(|_| {
+            Box::pin(async { Err(fs::FsError::Io(std::io::Error::other("resolve failed"))) })
+        });
+        let removed = Arc::clone(&removed_path);
+        fs_client
+            .expect_remove_file()
+            .once()
+            .returning(move |path| {
+                *removed.lock().expect("removed path") = Some(path);
+
+                Box::pin(async { Err(fs::FsError::Io(std::io::Error::other("gone"))) })
+            });
+
+        // Act
+        let persisted = persist_message_image(&fs_client, &clock, "session-123", 1, image).await;
+
+        // Assert
+        if is_write_failing {
+            assert!(matches!(persisted, Err(ClipboardError::Persist { .. })));
+        } else {
+            assert!(matches!(persisted, Err(ClipboardError::PathResolve(_))));
+        }
+        let written = written_path.lock().expect("written path").clone();
+        assert!(written.is_some());
+        assert_eq!(*removed_path.lock().expect("removed path"), written);
+    }
+}
+
 /// Verifies clipboard payload persistence rejects missing PNG source paths
 /// before attempting a filesystem read.
 #[tokio::test]

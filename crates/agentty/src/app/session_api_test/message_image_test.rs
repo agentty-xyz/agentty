@@ -244,7 +244,15 @@ async fn images_already_stored_are_removed_when_another_cannot_be() {
     ));
     let written: Vec<PathBuf> = files.written().into_iter().map(|(path, _)| path).collect();
     assert_eq!(written.len(), 1);
-    assert_eq!(files.removed(), written);
+    // The image that failed partway is removed with the one stored before.
+    let removed = files.removed();
+    assert_eq!(removed.len(), 2);
+    assert!(removed.contains(&written[0]));
+    assert!(
+        removed
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".jpg"))
+    );
 }
 
 /// Creates a regular session in review, ready for a follow-up turn.

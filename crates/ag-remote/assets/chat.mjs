@@ -1517,8 +1517,8 @@ export function createChat({
       // Text typed and images pasted after sending, here or before
       // switching away, stay, and so does the graph mode of a draft that
       // did not go out.
-      composer.forgetImages(sessionId, images);
       const isDraftGone = composer.forgetDraft(sessionId, message);
+      composer.forgetImages(sessionId, images);
       if (isGraph && isDraftGone) {
         composer.disarmGraph(sessionId);
       }

@@ -3978,6 +3978,43 @@ test("an image goes out without text, and a refused message keeps its images", a
   assert.deepEqual(imageChips(byId), []);
 });
 
+test("an image pasted while a message goes out keeps the only placeholder left", async () => {
+  let release;
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["images"],
+    respond: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  });
+  chat.render(session());
+  typeMessage(byId, "Look ");
+  pasteFiles(byId, [imageFile([1])]);
+  pressKey(byId, "Enter");
+  await settle();
+  // The next image is pasted at the end while the first is on its way.
+  byId("message").setSelectionRange(byId("message").value.length, byId("message").value.length);
+  pasteFiles(byId, [imageFile([2])]);
+  assert.equal(byId("message").value, "Look [Image #1][Image #2]");
+  release({ kind: "accepted" });
+  await settle();
+
+  assert.equal(byId("message").value, "Look [Image #2]");
+  assert.deepEqual(imageChips(byId), [["Image #2", "1 KB"]]);
+  pressKey(byId, "Enter");
+  await settle();
+  release({ kind: "accepted" });
+  await settle();
+  assert.deepEqual(
+    requests.map((body) => [body.message, body.images]),
+    [
+      ["Look [Image #1]", [{ data: "AQ==" }]],
+      ["Look [Image #1]", [{ data: "Ag==" }]],
+    ],
+  );
+  assert.equal(byId("message").value, "");
+});
+
 test("pastes the host cannot take, or without images, are left alone or refused", () => {
   const plain = mountChat();
   plain.chat.render(session());

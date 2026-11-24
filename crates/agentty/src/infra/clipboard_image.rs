@@ -194,7 +194,8 @@ async fn persist_clipboard_image(
 ///
 /// # Errors
 /// Returns a [`ClipboardError`] when the image cannot be written or its path
-/// resolved through the filesystem boundary.
+/// resolved through the filesystem boundary. The output file is removed
+/// first, since no caller learns its path to remove it.
 pub(crate) async fn persist_message_image(
     fs_client: &dyn FsClient,
     clock: &dyn Clock,
@@ -208,14 +209,23 @@ pub(crate) async fn persist_message_image(
         image.format().extension(),
         clock,
     )?;
-    persist_clipboard_payload(
+    let persisted = match persist_clipboard_payload(
         fs_client,
         &image_output_path,
         ClipboardPayload::Encoded(image.into_data()),
     )
-    .await?;
+    .await
+    {
+        Ok(()) => canonicalize_persisted_image_path(fs_client, &image_output_path).await,
+        Err(error) => Err(error),
+    };
+    if persisted.is_err() {
+        // A write that failed partway leaves a file too, and the original
+        // error is the one worth reporting.
+        let _ = fs_client.remove_file(image_output_path).await;
+    }
 
-    canonicalize_persisted_image_path(fs_client, &image_output_path).await
+    persisted
 }
 
 /// Normalizes one [`ClipboardError`] into short prompt-mode status text.

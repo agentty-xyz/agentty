@@ -660,11 +660,28 @@ export function createComposer({
       drafts.setGraph(draftId, false);
       showGraphMode();
     },
-    // Detaches `sent`, images that went out, from the draft of `draftId`;
-    // images pasted meanwhile stay.
+    // Detaches `sent`, images that went out, from the draft of `draftId`,
+    // and takes their placeholders out of what is left of it, so none
+    // points at another image once the next send renumbers them. Run it
+    // after `forgetDraft`; text typed and images pasted meanwhile stay.
     forgetImages: (draftId, sent) => {
       const kept = (attachedImages.get(draftId) ?? []).filter((image) => !sent.includes(image));
       setImages(draftId, kept);
+      const draft = drafts.get(draftId);
+      const left = sent.reduce((text, image) => withoutPlaceholder(text, image.number), draft);
+      if (left === draft) {
+        return;
+      }
+      drafts.set(draftId, left);
+      if (context().draftId !== draftId) {
+        return;
+      }
+      if (browsing.index !== null && browsing.draft === draft) {
+        browsing.draft = left;
+      } else if (elements.message.value === draft) {
+        elements.message.value = left;
+        resize();
+      }
     },
     // The images attached to the draft on screen, in the order they were
     // pasted.
