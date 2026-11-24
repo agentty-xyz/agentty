@@ -366,7 +366,8 @@ one, which decides whose recorded reasoning a model replays natively after a mod
 switch.
 
 - **`openai`** uses the stateless Responses API, so the harness still owns history.
-  Encrypted reasoning items are stored with the response and replayed verbatim.
+  Encrypted reasoning items are stored with the response and replayed verbatim; run
+  events and transcripts show only their summary text, and nothing when it is empty.
 - **`chatgpt`** sends the same requests billed to the user's ChatGPT plan through
   OpenAI's documented "Sign in with ChatGPT" route, with its own sign-in and refreshed
   bearer credential. Plan sessions record a distinct provider, so resuming one never

@@ -1075,7 +1075,7 @@
             "type",
             "text"
           ],
-          "description": "Provider reasoning returned with a model response."
+          "description": "Provider reasoning returned with a model response: its plain text,\nor the summary of encrypted or signed reasoning. Reasoning without\nreadable text, such as encrypted reasoning with an empty summary,\nemits no item."
         },
         {
           "$ref": "#/$defs/ToolCallItem",

@@ -933,8 +933,9 @@ impl Engine<'_> {
     }
 
     /// Emits a response's reasoning, then its assistant text, as completed
-    /// items: each the response's own content, or else the text streamed
-    /// into the item the response opened for it. The run's final output is
+    /// items: each the response's own content, its reasoning read as
+    /// [`Item::reasoning_text`], or else the text streamed into the item the
+    /// response opened for it. The run's final output is
     /// emitted only after its turn commits, by [`EventSink::complete`].
     async fn publish_message(
         &self,
@@ -944,6 +945,9 @@ impl Engine<'_> {
         let Some(events) = &self.events else {
             return;
         };
+        let (reasoning_content, streamed_reasoning) = reasoning;
+        let readable_reasoning = reasoning_content.and_then(Item::reasoning_text);
+        let reasoning = (readable_reasoning.as_deref(), streamed_reasoning);
         if let Some((id, text)) = Self::message_part(events, ItemKind::Reasoning, reasoning).await {
             let item = Item::Reasoning { text };
             events.emit(RunEventKind::ItemCompleted { id, item }).await;

@@ -238,6 +238,50 @@ fn record_orders_reasoning_text_calls_results_and_json_output() {
 }
 
 #[test]
+fn record_shows_reasoning_summaries_and_hides_encrypted_reasoning() {
+    // Arrange
+    let encrypted = json!([
+        {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAA"}
+    ])
+    .to_string();
+    let summarized = json!([{
+        "type": "reasoning",
+        "encrypted_content": "gAAAA",
+        "summary": [{"type": "summary_text", "text": "Check a.txt."}]
+    }])
+    .to_string();
+    let turn = stored(vec![
+        ModelMessage::User("question".to_string()),
+        ModelMessage::AssistantToolCall(read_call("first", Some(&encrypted), None)),
+        tool_result("first", "first result"),
+        ModelMessage::AssistantToolCall(read_call("second", Some(&summarized), None)),
+        tool_result("second", "second result"),
+        ModelMessage::AssistantReasoning {
+            content: r#"{"answer":"done"}"#.to_string(),
+            reasoning_content: encrypted,
+        },
+    ]);
+
+    // Act
+    let record = TurnRecord::from_stored(turn);
+
+    // Assert
+    assert_eq!(
+        record.items,
+        [
+            call_item("first", Some("first result")),
+            Item::Reasoning {
+                text: "Check a.txt.".to_string()
+            },
+            call_item("second", Some("second result")),
+            Item::Output {
+                output: RunOutput::Json(json!({"answer": "done"}))
+            },
+        ]
+    );
+}
+
+#[test]
 fn record_keeps_text_output_unanswered_calls_and_image_input() {
     // Arrange
     let image = ImageContent::new(
