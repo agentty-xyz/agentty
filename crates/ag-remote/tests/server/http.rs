@@ -273,6 +273,7 @@ async fn relay_serves_every_web_client_file_the_listener_serves() -> TestResult 
             "/format.mjs",
             "/graph.mjs",
             "/home.mjs",
+            "/image.mjs",
             "/instance.mjs",
             "/markdown.mjs",
             "/mention.mjs",

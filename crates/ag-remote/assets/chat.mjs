@@ -9,6 +9,7 @@
 // in crates/ag-remote/tests/web/chat.test.mjs pass the fake DOM.
 
 import { createComposer, modelNode, promptHistory } from "./composer.mjs";
+import { encodeImages, numberedText } from "./image.mjs";
 import {
   activeSeconds,
   formatTimer,
@@ -61,6 +62,8 @@ const TIMING_PARTS = ["timer", "started"];
 // it beside any staged ones and starts the session.
 const DRAFT_STAGED_NOTE = "Staged on the host. Your next message starts the session with it.";
 const DRAFT_EMPTY_NOTE = "Your first message starts the session.";
+// What a send says while `/graph` is armed with images attached.
+export const GRAPH_IMAGES_NOTE = "A graph request takes no images; remove them or return to chat";
 
 // The error a request in flight ends with when the connection drops
 // before Agentty answers. The request may still run on the host.
@@ -336,7 +339,7 @@ export function createRefreshGate({
 // Returns `open(sessionId, failure)`, `close()`, `render(session, summary)` for a
 // snapshot and the session's entry in the listing (`session` is `null`
 // when the session is gone), `setConnected(isConnected)`,
-// `setCapabilities(list)`, `keepDraft(sessionId, text)`, `tick()`, and
+// `setCapabilities(list)`, `keepDraft(sessionId, text, images)`, `tick()`, and
 // `showLoadError(sessionId, message)`.
 export function createChat({
   document,
@@ -425,6 +428,7 @@ export function createChat({
       graphMode: elements.composerGraph,
       graphNote: elements.composerGraphNote,
       hint: elements.composerHint,
+      images: elements.composerImages,
       message: elements.message,
       meta: elements.composerMeta,
       send: elements.send,
@@ -1363,7 +1367,7 @@ export function createChat({
     state.sessionId = sessionId;
     showPublished();
     if (failure) {
-      composer.keepDraft(sessionId, failure.draft);
+      composer.keepDraft(sessionId, failure.draft, failure.images);
       elements.sessionError.textContent = failure.error;
     }
     composer.load(sessionId);
@@ -1483,23 +1487,38 @@ export function createChat({
     // A graph task the host or the session cannot take now is never sent
     // as a chat message instead.
     const isBlocked = composer.isGraphBlocked();
-    if (!message.trim() || !sessionId || state.isSending || !state.isConnected || isBlocked) {
+    const images = composer.images();
+    const isEmpty = !message.trim() && images.length === 0;
+    if (isEmpty || !sessionId || state.isSending || !state.isConnected || isBlocked) {
       return;
     }
     // An armed `/graph` composer asks for a graph proposal of the task
-    // instead; a refusal keeps it armed with its text.
+    // instead; a refusal keeps it armed with its text. A graph task takes
+    // no images, so they stay until the draft goes out as a message.
     const isGraph = composer.isGraphArmed();
+    if (isGraph && images.length > 0) {
+      elements.sessionError.textContent = GRAPH_IMAGES_NOTE;
+
+      return;
+    }
     state.isSending = true;
     renderDock();
     try {
-      await request({
+      const body = {
         method: isGraph ? "generate_graph_proposal" : "send_message",
         session_id: sessionId,
         message: message,
-      });
-      // Text typed after sending, here or before switching away, stays,
-      // and so does the graph mode of a draft that did not go out.
+      };
+      if (images.length > 0) {
+        body.message = numberedText(message, images);
+        body.images = await encodeImages(images);
+      }
+      await request(body);
+      // Text typed and images pasted after sending, here or before
+      // switching away, stay, and so does the graph mode of a draft that
+      // did not go out.
       const isDraftGone = composer.forgetDraft(sessionId, message);
+      composer.forgetImages(sessionId, images);
       if (isGraph && isDraftGone) {
         composer.disarmGraph(sessionId);
       }
@@ -1696,8 +1715,9 @@ export function createChat({
 
   return {
     close,
-    // Keeps `text` as the unsent message of `sessionId`, for when it opens.
-    keepDraft: (sessionId, text) => composer.keepDraft(sessionId, text),
+    // Keeps `text` and `images` as the unsent message of `sessionId`, for
+    // when it opens.
+    keepDraft: (sessionId, text, images = []) => composer.keepDraft(sessionId, text, images),
     open,
     render,
     setCapabilities: (capabilities) => {

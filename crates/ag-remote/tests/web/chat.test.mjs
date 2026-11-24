@@ -14,6 +14,7 @@ import {
   promptHistory,
 } from "../../assets/composer.mjs";
 import {
+  GRAPH_IMAGES_NOTE,
   clockSkew,
   diffKey,
   collectAnswers,
@@ -59,6 +60,7 @@ const ELEMENT_IDS = {
   composerGraphLeave: "composer-graph-leave",
   composerGraphNote: "composer-graph-note",
   composerHint: "composer-hint",
+  composerImages: "composer-images",
   composerMeta: "composer-meta",
   composerSettings: "composer-settings",
   diff: "diff",
@@ -3885,4 +3887,208 @@ test("a hidden page fetches nothing until it shows again", async () => {
   document.dispatchEvent(new FakeEvent("visibilitychange"));
   await settle();
   assert.equal(runs, 1);
+});
+
+// A pasted file of `type` with `bytes`.
+function imageFile(bytes, type = "image/png") {
+  return new File([Uint8Array.from(bytes)], "pasted", { type: type });
+}
+
+// Pastes `files`, and `text` with them, into the composer and returns the
+// paste event.
+function pasteFiles(byId, files, text = "") {
+  const clipboardData = { files: files, getData: (type) => (type === "text/plain" ? text : "") };
+  const event = new FakeEvent("paste", { clipboardData: clipboardData });
+  byId("message").dispatchEvent(event);
+
+  return event;
+}
+
+function imageChips(byId) {
+  return Array.from(byId("composer-images").children, (chip) => [
+    chip.querySelector(".composer-image-label").textContent,
+    chip.querySelector(".composer-image-size").textContent,
+  ]);
+}
+
+test("pasted images go with the message as renumbered placeholders and base64 files", async () => {
+  const { byId, chat, requests } = mountChat({ capabilities: ["images"] });
+  chat.render(session());
+  typeMessage(byId, "Compare  with");
+  byId("message").setSelectionRange(8, 8);
+
+  const pasted = pasteFiles(byId, [imageFile([1, 2, 3]), imageFile([4, 5], "image/jpeg")]);
+  assert.equal(pasted.defaultPrevented, true);
+  assert.equal(byId("message").value, "Compare [Image #1] [Image #2] with");
+  assert.equal(byId("message").selectionStart, 29);
+  assert.equal(byId("composer-images").hidden, false);
+  assert.deepEqual(imageChips(byId), [
+    ["Image #1", "1 KB"],
+    ["Image #2", "1 KB"],
+  ]);
+  // Removing the first image takes its placeholder out; the second keeps
+  // its number until it goes out.
+  byId("composer-images").children[0].querySelector("button").click();
+  assert.equal(byId("message").value, "Compare [Image #2] with");
+  assert.deepEqual(imageChips(byId), [["Image #2", "1 KB"]]);
+  pressKey(byId, "Enter");
+  await settle();
+
+  assert.deepEqual(requests, [
+    {
+      images: [{ data: "BAU=" }],
+      message: "Compare [Image #1] with",
+      method: "send_message",
+      session_id: "s1",
+    },
+  ]);
+  assert.equal(byId("message").value, "");
+  assert.equal(byId("composer-images").hidden, true);
+});
+
+test("removing an image while an earlier prompt shows takes it out of the draft only", () => {
+  const storage = new MemoryStorage();
+  const { byId, chat } = mountChat({ capabilities: ["images"], sessionStorage: storage });
+  chat.render(session({ messages: HISTORY_MESSAGES }));
+  typeMessage(byId, "See ");
+  pasteFiles(byId, [imageFile([1]), imageFile([2])]);
+  assert.equal(pressArrow(byId, "ArrowUp"), true);
+
+  byId("composer-images").children[0].querySelector("button").click();
+
+  assert.equal(byId("message").value, "Add tests\nand docs");
+  assert.equal(storage.getItem(DRAFT_KEY_PREFIX + "s1"), "See [Image #2]");
+  assert.deepEqual(imageChips(byId), [["Image #2", "1 KB"]]);
+  assert.equal(pressArrow(byId, "ArrowDown"), true);
+  assert.equal(byId("message").value, "See [Image #2]");
+});
+
+test("an image goes out without text, and a refused message keeps its images", async () => {
+  let isRefusing = true;
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["images"],
+    respond: () => {
+      if (isRefusing) {
+        throw new Error("Session is busy");
+      }
+
+      return { kind: "accepted" };
+    },
+  });
+  chat.render(session());
+  pasteFiles(byId, [imageFile([1])]);
+  typeMessage(byId, "");
+
+  pressKey(byId, "Enter");
+  await settle();
+  assert.equal(byId("session-error").textContent, "Session is busy");
+  assert.deepEqual(imageChips(byId), [["Image #1", "1 KB"]]);
+  isRefusing = false;
+  pressKey(byId, "Enter");
+  await settle();
+
+  assert.deepEqual(
+    requests.map((body) => [body.message, body.images]),
+    [
+      ["", [{ data: "AQ==" }]],
+      ["", [{ data: "AQ==" }]],
+    ],
+  );
+  assert.deepEqual(imageChips(byId), []);
+});
+
+test("an image pasted while a message goes out keeps the only placeholder left", async () => {
+  let release;
+  const { byId, chat, requests } = mountChat({
+    capabilities: ["images"],
+    respond: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  });
+  chat.render(session());
+  typeMessage(byId, "Look ");
+  pasteFiles(byId, [imageFile([1])]);
+  pressKey(byId, "Enter");
+  await settle();
+  // The next image is pasted at the end while the first is on its way.
+  byId("message").setSelectionRange(byId("message").value.length, byId("message").value.length);
+  pasteFiles(byId, [imageFile([2])]);
+  assert.equal(byId("message").value, "Look [Image #1][Image #2]");
+  release({ kind: "accepted" });
+  await settle();
+
+  assert.equal(byId("message").value, "Look [Image #2]");
+  assert.deepEqual(imageChips(byId), [["Image #2", "1 KB"]]);
+  pressKey(byId, "Enter");
+  await settle();
+  release({ kind: "accepted" });
+  await settle();
+  assert.deepEqual(
+    requests.map((body) => [body.message, body.images]),
+    [
+      ["Look [Image #1]", [{ data: "AQ==" }]],
+      ["Look [Image #1]", [{ data: "Ag==" }]],
+    ],
+  );
+  assert.equal(byId("message").value, "");
+});
+
+test("pastes the host cannot take, or without images, are left alone or refused", () => {
+  const plain = mountChat();
+  plain.chat.render(session());
+  assert.equal(pasteFiles(plain.byId, [imageFile([1])]).defaultPrevented, false);
+  assert.deepEqual(imageChips(plain.byId), []);
+
+  const { byId, chat } = mountChat({ capabilities: ["images"] });
+  chat.render(session());
+  // Text pastes as text.
+  assert.equal(pasteFiles(byId, [new File(["notes"], "notes.txt", { type: "text/plain" })]).defaultPrevented, false);
+  // Text copied with an image of it, as from a spreadsheet, pastes as text.
+  assert.equal(pasteFiles(byId, [imageFile([1])], "A1\tB1").defaultPrevented, false);
+  assert.equal(pasteFiles(byId, [imageFile([1], "image/tiff")], "A1\tB1").defaultPrevented, false);
+  assert.equal(byId("session-error").textContent, "");
+  const gif = pasteFiles(byId, [imageFile([1], "image/gif")]);
+  assert.equal(gif.defaultPrevented, true);
+  assert.equal(byId("session-error").textContent, "Only PNG and JPEG images can be attached");
+  pasteFiles(byId, Array.from({ length: 9 }, () => imageFile([1])));
+  assert.equal(byId("session-error").textContent, "A message carries at most 8 images");
+  pasteFiles(byId, [imageFile(new Uint8Array(6 * 1024 * 1024 + 1))]);
+  assert.equal(byId("session-error").textContent, "A message's images are at most 6 MB together");
+  assert.deepEqual(imageChips(byId), []);
+  assert.equal(byId("message").value, "");
+});
+
+test("images stay with their draft across sessions, and a graph request refuses them", async () => {
+  const { byId, chat, requests } = mountChat({ capabilities: ["images", "graph_proposal"] });
+  chat.render(session());
+  pasteFiles(byId, [imageFile([1])]);
+
+  chat.open("s2");
+  assert.deepEqual(imageChips(byId), []);
+  chat.open("s1");
+  assert.deepEqual(imageChips(byId), [["Image #1", "1 KB"]]);
+  chat.render(session());
+  typeMessage(byId, "/gr");
+  pressKey(byId, "Enter");
+  typeMessage(byId, "Split it");
+  pressKey(byId, "Enter");
+  await settle();
+
+  assert.deepEqual(requests, []);
+  assert.equal(byId("session-error").textContent, GRAPH_IMAGES_NOTE);
+  assert.deepEqual(imageChips(byId), [["Image #1", "1 KB"]]);
+});
+
+test("a first message kept for a new session keeps its images", () => {
+  const { byId, chat } = mountChat({ capabilities: ["images"] });
+  const image = { file: imageFile([1, 2]), number: 1 };
+
+  chat.open("s3", { draft: "Look at [Image #1]", error: "Session is busy", images: [image] });
+
+  assert.equal(byId("message").value, "Look at [Image #1]");
+  assert.deepEqual(imageChips(byId), [["Image #1", "1 KB"]]);
+  chat.keepDraft("s4", "Other");
+  chat.open("s4");
+  assert.deepEqual(imageChips(byId), []);
 });

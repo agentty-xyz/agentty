@@ -267,6 +267,7 @@ fn act_on_session_graph() -> SessionMutation {
 
 fn send_message() -> SessionMutation {
     SessionMutation::SendMessage {
+        images: Vec::new(),
         message: "Hello".into(),
         session_id: "sess".into(),
     }
