@@ -961,6 +961,12 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
             writable_roots: vec![fixture.outside.join("metadata-alias")],
             ..Grants::default()
         },
+        // A writable root sharing the temporary directory, where macOS
+        // allows new Git metadata names.
+        in_cache(Grants {
+            temporary_directory: Some(tool_cache.clone()),
+            ..Grants::default()
+        }),
         // A hidden path containing the workspace, or inside a writable
         // directory once resolved, where renaming a parent would reveal it.
         Grants {

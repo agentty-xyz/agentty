@@ -32,6 +32,7 @@ mockall = { workspace = true, optional = true }
 opentelemetry.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 ag-contracts = { workspace = true, features = ["test-utils"] }
+ag-git.workspace = true
 ag-session = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 sqlx.workspace = true

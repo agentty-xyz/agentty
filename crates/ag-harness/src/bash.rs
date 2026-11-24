@@ -358,11 +358,11 @@ impl BashConfig {
     /// database's, or `HOME` of the harness or the commands), a system or
     /// toolchain directory such as `/usr`, `/opt`, `/etc`, `/Library`, or
     /// `/home/linuxbrew`, the workspace (grant those with
-    /// [`Self::with_write`]), or its Git metadata, and refuses every root
-    /// when the account has no home directory. Point tool caches at the
-    /// temporary directory through their environment instead, for example
-    /// `CARGO_HOME`, `npm_config_cache`, `GOMODCACHE`, `GOCACHE`, and
-    /// `PIP_CACHE_DIR`.
+    /// [`Self::with_write`]), its Git metadata, or the temporary directory,
+    /// and refuses every root when the account has no home directory. Point
+    /// tool caches at the temporary directory through their environment
+    /// instead, for example `CARGO_HOME`, `npm_config_cache`, `GOMODCACHE`,
+    /// `GOCACHE`, and `PIP_CACHE_DIR`.
     ///
     /// macOS keeps every `.git` entry inside a root read-only; Linux
     /// protects only the workspace repository's own Git metadata, so a

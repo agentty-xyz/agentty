@@ -48,6 +48,7 @@ name = "ag-agent"
 version = "0.20.0"
 dependencies = [
  "ag-contracts",
+ "ag-git",
  "ag-harness",
  "ag-protocol",
  "ag-session",

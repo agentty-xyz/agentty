@@ -103,7 +103,8 @@ async fn native_linux_denies_writes_links_and_renames_outside_grants() {
 /// repository at the top of a write grant stay read-only, without inspecting
 /// the grant, while a repository the command itself creates inside a write
 /// grant is the command's own output. macOS keeps its stronger
-/// pattern-based denial of every metadata name, including new ones.
+/// pattern-based denial of every metadata name outside the temporary
+/// directory, including new ones.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn native_linux_protects_existing_metadata_and_permits_new_repositories_in_grants() {

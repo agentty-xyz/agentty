@@ -334,9 +334,10 @@ pub(super) fn prepare_branch_directories(git: &GitWrites) -> io::Result<Vec<std:
 /// Builds the Seatbelt profile for `configuration`. Seatbelt checks every
 /// access against the resolved path, so links grant nothing beyond their
 /// targets, and the last matching rule decides: Git metadata denials follow
-/// the write grants, and the Git-writes grant reopens the worktree's own
-/// Git administration, the object store, and the branch reference after
-/// them, minus what Git would execute or follow.
+/// the write grants, the temporary directory is reopened after them, and
+/// the Git-writes grant reopens the worktree's own Git administration, the
+/// object store, and the branch reference last, minus what Git would
+/// execute or follow.
 #[cfg(target_os = "macos")]
 fn seatbelt(configuration: &Launch) -> io::Result<String> {
     let mut profile = String::from(

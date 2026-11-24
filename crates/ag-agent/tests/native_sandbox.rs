@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{self, Write as _};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -19,6 +20,7 @@ use ag_contracts::{
     AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, PermissionMode,
     ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
 };
+use ag_git::{GitClient, RealGitClient};
 use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
 use ag_protocol::TurnPrompt;
@@ -142,8 +144,9 @@ async fn run() -> TestResult {
 }
 
 /// Runs a scripted session turn whose one command commits in a linked
-/// worktree, uses its temporary directory, and tries to write outside the
-/// worktree and to read the harness history.
+/// worktree, uses its temporary directory, builds a repository there and
+/// moves it into the worktree, and tries to write outside the worktree and
+/// to read the harness history.
 async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> TestResult {
     // Arrange
     let fixture = Fixture::new()?;
@@ -209,7 +212,8 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
         notices.contains(&TurnNotice::SandboxAvailable),
         "the sandboxed turn must report it: {notices:?}"
     );
-    fixture.assert_effects()
+    fixture.assert_effects()?;
+    fixture.assert_planted_repository_ignored().await
 }
 
 /// A repository with a linked session worktree, a directory outside it, the
@@ -256,14 +260,24 @@ impl Fixture {
             r#"{"providers":{"muse":{"api_key":"muse-key"}},"version":1}"#,
         )?;
 
-        Ok(Self {
+        let fixture = Self {
             agentty_root,
             data_root: tempfile::tempdir()?,
             outside: tempfile::tempdir()?,
             repository,
             worktree,
             _worktrees: worktrees,
-        })
+        };
+        std::fs::write(
+            fixture.fsmonitor(),
+            format!(
+                "#!/bin/sh\ntouch '{}'\nexit 1\n",
+                fixture.marker().display()
+            ),
+        )?;
+        std::fs::set_permissions(fixture.fsmonitor(), std::fs::Permissions::from_mode(0o755))?;
+
+        Ok(fixture)
     }
 
     /// Returns the command the model runs: a commit, a temporary file, moves
@@ -275,11 +289,15 @@ impl Fixture {
             "export GIT_AUTHOR_NAME=Agentty GIT_AUTHOR_EMAIL=agentty@example.com \
              GIT_COMMITTER_NAME=Agentty GIT_COMMITTER_EMAIL=agentty@example.com; printf \
              'sandboxed\\n' > notes.txt && git add notes.txt && git commit -qm 'Add notes' && \
-             touch \"$TMPDIR/scratch\" && echo committed; git update-ref refs/heads/main HEAD \
-             2>/dev/null && echo moved-main; printf x >> \"$(git rev-parse --path-format=absolute \
-             --git-common-dir)/packed-refs\" && echo edited-packed-refs; touch '{}' && echo \
-             escaped; cat '{}' > /dev/null && echo read-history; cat '{}' > /dev/null && echo \
-             read-database; cat '{}' > /dev/null && echo read-keys",
+             touch \"$TMPDIR/scratch\" && echo committed; git init -q -b main \"$TMPDIR/planted\" \
+             && git -C \"$TMPDIR/planted\" commit -q --allow-empty -m planted && git -C \
+             \"$TMPDIR/planted\" config core.fsmonitor '{}' && mv \"$TMPDIR/planted\" planted; \
+             git update-ref refs/heads/main HEAD 2>/dev/null && echo moved-main; printf x >> \
+             \"$(git rev-parse --path-format=absolute --git-common-dir)/packed-refs\" && echo \
+             edited-packed-refs; touch '{}' && echo escaped; cat '{}' > /dev/null && echo \
+             read-history; cat '{}' > /dev/null && echo read-database; cat '{}' > /dev/null && \
+             echo read-keys",
+            self.fsmonitor().display(),
             self.escape().display(),
             self.data_root
                 .path()
@@ -343,9 +361,51 @@ impl Fixture {
         Ok(())
     }
 
+    /// Asserts that the repository the command built in its temporary
+    /// directory and moved into the worktree is there, and that Agentty's
+    /// host Git neither stages it nor runs its `core.fsmonitor` command.
+    async fn assert_planted_repository_ignored(&self) -> TestResult {
+        assert!(
+            self.worktree.join("planted/.git").is_dir(),
+            "the command should move its repository into the worktree"
+        );
+        let client = RealGitClient;
+        client.stage_all(self.worktree.clone()).await?;
+        client.worktree_status(self.worktree.clone()).await?;
+        client
+            .diff(self.worktree.clone(), "main".to_string())
+            .await?;
+        client
+            .diff_stats(self.worktree.clone(), "main".to_string())
+            .await?;
+        let index = Command::new("git")
+            .args(["ls-files", "--format=%(objectmode) %(path)"])
+            .current_dir(&self.worktree)
+            .output()?;
+        let index = String::from_utf8_lossy(&index.stdout);
+        assert!(!index.contains("160000"), "{index}");
+        assert!(
+            !self.marker().exists(),
+            "the planted fsmonitor ran on the host"
+        );
+
+        Ok(())
+    }
+
     /// Returns the file the command must not create outside the worktree.
     fn escape(&self) -> PathBuf {
         self.outside.path().join("escape")
+    }
+
+    /// Returns the command the planted repository names as its
+    /// `core.fsmonitor`, which records that it ran.
+    fn fsmonitor(&self) -> PathBuf {
+        self.outside.path().join("fsmonitor.sh")
+    }
+
+    /// Returns the file the planted repository's `core.fsmonitor` creates.
+    fn marker(&self) -> PathBuf {
+        self.outside.path().join("fsmonitor-ran")
     }
 }
 

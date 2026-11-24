@@ -420,13 +420,16 @@ async fn resolve_outside_grants(
     let homes = homes(files, policy).await?;
     for root in policy.writable_roots() {
         let (canonical, node) = directory_identity(files, root).await?;
-        // Overlapping the workspace also rules out `/`.
+        // Overlapping the workspace also rules out `/`. macOS reopens Git
+        // metadata names beneath the temporary directory, which a root
+        // must not share.
         if !allowed_root(&canonical, &homes)
             || overlaps(&canonical, workspace)
             || access
                 .git_metadata
                 .iter()
-                .any(|git| overlaps(&canonical, git))
+                .chain(&access.temporary_directory)
+                .any(|denied| overlaps(&canonical, denied))
         {
             return Err(ExecutionError::Unsupported);
         }
