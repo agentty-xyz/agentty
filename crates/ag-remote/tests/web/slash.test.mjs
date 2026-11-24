@@ -8,6 +8,7 @@ import {
   createSlashCommands,
   offersGraph,
   slashCommands,
+  slashAgents,
   slashQuery,
   slashScore,
   slashValues,
@@ -183,6 +184,18 @@ test("slashValues lists the choices with the current one marked", () => {
     { detail: "", isCurrent: true, key: "custom", label: "custom" },
   ]);
   assert.deepEqual(slashValues("/model", session({ model_id: null }), []), []);
+  // Every agent's models: `/agent` lists the agents, `/model` one agent's.
+  const every = parseModels(HOST);
+  assert.deepEqual(slashAgents(session(), every), ["claude", "codex"]);
+  assert.deepEqual(slashAgents(session(), models), []);
+  assert.deepEqual(slashAgents(session({ agent: "harness" }), parseModels(HOST, "codex")), ["codex", "harness"]);
+  assert.deepEqual(slashValues("/agent", session(), every), [
+    { detail: "", isCurrent: true, key: "claude", label: "claude" },
+    { detail: "", isCurrent: false, key: "codex", label: "codex" },
+  ]);
+  assert.deepEqual(slashValues("/model", session(), every, "codex"), [
+    { detail: "gpt-6.1", isCurrent: false, key: "gpt-6.1", label: "GPT 6.1" },
+  ]);
   assert.deepEqual(
     slashValues("/reasoning", session(), models).map((item) => [item.key, item.isCurrent]),
     [
@@ -286,6 +299,45 @@ test("/model lists the session agent's models, and a pick sends the model and cl
     { method: "set_session_settings", model: "claude-sonnet-5", session_id: "s1" },
   ]);
   assert.deepEqual(errors, [""]);
+});
+
+test("with settings_agent, /model lists the agents first, then the chosen one's models", async () => {
+  const { context, input, press, requests, shown, suggestions, texts, type } = mountSlash({
+    respond: (body) =>
+      body.method === "get_host"
+        ? { ...HOST, models: [...HOST.models, { agent: "harness", model: "claude-opus-5-5", name: "Opus 5.5" }] }
+        : { kind: "accepted" },
+  });
+  context.capabilities = ["host", "settings", "settings_agent"];
+  type("/mo");
+  await settle();
+  press("Enter");
+
+  assert.equal(input.value, "/model");
+  assert.deepEqual(shown(), ["claude", "codex", "harness"]);
+  assert.equal(suggestions.element.querySelector(".suggest-title").textContent, "Agent");
+  assert.equal(suggestions.element.querySelector(".is-current").dataset.key, "claude");
+  press("ArrowDown");
+  press("ArrowDown");
+  press("Enter");
+  // The harness serves the session's model id too, but it is not the
+  // session's own model there.
+  assert.deepEqual(shown(), ["claude-opus-5-5"]);
+  assert.equal(suggestions.element.querySelector(".suggest-title").textContent, "Model");
+  assert.equal(suggestions.element.querySelector(".is-current"), null);
+  press("Enter");
+  await settle();
+
+  assert.deepEqual(texts, ["/model", ""]);
+  assert.deepEqual(requests, [
+    { method: "get_host" },
+    { agent: "harness", method: "set_session_settings", model: "claude-opus-5-5", session_id: "s1" },
+  ]);
+
+  // Typing again starts over at the commands, then the agents.
+  type("/mo");
+  press("Enter");
+  assert.deepEqual(shown(), ["claude", "codex", "harness"]);
 });
 
 test("picking the current value sends nothing and still clears the text", async () => {

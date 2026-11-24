@@ -971,6 +971,7 @@ async fn settings_reach_the_host_and_a_bad_value_never_does() -> TestResult {
     let server = TestServer::start().await?;
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
     let settings = |reasoning: &str| RemoteRequest::SetSessionSettings {
+        agent: None,
         model: None,
         reasoning: Some(reasoning.to_string()),
         response_style: None,

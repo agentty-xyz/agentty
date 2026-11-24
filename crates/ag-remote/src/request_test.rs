@@ -856,13 +856,23 @@ async fn settings_reach_the_host_only_as_a_valid_change_to_a_listed_session() {
     let codex_model = ag_session::test_support::CODEX_MODEL.as_str();
     let settings =
         |session_id: &str, model: &str, reasoning: &str| RemoteRequest::SetSessionSettings {
+            agent: None,
             model: Some(model.to_string()),
             reasoning: Some(reasoning.to_string()),
             response_style: Some("concise".to_string()),
             session_id: session_id.into(),
             speed_mode: Some("fast".to_string()),
         };
+    let on_agent = |agent: &str| RemoteRequest::SetSessionSettings {
+        agent: Some(agent.to_string()),
+        model: Some(codex_model.to_string()),
+        reasoning: None,
+        response_style: None,
+        session_id: "session-1".into(),
+        speed_mode: None,
+    };
     let reasoning_only = RemoteRequest::SetSessionSettings {
+        agent: None,
         model: None,
         reasoning: Some("low".to_string()),
         response_style: None,
@@ -873,6 +883,8 @@ async fn settings_reach_the_host_only_as_a_valid_change_to_a_listed_session() {
     // Act
     let changed = reply_result(&serving.state, settings("session-1", codex_model, "max")).await;
     let partial = reply_result(&serving.state, reasoning_only).await;
+    let other_agent = reply_result(&serving.state, on_agent("harness")).await;
+    let unknown_agent = reply_result(&serving.state, on_agent("vi")).await;
     let unknown_model = reply_result(&serving.state, settings("session-1", "vim", "max")).await;
     let unknown_level =
         reply_result(&serving.state, settings("session-1", codex_model, "huge")).await;
@@ -892,6 +904,11 @@ async fn settings_reach_the_host_only_as_a_valid_change_to_a_listed_session() {
     // Assert
     assert_eq!(changed, RemoteResult::Ok(RemoteResponse::Accepted));
     assert_eq!(partial, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(other_agent, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unknown_agent,
+        RemoteResult::Error("unknown agent kind: vi".to_string())
+    );
     assert_eq!(
         unknown_model,
         RemoteResult::Error("unknown model: vim".to_string())
@@ -918,9 +935,12 @@ async fn settings_reach_the_host_only_as_a_valid_change_to_a_listed_session() {
         serving.backend.calls(),
         [
             "list".to_string(),
-            format!("settings:session-1:{codex_model}:max:concise:fast"),
+            format!("settings:session-1:-:{codex_model}:max:concise:fast"),
             "list".to_string(),
-            "settings:session-1:-:low:-:-".to_string(),
+            "settings:session-1:-:-:low:-:-".to_string(),
+            "list".to_string(),
+            format!("settings:session-1:harness:{codex_model}:-:-:-"),
+            "list".to_string(),
             "list".to_string(),
             "list".to_string(),
             "list".to_string(),

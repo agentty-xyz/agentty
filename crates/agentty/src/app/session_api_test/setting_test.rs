@@ -64,6 +64,7 @@ async fn settings_change_applies_every_setting_to_an_idle_session() {
         &mut app,
         session_id.clone(),
         SessionSettingsChange {
+            agent: None,
             model: Some(target.model()),
             reasoning_level: Some(ReasoningLevel::Low),
             response_style: Some(ResponseStyle::Concise),
@@ -80,6 +81,64 @@ async fn settings_change_applies_every_setting_to_an_idle_session() {
     assert_eq!(session.effective_reasoning_level(), ReasoningLevel::Low);
     assert_eq!(session.response_style, ResponseStyle::Concise);
     assert_eq!(session.speed_mode, SpeedMode::Normal);
+}
+
+#[tokio::test]
+async fn settings_change_switches_to_a_model_of_another_agent() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let session_id = create_regular_session(&mut app).await;
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, SessionStatus::Review);
+    let current = app
+        .sessions
+        .session_for_id(&session_id)
+        .expect("session")
+        .agent;
+    let target = request_host_context(&mut app)
+        .await
+        .expect("host context should load")
+        .models
+        .into_iter()
+        .find(|model| model.kind() != current.kind())
+        .expect("the host should offer another agent");
+
+    // Act
+    let agent_without_model = request_settings(
+        &mut app,
+        session_id.clone(),
+        SessionSettingsChange {
+            agent: Some(target.kind()),
+            ..SessionSettingsChange::default()
+        },
+    )
+    .await;
+    let changed = request_settings(
+        &mut app,
+        session_id.clone(),
+        SessionSettingsChange {
+            agent: Some(target.kind()),
+            model: Some(target.model()),
+            ..SessionSettingsChange::default()
+        },
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        agent_without_model,
+        Err(ApiSessionError::Operation(format!(
+            "Choose a model for agent `{}`",
+            target.kind()
+        )))
+    );
+    assert_eq!(changed, Ok(()));
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .expect("session")
+            .agent,
+        target
+    );
 }
 
 #[tokio::test]
@@ -186,6 +245,12 @@ async fn settings_change_refuses_what_the_session_cannot_use() {
         AgentKind::Antigravity,
         AgentKind::Antigravity.default_model(),
     );
+    let current_kind = app
+        .sessions
+        .session_for_id(&session_id)
+        .expect("session")
+        .agent
+        .kind();
 
     // Act
     let missing = request_settings(
@@ -241,8 +306,9 @@ async fn settings_change_refuses_what_the_session_cannot_use() {
     assert_eq!(
         harness,
         Err(ApiSessionError::Operation(format!(
-            "Model `{}` is not available to session `{session_id}`",
-            AgentModel::KimiK3.as_str()
+            "Model `{}` is not available to session `{session_id}` on agent `{}`",
+            AgentModel::KimiK3.as_str(),
+            current_kind
         )))
     );
     assert_eq!(

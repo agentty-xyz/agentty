@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId, SessionListEntry, SessionSummary};
 use crate::{
-    AcceptTaskPlanRequest, AgentModel, AgentSelection, CreateTaskRequest, ReasoningLevel,
-    ResponseStyle, SpeedMode, SubmitTaskRequest, Task,
+    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, CreateTaskRequest,
+    ReasoningLevel, ResponseStyle, SpeedMode, SubmitTaskRequest, Task,
 };
 
 /// Creation strategy for a new session.
@@ -148,8 +148,11 @@ pub enum SessionOperation {
 /// Settings to change on one session; `None` keeps a setting as it is.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SessionSettingsChange {
-    /// Model to switch to; the session's own agent runs it, as in the
-    /// terminal's `/model`.
+    /// Agent to run `model`, as the terminal's `/model` picks one before the
+    /// model; `None` keeps the session's own agent. It names an agent only
+    /// together with `model`, since agents share model ids.
+    pub agent: Option<AgentKind>,
+    /// Model to switch to, run by `agent`.
     pub model: Option<AgentModel>,
     /// Reasoning level to use for later turns.
     pub reasoning_level: Option<ReasoningLevel>,
@@ -208,9 +211,9 @@ pub struct HostContext {
     /// harness model when only Harness sessions are offered, otherwise the
     /// regular agent's default.
     pub default_model: AgentModel,
-    /// Agents and models a session can switch to now, in display order.
-    /// A session switches only among the entries of its own agent, as the
-    /// terminal's `/model` offers them; each gives the model's id and name.
+    /// Agents and models a session can switch to now, in display order, as
+    /// the terminal's `/model` offers them; each gives the model's id and
+    /// name.
     pub models: Vec<AgentSelection>,
     /// Identifier of the active project, the only one that accepts new
     /// sessions.

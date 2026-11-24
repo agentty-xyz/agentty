@@ -889,7 +889,8 @@ impl App {
     /// Nothing is written until the whole change passes the checks the
     /// terminal makes by construction: the session's status shows the
     /// composer, where `/model` and the other setting commands are reachable;
-    /// a model is one the session's own agent offers in `/model`; and fast
+    /// a model is one `/model` offers for the chosen agent, the session's own
+    /// unless the change names another together with a model; and fast
     /// mode suits the model the session will have. The writes then run in
     /// the order model, reasoning, style, speed, so the switch most likely
     /// to fail runs first. They are not transactional: when a later one fails
@@ -912,20 +913,26 @@ impl App {
                 "Session `{session_id}` cannot change settings in status `{status}`"
             )));
         }
+        let agent_kind = change.agent.unwrap_or_else(|| current_agent.kind());
+        if change.model.is_none() && agent_kind != current_agent.kind() {
+            return Err(ApiSessionError::Operation(format!(
+                "Choose a model for agent `{agent_kind}`"
+            )));
+        }
         if let Some(model) = change.model
             && !self
                 .api_session_models()
                 .into_iter()
-                .any(|offered| offered.kind() == current_agent.kind() && offered.model() == model)
+                .any(|offered| offered.kind() == agent_kind && offered.model() == model)
         {
             return Err(ApiSessionError::Operation(format!(
-                "Model `{}` is not available to session `{session_id}`",
+                "Model `{}` is not available to session `{session_id}` on agent `{agent_kind}`",
                 model.as_str()
             )));
         }
         let selected_agent = change
             .model
-            .map(|model| AgentSelection::new(current_agent.kind(), model));
+            .map(|model| AgentSelection::new(agent_kind, model));
         let resulting_agent = selected_agent
             .or_else(|| {
                 self.deferred_session_settings

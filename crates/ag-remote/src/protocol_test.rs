@@ -958,6 +958,7 @@ fn settings_requests_name_only_the_settings_that_change() {
         {
             "method": "set_session_settings",
             "session_id": "s",
+            "agent": "harness",
             "model": "gpt-6.1-sol",
             "response_style": "concise",
             "speed_mode": "fast"
@@ -974,6 +975,7 @@ fn settings_requests_name_only_the_settings_that_change() {
         requests,
         [
             RemoteRequest::SetSessionSettings {
+                agent: None,
                 model: None,
                 reasoning: Some("low".to_string()),
                 response_style: None,
@@ -981,6 +983,7 @@ fn settings_requests_name_only_the_settings_that_change() {
                 speed_mode: None,
             },
             RemoteRequest::SetSessionSettings {
+                agent: Some("harness".to_string()),
                 model: Some("gpt-6.1-sol".to_string()),
                 reasoning: None,
                 response_style: Some("concise".to_string()),

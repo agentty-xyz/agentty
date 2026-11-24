@@ -143,6 +143,8 @@ const elements = {
   "sync-target": document.getElementById("sync-target"),
   "settings-dialog": document.getElementById("settings-dialog"),
   "settings-form": document.getElementById("settings-form"),
+  "settings-agent-row": document.getElementById("settings-agent-row"),
+  "settings-agent": document.getElementById("settings-agent"),
   "settings-model": document.getElementById("settings-model"),
   "settings-reasoning": document.getElementById("settings-reasoning"),
   "settings-style": document.getElementById("settings-style"),
@@ -1121,6 +1123,8 @@ function removeInstance(instance) {
 const settingsSheet = createSettings({
   document: document,
   elements: {
+    agent: elements["settings-agent"],
+    agentRow: elements["settings-agent-row"],
     apply: elements["settings-apply"],
     dialog: elements["settings-dialog"],
     error: elements["settings-error"],

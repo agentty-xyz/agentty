@@ -5,7 +5,8 @@
 // from composer.mjs, for the session about to start: with the `settings`
 // capability too, its settings line and slash commands pick the model,
 // reasoning level, answer style and speed among those of the agent the
-// chosen mode starts on, and the picks are applied with
+// chosen mode starts on, or of another agent with `settings_agent`, and
+// the picks are applied with
 // `set_session_settings` before the first message goes out. The new
 // session has no worktree yet, so with the `project_files` capability
 // `@` lists the active project's checkout, as the terminal does for a
@@ -17,7 +18,7 @@
 
 import { composerState } from "./chat.mjs";
 import { createComposer } from "./composer.mjs";
-import { currentChoice, offersSettings, parseModels, settingsChange } from "./settings.mjs";
+import { agentModels, currentChoice, offersSettings, parseModels, settingsChange } from "./settings.mjs";
 
 // Where the unsent first message waits, among the per-session drafts.
 export const HOME_DRAFT_ID = "home";
@@ -26,6 +27,7 @@ const MODE_LABELS = { harness: "Harness", regular: "Regular" };
 // Settings a pick may change, as `set_session_settings` and a session
 // snapshot name them.
 const PICKED_FIELDS = {
+  agent: "agent",
   model: "model_id",
   reasoning: "reasoning",
   response_style: "response_style",
@@ -61,7 +63,6 @@ export function parseHost(result) {
       agent: entry.agent,
       id: entry.model,
       name: nonEmpty(entry.name) ?? entry.model,
-      options: parseModels(result, entry.agent),
       reasoning: nonEmpty(entry.reasoning),
       speed: nonEmpty(entry.speed_mode),
       style: nonEmpty(entry.response_style),
@@ -72,6 +73,7 @@ export function parseHost(result) {
     baseBranch: typeof result.base_branch === "string" ? result.base_branch : "",
     model: typeof result.default_model === "string" ? result.default_model : "",
     modeModels: modeModels,
+    models: parseModels(result),
     modes: modes,
     project: result.project,
   };
@@ -102,8 +104,8 @@ export function newSession(host, mode, picks = {}) {
       session[key] = picks[field];
     }
   }
-  if (session.model_id !== start.id) {
-    const option = start.options.find((model) => model.id === session.model_id);
+  if (session.model_id !== start.id || session.agent !== start.agent) {
+    const option = agentModels(host.models, session.agent).find((model) => model.id === session.model_id);
     session.model = option?.name ?? session.model_id;
   }
 
@@ -219,10 +221,11 @@ export function createHome({
     button.dataset.mode = mode;
     button.setAttribute("aria-pressed", String(mode === state.mode));
     button.addEventListener("click", () => {
-      // Another mode may start on another agent, so its model and speed
-      // picks do not carry over.
+      // Another mode may start on another agent, so its agent, model and
+      // speed picks do not carry over.
       if (mode !== state.mode) {
         const kept = { ...state.picks };
+        delete kept.agent;
         delete kept.model;
         delete kept.speed_mode;
         state.picks = kept;
@@ -273,7 +276,7 @@ export function createHome({
       return {};
     }
 
-    return settingsChange(start, currentChoice(chosenSession()), state.host.modeModels[state.mode].options);
+    return settingsChange(start, currentChoice(chosenSession()), state.host.models);
   }
 
   async function create() {

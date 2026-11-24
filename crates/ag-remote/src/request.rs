@@ -36,6 +36,9 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::GraphActions, "graph_actions"),
     (SessionOperation::GenerateGraphProposal, "graph_proposal"),
 ];
+/// Capabilities that extend the request another one offers, each listed
+/// with it: `settings_agent` says `set_session_settings` takes an `agent`.
+const EXTENSIONS: &[(&str, &str)] = &[("settings", "settings_agent")];
 /// Random bytes in the delivery identity of a graph proposal a device asks
 /// for.
 const PROPOSAL_ID_BYTES: usize = 16;
@@ -58,7 +61,15 @@ pub(crate) fn capabilities(sessions: &SessionService) -> Vec<String> {
     CAPABILITIES
         .iter()
         .filter(|(operation, _)| sessions.supports(*operation))
-        .map(|(_, capability)| (*capability).to_string())
+        .flat_map(|(_, capability)| {
+            let extensions = EXTENSIONS
+                .iter()
+                .filter(move |(base, _)| base == capability)
+                .map(|(_, extension)| *extension);
+
+            std::iter::once(*capability).chain(extensions)
+        })
+        .map(str::to_string)
         .collect()
 }
 
@@ -273,6 +284,7 @@ async fn respond(
             Ok(RemoteResponse::Accepted)
         }
         RemoteRequest::SetSessionSettings {
+            agent,
             model,
             reasoning,
             response_style,
@@ -281,6 +293,7 @@ async fn respond(
         } => {
             let session_id = session_id.listed(sessions).await?;
             let change = SessionSettingsChange {
+                agent: parse_setting(agent)?,
                 model: parse_setting(model)?,
                 reasoning_level: parse_setting(reasoning)?,
                 response_style: parse_setting(response_style)?,

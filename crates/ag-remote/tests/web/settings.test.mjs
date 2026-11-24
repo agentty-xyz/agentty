@@ -6,11 +6,15 @@ import { FakeEvent, createDocument } from "./fake_dom.mjs";
 import {
   REASONING_LEVELS,
   RESPONSE_STYLES,
+  agentModels,
   createSettings,
   currentChoice,
+  modelAgents,
+  offersAgentChoice,
   offersSettings,
   offersSpeed,
   parseModels,
+  refreshedChoice,
   settingsChange,
   withCurrent,
 } from "../../assets/settings.mjs";
@@ -23,6 +27,9 @@ const HOST = {
     { agent: "claude", model: "claude-opus-5-5", name: "Opus 5.5", supports_fast: true },
     { agent: "claude", model: "claude-sonnet-5", name: "Sonnet 5", supports_fast: false },
     { agent: "codex", model: "gpt-6.1", name: "GPT 6.1", supports_fast: true },
+    // Agents share model ids.
+    { agent: "harness", model: "claude-opus-5-5", name: "Opus 5.5" },
+    { agent: "harness", model: "kimi-k3", name: "Kimi K3" },
   ],
   project: "agentty",
 };
@@ -52,6 +59,8 @@ function mountSettings({ respond = (body) => (body.method === "get_host" ? HOST 
   const settings = createSettings({
     document: document,
     elements: {
+      agent: byId("settings-agent"),
+      agentRow: byId("settings-agent-row"),
       apply: byId("settings-apply"),
       dialog: byId("settings-dialog"),
       error: byId("settings-error"),
@@ -98,20 +107,62 @@ test("settings need both the settings and the host capabilities", () => {
 
 test("parseModels keeps the session's agent's models and reads what the host omits", () => {
   assert.deepEqual(MODELS, [
-    { id: "claude-opus-5-5", name: "Opus 5.5", supportsFast: true },
-    { id: "claude-sonnet-5", name: "Sonnet 5", supportsFast: false },
+    { agent: "claude", id: "claude-opus-5-5", name: "Opus 5.5", supportsFast: true },
+    { agent: "claude", id: "claude-sonnet-5", name: "Sonnet 5", supportsFast: false },
   ]);
-  assert.equal(parseModels(HOST).length, 3);
+  assert.equal(parseModels(HOST).length, 5);
   assert.deepEqual(parseModels({ kind: "host", models: [{ model: "m" }, { name: "no id" }, null] }), [
-    { id: "m", name: "m", supportsFast: false },
+    { agent: null, id: "m", name: "m", supportsFast: false },
   ]);
   assert.deepEqual(parseModels({ kind: "host" }), []);
   assert.deepEqual(parseModels({ kind: "accepted", models: HOST.models }), []);
 });
 
+test("the agents come in the host's order, each with its own models", () => {
+  const models = parseModels(HOST);
+  assert.equal(offersAgentChoice(["settings", "host", "settings_agent"]), true);
+  assert.equal(offersAgentChoice(["settings", "host"]), false);
+  assert.deepEqual(modelAgents(models), ["claude", "codex", "harness"]);
+  assert.deepEqual(modelAgents(parseModels({ kind: "host", models: [{ model: "m" }] })), []);
+  assert.deepEqual(
+    agentModels(models, "harness").map((model) => model.id),
+    ["claude-opus-5-5", "kimi-k3"],
+  );
+  assert.equal(agentModels(models, null), models);
+});
+
+test("another agent is sent with its model, even one with the same id", () => {
+  const models = parseModels(HOST);
+  const current = currentChoice(session());
+  assert.deepEqual(settingsChange(session(), { ...current, agent: "harness" }, models), {
+    agent: "harness",
+    model: "claude-opus-5-5",
+  });
+  assert.deepEqual(settingsChange(session(), { ...current, agent: "codex", model: "gpt-6.1", speed: "fast" }, models), {
+    agent: "codex",
+    model: "gpt-6.1",
+    speed_mode: "fast",
+  });
+  // The harness runs the shared model, but not fast.
+  assert.deepEqual(settingsChange(session(), { ...current, agent: "harness", speed: "fast" }, models), {
+    agent: "harness",
+    model: "claude-opus-5-5",
+  });
+  // Without a model, the agent alone is no change.
+  assert.deepEqual(settingsChange(session(), { ...current, agent: "harness", model: null }, models), {});
+  assert.equal(offersSpeed(models, "claude-opus-5-5", "claude"), true);
+  assert.equal(offersSpeed(models, "claude-opus-5-5", "harness"), false);
+});
+
 test("settingsChange sends only what changed, and speed only for a model that runs fast", () => {
   const current = currentChoice(session());
-  assert.deepEqual(current, { model: "claude-opus-5-5", reasoning: "high", speed: "normal", style: "balanced" });
+  assert.deepEqual(current, {
+    agent: "claude",
+    model: "claude-opus-5-5",
+    reasoning: "high",
+    speed: "normal",
+    style: "balanced",
+  });
   assert.deepEqual(settingsChange(session(), current, MODELS), {});
   assert.deepEqual(settingsChange(session(), { ...current, reasoning: "max" }, MODELS), { reasoning: "max" });
   assert.deepEqual(settingsChange(session(), { ...current, style: "concise", speed: "fast" }, MODELS), {
@@ -160,6 +211,72 @@ test("the sheet starts at the session's settings and lists the models by name", 
   assert.equal(byId("settings-speed-row").hidden, false);
   assert.equal(byId("settings-apply").disabled, true);
   assert.equal(byId("settings-note").hidden, true);
+});
+
+test("the agent is a choice only when the host takes it, and lists that agent's models", async () => {
+  const { byId, requests, settings } = mountSettings();
+  settings.open(session());
+  await settle();
+  assert.equal(byId("settings-agent-row").hidden, true);
+  assert.equal(byId("settings-agent").children.length, 0);
+  settings.close();
+
+  settings.open(session(), { canChooseAgent: true });
+  // Until the host answers, there is nothing to choose among.
+  assert.equal(byId("settings-agent-row").hidden, true);
+  await settle();
+  assert.equal(byId("settings-agent-row").hidden, false);
+  assert.deepEqual(
+    Array.from(byId("settings-agent").children, (button) => button.textContent),
+    ["claude", "codex", "harness"],
+  );
+  assert.deepEqual(pressed(byId, "settings-agent"), ["claude"]);
+  const listed = () => Array.from(byId("settings-model").children, (option) => option.value);
+  assert.deepEqual(listed(), ["claude-opus-5-5", "claude-sonnet-5"]);
+
+  // The harness runs the same model id, so it stays chosen.
+  choose(byId, "settings-agent", "harness");
+  assert.deepEqual(pressed(byId, "settings-agent"), ["harness"]);
+  assert.deepEqual(listed(), ["claude-opus-5-5", "kimi-k3"]);
+  assert.equal(byId("settings-model").value, "claude-opus-5-5");
+  assert.equal(byId("settings-speed-row").hidden, true);
+  assert.equal(byId("settings-apply").disabled, false);
+  // Codex does not, so its first model is chosen.
+  choose(byId, "settings-agent", "codex");
+  assert.equal(byId("settings-model").value, "gpt-6.1");
+  assert.equal(byId("settings-speed-row").hidden, false);
+  // Back on its own agent, the session keeps its own model.
+  choose(byId, "settings-agent", "claude");
+  assert.equal(byId("settings-model").value, "claude-opus-5-5");
+  assert.equal(byId("settings-apply").disabled, true);
+
+  choose(byId, "settings-agent", "harness");
+  byId("settings-apply").click();
+  await settle();
+  assert.deepEqual(requests.at(-1), {
+    agent: "harness",
+    method: "set_session_settings",
+    model: "claude-opus-5-5",
+    session_id: "s1",
+  });
+  assert.equal(byId("settings-dialog").open, false);
+});
+
+test("the session's own agent stays a choice with its own model when the host lists none of it", async () => {
+  const { byId, settings } = mountSettings({
+    respond: () => ({ kind: "host", models: [{ agent: "codex", model: "gpt-6.1", name: "GPT 6.1" }] }),
+  });
+  settings.open(session(), { canChooseAgent: true });
+  await settle();
+  // The session's own agent joins the host's list.
+  assert.deepEqual(
+    Array.from(byId("settings-agent").children, (button) => button.textContent),
+    ["codex", "claude"],
+  );
+  choose(byId, "settings-agent", "codex");
+  assert.equal(byId("settings-model").value, "gpt-6.1");
+  choose(byId, "settings-agent", "claude");
+  assert.deepEqual(Array.from(byId("settings-model").children, (option) => option.value), ["claude-opus-5-5"]);
 });
 
 test("speed is offered only while the chosen model runs fast", async () => {
@@ -326,4 +443,36 @@ test("snapshots and choices update the sheet in place, so the focus stays", asyn
     [...REASONING_LEVELS, "turbo"],
   );
   assert.deepEqual(pressed(byId, "settings-reasoning"), ["medium"]);
+});
+
+test("a newer snapshot moves the settings the user left alone, so Apply keeps a switch made meanwhile", async () => {
+  const { byId, requests, settings } = mountSettings();
+  settings.open(session(), { canChooseAgent: true });
+  await settle();
+  choose(byId, "settings-style", "concise");
+  // A queued switch to the harness finishes, with the same model id.
+  settings.update(session({ agent: "harness", reasoning: "low", response_style: "detailed" }));
+  assert.deepEqual(pressed(byId, "settings-agent"), ["harness"]);
+  assert.deepEqual(pressed(byId, "settings-reasoning"), ["low"]);
+  assert.deepEqual(pressed(byId, "settings-style"), ["concise"]);
+  byId("settings-apply").click();
+  await settle();
+  assert.deepEqual(requests.at(-1), { method: "set_session_settings", response_style: "concise", session_id: "s1" });
+});
+
+test("refreshedChoice keeps what the user chose and moves the agent and model together", () => {
+  const before = currentChoice(session());
+  const after = currentChoice(session({ agent: "harness", model_id: "kimi-k3", speed_mode: "fast" }));
+  // A model picked on the old agent keeps that agent.
+  assert.deepEqual(refreshedChoice({ ...before, model: "claude-sonnet-5" }, before, after), {
+    ...after,
+    agent: "claude",
+    model: "claude-sonnet-5",
+  });
+  assert.deepEqual(refreshedChoice({ ...before, agent: "codex", model: "gpt-6.1" }, before, after), {
+    ...after,
+    agent: "codex",
+    model: "gpt-6.1",
+  });
+  assert.deepEqual(refreshedChoice(before, before, after), after);
 });
