@@ -1,5 +1,6 @@
-//! `write` tool tests: unified-diff parsing, hunk matching and relocation,
-//! line-ending conventions, and rejected patches.
+//! `write` tool tests: unified-diff and Codex patch parsing, hunk matching
+//! and relocation, line-ending conventions, and rejected patches with the
+//! current lines they show.
 
 use std::fmt::Write as _;
 use std::io;
@@ -12,7 +13,10 @@ use std::task::{Context, Poll};
 use serde_json::json;
 use tokio::io::{AsyncRead, ReadBuf};
 
-use super::{MAX_FILE_BYTES, WriteError, WriteTool, apply_unified_diff, parse_unified_diff};
+use super::{
+    LineMatch, MAX_FILE_BYTES, WriteError, WriteTool, apply_unified_diff, header_target,
+    parse_unified_diff,
+};
 use crate::effect::Effects;
 use crate::fault_store_test::{Fault, FaultStore};
 use crate::file_system::MockFileSystem;
@@ -169,9 +173,9 @@ fn rejects_malformed_unified_diffs() {
         "--- a/file\n+++ b/file\n@@ -x +1 @@\n x\n",
         "--- a/file\n+++ b/file\n@@ -1 +x @@\n x\n",
         "--- a/file\n+++ b/file\n@@ -1,x +1 @@\n x\n",
-        "--- a/file\n+++ b/file\n@@ -1 +1 @@\n\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n?x\n",
+        "--- a/file\n+++ b/file\n@@ -1 +1 @@\néx\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n\\ No newline at end of file\n",
         concat!(
             "--- a/file\n+++ b/file\n@@ -0,0 +1,2 @@\n",
@@ -289,7 +293,12 @@ fn rejects_hunks_that_do_not_match_target() {
 
     // Assert
     assert!(
-        errors
+        errors[..2]
+            .iter()
+            .all(|error| matches!(error, WriteError::ContextMismatch { .. }))
+    );
+    assert!(
+        errors[2..]
             .iter()
             .all(|error| matches!(error, WriteError::Patch { .. }))
     );
@@ -1050,4 +1059,608 @@ fn classifies_stale_write_as_model_correctable() {
     assert!(existing.is_model_correctable());
     assert!(!denied.is_model_correctable());
     assert!(!unrelated_missing.is_model_correctable());
+}
+
+#[test]
+fn reads_empty_hunk_lines_as_blank_context() {
+    // Arrange
+    let patch = "--- a/file\n+++ b/file\n@@ -1,3 +1,3 @@\n a\n\n-b\n+c\n";
+
+    // Act
+    let patched =
+        apply_unified_diff("file", Some(b"a\n\nb\n"), patch).expect("blank context should apply");
+
+    // Assert
+    assert_eq!(patched.content, b"a\n\nc\n");
+}
+
+#[test]
+fn accepts_diffs_in_a_codex_envelope_or_without_file_headers() {
+    // Arrange
+    let diff = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n";
+    let cases = [
+        (
+            Some(b"old\n".as_slice()),
+            format!("{diff}*** End Patch\n\n"),
+        ),
+        (
+            Some(b"old\n".as_slice()),
+            format!("*** Begin Patch\n{diff}*** End Patch"),
+        ),
+        (Some(b"old\n".as_slice()), format!("{diff}\n\n")),
+        (
+            Some(b"old\n".as_slice()),
+            "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+        ),
+        (None, "@@ -0,0 +1 @@\n+new\n".to_string()),
+    ];
+
+    // Act
+    let results = cases.map(|(current, patch)| {
+        apply_unified_diff("file", current, &patch).expect("patch should apply")
+    });
+
+    // Assert
+    for patched in results {
+        assert_eq!(patched.content, b"new\n");
+    }
+}
+
+#[test]
+fn keeps_end_patch_text_that_does_not_fill_a_line() {
+    // Arrange
+    let patch = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new*** End Patch\n";
+
+    // Act
+    let patched = apply_unified_diff("file", Some(b"old\n"), patch).expect("patch should apply");
+
+    // Assert
+    assert_eq!(patched.content, b"new*** End Patch\n");
+}
+
+#[test]
+fn names_the_target_from_patch_headers() {
+    // Arrange
+    let patches = [
+        "--- a/src/lib.rs\n+++ b/src/lib.rs\t2026-01-01\n@@ -1 +1 @@\n-a\n+b\n",
+        "*** Begin Patch\n*** Update File: src/lib.rs \n@@\n-a\n+b\n*** End Patch\n",
+        "*** Begin Patch\n*** Add File: src/lib.rs\n+a\n*** End Patch\n",
+        "--- a/src/lib.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n",
+        "@@ -1 +1 @@\n-a\n++++ b/src/lib.rs\n",
+        "--- a/src/lib.rs\n+++ \n",
+    ];
+
+    // Act
+    let targets = patches.map(header_target);
+
+    // Assert
+    assert_eq!(
+        targets,
+        [
+            Some("src/lib.rs"),
+            Some("src/lib.rs"),
+            Some("src/lib.rs"),
+            None,
+            None,
+            None
+        ]
+    );
+}
+
+#[test]
+fn shows_current_lines_where_an_unmatched_hunk_most_nearly_matches() {
+    // Arrange
+    let current = numbered_lines(10, &[]);
+    let near = "--- a/file\n+++ b/file\n@@ -2,3 +2,3 @@\n line-5\n line-6\n-line-7 typo\n+new\n";
+
+    // Act
+    let error = apply_unified_diff("file", Some(current.as_bytes()), near)
+        .expect_err("near miss should be rejected");
+
+    // Assert
+    let result = serde_json::from_str::<serde_json::Value>(
+        &error.to_tool_result("file").expect("result should encode"),
+    )
+    .expect("result should be JSON");
+    assert!(matches!(error, WriteError::ContextMismatch { .. }));
+    assert_eq!(
+        result["current"],
+        json!({ "content": &current["line-1\n".len()..], "end_line": 10, "start_line": 2 })
+    );
+    let error_text = result["error"].as_str().expect("error text");
+    assert!(error_text.contains("the lines where the hunk most nearly matches are attached"));
+    assert!(error_text.contains("`current` holds lines 2-10 of the file as it is now"));
+    assert_eq!(result["status"], "rejected");
+}
+
+/// Returns the `current` lines a rejected write's tool result shows, as
+/// `(start_line, end_line, content)`.
+fn shown_lines(error: &WriteError) -> (u64, u64, String) {
+    let result = serde_json::from_str::<serde_json::Value>(
+        &error.to_tool_result("file").expect("result should encode"),
+    )
+    .expect("result should be JSON");
+    let current = &result["current"];
+
+    (
+        current["start_line"].as_u64().expect("start line"),
+        current["end_line"].as_u64().expect("end line"),
+        current["content"].as_str().expect("content").to_string(),
+    )
+}
+
+#[test]
+fn shows_current_lines_around_the_header_without_a_near_match() {
+    // Arrange
+    let current = numbered_lines(10, &[]);
+    let cases = [
+        ("@@ -5 +5 @@\n-zzz\n+y\n", 2, 8),
+        ("@@ -50 +50 @@\n-zzz\n+y\n", 7, 10),
+        ("@@ -1,2 +1,2 @@\n line-3\n-x\n+y\n", 1, 7),
+    ];
+
+    // Act
+    let errors = cases.map(|(hunk, _, _)| {
+        apply_unified_diff(
+            "file",
+            Some(current.as_bytes()),
+            &format!("--- a/file\n+++ b/file\n{hunk}"),
+        )
+        .expect_err("unmatched hunk should be rejected")
+    });
+
+    // Assert
+    for (error, (_, start, end)) in errors.iter().zip(cases) {
+        let (start_line, end_line, _) = shown_lines(error);
+        assert_eq!((start_line, end_line), (start, end), "{error}");
+    }
+    assert!(errors[0].to_string().contains("around the hunk's position"));
+}
+
+#[test]
+fn bounds_the_current_lines_by_count_and_bytes() {
+    // Arrange
+    let many_lines = numbered_lines(60, &[]);
+    let long_lines = format!("{}\n", "x".repeat(999)).repeat(10);
+    let many_removed = format!(
+        "--- a/file\n+++ b/file\n@@ -1,50 +1 @@\n{}+y\n",
+        "-zzz\n".repeat(50)
+    );
+    let one_removed = "--- a/file\n+++ b/file\n@@ -5 +5 @@\n-zzz\n+y\n";
+
+    // Act
+    let by_count = apply_unified_diff("file", Some(many_lines.as_bytes()), &many_removed)
+        .expect_err("unmatched hunk should be rejected");
+    let by_bytes = apply_unified_diff("file", Some(long_lines.as_bytes()), one_removed)
+        .expect_err("unmatched hunk should be rejected");
+
+    // Assert
+    let (start_line, end_line, content) = shown_lines(&by_count);
+    assert_eq!((start_line, end_line), (1, 40));
+    assert_eq!(content, numbered_lines(40, &[]));
+    let (start_line, end_line, content) = shown_lines(&by_bytes);
+    assert_eq!((start_line, end_line), (2, 5));
+    assert_eq!(content.lines().count(), 4);
+}
+
+#[test]
+fn shows_lines_around_the_header_once_the_nearest_match_exceeds_the_budget() {
+    // Arrange
+    let current = "x\n".repeat(100_000);
+    let patch = format!(
+        "--- a/file\n+++ b/file\n@@ -1,100 +1 @@\n{}+z\n",
+        "-y\n".repeat(100)
+    );
+
+    // Act
+    let error = apply_unified_diff("file", Some(current.as_bytes()), &patch)
+        .expect_err("unmatched hunk should be rejected");
+
+    // Assert
+    assert!(
+        error.to_string().contains("around the hunk's position"),
+        "{error}"
+    );
+    assert_eq!(shown_lines(&error).0, 1);
+}
+
+#[test]
+fn prefers_the_nearest_of_equally_close_matches() {
+    // Arrange
+    let current = "a\nb\nx\nx\nx\nx\nx\nx\nx\nx\na\nb\n";
+    let patch = "--- a/file\n+++ b/file\n@@ -10,2 +10,2 @@\n a\n-c\n+d\n";
+
+    // Act
+    let error = apply_unified_diff("file", Some(current.as_bytes()), patch)
+        .expect_err("unmatched hunk should be rejected");
+
+    // Assert
+    assert!(
+        matches!(error, WriteError::ContextMismatch { start_line: 8, .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn omits_current_lines_that_cannot_be_shown() {
+    // Arrange
+    let long_line = format!("{}\n", "x".repeat(MAX_FILE_BYTES / 256));
+    let patch = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-y\n+z\n";
+
+    // Act
+    let errors = [b"".as_slice(), long_line.as_bytes()].map(|current| {
+        apply_unified_diff("file", Some(current), patch).expect_err("hunk should be rejected")
+    });
+
+    // Assert
+    for error in errors {
+        assert!(matches!(error, WriteError::Patch { .. }), "{error:?}");
+        assert!(error.to_string().contains("re-read the file"));
+    }
+}
+
+const CODEX_PATH: &str = "src/lib.rs";
+
+/// Wraps `operations` in a Codex patch envelope.
+fn codex_envelope(operations: &str) -> String {
+    format!("*** Begin Patch\n{operations}*** End Patch\n")
+}
+
+/// Wraps Codex update `hunks` for [`CODEX_PATH`] in a patch envelope.
+fn codex_update(hunks: &str) -> String {
+    codex_envelope(&format!("*** Update File: {CODEX_PATH}\n{hunks}"))
+}
+
+/// Applies `patch` to `current`, the text of [`CODEX_PATH`] when it exists,
+/// and returns the resulting text.
+fn apply_codex(current: Option<&str>, patch: &str) -> Result<String, WriteError> {
+    apply_unified_diff(CODEX_PATH, current.map(str::as_bytes), patch)
+        .map(|patched| String::from_utf8(patched.content).expect("result should be UTF-8"))
+}
+
+#[test]
+fn applies_codex_hunks_in_order_after_their_anchors() {
+    // Arrange
+    let current = "fn new() {\n    a: 1,\n}\nfn reset() {\n    a: 1,\n}\n";
+    let anchored = codex_update("@@ fn reset() {\n-    a: 1,\n+    a: 2,\n");
+    let sequential = codex_update(
+        "@@ fn new() {\n     a: 1,\n+    b: 1,\n@@ fn reset() {\n     a: 1,\n+    b: 2,\n",
+    );
+    let context_anchor = codex_update("@@\n fn reset() {\n@@\n     a: 1,\n+    b: 2,\n");
+    let repeated = codex_update("@@\n     a: 1,\n+    b: 1,\n");
+
+    // Act
+    let anchored = apply_codex(Some(current), &anchored).expect("anchored hunk should apply");
+    let sequential =
+        apply_codex(Some(current), &sequential).expect("sequential hunks should apply");
+    let context_anchor =
+        apply_codex(Some(current), &context_anchor).expect("context-only hunk should anchor");
+    let repeated = apply_codex(Some(current), &repeated)
+        .expect_err("a repeated hunk without an `@@` line must not guess");
+
+    // Assert
+    assert!(
+        matches!(repeated, WriteError::Patch { .. })
+            && repeated
+                .to_string()
+                .contains("matches more than one place after the previous hunk, at lines 2 and 5"),
+        "{repeated}"
+    );
+    assert_eq!(
+        anchored,
+        "fn new() {\n    a: 1,\n}\nfn reset() {\n    a: 2,\n}\n"
+    );
+    assert_eq!(
+        sequential,
+        "fn new() {\n    a: 1,\n    b: 1,\n}\nfn reset() {\n    a: 1,\n    b: 2,\n}\n"
+    );
+    assert_eq!(
+        context_anchor,
+        "fn new() {\n    a: 1,\n}\nfn reset() {\n    a: 1,\n    b: 2,\n}\n"
+    );
+}
+
+#[test]
+fn accepts_unmarked_codex_hunks_range_headers_moves_in_place_and_no_end_line() {
+    // Arrange
+    let patches = [
+        codex_update(" a\n-b\n+c\n"),
+        codex_update("@@ -1,2 +1,2 @@\n a\n-b\n+c\n"),
+        codex_envelope(&format!(
+            "*** Update File: {CODEX_PATH}\n*** Move to: {CODEX_PATH}\n@@\n a\n-b\n+c\n"
+        )),
+        format!("*** Begin Patch\n*** Update File: {CODEX_PATH}\n@@\n a\n-b\n+c\n"),
+        codex_update(" a\n\n-b\n+c\n"),
+    ];
+
+    // Act
+    let results = patches.each_ref().map(|patch| {
+        let current = if patch.contains("\n\n-b") {
+            "a\n\nb\n"
+        } else {
+            "a\nb\n"
+        };
+
+        apply_codex(Some(current), patch).expect("patch should apply")
+    });
+
+    // Assert
+    assert_eq!(results[..4], ["a\nc\n", "a\nc\n", "a\nc\n", "a\nc\n"]);
+    assert_eq!(results[4], "a\n\nc\n");
+}
+
+#[test]
+fn matches_codex_hunks_ignoring_trailing_whitespace_or_at_the_end_of_file() {
+    // Arrange
+    let tolerant = codex_update("@@\n a\n-b\n+c\n");
+    let end_of_file = codex_update("@@\n-x\n+z\n*** End of File\n");
+
+    // Act
+    let tolerant = apply_unified_diff(CODEX_PATH, Some(b"a  \nb\n"), &tolerant)
+        .expect("whitespace-tolerant hunk should apply");
+    let end_of_file =
+        apply_codex(Some("x\ny\nx\n"), &end_of_file).expect("end-of-file hunk should apply");
+
+    // Assert
+    assert_eq!(tolerant.content, b"a  \nc\n");
+    assert_eq!(
+        tolerant.adjusted_hunks[0].line_match,
+        LineMatch::IgnoringTrailingWhitespace
+    );
+    assert_eq!(end_of_file, "x\ny\nz\n");
+}
+
+#[test]
+fn appends_codex_hunks_of_only_added_lines() {
+    // Arrange
+    let append = codex_update("@@\n+c\n");
+    let change_then_append = codex_update("@@\n-a\n+A\n@@\n+d\n");
+
+    // Act
+    let terminated = apply_codex(Some("a\nb\n"), &append).expect("append should apply");
+    let unterminated = apply_codex(Some("a\nb"), &append).expect("append should apply");
+    let after_change = apply_codex(Some("a\nb\nc\n"), &change_then_append)
+        .expect("append after a change should apply");
+
+    // Assert
+    assert_eq!(terminated, "a\nb\nc\n");
+    assert_eq!(unterminated, "a\nb\nc\n");
+    assert_eq!(after_change, "A\nb\nc\nd\n");
+}
+
+#[test]
+fn codex_hunks_keep_or_terminate_an_unterminated_final_line() {
+    // Arrange
+    let cases = [
+        ("@@\n b\n+c\n", "a\nb\nc\n"),
+        ("@@\n-a\n+A\n b\n", "A\nb"),
+        ("@@\n a\n-b\n", "a\n"),
+        ("@@\n-b\n+B\n", "a\nB\n"),
+    ];
+
+    // Act
+    let results = cases.map(|(hunks, _)| apply_codex(Some("a\nb"), &codex_update(hunks)));
+
+    // Assert
+    for (result, (_, expected)) in results.into_iter().zip(cases) {
+        assert_eq!(result.expect("hunk should apply"), expected);
+    }
+}
+
+#[test]
+fn creates_files_from_codex_add_operations() {
+    // Arrange
+    let add = codex_envelope(&format!("*** Add File: {CODEX_PATH}\n+one\n+two\n"));
+    let empty = codex_envelope(&format!("*** Add File: {CODEX_PATH}\n"));
+
+    // Act
+    let created = apply_codex(None, &add).expect("add should create the file");
+    let empty = apply_codex(None, &empty).expect("empty add should create the file");
+    let existing = apply_codex(Some("x\n"), &add).expect_err("add must not replace a file");
+
+    // Assert
+    assert_eq!(created, "one\ntwo\n");
+    assert_eq!(empty, "");
+    assert!(matches!(existing, WriteError::Unsupported { .. }));
+}
+
+#[test]
+fn rejects_unsupported_codex_operations_with_a_correction() {
+    // Arrange
+    let cases = [
+        (
+            Some("x\n"),
+            codex_envelope(&format!("*** Delete File: {CODEX_PATH}\n")),
+        ),
+        (
+            Some("x\n"),
+            codex_envelope(&format!(
+                "*** Update File: {CODEX_PATH}\n*** Move to: src/other.rs\n@@\n-x\n+y\n"
+            )),
+        ),
+        (
+            Some("x\n"),
+            codex_envelope(&format!(
+                "*** Update File: {CODEX_PATH}\n@@\n-x\n+y\n*** Update File: \
+                 src/other.rs\n@@\n-x\n+y\n"
+            )),
+        ),
+        (None, codex_update("@@\n-x\n+y\n")),
+    ];
+
+    // Act
+    let errors = cases.map(|(current, patch)| {
+        apply_codex(current, &patch).expect_err("operation should be rejected")
+    });
+
+    // Assert
+    for error in &errors {
+        assert!(matches!(error, WriteError::Unsupported { .. }), "{error}");
+    }
+    assert!(errors[2].to_string().contains("one `write` call per file"));
+    assert!(errors[3].to_string().contains("`*** Add File:`"));
+}
+
+#[test]
+fn rejects_malformed_codex_patches() {
+    // Arrange
+    let cases = [
+        (
+            codex_envelope(&format!("*** Add File: {CODEX_PATH}\n one\n")),
+            "must start with `+`",
+        ),
+        (codex_update("@@\n?x\n"), "must start with space"),
+        (
+            codex_update("@@ a\n@@\n x\n"),
+            "hunk 1 contains no patch lines",
+        ),
+        (
+            codex_update("*** End of File\n@@\n x\n"),
+            "hunk 1 contains no patch lines",
+        ),
+        (
+            codex_update("@@ a\n+y\n"),
+            "only added lines after its `@@` line",
+        ),
+        (
+            codex_update("@@\n-b\n+B\n@@\n+c\n"),
+            "merge them into one hunk",
+        ),
+    ];
+
+    // Act
+    let errors = cases.each_ref().map(|(patch, _)| {
+        apply_codex(Some("a\nb"), patch).expect_err("malformed patch should be rejected")
+    });
+
+    // Assert
+    for (error, (_, expected)) in errors.iter().zip(&cases) {
+        assert!(matches!(error, WriteError::Patch { .. }), "{error}");
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn finds_codex_anchors_with_or_without_their_indentation() {
+    // Arrange
+    let current =
+        "class A:\n    def f(self):\n        return 1\n    def g(self):\n        return 1\n";
+    let anchors = ["@@ def g(self):", "@@     def g(self):"];
+
+    // Act
+    let results = anchors.map(|anchor| {
+        apply_codex(
+            Some(current),
+            &codex_update(&format!("{anchor}\n-        return 1\n+        return 2\n")),
+        )
+        .expect("anchored hunk should apply")
+    });
+
+    // Assert
+    for result in results {
+        assert_eq!(
+            result,
+            "class A:\n    def f(self):\n        return 1\n    def g(self):\n        return 2\n"
+        );
+    }
+}
+
+#[test]
+fn applies_crlf_codex_patches_and_rejects_lone_carriage_returns() {
+    // Arrange
+    let crlf = codex_update(" a\n-b\n+c\n").replace('\n', "\r\n");
+    let lone_return = codex_update(" a\n-b\n+x\ry\n");
+
+    // Act
+    let applied = apply_codex(Some("a\r\nb\r\n"), &crlf).expect("CRLF patch should apply");
+    let rejected =
+        apply_codex(Some("a\nb\n"), &lone_return).expect_err("a lone carriage return is rejected");
+
+    // Assert
+    assert_eq!(applied, "a\r\nc\r\n");
+    assert!(
+        rejected
+            .to_string()
+            .contains("unsupported carriage returns")
+    );
+}
+
+#[test]
+fn rejects_codex_hunks_too_repetitive_to_locate() {
+    // Arrange
+    let current = "x\n".repeat(100_000);
+    let patch = codex_update(&format!("@@\n{}-y\n", " x\n".repeat(100)));
+    // The first hunk is found after nearly the whole budget, so the second
+    // hunk's anchor search runs out of it.
+    let spent_current = format!("{}y\n{}", "x\n".repeat(50_000), "x\n".repeat(100_000));
+    let spent_patch = codex_update(&format!("@@ x\n{}-y\n@@ missing\n x\n", " x\n".repeat(166)));
+
+    // Act
+    let errors = [(current, patch), (spent_current, spent_patch)].map(|(current, patch)| {
+        apply_codex(Some(&current), &patch).expect_err("search should exhaust its budget")
+    });
+
+    // Assert
+    assert!(
+        errors[0]
+            .to_string()
+            .contains("hunk 1 is too repetitive to locate"),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[1]
+            .to_string()
+            .contains("hunk 2 is too repetitive to locate"),
+        "{}",
+        errors[1]
+    );
+}
+
+#[test]
+fn rejects_a_codex_patch_for_another_path() {
+    // Arrange
+    let patch = codex_envelope("*** Update File: src/other.rs\n@@\n-a\n+b\n");
+
+    // Act
+    let error = apply_codex(Some("a\n"), &patch).expect_err("other path should be rejected");
+
+    // Assert
+    assert!(matches!(error, WriteError::PathMismatch { .. }));
+}
+
+#[test]
+fn shows_current_lines_for_codex_hunks_and_anchors_that_match_nowhere() {
+    // Arrange
+    let current = "a\nb\nc\nd\n";
+    let patches = [
+        codex_update("@@ missing\n a\n"),
+        codex_update("@@\n b\n-x\n+y\n"),
+        codex_update("@@\n-a\n+z\n*** End of File\n"),
+        codex_update("@@\n a\n b\n c\n d\n-e\n"),
+    ];
+
+    // Act
+    let results = patches.each_ref().map(|patch| {
+        let error = apply_codex(Some(current), patch).expect_err("hunk should match nowhere");
+        let result = error
+            .to_tool_result(CODEX_PATH)
+            .expect("result should encode");
+
+        serde_json::from_str::<serde_json::Value>(&result).expect("result should be JSON")
+    });
+
+    // Assert
+    let errors = results
+        .each_ref()
+        .map(|result| result["error"].as_str().expect("error text"));
+    assert!(errors[0].contains("hunk 1's `@@ missing` line does not occur"));
+    assert!(errors[1].contains("where the hunk most nearly matches"));
+    assert!(errors[2].contains("at the end of the file"));
+    assert!(errors[3].contains("hunk 1 context and removed lines do not occur"));
+    assert_eq!(
+        results[0]["current"],
+        json!({ "content": current, "end_line": 4, "start_line": 1 })
+    );
+    assert_eq!(results[1]["current"]["start_line"], 1);
 }

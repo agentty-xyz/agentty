@@ -172,6 +172,36 @@ fn validates_arguments_and_exposes_bounded_tool_contract_without_debug_content()
 }
 
 #[test]
+fn accepts_and_ignores_the_timeouts_models_send() {
+    // Arrange
+    let inputs = [
+        r#"{"command":"true","timeout":120000}"#,
+        r#"{"command":"true","timeout_ms":"5"}"#,
+        r#"{"command":"true","timeout":null,"timeout_ms":1}"#,
+    ];
+
+    // Act
+    let calls = inputs.map(|arguments| {
+        ToolCall::from_json("call".into(), "bash", arguments, None).expect("call")
+    });
+
+    // Assert
+    for call in calls {
+        assert!(
+            matches!(
+                call.arguments(),
+                ToolCallArguments::Bash(arguments) if arguments.command() == "true"
+            ),
+            "{call:?}"
+        );
+        assert_eq!(
+            call.arguments_json().expect("arguments"),
+            json!({"command": "true"}).to_string()
+        );
+    }
+}
+
+#[test]
 fn default_denial_and_recorded_permission_serialization_remain_stable() {
     // Arrange
     let permissions = BuiltinPermissions::default();

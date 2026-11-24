@@ -470,6 +470,73 @@ fn write_definition_and_arguments_reject_invalid_input() {
 }
 
 #[test]
+fn write_arguments_take_a_missing_path_from_the_patch_headers() {
+    // Arrange
+    let patch = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n";
+    let inferred = [
+        json!({ "patch": patch }),
+        json!({ "patch": patch, "path": null }),
+    ];
+    let rejected = [
+        json!({ "patch": "--- a/../lib.rs\n+++ b/../lib.rs\n@@ -1 +1 @@\n-a\n+b\n" }),
+        json!({ "patch": "@@ -1 +1 @@\n-a\n+b\n" }),
+    ];
+
+    // Act
+    let inferred = inferred.map(serde_json::from_value::<WriteArguments>);
+    let rejected = rejected.map(serde_json::from_value::<WriteArguments>);
+
+    // Assert
+    for arguments in inferred {
+        assert_eq!(arguments.expect("path from headers").path(), "src/lib.rs");
+    }
+    assert!(
+        rejected[0]
+            .as_ref()
+            .expect_err("an unsafe header path is rejected")
+            .to_string()
+            .contains("parent-directory components")
+    );
+    assert!(
+        rejected[1]
+            .as_ref()
+            .expect_err("no header names a path")
+            .to_string()
+            .contains("missing field `path`")
+    );
+}
+
+#[test]
+fn tool_call_from_json_decodes_arguments_sent_as_a_json_string() {
+    // Arrange
+    let encoded = serde_json::to_string(r#"{"path":"a.rs"}"#).expect("encode");
+    let encoded_invalid = serde_json::to_string(r#"{"path":"a.rs","extra":1}"#).expect("encode");
+    let plain_string = serde_json::to_string("a.rs").expect("encode");
+
+    // Act
+    let call = ToolCall::from_json("call-id".to_string(), "read", &encoded, None).expect("call");
+    let invalid =
+        ToolCall::from_json("call-id".to_string(), "read", &encoded_invalid, None).expect("call");
+    let plain =
+        ToolCall::from_json("call-id".to_string(), "read", &plain_string, None).expect("call");
+
+    // Assert
+    assert_eq!(
+        call.read_arguments().expect("read arguments").path(),
+        "a.rs"
+    );
+    assert_eq!(
+        call.arguments_json().expect("arguments"),
+        r#"{"path":"a.rs"}"#
+    );
+    let malformed = invalid.malformed_arguments().expect("malformed arguments");
+    assert_eq!(malformed.raw(), encoded_invalid);
+    assert!(malformed.reason().contains("unknown field `extra`"));
+    let malformed = plain.malformed_arguments().expect("malformed arguments");
+    assert!(malformed.reason().contains("invalid type: string"));
+}
+
+#[test]
 fn tool_call_exposes_matching_typed_arguments_and_serialization() {
     // Arrange
     let read_arguments = serde_json::from_value(json!({

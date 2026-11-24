@@ -1,5 +1,10 @@
 //! Built-in `write` tool that applies unified-diff patches to repository
 //! files.
+//!
+//! Besides a standard unified diff, the tool accepts the forms models
+//! trained on other harnesses send: a diff without file headers, a diff
+//! inside Codex's `*** Begin Patch`/`*** End Patch` envelope, and Codex's
+//! own `apply_patch` dialect (see [`parse_codex_patch`]).
 
 use std::borrow::Cow;
 use std::io;
@@ -23,6 +28,22 @@ const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_LOCATE_COMPARISONS: usize = 8 * 1024 * 1024;
 /// Candidate line numbers named when a hunk matches several places.
 const MAX_REPORTED_CANDIDATES: usize = 8;
+/// Lines of the target shown before and after the place a hunk that
+/// matches nowhere most nearly matches.
+const SHOWN_CONTEXT_LINES: usize = 3;
+/// Most lines of the target shown with a hunk that matches nowhere.
+const MAX_SHOWN_LINES: usize = 40;
+/// Most bytes of the target shown with a hunk that matches nowhere.
+const MAX_SHOWN_BYTES: usize = 4 * 1024;
+/// First line of a Codex patch, with its line ending.
+const CODEX_BEGIN: &str = "*** Begin Patch\n";
+/// Last line of a Codex patch.
+const CODEX_END: &str = "*** End Patch";
+const CODEX_ADD_FILE: &str = "*** Add File: ";
+const CODEX_DELETE_FILE: &str = "*** Delete File: ";
+const CODEX_END_OF_FILE: &str = "*** End of File";
+const CODEX_MOVE_TO: &str = "*** Move to: ";
+const CODEX_UPDATE_FILE: &str = "*** Update File: ";
 
 /// Successful result of applying one repository write.
 ///
@@ -72,6 +93,20 @@ pub enum WriteError {
     BinaryTarget {
         /// Repository-relative target path.
         path: String,
+    },
+    /// A hunk's context and removed lines match nowhere in the target.
+    /// `content` holds the target's current lines where they most nearly
+    /// match, or around the hunk's position, and the model-facing result
+    /// shows them so the model can correct the hunk without reading the
+    /// file again.
+    #[error("invalid patch: {reason}")]
+    ContextMismatch {
+        /// Current target lines, each with its line ending.
+        content: String,
+        /// Bounded validation diagnostic.
+        reason: String,
+        /// One-based line number of the first line of `content`.
+        start_line: usize,
     },
     /// The bounded tool result could not be encoded for the model.
     #[error("failed to encode write result: {0}")]
@@ -143,6 +178,7 @@ impl WriteError {
     pub(crate) fn is_model_correctable(&self) -> bool {
         match self {
             Self::BinaryTarget { .. }
+            | Self::ContextMismatch { .. }
             | Self::NoChange { .. }
             | Self::Patch { .. }
             | Self::PathMismatch { .. }
@@ -158,14 +194,48 @@ impl WriteError {
 
     pub(crate) fn to_tool_result(&self, path: &str) -> Result<String, serde_json::Error> {
         #[derive(Serialize)]
+        struct CurrentLines<'a> {
+            content: &'a str,
+            end_line: usize,
+            start_line: usize,
+        }
+
+        #[derive(Serialize)]
         struct RejectedWrite<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            current: Option<CurrentLines<'a>>,
             error: String,
             path: &'a str,
             status: &'static str,
         }
 
+        let error = schema_contract::bounded_diagnostic(self);
+        let (current, error) = match self {
+            Self::ContextMismatch {
+                content,
+                start_line,
+                ..
+            } => {
+                let end_line = start_line + content.split_inclusive('\n').count() - 1;
+
+                (
+                    Some(CurrentLines {
+                        content,
+                        end_line,
+                        start_line: *start_line,
+                    }),
+                    format!(
+                        "{error}; `current` holds lines {start_line}-{end_line} of the file as it \
+                         is now; copy context and removed lines exactly from it"
+                    ),
+                )
+            }
+            _ => (None, error),
+        };
+
         serde_json::to_string(&RejectedWrite {
-            error: schema_contract::bounded_diagnostic(self),
+            current,
+            error,
             path,
             status: "rejected",
         })
@@ -310,6 +380,24 @@ impl WriteTool {
     }
 }
 
+/// Returns the repository path the file headers of `patch` name as its
+/// result, for a `write` call that left out its `path`: the `+++` header
+/// without its `b/` prefix, or the path of a Codex patch's
+/// `*** Update File:` or `*** Add File:` line. Only lines before the first
+/// hunk count, and `/dev/null` names no path.
+pub(crate) fn header_target(patch: &str) -> Option<&str> {
+    patch
+        .lines()
+        .take_while(|line| !line.starts_with("@@"))
+        .find_map(|line| {
+            line.strip_prefix("+++ ")
+                .map(|header| header_path(header.split('\t').next().unwrap_or_default()))
+                .or_else(|| codex_target(line))
+        })
+        .map(str::trim_end)
+        .filter(|path| !path.is_empty() && *path != "/dev/null")
+}
+
 /// Hunk that applied away from its header line or only after ignoring
 /// trailing whitespace. Line numbers are one-based in the original file.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -363,10 +451,41 @@ enum PatchLineKind {
     Removal,
 }
 
+impl PatchLineKind {
+    /// Splits a hunk line into its kind and content: a ` `, `+`, or `-`
+    /// prefix, or none for an empty line, which reads as blank context.
+    fn split(line: &str) -> Option<(Self, &str)> {
+        if line.is_empty() {
+            return Some((Self::Context, line));
+        }
+        let (prefix, content) = line.split_at_checked(1)?;
+        let kind = match prefix {
+            "+" => Self::Addition,
+            " " => Self::Context,
+            "-" => Self::Removal,
+            _ => return None,
+        };
+
+        Some((kind, content))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PatchLine {
     kind: PatchLineKind,
     text: TextLine,
+}
+
+impl PatchLine {
+    fn new(kind: PatchLineKind, content: &str, newline: bool) -> Self {
+        Self {
+            kind,
+            text: TextLine {
+                content: content.to_string(),
+                newline,
+            },
+        }
+    }
 }
 
 /// One parsed hunk. Line counts are derived from the body, as with
@@ -564,17 +683,12 @@ impl<'a> HunkApplier<'a> {
                 return Ok(header_index);
             }
         }
-        let too_repetitive = || {
-            patch_error(format!(
-                "hunk {number} is too repetitive to locate within the comparison limit; add \
-                 distinctive context lines or split the patch into smaller writes"
-            ))
-        };
+        let repetitive = || too_repetitive(number);
         let remaining = &self.source_lines[self.source_index..];
         self.comparisons_left = self
             .comparisons_left
             .checked_sub(self.output.len() + remaining.len())
-            .ok_or_else(too_repetitive)?;
+            .ok_or_else(repetitive)?;
         let evolving: Vec<&str> = self
             .output
             .iter()
@@ -584,7 +698,7 @@ impl<'a> HunkApplier<'a> {
         for line_match in [LineMatch::Exact, LineMatch::IgnoringTrailingWhitespace] {
             let candidates =
                 find_matches(&evolving, original, line_match, &mut self.comparisons_left)
-                    .ok_or_else(too_repetitive)?;
+                    .ok_or_else(repetitive)?;
             match candidates.as_slice() {
                 [] => {}
                 [candidate] => {
@@ -610,11 +724,17 @@ impl<'a> HunkApplier<'a> {
             }
         }
 
-        Err(patch_error(format!(
-            "hunk {number} context and removed lines do not match the target at header line {} or \
-             anywhere else; re-read the file and copy those lines exactly",
-            hunk.old_start
-        )))
+        Err(context_mismatch(
+            &self.source_lines,
+            header_index,
+            original,
+            &mut self.comparisons_left,
+            &format!(
+                "hunk {number} context and removed lines do not match the target at header line \
+                 {} or anywhere else",
+                hunk.old_start
+            ),
+        ))
     }
 
     fn copy_source_until(&mut self, start: usize) -> Result<(), WriteError> {
@@ -661,16 +781,528 @@ impl<'a> HunkApplier<'a> {
 fn apply_unified_diff(
     requested_path: &str,
     current: Option<&[u8]>,
-    unified_patch: &str,
+    patch: &str,
 ) -> Result<PatchedText, WriteError> {
-    let diff = parse_unified_diff(unified_patch)?;
-    validate_headers(requested_path, current.is_some(), &diff)?;
     let (bom, text) = decode_text(requested_path, current.unwrap_or_default())?;
     let (line_ending, normalized) = normalize_line_endings(requested_path, text)?;
+    let diff = parse_patch(
+        requested_path,
+        current.is_some().then_some(&*normalized),
+        patch,
+    )?;
+    validate_headers(requested_path, current.is_some(), &diff)?;
     let mut patched = apply_hunks(&normalized, &diff.hunks, line_ending)?;
     patched.content.splice(0..0, bom.iter().copied());
 
     Ok(patched)
+}
+
+/// Parses `text` in the form it is written in: a unified diff, which may
+/// leave out its file headers or sit inside Codex's `*** Begin Patch` and
+/// `*** End Patch` lines, or a Codex `apply_patch` patch, resolved against
+/// `current`, the target's text when it exists. Blank lines that end the
+/// patch are ignored, and a carriage return outside a `\r\n` line ending
+/// rejects every form.
+fn parse_patch(path: &str, current: Option<&str>, text: &str) -> Result<UnifiedDiff, WriteError> {
+    let normalized = text.replace("\r\n", "\n");
+    if normalized.contains('\r') {
+        return Err(patch_error("patch contains unsupported carriage returns"));
+    }
+    let body = normalized.trim_end_matches('\n');
+    let body = match body.strip_prefix(CODEX_BEGIN) {
+        Some(operations) if codex_target(operations).is_some() => {
+            return parse_codex_patch(path, current, operations);
+        }
+        Some(diff) => diff,
+        None => body,
+    };
+    let body = match body.strip_suffix(CODEX_END) {
+        Some(diff) if diff.is_empty() || diff.ends_with('\n') => diff.trim_end_matches('\n'),
+        _ => body,
+    };
+    if !body.starts_with("@@") {
+        return parse_unified_diff(&format!("{body}\n"));
+    }
+    let original = if current.is_some() {
+        format!("a/{path}")
+    } else {
+        "/dev/null".to_string()
+    };
+
+    parse_unified_diff(&format!("--- {original}\n+++ b/{path}\n{body}\n"))
+}
+
+/// Returns the path the first line of `text` names when it is a Codex
+/// `*** Add File:`, `*** Delete File:`, or `*** Update File:` line.
+fn codex_target(text: &str) -> Option<&str> {
+    let line = text.lines().next()?;
+
+    [CODEX_ADD_FILE, CODEX_DELETE_FILE, CODEX_UPDATE_FILE]
+        .into_iter()
+        .find_map(|operation| line.strip_prefix(operation))
+        .map(str::trim)
+}
+
+/// Translates a patch in Codex's `apply_patch` dialect, which models trained
+/// on Codex send, into the hunks this tool applies. `operations` are the
+/// lines after its `*** Begin Patch` line, for the write to `path`, whose
+/// current text is `current` when the file exists.
+///
+/// A patch holds one `*** Add File:` operation whose lines all start with
+/// `+`, or one `*** Update File:` operation whose hunks each start with
+/// `@@`, optionally followed by a line to find first, compared ignoring
+/// surrounding whitespace so it may leave out its indentation. Hunks carry no
+/// line numbers, so each is searched after the previous hunk for its context
+/// and removed lines, exactly or else ignoring trailing whitespace. A hunk with
+/// an `@@` line applies at the first match after that line, as in Codex; a
+/// hunk without one must match exactly one place after the previous hunk,
+/// so a short, repeated hunk is rejected rather than applied to the wrong
+/// place. `*** End of File` makes a hunk match only at the end of the file.
+/// A hunk of only added lines appends to the file. Deleting or moving a
+/// file, and changing several files in one call, are rejected with a
+/// correction.
+fn parse_codex_patch(
+    path: &str,
+    current: Option<&str>,
+    operations: &str,
+) -> Result<UnifiedDiff, WriteError> {
+    let operations = match operations.strip_suffix(CODEX_END) {
+        Some(body) if body.ends_with('\n') => body,
+        _ => operations,
+    };
+    let mut lines = operations.lines();
+    let operation = lines.next().unwrap_or_default();
+    let body: Vec<&str> = lines.collect();
+    if body.iter().any(|line| codex_target(line).is_some()) {
+        return Err(WriteError::Unsupported {
+            reason: "a Codex patch may change only the file named by `path`; send one `write` \
+                     call per file"
+                .to_string(),
+        });
+    }
+    if codex_target(operation) != Some(path) {
+        return Err(WriteError::PathMismatch {
+            path: path.to_string(),
+        });
+    }
+    if operation.starts_with(CODEX_ADD_FILE) {
+        return codex_add_file(path, &body);
+    }
+    if operation.starts_with(CODEX_DELETE_FILE) {
+        return Err(WriteError::Unsupported {
+            reason: "`write` cannot delete files; delete it with `bash` if that is available, or \
+                     tell the user it should be deleted"
+                .to_string(),
+        });
+    }
+
+    codex_update_file(path, current, &body)
+}
+
+/// Translates a Codex `*** Add File:` operation into a creation diff.
+fn codex_add_file(path: &str, body: &[&str]) -> Result<UnifiedDiff, WriteError> {
+    let lines = body
+        .iter()
+        .map(|line| {
+            line.strip_prefix('+')
+                .map(|content| PatchLine::new(PatchLineKind::Addition, content, true))
+                .ok_or_else(|| patch_error("every `*** Add File:` line must start with `+`"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let hunks = if lines.is_empty() {
+        Vec::new()
+    } else {
+        vec![Hunk {
+            lines,
+            new_start: 1,
+            old_count: 0,
+            old_start: 0,
+        }]
+    };
+
+    Ok(UnifiedDiff {
+        hunks,
+        modified_path: format!("b/{path}"),
+        original_path: "/dev/null".to_string(),
+    })
+}
+
+/// One `@@` hunk of a Codex `*** Update File:` operation.
+#[derive(Default)]
+struct CodexHunk<'a> {
+    anchor: Option<&'a str>,
+    end_of_file: bool,
+    lines: Vec<(PatchLineKind, &'a str)>,
+}
+
+/// Translates a Codex `*** Update File:` operation into hunks placed
+/// against `current`.
+fn codex_update_file(
+    path: &str,
+    current: Option<&str>,
+    body: &[&str],
+) -> Result<UnifiedDiff, WriteError> {
+    let Some(current) = current else {
+        return Err(WriteError::Unsupported {
+            reason: "`*** Update File:` names a file that does not exist; create it with `*** Add \
+                     File:`"
+                .to_string(),
+        });
+    };
+    let body = match body.split_first() {
+        Some((line, rest)) if line.starts_with(CODEX_MOVE_TO) => {
+            if line[CODEX_MOVE_TO.len()..].trim() != path {
+                return Err(WriteError::Unsupported {
+                    reason: "`write` cannot move files; create the file at its new path with `*** \
+                             Add File:`, then delete the old one with `bash` if that is available"
+                        .to_string(),
+                });
+            }
+
+            rest
+        }
+        _ => body,
+    };
+    let codex_hunks = parse_codex_hunks(body)?;
+    let source: Vec<&str> = current.split_inclusive('\n').collect();
+    // Hunk lines carry no end-of-file marker, so they are searched as if
+    // the final line had a line ending.
+    let terminated = if current.is_empty() || current.ends_with('\n') {
+        Cow::Borrowed(current)
+    } else {
+        Cow::Owned(format!("{current}\n"))
+    };
+    let searched: Vec<&str> = terminated.split_inclusive('\n').collect();
+    let mut placement = CodexPlacement {
+        comparisons_left: MAX_LOCATE_COMPARISONS,
+        consumed: 0,
+        cursor: 0,
+        produced: 0,
+        searched: &searched,
+        source: &source,
+    };
+    let hunks = codex_hunks
+        .iter()
+        .enumerate()
+        .map(|(index, codex_hunk)| placement.place(index + 1, codex_hunk))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(UnifiedDiff {
+        hunks,
+        modified_path: format!("b/{path}"),
+        original_path: format!("a/{path}"),
+    })
+}
+
+/// Splits a Codex update's lines into hunks. Lines before the first `@@`
+/// form a hunk of their own, as Codex accepts. A unified-diff range after
+/// `@@`, such as `@@ -4,2 +4,3 @@`, is ignored like the line numbers Codex
+/// hunks lack.
+fn parse_codex_hunks<'a>(body: &[&'a str]) -> Result<Vec<CodexHunk<'a>>, WriteError> {
+    let mut hunks: Vec<CodexHunk<'a>> = vec![CodexHunk::default()];
+    for line in body {
+        let last = hunks.len() - 1;
+        if let Some(anchor) = line.strip_prefix("@@") {
+            let anchor = anchor.trim();
+            let range = anchor
+                .strip_prefix('-')
+                .is_some_and(|range| range.starts_with(|first: char| first.is_ascii_digit()));
+            let hunk = CodexHunk {
+                anchor: (!anchor.is_empty() && !range).then_some(anchor),
+                ..CodexHunk::default()
+            };
+            // The first `@@` replaces the unmarked hunk while it is empty.
+            let first = &hunks[0];
+            if last == 0 && first.lines.is_empty() && !first.end_of_file && first.anchor.is_none() {
+                hunks[0] = hunk;
+            } else {
+                hunks.push(hunk);
+            }
+
+            continue;
+        }
+        let hunk = &mut hunks[last];
+        if *line == CODEX_END_OF_FILE {
+            hunk.end_of_file = true;
+
+            continue;
+        }
+        let line = PatchLineKind::split(line).ok_or_else(|| {
+            patch_error("Codex patch hunk line must start with space, `+`, or `-`")
+        })?;
+        hunk.lines.push(line);
+    }
+    if let Some(number) = hunks.iter().position(|hunk| hunk.lines.is_empty()) {
+        return Err(patch_error(format!(
+            "hunk {} contains no patch lines",
+            number + 1
+        )));
+    }
+
+    Ok(hunks)
+}
+
+/// Places a Codex update's hunks in order against the target's lines.
+struct CodexPlacement<'a, 'b> {
+    comparisons_left: usize,
+    /// Source lines before the end of the previous hunk.
+    consumed: usize,
+    /// Source line from which the next hunk is searched.
+    cursor: usize,
+    /// Modified lines before the end of the previous hunk.
+    produced: usize,
+    /// `source` with a line ending on every line.
+    searched: &'b [&'a str],
+    source: &'b [&'a str],
+}
+
+impl CodexPlacement<'_, '_> {
+    /// Places hunk `number` after the previous one and returns it with the
+    /// line numbers the unified-diff applier expects.
+    fn place(&mut self, number: usize, codex_hunk: &CodexHunk<'_>) -> Result<Hunk, WriteError> {
+        if let Some(anchor) = codex_hunk.anchor {
+            let anchor_line = TextLine {
+                content: anchor.to_string(),
+                newline: true,
+            };
+            let found = self.anchor_after(number, anchor)?;
+            let found = found.ok_or_else(|| {
+                self.mismatch(
+                    &[&anchor_line],
+                    &format!(
+                        "hunk {number}'s `@@ {anchor}` line does not occur after the previous hunk"
+                    ),
+                )
+            })?;
+            self.cursor = found + 1;
+        }
+        let original: Vec<TextLine> = codex_hunk
+            .lines
+            .iter()
+            .filter(|(kind, _)| *kind != PatchLineKind::Addition)
+            .map(|(_, content)| TextLine {
+                content: (*content).to_string(),
+                newline: true,
+            })
+            .collect();
+        if original.is_empty() {
+            if codex_hunk.anchor.is_some() {
+                return Err(patch_error(format!(
+                    "hunk {number} has only added lines after its `@@` line; add the line they \
+                     follow as a context line starting with a space"
+                )));
+            }
+
+            return self.append(number, codex_hunk);
+        }
+        let original: Vec<&TextLine> = original.iter().collect();
+        let from = if codex_hunk.end_of_file {
+            self.source
+                .len()
+                .saturating_sub(original.len())
+                .max(self.cursor)
+        } else {
+            self.cursor
+        };
+        // An `@@` line or the end of the file already pins the place.
+        let limit = if codex_hunk.anchor.is_some() || codex_hunk.end_of_file {
+            1
+        } else {
+            2
+        };
+        let start = match self
+            .matches_after(number, from, &original, limit)?
+            .as_slice()
+        {
+            [start] => *start,
+            [] => {
+                let place = if codex_hunk.end_of_file {
+                    " at the end of the file"
+                } else {
+                    ""
+                };
+
+                return Err(self.mismatch(
+                    &original,
+                    &format!(
+                        "hunk {number} context and removed lines do not occur after the previous \
+                         hunk{place}"
+                    ),
+                ));
+            }
+            [first, second, ..] => {
+                return Err(patch_error(format!(
+                    "hunk {number} matches more than one place after the previous hunk, at lines \
+                     {} and {}; add an `@@` line naming a line above the change, such as its \
+                     enclosing function, or add context lines",
+                    first + 1,
+                    second + 1
+                )));
+            }
+        };
+
+        Ok(self.hunk(start, start + 1, codex_hunk))
+    }
+
+    /// Returns the first source line after the previous hunk that equals
+    /// `anchor` once surrounding whitespace is ignored on both, as Codex
+    /// matches an `@@` line, which models write with or without the line's
+    /// indentation.
+    ///
+    /// # Errors
+    /// Returns why hunk `number` cannot be located once the comparison
+    /// budget runs out.
+    fn anchor_after(&mut self, number: usize, anchor: &str) -> Result<Option<usize>, WriteError> {
+        for (offset, line) in self.searched[self.cursor..].iter().enumerate() {
+            self.comparisons_left = self
+                .comparisons_left
+                .checked_sub(1)
+                .ok_or_else(|| too_repetitive(number))?;
+            if line.trim() == anchor {
+                return Ok(Some(self.cursor + offset));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Returns up to `limit` indexes, in order, from `from` where `original`
+    /// matches the source exactly or, when it matches nowhere exactly,
+    /// ignoring trailing whitespace.
+    ///
+    /// # Errors
+    /// Returns why hunk `number` cannot be located once the comparison
+    /// budget runs out.
+    fn matches_after(
+        &mut self,
+        number: usize,
+        from: usize,
+        original: &[&TextLine],
+        limit: usize,
+    ) -> Result<Vec<usize>, WriteError> {
+        let Some(last) = self.searched.len().checked_sub(original.len()) else {
+            return Ok(Vec::new());
+        };
+        for line_match in [LineMatch::Exact, LineMatch::IgnoringTrailingWhitespace] {
+            let mut found = Vec::new();
+            'starts: for start in from..=last {
+                for (source, expected) in self.searched[start..].iter().zip(original) {
+                    self.comparisons_left = self
+                        .comparisons_left
+                        .checked_sub(1)
+                        .ok_or_else(|| too_repetitive(number))?;
+                    if !line_match.matches(source, expected) {
+                        continue 'starts;
+                    }
+                }
+                found.push(start);
+                if found.len() == limit {
+                    break;
+                }
+            }
+            if !found.is_empty() {
+                return Ok(found);
+            }
+        }
+
+        Ok(Vec::new())
+    }
+
+    fn mismatch(&mut self, original: &[&TextLine], problem: &str) -> WriteError {
+        context_mismatch(
+            self.source,
+            self.cursor,
+            original,
+            &mut self.comparisons_left,
+            problem,
+        )
+    }
+
+    /// Places a hunk of only added lines after the target's last line, which
+    /// it rewrites with a line ending when that line has none.
+    fn append(&mut self, number: usize, codex_hunk: &CodexHunk<'_>) -> Result<Hunk, WriteError> {
+        let Some(last) = self.source.len().checked_sub(1).filter(|last| {
+            let line = self.source[*last];
+
+            !line.ends_with('\n')
+        }) else {
+            return Ok(self.hunk(self.source.len(), self.source.len(), codex_hunk));
+        };
+        if last < self.consumed {
+            return Err(patch_error(format!(
+                "hunk {number} appends after an earlier hunk that ends at the file's last line; \
+                 merge them into one hunk"
+            )));
+        }
+
+        Ok(self.hunk(last, last + 1, codex_hunk))
+    }
+
+    /// Builds the hunk for `codex_hunk`, starting at source index `start`,
+    /// with `old_start` its header's original start. A line matched against
+    /// the target's final line, when that line has no line ending, keeps it
+    /// missing; a hunk that adds lines after that line rewrites it with a
+    /// line ending first.
+    fn hunk(&mut self, start: usize, old_start: usize, codex_hunk: &CodexHunk<'_>) -> Hunk {
+        let unterminated = self
+            .source
+            .last()
+            .filter(|line| !line.ends_with('\n'))
+            .map(|_| self.source.len() - 1);
+        let mut lines = Vec::new();
+        let mut position = start;
+        let appends_to_unterminated = start < self.source.len()
+            && codex_hunk
+                .lines
+                .iter()
+                .all(|(kind, _)| *kind == PatchLineKind::Addition);
+        if appends_to_unterminated {
+            lines.extend(self.terminated(start));
+            position += 1;
+        }
+        for (index, (kind, content)) in codex_hunk.lines.iter().enumerate() {
+            if *kind == PatchLineKind::Addition {
+                lines.push(PatchLine::new(*kind, content, true));
+
+                continue;
+            }
+            let at_unterminated = Some(position) == unterminated;
+            let followed = index + 1 < codex_hunk.lines.len();
+            if at_unterminated && *kind == PatchLineKind::Context && followed {
+                lines.extend(self.terminated(position));
+            } else {
+                lines.push(PatchLine::new(*kind, content, !at_unterminated));
+            }
+            position += 1;
+        }
+        let old_count = position - start;
+        let new_count = lines
+            .iter()
+            .filter(|line| line.kind != PatchLineKind::Removal)
+            .count();
+        let new_index = self.produced + (start - self.consumed);
+        self.consumed = start + old_count;
+        self.produced = new_index + new_count;
+        self.cursor = self.cursor.max(self.consumed);
+
+        Hunk {
+            lines,
+            new_start: new_index + 1,
+            old_count,
+            old_start,
+        }
+    }
+
+    /// Returns the lines that rewrite the target's unterminated final line,
+    /// at source index `index`, with a line ending.
+    fn terminated(&self, index: usize) -> [PatchLine; 2] {
+        let content = self.source[index];
+
+        [
+            PatchLine::new(PatchLineKind::Removal, content, false),
+            PatchLine::new(PatchLineKind::Addition, content, true),
+        ]
+    }
 }
 
 fn parse_unified_diff(patch: &str) -> Result<UnifiedDiff, WriteError> {
@@ -730,24 +1362,13 @@ where
     Ok(hunk_lines)
 }
 
+/// Parses one hunk line. An empty line is a blank context line whose
+/// leading space was dropped, as editors and models often do.
 fn parse_patch_line(line: &str) -> Result<PatchLine, WriteError> {
-    let (prefix, content) = line
-        .split_at_checked(1)
-        .ok_or_else(|| patch_error("hunk contains an empty patch line"))?;
-    let kind = match prefix {
-        "+" => PatchLineKind::Addition,
-        " " => PatchLineKind::Context,
-        "-" => PatchLineKind::Removal,
-        _ => return Err(patch_error("hunk line must start with space, `+`, or `-`")),
-    };
+    let (kind, content) = PatchLineKind::split(line)
+        .ok_or_else(|| patch_error("hunk line must start with space, `+`, or `-`"))?;
 
-    Ok(PatchLine {
-        kind,
-        text: TextLine {
-            content: content.to_string(),
-            newline: true,
-        },
-    })
+    Ok(PatchLine::new(kind, content, true))
 }
 
 fn parse_header(line: Option<&str>, prefix: &str) -> Result<String, WriteError> {
@@ -957,6 +1578,94 @@ fn ambiguous_hunk_error(number: usize, candidates: &[usize], line_match: LineMat
          {lines}{numbering}{comparison}; re-read the file and add context lines so the hunk \
          matches exactly one place"
     ))
+}
+
+/// Returns the error for hunk `number` when locating it exhausts the
+/// patch's comparison budget.
+fn too_repetitive(number: usize) -> WriteError {
+    patch_error(format!(
+        "hunk {number} is too repetitive to locate within the comparison limit; add distinctive \
+         context lines or split the patch into smaller writes"
+    ))
+}
+
+/// Returns the error for a hunk whose `original` lines match nowhere,
+/// described by `problem`, with the target's current lines where those
+/// lines most nearly match or, failing that, around index `near`, so the
+/// model can copy them instead of reading the file again.
+///
+/// The nearest match is the place where the most non-blank lines of the
+/// hunk match the target ignoring surrounding whitespace, the one closest
+/// to `near` among equals; finding it spends the patch's comparison budget, and
+/// once that runs out the lines around `near` are shown. At most
+/// [`MAX_SHOWN_LINES`] whole lines within [`MAX_SHOWN_BYTES`] are shown.
+fn context_mismatch(
+    lines: &[&str],
+    near: usize,
+    original: &[&TextLine],
+    comparisons_left: &mut usize,
+    problem: &str,
+) -> WriteError {
+    let nearest = nearest_match(lines, original, near, comparisons_left);
+    let anchor = nearest.unwrap_or(near).min(lines.len().saturating_sub(1));
+    let start = anchor.saturating_sub(SHOWN_CONTEXT_LINES);
+    let end = (anchor + original.len() + SHOWN_CONTEXT_LINES)
+        .min(lines.len())
+        .min(start + MAX_SHOWN_LINES);
+    let mut content = String::new();
+    for line in &lines[start..end] {
+        if content.len() + line.len() > MAX_SHOWN_BYTES {
+            break;
+        }
+        content.push_str(line);
+    }
+    if content.is_empty() {
+        return patch_error(format!(
+            "{problem}; re-read the file and copy those lines exactly"
+        ));
+    }
+    let place = if nearest.is_some() {
+        "the lines where the hunk most nearly matches are attached"
+    } else {
+        "the lines around the hunk's position are attached"
+    };
+
+    WriteError::ContextMismatch {
+        content,
+        reason: schema_contract::bounded_diagnostic(format!("{problem}; {place}")),
+        start_line: start + 1,
+    }
+}
+
+/// Returns the start index where the most non-blank `original` lines match
+/// `lines` ignoring surrounding whitespace, the one closest to `near` among
+/// equals, or `None` when no line matches or the comparison budget runs out.
+fn nearest_match(
+    lines: &[&str],
+    original: &[&TextLine],
+    near: usize,
+    comparisons_left: &mut usize,
+) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None;
+    for start in 0..lines.len() {
+        let mut score = 0;
+        for (source, expected) in lines[start..].iter().zip(original) {
+            *comparisons_left = comparisons_left.checked_sub(1)?;
+            let source = strip_patch_newline(source);
+            if !expected.content.trim().is_empty() && source.trim() == expected.content.trim() {
+                score += 1;
+            }
+        }
+        let better = best.is_none_or(|(best_score, best_start)| {
+            score > best_score
+                || (score == best_score && start.abs_diff(near) < best_start.abs_diff(near))
+        });
+        if score > 0 && better {
+            best = Some((score, start));
+        }
+    }
+
+    best.map(|(_, start)| start)
 }
 
 fn strip_patch_newline(line: &str) -> &str {
