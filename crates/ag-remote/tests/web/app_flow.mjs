@@ -457,20 +457,15 @@ async function routeFlow() {
     label: syncLabel,
   });
 
-  // The sidebar names the project and its branch. Its Sync asks first, and
-  // the next listing reports the sync.
+  // The sidebar names the project and its branch. Its Sync starts at once,
+  // and the next listing reports the sync.
   const branch = part("project-branch").textContent + " " + part("project-counts").textContent;
   part("project-sync").click();
-  const projectAskedFirst = byId("project-sync-dialog").open;
-  const target = byId("project-sync-target").textContent;
-  byId("project-sync-dialog").querySelector('button[value="confirm"]').click();
   await waitFor("the sync to be accepted", () => part("project-sync-label").textContent === "Sync");
   report({
     step: "project",
-    askedFirst: projectAskedFirst,
     branch: branch,
     error: part("project-error").textContent,
-    target: target,
   });
   await waitFor("the sync's progress", () => !part("project-status").hidden);
   report({

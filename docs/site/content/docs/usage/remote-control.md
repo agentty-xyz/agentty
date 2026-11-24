@@ -69,10 +69,10 @@ for you, with their changed lines.
 
 The top of the sidebar names the active project, its branch, and how far that branch is
 from its remote: `↓2 ↑1` means two commits to pull and one to push, and `✓` means none.
-When this Agentty lets devices sync the project, `Sync` beside it asks first, then pulls
-and pushes that branch as `s` does in the terminal. The line under it follows the sync
-and shows its result for a few seconds. A sync that cannot start, such as while a merge
-runs, says why.
+When this Agentty lets devices sync the project, `Sync` beside it pulls and pushes that
+branch as `s` does in the terminal. The line under it follows the sync and shows its
+result for a few seconds. A sync that cannot start, such as while a merge runs, says
+why.
 
 When this Agentty lets devices create sessions, the sidebar offers `New session`. Home
 then asks what the agent should work on in the active project and base branch, with a

@@ -393,10 +393,8 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
         project,
         json!({
             "step": "project",
-            "askedFirst": true,
             "branch": "main ↓2 ↑0",
             "error": "",
-            "target": "agentty/main",
         })
     );
     assert_eq!(

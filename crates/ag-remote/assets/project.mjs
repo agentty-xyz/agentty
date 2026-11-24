@@ -1,14 +1,14 @@
 // Active project of the remote control client: the sidebar line with the
 // project's name, its branch and how far that branch is from its
 // upstream, the progress of its sync, and, with the `sync_project`
-// capability, the button that syncs it after a confirmation. The project
-// comes with each session listing; a host that does not report it shows
-// only the name `get_host` gives. Names, branches and the host's messages
-// only ever become text nodes. The module reaches the page only through
-// the elements it is given, so the Node tests in
+// capability, the button that syncs it. The project comes with each
+// session listing; a host that does not report it shows only the name
+// `get_host` gives. Names, branches and the host's messages only ever
+// become text nodes. The module reaches the page only through the
+// elements it is given, so the Node tests in
 // crates/ag-remote/tests/web/project.test.mjs pass the fake DOM.
 
-import { projectCounts, projectSyncLine, projectSyncTarget } from "./format.mjs";
+import { projectCounts, projectSyncLine } from "./format.mjs";
 
 // Whether the host lets this device sync the active project.
 export function offersProjectSync(capabilities) {
@@ -17,9 +17,7 @@ export function offersProjectSync(capabilities) {
 
 // Wires the project line. `elements` holds `line` (the whole block),
 // `name`, `branch`, `counts` (the distance from upstream), `status` (the
-// sync's progress), `error`, `sync` (the button) with `syncLabel`, and
-// `dialog` with `dialogTarget` and `dialogBranch`, the nodes with the ids
-// named in index.html.
+// sync's progress), `error`, and `sync` (the button) with `syncLabel`.
 // `request(body)` sends one request and resolves with its result.
 //
 // Returns `update(project)` for the project of a new listing (`null` when
@@ -31,8 +29,6 @@ export function createProject({ elements, request }) {
     capabilities: [],
     // The name `get_host` gives, shown while no listing names the project.
     hostName: null,
-    // Whether the sync dialog is open for this project.
-    isAsking: false,
     isConnected: false,
     // Whether a sync request waits for the host's answer.
     isRequesting: false,
@@ -55,15 +51,6 @@ export function createProject({ elements, request }) {
     elements.sync.disabled = isSyncing || !state.isConnected;
     elements.sync.setAttribute("aria-busy", String(isSyncing));
     elements.syncLabel.textContent = isSyncing ? "Syncing…" : "Sync";
-    if (state.isAsking) {
-      renderDialog();
-    }
-  }
-
-  // The shared dialog names this project while it asks.
-  function renderDialog() {
-    elements.dialogTarget.textContent = projectSyncTarget(state.project) || "the project";
-    elements.dialogBranch.textContent = state.project?.branch ?? "its branch";
   }
 
   // The status is a live region: unchanged text is not written again, so
@@ -90,21 +77,9 @@ export function createProject({ elements, request }) {
     render();
   }
 
-  elements.sync.addEventListener("click", () => {
-    state.isAsking = true;
-    renderDialog();
-    elements.dialog.returnValue = "";
-    elements.dialog.showModal();
-  });
-  // Several Agenttys' project lines share the dialog; only the one that
-  // asked acts on its answer.
-  elements.dialog.addEventListener("close", () => {
-    const wasAsking = state.isAsking;
-    state.isAsking = false;
-    if (wasAsking && elements.dialog.returnValue === "confirm" && !elements.sync.disabled) {
-      void sync();
-    }
-  });
+  // A disabled button gets no clicks, and `sync` disables it at once, so
+  // one sync waits for the host at a time.
+  elements.sync.addEventListener("click", () => void sync());
 
   render();
 

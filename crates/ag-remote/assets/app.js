@@ -89,9 +89,6 @@ const elements = {
   "drawer-close": document.getElementById("drawer-close"),
   "instance-slot": document.getElementById("instance-slot"),
   "instance-prototype": document.getElementById("instance-prototype"),
-  "project-sync-dialog": document.getElementById("project-sync-dialog"),
-  "project-sync-target": document.getElementById("project-sync-target"),
-  "project-sync-branch": document.getElementById("project-sync-branch"),
   filter: document.getElementById("filter"),
   "filter-key": document.getElementById("filter-key"),
   chips: document.getElementById("chips"),
@@ -520,12 +517,7 @@ function createInstance(id, pairing) {
     window: window,
   });
   instance.project = createProject({
-    elements: {
-      ...view.project,
-      dialog: elements["project-sync-dialog"],
-      dialogBranch: elements["project-sync-branch"],
-      dialogTarget: elements["project-sync-target"],
-    },
+    elements: view.project,
     request: instance.connection.request,
   });
   // Reloads the list and the open session, at most once a second and not
