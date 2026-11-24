@@ -95,6 +95,15 @@ pub(crate) const SUMMARY_MAX_PERCENT: u64 = 15;
 /// reduces its requests deterministically.
 pub(crate) const MAX_SUMMARY_FAILURES_PER_TURN: usize = 2;
 
+/// Share, in percent, of a request's message weight that clearing the older
+/// tool results later calls superseded must save before a request within
+/// the budget clears them. A file read before the model rewrote it, or one
+/// it read again, shows outdated or duplicate text the model may still act
+/// on, but clearing it rewrites the cached prefix from that result on, so
+/// stale results are cleared together, only once removing them shrinks
+/// every following request by a large share.
+pub(crate) const STALE_RESULTS_PERCENT: u64 = 25;
+
 /// Placeholder that replaces cleared provider reasoning. Providers that
 /// require reasoning on replayed assistant tool calls still receive a
 /// non-empty value.
@@ -184,7 +193,10 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// latest results further and the latest write patches to their outcome. Every
 /// reduced message keeps its reduced form, so the following requests append to
 /// it. With [`ContextSummaryPolicy::Enabled`], earlier tool rounds may instead
-/// be replaced by a model-written summary before those steps.
+/// be replaced by a model-written summary before those steps. Superseded
+/// results are also cleared from a request within the budget, all at once,
+/// once that saves a quarter of its message weight (see
+/// [`STALE_RESULTS_PERCENT`]).
 /// The stored byte-based replay budget still bounds how much history is
 /// loaded. For a model with a declared context window, a new session's stored
 /// byte budget is derived from this request budget, capped at 256 KiB (see
@@ -1210,7 +1222,9 @@ fn instruction_weight(
 ///
 /// Canonical turn messages only grow by appending, and every reduction is
 /// sticky: a message is reduced at most once, when a request exceeds the
-/// budget, and keeps that form in every later request. Results and call
+/// budget or clearing its superseded results saves
+/// [`STALE_RESULTS_PERCENT`] of it, and
+/// keeps that form in every later request. Results and call
 /// messages are reduced oldest first behind watermarks, dropped rounds are
 /// named by notes appended after the earlier ones, and the latest round's
 /// cut results stay cut. A request that fits therefore only appends its new
@@ -1384,9 +1398,9 @@ impl ContextFit {
     ///
     /// A request within the budget is sent as the previous request's reduced
     /// copy with the new messages appended. A request that exceeds the budget
-    /// first clears older tool results that a later call of the request
-    /// superseded, oldest first, until it weighs at most
-    /// [`FIT_TARGET_PERCENT`] of its capacity (see [`Self::elide_superseded`]).
+    /// first clears every older tool result that a later call of the request
+    /// superseded (see [`Self::elide_superseded`]), as does a request within
+    /// the budget once clearing them saves [`STALE_RESULTS_PERCENT`] of it.
     /// It then caps each result the latest round added above
     /// [`RESULT_CAP_PERCENT`] of its capacity, and the round's largest results
     /// while together they exceed [`LATEST_ROUND_CAP_PERCENT`] (see
@@ -1442,7 +1456,10 @@ impl ContextFit {
             base.saturating_add(self.canonical_weight) - budget.reserved_output_weight();
         let previous = self.fitted.take();
         let forced = summary == Some(ContextSummaryTrigger::ContextOverflow);
+        let layout = Layout::new(request);
+        let mut changed = self.clear_stale_results(estimator, request, &layout, base);
         if !forced
+            && !changed
             && previous.is_none()
             && !self.reduced
             && base.saturating_add(self.required) <= budget_weight
@@ -1451,10 +1468,10 @@ impl ContextFit {
 
             return Ok(FitStep::Send(None, ContextActivity::default()));
         }
-        let layout = Layout::new(request);
         let over = base.saturating_add(self.required) > budget_weight;
-        let mut changed =
-            over && self.clear_stale_and_cap(estimator, budget, request, &layout, base);
+        if over && self.clear_stale_and_cap(estimator, budget, request, &layout, base) {
+            changed = true;
+        }
         if let Some(trigger) = summary
             && (forced
                 || (over
@@ -1649,6 +1666,52 @@ impl ContextFit {
         budget
             .reserved_output_weight()
             .saturating_add(Self::capacity(budget).saturating_mul(percent) / 100)
+    }
+
+    /// Clears every older result of the current turn that a later call
+    /// superseded, past the elision watermark and before the latest round,
+    /// once clearing them would save at least [`STALE_RESULTS_PERCENT`] of
+    /// the request's message weight, and returns whether any sent message
+    /// changed. Each result becomes the notice naming its newer call, so the
+    /// model stops acting on a file's text from before it rewrote the file.
+    /// A result its notice would not shrink saves nothing, so it never
+    /// counts toward the share. This runs before every fit, also within the
+    /// budget: the savings must build up again before the next such rewrite
+    /// of the cached prefix.
+    fn clear_stale_results(
+        &mut self,
+        estimator: &dyn ContextEstimator,
+        request: &ModelRequest,
+        layout: &Layout<'_>,
+        base: u64,
+    ) -> bool {
+        let messages = request.messages();
+        let stale = self.stale_results(messages, layout.latest_round);
+        let savings: u64 = stale
+            .iter()
+            .filter_map(|(index, supersession)| {
+                let notice = elided_result(&messages[*index], &self.records, Some(supersession))?;
+
+                self.messages[*index]
+                    .weight
+                    .checked_sub(estimator.message_weight(&notice))
+            })
+            .sum();
+        if savings.saturating_mul(100) < self.required.saturating_mul(STALE_RESULTS_PERCENT) {
+            return false;
+        }
+        let mut changed = false;
+        let mut tier = Tier {
+            base,
+            changed: &mut changed,
+            estimator,
+            messages,
+            // Clearing stale results reads no target: every one goes.
+            target: 0,
+        };
+        self.elide_stale(&mut tier, stale);
+
+        changed
     }
 
     /// Elides superseded older results, then caps the oversized results of
@@ -2211,29 +2274,41 @@ impl ContextFit {
         excerpt(low)
     }
 
-    /// Elides the tool results past the elision watermark, before the
-    /// latest round, that a later call of the request superseded, oldest
-    /// first, until the request weighs at most the tier's target. A result is
-    /// superseded when a later call re-read the same target over at least
-    /// its lines, applied a write to the file it read, or reran the same
-    /// command; its notice names that call. Staleness is weighed only while
-    /// a request exceeds the budget, and a result elided this way stays
-    /// elided, so later requests keep sharing the reduced prefix.
+    /// Elides every tool result past the elision watermark, before the
+    /// latest round, that a later call of the request superseded (see
+    /// [`Self::stale_results`]). Staleness is weighed while a request exceeds
+    /// the budget or once clearing it would save [`STALE_RESULTS_PERCENT`]
+    /// of the request, and all of it is cleared in that one rewrite, since
+    /// no stale result is worth a later rewrite of the cached prefix. A
+    /// result elided this way stays elided, so later requests keep sharing
+    /// the reduced prefix.
     fn elide_superseded(&mut self, tier: &mut Tier<'_>, latest_round: usize) {
-        // Replayed history is cleared with the plain notices of its elided
-        // form, so the next turn can replay it as sent.
-        let superseded = find_superseded(
-            tier.messages,
+        let stale = self.stale_results(tier.messages, latest_round);
+        self.elide_stale(tier, stale);
+    }
+
+    /// Returns the results past the elision watermark, before the latest
+    /// round, not yet elided, that a later call superseded: it re-read the
+    /// same target over at least their lines, applied a write to the file
+    /// they read, or reran the same command. Replayed history is cleared
+    /// only with the plain notices of its elided form, so the next turn can
+    /// replay it as sent.
+    fn stale_results<'a>(
+        &self,
+        messages: &'a [ModelMessage],
+        latest_round: usize,
+    ) -> Vec<(usize, Supersession<'a>)> {
+        find_superseded(
+            messages,
             &self.messages,
             self.elided_results_before.max(self.history_end)..latest_round,
-        );
-        for (index, supersession) in superseded {
-            if tier.base.saturating_add(self.required) <= tier.target {
-                return;
-            }
-            if self.messages[index].changes & Reduction::ElideResult.flag() != 0 {
-                continue;
-            }
+        )
+    }
+
+    /// Replaces each of the `stale` results with the notice naming the call
+    /// that superseded it, when the notice weighs less.
+    fn elide_stale(&mut self, tier: &mut Tier<'_>, stale: Vec<(usize, Supersession<'_>)>) {
+        for (index, supersession) in stale {
             if self.elide(tier, index, Some(&supersession)) {
                 self.messages[index].changes |= SUPERSEDED_FLAG;
                 self.superseded_results += 1;
@@ -2872,18 +2947,18 @@ impl SupersessionCause {
     fn notice(self) -> &'static str {
         match self {
             Self::Reread => concat!(
-                "This earlier read result was cleared to fit the context window because a later \
-                 read of the same target, named in superseded_by, returned it again. ",
+                "This earlier read result was cleared from the context because a later read of \
+                 the same target, named in superseded_by, returned it again. ",
                 newer_result_guidance!()
             ),
             Self::Rerun => {
-                "This earlier command result was cleared to fit the context window because the \
-                 same command ran again later, in the call named in superseded_by. That newer \
-                 result supersedes it; do NOT repeat the command to recover this output."
+                "This earlier command result was cleared from the context because the same command \
+                 ran again later, in the call named in superseded_by. That newer result supersedes \
+                 it; do NOT repeat the command to recover this output."
             }
             Self::Write => {
-                "This earlier read result was cleared to fit the context window because a later \
-                 write, named in superseded_by, changed the file it showed, so its content is not \
+                "This earlier read result was cleared from the context because a later write, \
+                 named in superseded_by, changed the file it showed, so its content is not \
                  current. If you still need the file, read it again, narrowed with offset/limit, \
                  before using it."
             }
@@ -3119,9 +3194,10 @@ fn carries_reasoning(message: &ModelMessage) -> bool {
     })
 }
 
-/// Returns, oldest first, each tool result whose index lies in `range` that
-/// a later call of `messages` superseded, with the nearest such call. A
-/// repeat or deferred `read` result neither supersedes nor is superseded.
+/// Returns, oldest first, each tool result whose index lies in `range`, not
+/// yet elided, that a later call of `messages` superseded, with the nearest
+/// such call. A repeat or deferred `read` result neither supersedes nor is
+/// superseded.
 /// Results pair with the latest earlier call of their identifier, so
 /// identifiers reused across turns stay distinct.
 fn find_superseded<'a>(
@@ -3149,9 +3225,11 @@ fn find_superseded<'a>(
         .enumerate()
         .filter_map(|(position, (call, result))| {
             // A result without content of its own stands in for nothing a
-            // later call could return again.
+            // later call could return again; an elided one is already gone.
             let result = result.filter(|result| {
-                range.contains(result) && !is_contentless_read(&messages[*result])
+                range.contains(result)
+                    && cached[*result].changes & Reduction::ElideResult.flag() == 0
+                    && !is_contentless_read(&messages[*result])
             })?;
             let supersession = calls[position + 1..]
                 .iter()
@@ -3187,8 +3265,8 @@ fn supersession_cause(
             Some(SupersessionCause::Reread)
         }
         (ToolCallArguments::Read(earlier), ToolCallArguments::Write(later))
-            if write_outcome(later_result).is_some_and(|(_, status)| status == "applied")
-                && read_shows_path(earlier, later.path()) =>
+            if read_shows_path(earlier, later.path())
+                && write_outcome(later_result).is_some_and(|(_, status)| status == "applied") =>
         {
             Some(SupersessionCause::Write)
         }

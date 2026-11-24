@@ -429,12 +429,14 @@ async fn review(
   the schema is committed in `crates/ag-harness/schema/run_event.json`.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Within a turn, requests only append, so they share one cached prefix, until tool
-  traffic grows a request past the budget. That request is sent as a reduced copy
-  without an extra model call, reduced deeply once so several later requests append to
-  it unchanged. First, older tool results that a later call superseded (a re-read of the
-  same target, an applied write to the file read, or a rerun of the same command) become
-  notices naming that call. Then the new round's results above 25% of the input budget
-  are cut (a `read` result by whole lines or items, any other to a head and tail
+  traffic grows a request past the budget, or until clearing the older results that
+  later calls superseded would save a quarter of a request; that request replaces all of
+  them with notices naming the newer call. An over-budget request is sent as a reduced
+  copy without an extra model call, reduced deeply once so several later requests append
+  to it unchanged. First, older tool results that a later call superseded (a re-read of
+  the same target, an applied write to the file read, or a rerun of the same command)
+  become notices naming that call. Then the new round's results above 25% of the input
+  budget are cut (a `read` result by whole lines or items, any other to a head and tail
   excerpt), and its largest results are cut to one common size while together they
   exceed 50%. Then, down to 50% of the budget and oldest first, the other older tool
   results become notices (`read` notices name the target and say its content is not

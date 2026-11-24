@@ -139,7 +139,9 @@ fn superseded_results_stay_elided_and_new_staleness_waits_for_the_next_fit() {
 
     // Act
     // Re-reading `a.txt` makes its result stale, but this request still
-    // fits, so the shared prefix is kept.
+    // fits and the stale result is a small share of it, so the shared prefix
+    // is kept.
+    record_read_round(&mut request, "e", 2000);
     record(&mut request, &read_call_of("a2", "a.txt"), "z".repeat(10));
     let (second, second_activity) = fit_owned(&mut fit, budget_weight, &request);
     for index in 0..3 {
@@ -159,6 +161,67 @@ fn superseded_results_stay_elided_and_new_staleness_waits_for_the_next_fit() {
     assert_eq!(notice["superseded_by"], json!("a2"));
     assert_eq!(third_activity.superseded_results(), 2);
     assert_eq!(third.messages().last(), request.messages().last());
+}
+
+#[test]
+fn stale_results_are_cleared_within_the_budget_once_they_are_a_quarter_of_the_request() {
+    // Arrange
+    // `src/lib.rs` is read whole, rewritten, and read again around another
+    // file, so its first read shows text from before the write.
+    let file_read = read_of("r1", &json!({"path": "src/lib.rs"}));
+    let write = write_call(
+        "w1",
+        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n",
+    );
+    let applied = json!({"bytes_written": 2, "path": "src/lib.rs", "status": "applied"});
+    let mut request = request(Vec::new(), Vec::new(), "edit");
+    record(&mut request, &file_read, "x".repeat(2000));
+    record(&mut request, &write, applied.to_string());
+    record_read_round(&mut request, "other", 400);
+    let roomy_budget = weigh(&request) * 10;
+    let mut fit = ContextFit::default();
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut fit, roomy_budget, &request);
+    record_read_round(&mut request, "next", 100);
+    let (next, next_activity) = fit_owned(&mut fit, roomy_budget, &request);
+
+    // Assert
+    let notice = result_json(&fitted.messages()[2]);
+    assert_eq!(notice["superseded_by"], json!("w1"));
+    assert!(
+        notice["context_cleared"]
+            .as_str()
+            .expect("notice text")
+            .contains("a later write, named in superseded_by, changed the file it showed")
+    );
+    assert_eq!(fitted.messages()[3..], request.messages()[3..7]);
+    assert_eq!(activity.superseded_results(), 1);
+    assert_eq!(
+        next.messages()[..fitted.messages().len()],
+        *fitted.messages()
+    );
+    assert_eq!(next_activity.superseded_results(), 1);
+}
+
+#[test]
+fn stale_results_below_a_quarter_of_the_request_wait_while_it_fits() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(500));
+    record_read_round(&mut request, "big", 3000);
+    record(&mut request, &read_call_of("a2", "a.txt"), "y".repeat(500));
+    record_read_round(&mut request, "latest", 100);
+    let roomy_budget = weigh(&request) * 10;
+
+    // Act
+    let step = ContextFit::default()
+        .fit(&ByteEstimator, budget(roomy_budget), &request, None)
+        .map(sent)
+        .expect("request fits");
+
+    // Assert
+    assert_eq!(step, (None, ContextActivity::default()));
 }
 
 #[test]
@@ -804,11 +867,15 @@ fn sends_whole_is_false_for_cut_latest_and_dropped_results() {
 }
 
 #[test]
-fn superseded_elision_stops_once_the_request_reaches_the_target() {
+fn an_over_budget_request_clears_every_stale_result() {
     // Arrange
+    // The two stale reads are well below the share that clears them within
+    // the budget, so only the over-budget fit clears them, and it clears
+    // both even though the first alone would not reach its target.
     let mut request = request(Vec::new(), Vec::new(), "inspect");
-    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(3000));
-    record(&mut request, &read_call_of("b1", "b.txt"), "y".repeat(300));
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(1000));
+    record(&mut request, &read_call_of("b1", "b.txt"), "y".repeat(1000));
+    record_read_round(&mut request, "big", 8000);
     record(&mut request, &read_call_of("a2", "a.txt"), "z".repeat(10));
     record(&mut request, &read_call_of("b2", "b.txt"), "w".repeat(10));
     record_read_round(&mut request, "latest", 10);
@@ -822,6 +889,105 @@ fn superseded_elision_stops_once_the_request_reaches_the_target() {
         result_json(&fitted.messages()[2])["superseded_by"],
         json!("a2")
     );
-    assert_eq!(fitted.messages()[4], request.messages()[4]);
-    assert_eq!(activity.superseded_results(), 1);
+    assert_eq!(
+        result_json(&fitted.messages()[4])["superseded_by"],
+        json!("b2")
+    );
+    assert_eq!(activity.superseded_results(), 2);
+}
+
+/// Builds a request whose stale `a.txt` read is superseded by a later read,
+/// with `padding` bytes of other content between them.
+fn request_with_a_stale_read_and_padding(padding: usize) -> ModelRequest {
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    record(&mut request, &read_call_of("a1", "a.txt"), "x".repeat(1000));
+    record_read_round(&mut request, "pad", padding);
+    record(&mut request, &read_call_of("a2", "a.txt"), "y".repeat(10));
+    record_read_round(&mut request, "latest", 10);
+
+    request
+}
+
+#[test]
+fn stale_results_are_cleared_within_the_budget_from_exactly_a_quarter_of_savings() {
+    // Arrange
+    // What clearing the stale read saves: its weight less its notice's.
+    let (cleared, _) = fit_owned(
+        &mut ContextFit::default(),
+        u64::MAX,
+        &request_with_a_stale_read_and_padding(0),
+    );
+    let stale_weight =
+        u64::try_from(request_with_a_stale_read_and_padding(0).messages()[2].retained_bytes())
+            .expect("bytes fit u64");
+    let notice_weight =
+        u64::try_from(cleared.messages()[2].retained_bytes()).expect("bytes fit u64");
+    let savings = stale_weight - notice_weight;
+    // The padding at which those savings are exactly a quarter of the
+    // request.
+    let padding = (0..10_000)
+        .find(|padding| weigh(&request_with_a_stale_read_and_padding(*padding)) == 4 * savings)
+        .expect("some padding makes the savings exactly a quarter");
+
+    // Act
+    let at_quarter = ContextFit::default()
+        .fit(
+            &ByteEstimator,
+            budget(u64::MAX),
+            &request_with_a_stale_read_and_padding(padding),
+            None,
+        )
+        .map(sent)
+        .expect("request fits");
+    let below_quarter = ContextFit::default()
+        .fit(
+            &ByteEstimator,
+            budget(u64::MAX),
+            &request_with_a_stale_read_and_padding(padding + 1),
+            None,
+        )
+        .map(sent)
+        .expect("request fits");
+
+    // Assert
+    assert_eq!(at_quarter.1.superseded_results(), 1);
+    assert_eq!(below_quarter, (None, ContextActivity::default()));
+}
+
+#[test]
+fn stale_results_in_history_or_the_latest_round_never_trigger_clearing_within_the_budget() {
+    // Arrange
+    let history_turn = vec![
+        ModelMessage::User("earlier".to_string()),
+        ModelMessage::AssistantToolCall(read_call_of("h1", "a.txt")),
+        tool_result("h1", "read", &"x".repeat(5000)),
+        ModelMessage::AssistantToolCall(read_call_of("h2", "a.txt")),
+        tool_result("h2", "read", "y"),
+    ];
+    let mut from_history = request(Vec::new(), vec![history_turn], "inspect");
+    record_read_round(&mut from_history, "latest", 10);
+    let file_read = read_of("r1", &json!({"path": "src/lib.rs"}));
+    let write = write_call(
+        "w1",
+        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n",
+    );
+    let applied = json!({"bytes_written": 2, "path": "src/lib.rs", "status": "applied"});
+    let mut in_latest_round = request(Vec::new(), Vec::new(), "edit");
+    record_read_round(&mut in_latest_round, "first", 10);
+    in_latest_round.record_tool_calls(vec![file_read.clone(), write.clone()]);
+    in_latest_round.record_tool_result(&file_read, "x".repeat(5000));
+    in_latest_round.record_tool_result(&write, applied.to_string());
+
+    // Act
+    let steps = [from_history, in_latest_round].map(|request| {
+        ContextFit::default()
+            .fit(&ByteEstimator, budget(u64::MAX), &request, None)
+            .map(sent)
+            .expect("request fits")
+    });
+
+    // Assert
+    for step in steps {
+        assert_eq!(step, (None, ContextActivity::default()));
+    }
 }
