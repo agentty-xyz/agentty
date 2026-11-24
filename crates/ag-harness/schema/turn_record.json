@@ -569,7 +569,7 @@
           "minimum": 0
         },
         "cache_write": {
-          "description": "Input tokens written to the provider's prompt cache, part of `input`,\nor `None` when unknown; of the built-in protocols only Anthropic\nMessages reports them.",
+          "description": "Input tokens written to the provider's prompt cache, part of `input`,\nor `None` when unknown; of the built-in protocols Anthropic Messages\nreports them, and the `OpenAI` Responses API does for models from\nGPT-5.6 on.",
           "type": [
             "integer",
             "null"
