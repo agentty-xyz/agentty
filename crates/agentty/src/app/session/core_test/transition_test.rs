@@ -80,10 +80,9 @@ async fn test_spawn_session_task_auto_commits_changes() {
         .expect_diff()
         .times(2)
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
-    // Once before auto-commit and once during finalization.
     mock_git_client
         .expect_diff_stats()
-        .times(2)
+        .times(1)
         .returning(|_, _| Box::pin(async { Ok(git::DiffStats::default()) }));
     mock_git_client
         .expect_fetch_remote()

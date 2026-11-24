@@ -17,7 +17,7 @@ use tracing::debug;
 use super::base_branch::{BaseBranchScope, BaseBranchSnapshot};
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::live_diff_stats::LiveDiffStats;
-use super::post_turn::{PostTurnContext, TurnFinalizerContext};
+use super::post_turn::PostTurnContext;
 use super::sandbox::SandboxNoticeTarget;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
@@ -242,7 +242,6 @@ pub(super) async fn run_channel_turn(
     )
     .await;
     let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
-    let (sandbox_tx, diff_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let consumer = spawn::spawn_traced(consume_turn_events(
         event_rx,
@@ -262,18 +261,10 @@ pub(super) async fn run_channel_turn(
     )
     .await;
 
-    let sandbox_notices = sandbox_notice_target(context);
-    let finalizer = TurnFinalizerContext::from_worker(context);
-    let live_diff_stats = LiveDiffStats::start(TurnFinalizerContext::from_worker(context));
-    let (turn_result, (), ()) = tokio::join!(
+    let (turn_result, ()) = tokio::join!(
         run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx),
-        sandbox_notices.relay(relayed_rx, sandbox_tx),
-        live_diff_stats.relay(diff_rx, relay_tx),
+        relay_turn_events(context, PermissionMode::AutoEdit, relayed_rx, relay_tx),
     );
-    live_diff_stats.finish().await;
-    // Project the turn's changes before post-turn effects, such as
-    // auto-commit recovery, which can run for minutes.
-    post_turn::refresh_channel_diff_stats(&finalizer).await;
     SessionManager::cleanup_prompt_attachment_paths(
         context.fs_client.clone(),
         prompt.local_image_paths().cloned().collect(),
@@ -294,6 +285,7 @@ pub(super) async fn run_channel_turn(
         turn_result,
     )
     .await;
+    let finalizer = post_turn::TurnFinalizerContext::from_worker(context);
     let result = Span::child("postprocess")
         .run(
             post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result, &activity),
@@ -472,7 +464,7 @@ async fn finalize_turn_setup_failure(
         prompt.local_image_paths().cloned().collect(),
     )
     .await;
-    let finalizer_context = TurnFinalizerContext::from_worker(context);
+    let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
     let result = post_turn::apply_turn_result(
         post_turn_context,
         turn_metadata,
@@ -792,15 +784,39 @@ pub(super) fn base_branch_scope(context: &SessionWorkerContext) -> BaseBranchSco
     }
 }
 
-/// Returns the session transcript that receives a turn's sandbox notices.
-pub(super) fn sandbox_notice_target(context: &SessionWorkerContext) -> SandboxNoticeTarget<'_> {
-    SandboxNoticeTarget {
+/// Relays a turn's provider events to its consumer until the provider stops
+/// sending them.
+///
+/// Sandbox notices go to the session transcript as they arrive. Unless the
+/// turn is read-only, finished tool calls also refresh the session's diff
+/// stats, and the relay ends with a refresh of the turn's final edits so
+/// post-turn effects start from current totals.
+pub(super) async fn relay_turn_events(
+    context: &SessionWorkerContext,
+    permission_mode: PermissionMode,
+    provider_events: mpsc::UnboundedReceiver<TurnEvent>,
+    consumer: mpsc::UnboundedSender<TurnEvent>,
+) {
+    let sandbox_notices = SandboxNoticeTarget {
         app_event_tx: &context.app_event_tx,
         db: &context.db,
         session_id: &context.session_id,
         session_update_versions: &context.session_update_versions,
         transcript: &context.transcript,
+    };
+    if permission_mode == PermissionMode::ReadOnly {
+        sandbox_notices.relay(provider_events, consumer).await;
+
+        return;
     }
+
+    let (sandbox_tx, diff_rx) = mpsc::unbounded_channel();
+    let live_diff_stats = LiveDiffStats::start(context);
+    tokio::join!(
+        sandbox_notices.relay(provider_events, sandbox_tx),
+        live_diff_stats.relay(diff_rx, consumer),
+    );
+    live_diff_stats.finish().await;
 }
 
 /// Appends one turn notice, such as a main-checkout warning, to the live and

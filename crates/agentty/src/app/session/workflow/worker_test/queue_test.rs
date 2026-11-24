@@ -4,9 +4,12 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, OneShotError, TurnResult};
+use ag_contracts::{
+    ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, MockAgentChannel,
+    OneShotError, TurnEvent, TurnResult,
+};
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::AgentResponse;
@@ -15,7 +18,7 @@ use ag_worker::{MockRunClient, RunClient, SessionRunClient, WorkerHost as _};
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tempfile::{TempDir, tempdir};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::super::{
@@ -971,6 +974,102 @@ async fn untracked_queued_message_gets_a_completed_turn_trace() {
     );
 }
 
+#[tokio::test]
+async fn chat_turn_projects_its_edits_before_auto_commit_starts() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning(|_, _, events| {
+        let _ = events.send(TurnEvent::Activity(ActivityEvent {
+            attempt_id: "attempt".into(),
+            exit_code: Some(0),
+            id: "edit".into(),
+            input: None,
+            kind: ActivityKind::FileChange,
+            name: "write".into(),
+            observed_at: SystemTime::UNIX_EPOCH,
+            output: None,
+            parent_id: None,
+            status: ActivityStatus::Completed,
+        }));
+
+        Box::pin(async { Ok(successful_turn_result("Edited the file.")) })
+    });
+    let (mut context, db, _queue, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = event_tx;
+    let commit_started = Arc::new(Notify::new());
+    let commit_release = Arc::new(Notify::new());
+    let mut git = MockGitClient::new();
+    git.expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some("wt/sess1".into()) }));
+    git.expect_main_checkout_working_tree()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    // Once for the reported edit and once during finalization.
+    git.expect_diff_stats().times(2).returning(|_, _| {
+        Box::pin(async {
+            Ok(DiffStats {
+                added_lines: 5,
+                deleted_lines: 2,
+                has_changes: true,
+            })
+        })
+    });
+    let started = Arc::clone(&commit_started);
+    let release = Arc::clone(&commit_release);
+    git.expect_is_worktree_clean().once().returning(move |_| {
+        let started = Arc::clone(&started);
+        let release = Arc::clone(&release);
+
+        Box::pin(async move {
+            started.notify_one();
+            release.notified().await;
+
+            Ok(true)
+        })
+    });
+    context.git_client = Arc::new(git);
+    let command = resume_command("projected-edit");
+    db.operations()
+        .insert_session_operation("projected-edit", &context.session_id, command.kind())
+        .await
+        .expect("operation");
+    let run_client = auto_commit_run_client();
+
+    // Act
+    let run = SessionWorkerService::process_session_command(&context, &run_client, command);
+    tokio::pin!(run);
+    let finished_early = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            result = &mut run => Some(result),
+            () = commit_started.notified() => None,
+        }
+    })
+    .await
+    .expect("auto-commit started");
+    let row = db
+        .sessions()
+        .load_session(&context.session_id)
+        .await
+        .expect("session")
+        .expect("present");
+    let projected = std::iter::from_fn(|| event_rx.try_recv().ok())
+        .any(|event| matches!(event, AppEvent::SessionDiffStatsUpdated { .. }));
+    commit_release.notify_one();
+    let result = run.await;
+
+    // Assert
+    assert!(finished_early.is_none(), "turn ended before auto-commit");
+    assert_eq!((row.added_lines, row.deleted_lines), (5, 2));
+    assert!(
+        projected,
+        "diff stats were not projected before auto-commit"
+    );
+    assert!(matches!(result, Some(Ok(()))));
+}
+
 async fn auto_commit_cancellation_context() -> (
     SessionWorkerContext,
     AppRepositories,
@@ -993,8 +1092,7 @@ async fn auto_commit_cancellation_context() -> (
     git.expect_is_worktree_clean()
         .once()
         .returning(|_| Box::pin(async { Ok(false) }));
-    // Once before post-turn effects and once during finalization.
-    git.expect_diff_stats().times(2).returning(|_, _| {
+    git.expect_diff_stats().once().returning(|_, _| {
         Box::pin(async {
             Ok(DiffStats {
                 added_lines: 0,

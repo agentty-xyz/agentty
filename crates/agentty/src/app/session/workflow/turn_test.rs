@@ -19,7 +19,7 @@ use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
     MainCheckoutSnapshot, add_main_checkout_warning, consume_turn_events, fresh_turn_cancel_token,
     live_transcript_source, load_session_response_style, load_title_reasoning_level,
-    prepare_turn_request, sandbox_notice_target,
+    prepare_turn_request, relay_turn_events,
 };
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
@@ -391,9 +391,7 @@ async fn sandbox_notices_reach_the_transcript_as_they_arrive_and_other_events_pa
             event_tx.send(event).expect("queued event");
         }
         drop(event_tx);
-        sandbox_notice_target(&context)
-            .relay(relayed_rx, relay_tx)
-            .await;
+        relay_turn_events(&context, PermissionMode::ReadOnly, relayed_rx, relay_tx).await;
         while let Ok(event) = event_rx.try_recv() {
             forwarded.push(event);
         }

@@ -15,7 +15,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::base_branch::BaseBranchSnapshot;
-use super::live_diff_stats::LiveDiffStats;
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::task::SessionTaskService;
 use super::worker::{SessionWorkerContext, TurnMetadata};
@@ -191,7 +190,6 @@ async fn execute(
         .create_graph_task(attempt_id, &context.session_id, dispatch.node.agent.kind())
         .map_err(turn::session_error_from_agent_error)?;
     let (event_tx, relayed_rx) = mpsc::unbounded_channel();
-    let (sandbox_tx, diff_rx) = mpsc::unbounded_channel();
     let (relay_tx, event_rx) = mpsc::unbounded_channel();
     let consumer = spawn::spawn_detached(turn::consume_turn_events(
         event_rx,
@@ -202,14 +200,10 @@ async fn execute(
     let base_branch_scope = turn::base_branch_scope(context);
     let base_branch =
         BaseBranchSnapshot::capture(&base_branch_scope, dispatch.node.agent.kind()).await?;
-    let sandbox_notices = turn::sandbox_notice_target(context);
-    let live_diff_stats = LiveDiffStats::start(TurnFinalizerContext::from_worker(context));
-    let (result, (), ()) = tokio::join!(
+    let (result, ()) = tokio::join!(
         client.submit(prepared, event_tx, task.cancellation.as_ref().clone()),
-        sandbox_notices.relay(relayed_rx, sandbox_tx),
-        live_diff_stats.relay(diff_rx, relay_tx),
+        turn::relay_turn_events(context, permission_mode, relayed_rx, relay_tx),
     );
-    live_diff_stats.finish().await;
     let cleanup = client.shutdown().await;
     let activity = consumer.await.unwrap_or_default();
     activity.clear_live(&context.app_event_tx, &context.session_id);

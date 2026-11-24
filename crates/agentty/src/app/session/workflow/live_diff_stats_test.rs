@@ -1,25 +1,31 @@
 //! Live diff-stat refresh tests covering which turn events request a refresh,
-//! throttling, and the hand-off to the turn's own final refresh.
+//! throttling, and the pending refresh that `finish` runs before post-turn
+//! effects.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus, TurnEvent};
-use ag_git::{DiffStats, MockGitClient};
-use ag_session::test_support as model_fixture;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
 use super::{LIVE_REFRESH_INTERVAL, LiveDiffStats};
-use crate::app::AppEvent;
-use crate::app::graph_activity::GraphActivityRegistry;
-use crate::app::session::workflow::post_turn::TurnFinalizerContext;
-use crate::domain::session::{SessionDiffStats, SessionSize, Status};
-use crate::infra::clock::RealClock;
-use crate::infra::db::AppRepositories;
-use crate::infra::fs::MockFsClient;
+use crate::infra::clock::Clock;
+
+/// Clock that follows Tokio's clock, so paused-time tests can measure how
+/// long a refresh took.
+struct TokioClock;
+
+impl Clock for TokioClock {
+    fn now_instant(&self) -> std::time::Instant {
+        Instant::now().into_std()
+    }
+
+    fn now_system_time(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+    }
+}
 
 /// Returns one activity snapshot of `kind` in `status`.
 fn activity(kind: ActivityKind, status: ActivityStatus) -> TurnEvent {
@@ -37,14 +43,14 @@ fn activity(kind: ActivityKind, status: ActivityStatus) -> TurnEvent {
     })
 }
 
-/// Starts a refresher whose refreshes report their start time on the
-/// returned receiver.
-fn recording_refresher() -> (LiveDiffStats, mpsc::UnboundedReceiver<Instant>) {
+/// Starts a refresher whose refreshes take `duration` and report their start
+/// time on the returned receiver.
+fn recording_refresher(duration: Duration) -> (LiveDiffStats, mpsc::UnboundedReceiver<Instant>) {
     let (refreshed_tx, refreshed_rx) = mpsc::unbounded_channel();
-    let refresher = LiveDiffStats::spawn(move || {
+    let refresher = LiveDiffStats::with_refresh(Arc::new(TokioClock), move || {
         let _ = refreshed_tx.send(Instant::now());
 
-        async {}
+        tokio::time::sleep(duration)
     });
 
     (refresher, refreshed_rx)
@@ -89,7 +95,7 @@ fn only_finished_calls_that_may_edit_files_request_a_refresh() {
 #[tokio::test(start_paused = true)]
 async fn relay_forwards_every_event_and_refreshes_after_a_finished_edit() {
     // Arrange
-    let (refresher, mut refreshed_rx) = recording_refresher();
+    let (refresher, mut refreshed_rx) = recording_refresher(Duration::ZERO);
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (forward_tx, mut forward_rx) = mpsc::unbounded_channel();
     event_tx
@@ -116,12 +122,13 @@ async fn relay_forwards_every_event_and_refreshes_after_a_finished_edit() {
         Some(TurnEvent::Activity(_))
     ));
     assert!(forward_rx.recv().await.is_none());
+    assert!(refreshed_rx.recv().await.is_none());
 }
 
 #[tokio::test(start_paused = true)]
-async fn refreshes_within_the_interval_coalesce_into_one_trailing_refresh() {
+async fn signals_within_the_interval_coalesce_into_one_trailing_refresh() {
     // Arrange
-    let (refresher, mut refreshed_rx) = recording_refresher();
+    let (refresher, mut refreshed_rx) = recording_refresher(Duration::ZERO);
     let started = Instant::now();
 
     // Act
@@ -130,21 +137,58 @@ async fn refreshes_within_the_interval_coalesce_into_one_trailing_refresh() {
     refresher.trigger.notify_one();
     refresher.trigger.notify_one();
     let trailing = refreshed_rx.recv().await.expect("trailing refresh");
+    tokio::time::sleep(LIVE_REFRESH_INTERVAL * 3).await;
+    let extra = refreshed_rx.try_recv();
     refresher.finish().await;
 
     // Assert
     assert_eq!(first, started);
     assert_eq!(trailing - first, LIVE_REFRESH_INTERVAL);
+    assert!(extra.is_err(), "coalesced signals refreshed again");
+    assert!(refreshed_rx.recv().await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn slow_refreshes_wait_their_own_duration_before_the_next() {
+    // Arrange
+    let duration = LIVE_REFRESH_INTERVAL * 2;
+    let (refresher, mut refreshed_rx) = recording_refresher(duration);
+
+    // Act
+    refresher.trigger.notify_one();
+    let first = refreshed_rx.recv().await.expect("first refresh");
+    refresher.trigger.notify_one();
+    let next = refreshed_rx.recv().await.expect("next refresh");
+    refresher.finish().await;
+
+    // Assert
+    assert_eq!(next - first, duration * 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn finish_runs_a_pending_refresh_without_waiting_for_the_interval() {
+    // Arrange
+    let (refresher, mut refreshed_rx) = recording_refresher(Duration::ZERO);
+    refresher.trigger.notify_one();
+    let first = refreshed_rx.recv().await.expect("first refresh");
+    refresher.trigger.notify_one();
+
+    // Act
+    refresher.finish().await;
+    let pending = refreshed_rx.recv().await.expect("pending refresh");
+
+    // Assert
+    assert_eq!(pending, first);
     assert!(refreshed_rx.recv().await.is_none());
 }
 
 #[tokio::test]
-async fn finish_waits_for_an_in_flight_refresh_and_skips_pending_ones() {
+async fn finish_waits_for_an_in_flight_refresh_then_runs_one_pending_refresh() {
     // Arrange
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let completed = Arc::new(AtomicBool::new(false));
-    let refresher = LiveDiffStats::spawn({
+    let completed = Arc::new(AtomicUsize::new(0));
+    let refresher = LiveDiffStats::with_refresh(Arc::new(TokioClock), {
         let started = Arc::clone(&started);
         let release = Arc::clone(&release);
         let completed = Arc::clone(&completed);
@@ -156,29 +200,32 @@ async fn finish_waits_for_an_in_flight_refresh_and_skips_pending_ones() {
             async move {
                 started.notify_one();
                 release.notified().await;
-                completed.store(true, Ordering::SeqCst);
+                completed.fetch_add(1, Ordering::SeqCst);
             }
         }
     });
     refresher.trigger.notify_one();
     started.notified().await;
+    refresher.trigger.notify_one();
+    refresher.trigger.notify_one();
 
     // Act
     let finishing = tokio::spawn(refresher.finish());
-    tokio::task::yield_now().await;
-    let finished_early = finishing.is_finished();
+    release.notify_one();
+    started.notified().await;
+    let completed_before_pending = completed.load(Ordering::SeqCst);
     release.notify_one();
     finishing.await.expect("finish");
 
     // Assert
-    assert!(!finished_early);
-    assert!(completed.load(Ordering::SeqCst));
+    assert_eq!(completed_before_pending, 1);
+    assert_eq!(completed.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
 async fn finish_without_a_signal_runs_no_refresh() {
     // Arrange
-    let (refresher, mut refreshed_rx) = recording_refresher();
+    let (refresher, mut refreshed_rx) = recording_refresher(Duration::ZERO);
 
     // Act
     refresher.finish().await;
@@ -188,80 +235,14 @@ async fn finish_without_a_signal_runs_no_refresh() {
 }
 
 #[tokio::test]
-async fn started_refresher_persists_and_projects_the_worktree_diff() {
+async fn dropping_the_refresher_stops_its_task() {
     // Arrange
-    let db = AppRepositories::in_memory().await.expect("db");
-    let project_id = db
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("project");
-    db.sessions()
-        .insert_session(
-            "session-id",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("session");
-    let mut fs_client = MockFsClient::new();
-    fs_client.expect_is_dir().times(1).return_const(true);
-    let mut git_client = MockGitClient::new();
-    git_client
-        .expect_diff_stats()
-        .times(1)
-        .returning(|_, base_branch| {
-            assert_eq!(base_branch, "main");
-
-            Box::pin(async {
-                Ok(DiffStats {
-                    added_lines: 478,
-                    deleted_lines: 73,
-                    has_changes: true,
-                })
-            })
-        });
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let refresher = LiveDiffStats::start(TurnFinalizerContext {
-        app_event_tx,
-        clock: Arc::new(RealClock),
-        db: db.clone(),
-        folder: PathBuf::from("/tmp/session"),
-        fs_client: Arc::new(fs_client),
-        git_client: Arc::new(git_client),
-        graph_activity: GraphActivityRegistry::default(),
-        session_id: "session-id".into(),
-        session_update_versions: Arc::default(),
-        status: Arc::new(Mutex::new(Status::InProgress)),
-    });
+    let (refresher, mut refreshed_rx) = recording_refresher(Duration::ZERO);
 
     // Act
-    refresher.trigger.notify_one();
-    let event = tokio::time::timeout(Duration::from_secs(5), app_event_rx.recv())
-        .await
-        .expect("refresh event");
-    refresher.finish().await;
-    let sessions = db
-        .sessions()
-        .load_sessions_for_project(project_id)
-        .await
-        .expect("sessions");
+    drop(refresher);
 
     // Assert
-    assert!(matches!(
-        event,
-        Some(AppEvent::SessionDiffStatsUpdated {
-            diff_stats: SessionDiffStats::Known {
-                added_lines: 478,
-                deleted_lines: 73,
-                has_diff: true,
-                session_size: SessionSize::Xxl,
-            },
-            ..
-        })
-    ));
-    assert_eq!(sessions[0].added_lines, 478);
-    assert_eq!(sessions[0].size, "XXL");
+    let closed = tokio::time::timeout(Duration::from_secs(5), refreshed_rx.recv()).await;
+    assert!(matches!(closed, Ok(None)));
 }
