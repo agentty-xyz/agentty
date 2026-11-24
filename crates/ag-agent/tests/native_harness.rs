@@ -93,6 +93,7 @@ fn turn_request(folder: &Path, model: &str, prompt: &str) -> TurnRequest {
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::Concise,
+        session_branch: None,
         speed_mode: SpeedMode::Normal,
     }
 }

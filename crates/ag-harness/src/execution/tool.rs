@@ -262,7 +262,7 @@ impl BashTool {
                 )
                 .collect(),
             external_reads: self.external_reads.clone(),
-            git_writes: configuration.grants(Capability::GitWrites),
+            git_branch: configuration.git_branch.clone(),
             host_information: configuration.host_information,
             network: configuration.grants(Capability::Network),
             hidden_paths: configuration.hidden_paths.clone(),

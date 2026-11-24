@@ -21,6 +21,11 @@ use tempfile::TempDir;
 use super::coverage::{self, Coverage};
 use super::fixture::{refusing_harness, schema};
 
+/// The linked worktree's branch, nested like a host's session branches so
+/// that Linux, which grants the directory holding it, keeps `main`
+/// read-only.
+const SESSION_BRANCH: &str = "wt/session";
+
 /// A repository whose linked worktree holds symlinks, beside a
 /// per-session temporary directory, as a host would lay out one session.
 struct LinkedWorktree {
@@ -45,7 +50,7 @@ impl LinkedWorktree {
         git(&main, &["commit", "-q", "-m", "initial"]);
         git(
             &main,
-            &["worktree", "add", "-q", "-b", "session", "../session"],
+            &["worktree", "add", "-q", "-b", SESSION_BRANCH, "../session"],
         );
         // Instrumented launchers write their profiles beneath `output`.
         std::fs::create_dir(root.join("session/output")).expect("profile parent");
@@ -92,7 +97,8 @@ impl LinkedWorktree {
         .expect("launcher grant")
         .with_write(".".into())
         .expect("worktree grant")
-        .with_git_writes()
+        .with_git_writes(SESSION_BRANCH.into())
+        .expect("Git writes")
         .with_temporary_directory(self.temporary())
         .expect("temporary directory")
     }
@@ -403,9 +409,10 @@ async fn native_git_command_latency_stays_bounded() {
     );
 }
 
-/// In a main worktree macOS commits while the Git directory and its
-/// protected entries stay in place; Linux refuses Git writes beside a write
-/// grant containing the Git directory, because Landlock would open all of
+/// In a main worktree macOS commits while the Git directory, its protected
+/// entries, other branches' reflogs, and the top-level entries Git does not
+/// write as worktree state stay in place; Linux refuses Git writes beside a
+/// write grant containing the Git directory, because Landlock would open all of
 /// it.
 #[tokio::test]
 async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() {
@@ -431,7 +438,8 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
         .expect("launcher grant")
         .with_write(write.into())
         .expect("worktree grant")
-        .with_git_writes()
+        .with_git_writes("main".into())
+        .expect("Git writes")
         .with_temporary_directory(fixture.temporary())
         .expect("temporary directory")
     };
@@ -440,18 +448,23 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
     // Act
     let output = refusing_harness(&main)
         .turn(
-            "set -e; printf main > main-file; git add main-file; git -c user.name=Sandbox -c \
-             user.email=sandbox@example.com -c commit.gpgsign=false commit -q -m sandboxed; if \
-             /bin/mv .git \"$TMPDIR/moved\"; then exit 91; fi; if /bin/mv .git moved; then exit \
-             92; fi; if /bin/mv .git/hooks .git/objects/hooks; then exit 93; fi; if printf \
-             changed >> .git/config; then exit 94; fi; printf confined",
+            "set -e; export GIT_AUTHOR_NAME=Sandbox GIT_AUTHOR_EMAIL=sandbox@example.com \
+             GIT_COMMITTER_NAME=Sandbox GIT_COMMITTER_EMAIL=sandbox@example.com; printf main > \
+             main-file; git add main-file; git -c commit.gpgsign=false commit -q -m staged; \
+             printf more >> main-file; git -c commit.gpgsign=false commit -q -m sandboxed \
+             main-file; if /bin/mv .git \"$TMPDIR/moved\"; then exit 91; fi; if /bin/mv .git \
+             moved; then exit 92; fi; if /bin/mv .git/hooks .git/objects/hooks; then exit 93; fi; \
+             if printf changed >> .git/config; then exit 94; fi; if printf x >> \
+             .git/logs/refs/heads/wt/session; then exit 95; fi; /bin/mkdir -p remotes; if /bin/mv \
+             remotes .git/remotes; then exit 96; fi; if printf x > .git/packed-refs.lock; then \
+             exit 97; fi; printf confined",
             options(configuration(".")),
         )
         .await
         .expect("turn");
     // Without a write grant around the Git directory, Linux opens only the
-    // object, reference, and log stores of a main worktree: objects can be
-    // written, but staging cannot replace the index.
+    // object store and the branch's directories of a main worktree: objects
+    // can be written, but staging cannot replace the index.
     #[cfg(target_os = "linux")]
     let stores = refusing_harness(&main)
         .turn(
@@ -489,6 +502,8 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
             git(&main, &["log", "-1", "--format=%s"]).trim(),
             "sandboxed"
         );
+        assert!(!main.join(".git/remotes").exists());
+        assert!(!main.join(".git/packed-refs.lock").exists());
     }
     #[cfg(target_os = "linux")]
     {
@@ -528,10 +543,11 @@ async fn native_linux_system_reads_mount_a_private_proc_and_a_minimal_dev() {
     assert_eq!(result.stdout, "private", "{result:?}");
 }
 
-/// Replacement refs, grafts, the shallow boundary, and object alternates
-/// change the history Git run outside the sandbox shows without changing
-/// the objects it pushes, so commands cannot write them, whether they exist
-/// or not, nor move the directories holding them to swap in replacements.
+/// Replacement refs, grafts, the shallow boundary, object alternates, and
+/// commit-graph files change the history Git run outside the sandbox shows
+/// without changing the objects it pushes, so commands cannot write them,
+/// whether they exist or not, nor move the directories holding them to swap
+/// in replacements.
 #[tokio::test]
 async fn native_git_writes_keep_history_rewrites_read_only() {
     // Arrange
@@ -551,7 +567,8 @@ async fn native_git_writes_keep_history_rewrites_read_only() {
              exit 95; fi; if mv \"$common/objects/info\" \"$common/objects/aside\" 2>/dev/null; \
              then exit 96; fi; if mv \"$common/objects\" \"$common/objects-aside\" 2>/dev/null; \
              then exit 97; fi; if mv \"$common/refs\" \"$common/refs-aside\" 2>/dev/null; then \
-             exit 98; fi; printf confined",
+             exit 98; fi; if printf x > \"$common/objects/info/commit-graph\"; then exit 89; fi; \
+             if mkdir \"$common/objects/info/commit-graphs\"; then exit 90; fi; printf confined",
             fixture.configuration(),
         )
         .await;
@@ -566,6 +583,76 @@ async fn native_git_writes_keep_history_rewrites_read_only() {
     );
     assert!(!common.join("info/grafts").exists());
     assert!(!common.join("shallow").exists());
+    assert!(!common.join("objects/info/commit-graph").exists());
+    assert!(!common.join("objects/info/commit-graphs").exists());
+}
+
+/// Commands commit to the session branch, even one only `packed-refs`
+/// holds, and write its reflog, but cannot move the base branch, create
+/// branches or tags, stash, or edit or rewrite `packed-refs`, and `git gc`
+/// stops at its first lock, leaving the repository intact. Each refusal
+/// must name the denied write, so a step failing for another reason, such
+/// as a missing identity, fails the test. macOS also keeps the session
+/// branch's siblings read-only; Linux grants the directory holding it.
+#[tokio::test]
+async fn native_git_writes_cover_only_the_session_branch() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let main = fixture.root().join("main");
+    git(&main, &["branch", "wt/other", "main"]);
+    git(&main, &["pack-refs", "--all"]);
+    let common = main.join(".git");
+    let packed_before = std::fs::read(common.join("packed-refs")).expect("packed references");
+    let base = git(&main, &["rev-parse", "main"]);
+    let sibling = if cfg!(target_os = "macos") {
+        "refused git branch -f wt/other HEAD || exit 92; "
+    } else {
+        ""
+    };
+
+    // Act
+    let result = fixture
+        .run(
+            &format!(
+                "export GIT_AUTHOR_NAME=Sandbox GIT_AUTHOR_EMAIL=sandbox@example.com \
+                 GIT_COMMITTER_NAME=Sandbox GIT_COMMITTER_EMAIL=sandbox@example.com \
+                 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false; \
+                 refused() {{ if \"$@\" 2> \"$TMPDIR/refusal\"; then echo \"ran: $*\" >&2; return \
+                 1; fi; grep -qiE 'not permitted|permission denied|cannot save the current \
+                 status' \"$TMPDIR/refusal\" || {{ cat \"$TMPDIR/refusal\" >&2; return 1; }}; }}; \
+                 common=$(git rev-parse --path-format=absolute --git-common-dir); git -c \
+                 commit.gpgsign=false commit -q --allow-empty -m own || exit 90; refused git \
+                 update-ref refs/heads/main HEAD || exit 91; {sibling}refused sh -c 'printf x >> \
+                 \"$1/packed-refs\"' sh \"$common\" || exit 93; refused git tag sandboxed || exit \
+                 94; refused git checkout -q -b wt-new || exit 95; printf changed >> tracked; \
+                 refused git stash || exit 96; grep -q changed tracked || exit 97; refused git \
+                 pack-refs --all || exit 98; refused git gc -q || exit 99; printf confined"
+            ),
+            fixture.configuration(),
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "confined", "{result:?}");
+    assert_eq!(
+        git(&main, &["log", "-1", "--format=%s", SESSION_BRANCH]).trim(),
+        "own"
+    );
+    assert_eq!(
+        git(&main, &["log", "-g", "-1", "--format=%gs", SESSION_BRANCH]).trim(),
+        "commit: own"
+    );
+    assert_eq!(git(&main, &["rev-parse", "main"]), base);
+    assert_eq!(git(&main, &["rev-parse", "wt/other"]), base);
+    assert_eq!(
+        std::fs::read(common.join("packed-refs")).expect("packed references"),
+        packed_before
+    );
+    assert_eq!(git(&main, &["tag", "--list"]), "");
+    assert_eq!(git(&main, &["branch", "--list", "wt-new"]), "");
+    assert_eq!(git(&main, &["stash", "list"]), "");
+    git(&main, &["fsck", "--no-progress"]);
 }
 
 /// Git run outside the sandbox resumes a rebase from its to-do list, which

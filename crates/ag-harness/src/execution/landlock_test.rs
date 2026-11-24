@@ -144,6 +144,7 @@ mod linux {
         std::fs::write(workspace.join("objects"), "not a directory").expect("store file");
         configuration.git_writes = Some(crate::execution::wire::GitWrites {
             admin: Some(workspace.join("missing-admin")),
+            branch: "wt/session".into(),
             common: workspace.clone(),
         });
         assert!(

@@ -53,6 +53,9 @@ pub(super) struct GitWrites {
     /// The linked worktree's own administration directory, when it is not
     /// the common directory.
     pub(super) admin: Option<PathBuf>,
+    /// The branch whose reference and reflog in the common directory are
+    /// writable.
+    pub(super) branch: String,
     /// The common Git directory holding objects, references, and
     /// configuration.
     pub(super) common: PathBuf,

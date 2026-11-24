@@ -326,39 +326,49 @@ async fn git_writes_refuse_per_worktree_configuration_the_worktree_lacks() {
             admin: common.clone(),
             common: common.clone(),
         }
-        .writes(&LocalInspection)
+        .writes(&LocalInspection, "wt/session".into())
         .await,
         Ok(GitWrites {
             admin: None,
+            branch: "wt/session".into(),
             common: common.clone(),
         })
     );
     assert_eq!(
-        linked().writes(&LocalInspection).await,
+        linked().writes(&LocalInspection, "wt/session".into()).await,
         Err(ExecutionError::Setup),
         "a repository without configuration"
     );
     std::fs::write(common.join("config"), "[core]\n\tbare = false\n").expect("configuration");
     let expected = Ok(GitWrites {
         admin: Some(admin.clone()),
+        branch: "wt/session".into(),
         common: common.clone(),
     });
-    assert_eq!(linked().writes(&LocalInspection).await, expected);
+    assert_eq!(
+        linked().writes(&LocalInspection, "wt/session".into()).await,
+        expected
+    );
     std::fs::write(
         common.join("config"),
         "[extensions]\n\tworktreeConfig = true\n",
     )
     .expect("per-worktree configuration");
     assert_eq!(
-        linked().writes(&LocalInspection).await,
+        linked().writes(&LocalInspection, "wt/session".into()).await,
         Err(ExecutionError::Unsupported)
     );
     assert_eq!(
-        linked().writes(&FailingInspection::new("exists", 1)).await,
+        linked()
+            .writes(&FailingInspection::new("exists", 1), "wt/session".into())
+            .await,
         Err(ExecutionError::Setup)
     );
     std::fs::write(admin.join("config.worktree"), "").expect("worktree configuration");
-    assert_eq!(linked().writes(&LocalInspection).await, expected);
+    assert_eq!(
+        linked().writes(&LocalInspection, "wt/session".into()).await,
+        expected
+    );
 }
 
 /// A workspace with a linked worktree's `.git` pointer beside its common
@@ -420,7 +430,7 @@ async fn access_resolves_grants_by_path_and_opens_the_repository_git_directories
     symlink(&fixture.outside, fixture.temporary.join("alias")).expect("read alias");
     let policy = fixture.policy(Grants {
         external_reads: vec![fixture.outside.clone(), fixture.temporary.join("alias")],
-        git_writes: true,
+        git_branch: Some("wt/session".into()),
         temporary_directory: Some(fixture.temporary.clone()),
         workspace_writes: vec!["output".into()],
         ..Grants::default()
@@ -460,6 +470,7 @@ async fn access_resolves_grants_by_path_and_opens_the_repository_git_directories
         access.git_writes,
         Some(GitWrites {
             admin: Some(fixture.admin.clone()),
+            branch: "wt/session".into(),
             common: fixture.common.clone(),
         })
     );
@@ -527,7 +538,7 @@ async fn access_refuses_grants_the_sandbox_cannot_honor() {
         unrelated.clone(),
         vec![unrelated.join(".git")],
         Grants {
-            git_writes: true,
+            git_branch: Some("wt/session".into()),
             ..Grants::default()
         },
     )
@@ -1146,7 +1157,7 @@ async fn probe_reports_the_first_missing_native_sandbox_piece() {
         .clone()
         .with_temporary_directory(fixture.tools.clone())
         .expect("temporary directory");
-    let git = failing.clone().with_git_writes();
+    let git = failing.clone().with_git_writes("wt".into()).expect("Git");
     let inside = fixture.workspace.join("helper");
     std::fs::copy(&fixture.helper, &inside).expect("helper inside workspace");
     let missing_seatbelt = fixture.tools.join("missing-sandbox-exec");

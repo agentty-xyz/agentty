@@ -24,6 +24,7 @@ pub(super) fn make_turn_request() -> TurnRequest {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ag_contracts::ResponseStyle::default(),
+        session_branch: None,
         speed_mode: ag_contracts::SpeedMode::default(),
     }
 }

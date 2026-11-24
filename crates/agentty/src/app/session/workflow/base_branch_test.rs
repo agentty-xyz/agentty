@@ -12,6 +12,9 @@ use super::{BaseBranchScope, BaseBranchSnapshot};
 use crate::domain::agent::AgentKind;
 use crate::infra::db::AppRepositories;
 
+/// The branch the session worktree's `HEAD` resolves to before a turn.
+const SESSION_HEAD: &str = "refs/heads/wt/worker";
+
 #[tokio::test]
 async fn harness_turns_that_move_or_delete_the_base_fail_before_publishing() {
     // Arrange
@@ -20,6 +23,7 @@ async fn harness_turns_that_move_or_delete_the_base_fail_before_publishing() {
     let git_client = base_git(
         "origin/main",
         &[Some("base-1"), Some("base-1"), Some("moved"), None],
+        &[Some(SESSION_HEAD), Some(SESSION_HEAD)],
     );
     let scope = scope(&db, &git_client, "worker");
 
@@ -53,7 +57,7 @@ async fn harness_turns_that_move_or_delete_the_base_fail_before_publishing() {
 async fn harness_turns_refuse_to_run_on_a_base_that_does_not_resolve() {
     // Arrange
     let db = session_database("main").await;
-    let git_client = base_git("main", &[None]);
+    let git_client = base_git("main", &[None], &[]);
     let scope = scope(&db, &git_client, "worker");
 
     // Act
@@ -68,10 +72,73 @@ async fn harness_turns_refuse_to_run_on_a_base_that_does_not_resolve() {
 }
 
 #[tokio::test]
+async fn harness_turns_that_retarget_head_fail_before_publishing() {
+    // Arrange
+    let db = session_database("main").await;
+    // Capture on the session branch, then a detached `HEAD`, one pointing at
+    // `main`, and one that no longer resolves; the base stays in place.
+    let git_client = base_git(
+        "main",
+        &[Some("base-1"); 4],
+        &[
+            Some(SESSION_HEAD),
+            Some("HEAD"),
+            Some("refs/heads/main"),
+            None,
+        ],
+    );
+    let scope = scope(&db, &git_client, "worker");
+    // A `HEAD` an earlier turn retargeted keeps the next turn from starting.
+    let retargeted_git = base_git("main", &[Some("base-1")], &[Some("refs/heads/main")]);
+
+    // Act
+    let snapshot = BaseBranchSnapshot::capture(&scope, AgentKind::Harness)
+        .await
+        .expect("capture")
+        .expect("base branch snapshot");
+    let detached = BaseBranchSnapshot::verify(Some(&snapshot), &scope, Ok(completed_turn())).await;
+    let retargeted =
+        BaseBranchSnapshot::verify(Some(&snapshot), &scope, Ok(completed_turn())).await;
+    let unresolved =
+        BaseBranchSnapshot::verify(Some(&snapshot), &scope, Ok(completed_turn())).await;
+    let retargeted_capture = BaseBranchSnapshot::capture(
+        &self::scope(&db, &retargeted_git, "worker"),
+        AgentKind::Harness,
+    )
+    .await;
+
+    // Assert
+    assert!(detached.is_ok());
+    let retargeted = retargeted
+        .expect_err("a retargeted HEAD fails the turn")
+        .to_string();
+    assert!(
+        retargeted.contains(&format!(
+            "`HEAD` resolves to `refs/heads/main` instead of `{SESSION_HEAD}`"
+        )),
+        "{retargeted}"
+    );
+    let unresolved = unresolved
+        .expect_err("an unresolvable HEAD fails the turn")
+        .to_string();
+    assert!(
+        unresolved.contains("`HEAD` does not resolve"),
+        "{unresolved}"
+    );
+    let retargeted_capture = retargeted_capture
+        .expect_err("a retargeted HEAD fails before the turn")
+        .to_string();
+    assert!(
+        retargeted_capture.contains("resolves to `refs/heads/main`"),
+        "{retargeted_capture}"
+    );
+}
+
+#[tokio::test]
 async fn base_branch_snapshots_cover_only_harness_sessions_with_a_base() {
     // Arrange
     let db = session_database("main").await;
-    let git_client = base_git("main", &[]);
+    let git_client = base_git("main", &[], &[]);
 
     // Act
     let other_agent =
@@ -106,10 +173,26 @@ async fn session_database(base_branch: &str) -> AppRepositories {
     db
 }
 
-/// Returns a Git client whose `reference` resolves to `commits` in order,
-/// with `None` for a reference that does not resolve.
-fn base_git(reference: &'static str, commits: &'static [Option<&'static str>]) -> MockGitClient {
+/// Returns a Git client whose `reference` resolves to `commits` in order and
+/// whose `HEAD` resolves to `heads` in order, with `None` for one that does
+/// not resolve.
+fn base_git(
+    reference: &'static str,
+    commits: &'static [Option<&'static str>],
+    heads: &'static [Option<&'static str>],
+) -> MockGitClient {
     let mut git_client = MockGitClient::new();
+    let mut remaining_heads = heads.iter();
+    git_client
+        .expect_head_reference()
+        .times(heads.len())
+        .returning(move |_| {
+            let head = remaining_heads.next().copied().flatten();
+            Box::pin(async move {
+                head.map(str::to_string)
+                    .ok_or_else(|| GitError::OutputParse("unknown revision".into()))
+            })
+        });
     let mut remaining = commits.iter();
     git_client
         .expect_ref_hash()

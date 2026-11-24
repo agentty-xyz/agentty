@@ -161,7 +161,7 @@ pub(crate) async fn probe(
     let writes = !snapshot.workspace_writes.is_empty()
         || !snapshot.writable_roots.is_empty()
         || snapshot.temporary_directory.is_some()
-        || snapshot.grants(Capability::GitWrites);
+        || snapshot.git_branch.is_some();
     if !host.landlock && writes {
         return Err(SandboxUnavailableReason::LandlockUnavailable);
     }
@@ -383,9 +383,9 @@ async fn resolve_access(
         access.write_nodes.push(node);
     }
     resolve_outside_grants(files, policy, &mut access).await?;
-    if policy.allows_git_writes() {
+    if let Some(branch) = policy.git_writes_branch() {
         let repository = repository.ok_or(ExecutionError::Unsupported)?;
-        let git_writes = repository.writes(files).await?;
+        let git_writes = repository.writes(files, branch.to_string()).await?;
         // A Landlock rule covers everything beneath its directory, and the
         // writable Git mounts replace the read-only ones, so a write grant
         // around a Git directory would open its configuration and hooks.
@@ -759,17 +759,22 @@ struct GitDirectories {
 }
 
 impl GitDirectories {
-    /// Returns the directories the Git-writes grant opens.
+    /// Returns the directories the Git-writes grant opens for `branch`.
     ///
     /// # Errors
     /// Returns [`ExecutionError::Unsupported`] for a linked worktree whose
     /// repository enables per-worktree configuration while the worktree has
     /// no `config.worktree`: the Linux sandbox could not keep a command from
     /// creating one that Git run later outside the sandbox would read.
-    async fn writes(self, files: &dyn Inspection) -> Result<GitWrites, ExecutionError> {
+    async fn writes(
+        self,
+        files: &dyn Inspection,
+        branch: String,
+    ) -> Result<GitWrites, ExecutionError> {
         if self.admin == self.common {
             return Ok(GitWrites {
                 admin: None,
+                branch,
                 common: self.common,
             });
         }
@@ -790,6 +795,7 @@ impl GitDirectories {
 
         Ok(GitWrites {
             admin: Some(self.admin),
+            branch,
             common: self.common,
         })
     }

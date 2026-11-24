@@ -542,6 +542,9 @@ pub(super) fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitC
     mock.expect_ref_hash()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok("head-commit".to_string()) }));
+    mock.expect_head_reference()
+        .times(0..)
+        .returning(|_| Box::pin(async { Ok("HEAD".to_string()) }));
     mock.expect_delete_branch()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok(()) }));

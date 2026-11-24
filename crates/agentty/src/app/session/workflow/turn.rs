@@ -431,6 +431,7 @@ async fn prepare_turn_request(
                     reasoning_level: settings.reasoning_level,
                     request_kind,
                     response_style: settings.response_style,
+                    session_branch: Some(env.branch.clone()),
                     speed_mode: settings.speed_mode,
                 },
                 session_project_id,

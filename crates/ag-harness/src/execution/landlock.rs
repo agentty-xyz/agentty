@@ -5,12 +5,14 @@
 //! exists at launch immutable, and mount boundaries reject cross-mount hard
 //! links and renames on their own; Landlock additionally confines every
 //! write of the shell and its descendants to the granted directories, and
-//! the Git-writes grant to the object, reference, and log stores and the
-//! files at the top of a linked worktree's administration directory, so the
-//! remaining mount-writable paths — the sandbox-private tmpfs root, even
-//! through symlinks — stay unreachable and rename and link rights stay
-//! scoped to each grant. Enforcement requires ABI 3 (Linux 6.2): earlier
-//! kernels cannot restrict `truncate`, so write grants fail closed there.
+//! the Git-writes grant to the object store, the directories holding the
+//! branch reference and its reflog, and a linked worktree's reference and
+//! log stores and the files at the top of its administration directory, so
+//! the remaining mount-writable paths — the sandbox-private tmpfs root, the
+//! rest of the common Git directory, even through symlinks — stay
+//! unreachable and rename and link rights stay scoped to each grant.
+//! Enforcement requires ABI 3 (Linux 6.2): earlier kernels cannot restrict
+//! `truncate`, so write grants fail closed there.
 //! The kernel API has no libc wrapper, so this module owns the workspace's
 //! only unsafe blocks: three raw syscalls on plain values and descriptors
 //! held in `OwnedFd`.
@@ -68,9 +70,15 @@ const DEVICE_ACCESS: u64 = ACCESS_WRITE_FILE | ACCESS_TRUNCATE;
 const GIT_ADMIN_ACCESS: u64 =
     ACCESS_WRITE_FILE | ACCESS_TRUNCATE | ACCESS_MAKE_REG | ACCESS_REMOVE_FILE;
 
-/// Git stores the Git-writes grant opens fully beneath each Git directory.
+/// Stores of a linked worktree's administration directory that the
+/// Git-writes grant opens fully: its per-worktree references, such as
+/// `refs/bisect`, and its logs, such as the `HEAD` reflog. In the common
+/// directory only the object store and the directories holding the branch
+/// reference and its reflog are writable, so other branches outside the
+/// branch's own directory, tags, `refs/stash`, and `packed-refs` stay
+/// read-only.
 #[cfg(target_os = "linux")]
-const GIT_STORES: [&str; 3] = ["objects", "refs", "logs"];
+const GIT_ADMIN_STORES: [&str; 2] = ["refs", "logs"];
 
 /// Entries of a linked worktree's administration directory that stay
 /// mounted read-only under the Git-writes grant: Git follows `commondir`
@@ -126,13 +134,18 @@ pub(super) fn confine(configuration: &Launch) -> io::Result<()> {
         add_rule(&ruleset, &grant, GRANT_ACCESS)?;
     }
     if let Some(git) = &configuration.git_writes {
-        for root in git.admin.iter().chain(std::iter::once(&git.common)) {
-            for store in GIT_STORES {
-                match directory(&root.join(store)) {
-                    Ok(store) => add_rule(&ruleset, &store, GRANT_ACCESS)?,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
+        let admin_stores = git
+            .admin
+            .iter()
+            .flat_map(|admin| GIT_ADMIN_STORES.map(|store| admin.join(store)));
+        let stores = std::iter::once(git.common.join("objects"))
+            .chain(admin_stores)
+            .chain(super::launcher::prepare_branch_directories(git)?);
+        for store in stores {
+            match directory(&store) {
+                Ok(store) => add_rule(&ruleset, &store, GRANT_ACCESS)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
         }
         if let Some(admin) = &git.admin {

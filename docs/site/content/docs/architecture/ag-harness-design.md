@@ -467,17 +467,19 @@ sessions start on a harness model only once its provider is configured.
 - `ReadOnly` maps to `read`. Edit modes add `write` and `bash`, which inherits Agentty's
   environment without provider credential and endpoint variables.
 - `bash` runs in the native sandbox with Agentty's grants: full-disk reads, writes to
-  the worktree, its Git metadata, and the session's own temporary directory, which holds
-  the tool caches, and network; no Unix sockets. The harness data root, Agentty's
-  database and pasted images, and the ChatGPT sign-in are hidden, and credential-like
-  variables are withheld. The `agentty` executable calls
-  `ag_worker::dispatch_sandbox_helper`, which wraps the harness's `sandbox::dispatch`,
-  first in `main`, so it is its own sandbox helper. Where the sandbox cannot run,
-  session commands run unsandboxed and each turn reports `SandboxUnavailable`, which the
-  session view shows once per session, or again when the reason changes or the sandbox
-  worked in between; utility prompts refuse instead. `ag-git` runs Git with
-  `GIT_NO_REPLACE_OBJECTS` and without grafts, and a Harness turn that moves its base
-  branch fails before Agentty commits or publishes.
+  the worktree and the session's own temporary directory, which holds the tool caches,
+  and network; no Unix sockets. Git writes cover only committing on the validated
+  session branch that `TurnRequest::session_branch` names, and one-shot utility prompts
+  get none. A Harness turn that leaves the worktree's `HEAD` resolving to another branch
+  fails like one that moves its base. The harness data root, Agentty's database and
+  pasted images, and the ChatGPT sign-in are hidden, and credential-like variables are
+  withheld. The `agentty` executable calls `ag_worker::dispatch_sandbox_helper`, which
+  wraps the harness's `sandbox::dispatch`, first in `main`, so it is its own sandbox
+  helper. Where the sandbox cannot run, session commands run unsandboxed and each turn
+  reports `SandboxUnavailable`, which the session view shows once per session, or again
+  when the reason changes or the sandbox worked in between; utility prompts refuse
+  instead. `ag-git` runs Git with `GIT_NO_REPLACE_OBJECTS` and without grafts, and a
+  Harness turn that moves its base branch fails before Agentty commits or publishes.
 - Each session's database lives under the Agentty data root, outside the session
   worktree; session deletion removes it.
 - A turn returns to Agentty only after `TurnControl::settled`, so Agentty commits a

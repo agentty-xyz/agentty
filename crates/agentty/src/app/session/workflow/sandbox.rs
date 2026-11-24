@@ -14,10 +14,11 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
 
 /// Hint shown to the user after a command the sandbox may have blocked.
-const LIKELY_DENIAL_HINT: &str =
-    "A command may have been blocked by the sandbox. Session commands can write only the session \
-     worktree, its Git metadata, and their temporary directory, and cannot read credential stores \
-     such as `~/.ssh`. You can run commands that need more access outside the session.";
+const LIKELY_DENIAL_HINT: &str = "A command may have been blocked by the sandbox. Session \
+                                  commands can write only the session worktree, commits on the \
+                                  session branch, and their temporary directory, and cannot read \
+                                  credential stores such as `~/.ssh`. You can run commands that \
+                                  need more access outside the session.";
 /// Detail of the notice shown when the sandbox runs commands again after a
 /// warning.
 const RESTORED: &str = "Commands run in the sandbox again.";

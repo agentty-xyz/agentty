@@ -92,6 +92,7 @@ fn test_build_command_request_uses_agent_facing_prompt_text() {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ag_contracts::ResponseStyle::default(),
+        session_branch: None,
         speed_mode: ag_contracts::SpeedMode::default(),
     };
     let prompt_text = request.prompt.agent_text();

@@ -38,6 +38,9 @@ const TEST_NAME: &str = "session_commands_commit_in_a_linked_worktree_and_stay_c
 const MODEL: &str = "muse-spark-1.3";
 /// Session whose harness history the command tries to read.
 const SESSION_ID: &str = "session-sandbox";
+/// Session branch checked out in the worktree, nested like Agentty's own so
+/// that Linux, which grants the directory holding it, keeps `main` read-only.
+const SESSION_BRANCH: &str = "wt/session";
 /// Stored API key file, under the Agentty root, the command tries to read.
 const API_KEY_FILE: &str = "auth/api_keys.json";
 
@@ -190,9 +193,10 @@ async fn session_commands_commit_in_a_linked_worktree_and_stay_confined() -> Tes
         .iter()
         .find(|body| body.contains(r#""tool_call_id":"call-bash""#))
         .ok_or("bash result should reach the model")?;
-    // The command commits, then the write outside and the reads of the
-    // harness history and the application database fail, so only the first
-    // marker reaches standard output.
+    // The command commits, then the moves of the base branch, the edit of
+    // `packed-refs`, the write outside, and the reads of the harness history
+    // and the application database fail, so only the first marker reaches
+    // standard output.
     assert!(
         bash_result.contains(r#"\"stdout\":\"committed\\n\""#),
         "{bash_result}"
@@ -221,7 +225,7 @@ struct Fixture {
 
 impl Fixture {
     /// Creates the repository with one commit and its linked worktree on the
-    /// `session` branch.
+    /// session branch.
     fn new() -> TestResult<Self> {
         let repository = tempfile::tempdir()?;
         let worktrees = tempfile::tempdir()?;
@@ -233,7 +237,14 @@ impl Fixture {
         let worktree_path = worktree.display().to_string();
         git(
             repository.path(),
-            &["worktree", "add", "-q", "-b", "session", &worktree_path],
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                SESSION_BRANCH,
+                &worktree_path,
+            ],
         )?;
 
         let agentty_root = tempfile::tempdir()?;
@@ -255,16 +266,20 @@ impl Fixture {
         })
     }
 
-    /// Returns the command the model runs: a commit, a temporary file, a
-    /// write outside the worktree, and reads of the harness history and of
-    /// Agentty's application database and stored API keys.
+    /// Returns the command the model runs: a commit, a temporary file, moves
+    /// of the base branch and edits of `packed-refs`, a write outside the
+    /// worktree, and reads of the harness history and of Agentty's
+    /// application database and stored API keys.
     fn command(&self) -> String {
         format!(
-            "printf 'sandboxed\\n' > notes.txt && git add notes.txt && git -c user.name=Agentty \
-             -c user.email=agentty@example.com commit -qm 'Add notes' && touch \
-             \"$TMPDIR/scratch\" && echo committed; touch '{}' && echo escaped; cat '{}' > \
-             /dev/null && echo read-history; cat '{}' > /dev/null && echo read-database; cat '{}' \
-             > /dev/null && echo read-keys",
+            "export GIT_AUTHOR_NAME=Agentty GIT_AUTHOR_EMAIL=agentty@example.com \
+             GIT_COMMITTER_NAME=Agentty GIT_COMMITTER_EMAIL=agentty@example.com; printf \
+             'sandboxed\\n' > notes.txt && git add notes.txt && git commit -qm 'Add notes' && \
+             touch \"$TMPDIR/scratch\" && echo committed; git update-ref refs/heads/main HEAD \
+             2>/dev/null && echo moved-main; printf x >> \"$(git rev-parse --path-format=absolute \
+             --git-common-dir)/packed-refs\" && echo edited-packed-refs; touch '{}' && echo \
+             escaped; cat '{}' > /dev/null && echo read-history; cat '{}' > /dev/null && echo \
+             read-database; cat '{}' > /dev/null && echo read-keys",
             self.escape().display(),
             self.data_root
                 .path()
@@ -300,15 +315,21 @@ impl Fixture {
         })
     }
 
-    /// Asserts that the commit landed on the session branch, the temporary
-    /// file is in the session's temporary directory, and nothing was
-    /// written outside.
+    /// Asserts that the commit landed on the session branch, the base branch
+    /// and packed references stayed unchanged, the temporary file is in the
+    /// session's temporary directory, and nothing was written outside.
     fn assert_effects(&self) -> TestResult {
-        let log = Command::new("git")
-            .args(["log", "-1", "--format=%s", "session"])
-            .current_dir(self.repository.path())
-            .output()?;
-        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Add notes");
+        let subject = |branch: &str| -> TestResult<String> {
+            let log = Command::new("git")
+                .args(["log", "-1", "--format=%s", branch])
+                .current_dir(self.repository.path())
+                .output()?;
+
+            Ok(String::from_utf8_lossy(&log.stdout).trim().to_string())
+        };
+        assert_eq!(subject(SESSION_BRANCH)?, "Add notes");
+        assert_eq!(subject("main")?, "Base");
+        assert!(!self.repository.path().join(".git/packed-refs").exists());
         assert!(
             self.data_root
                 .path()
@@ -358,6 +379,7 @@ fn turn_request(folder: &Path, prompt: &str) -> TurnRequest {
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::Concise,
+        session_branch: Some(SESSION_BRANCH.to_string()),
         speed_mode: SpeedMode::Normal,
     }
 }
