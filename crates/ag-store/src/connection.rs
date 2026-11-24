@@ -1,14 +1,13 @@
 //! `SQLite` connection setup for the database layer.
 
-use std::io::ErrorKind;
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::migrate::{MigrateError, Migrator};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Connection as _, Sqlite, SqliteConnection, SqlitePool, Transaction};
+use ag_sqlite::{OpenOptions, OperationLabels};
+use sqlx::sqlite::SqliteSynchronous;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::timestamp::system_timestamp_source;
 use crate::{AppRepositories, DbError, DbResultExt as _, TimestampSource};
@@ -118,7 +117,7 @@ impl Database {
     pub async fn open_in_memory_with_timestamp_source(
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Result<Self, DbError> {
-        let pool = open_in_memory_pool(1).await?;
+        let pool = open_in_memory_pool().await?;
 
         Ok(Self::from_pool(pool, timestamp_source))
     }
@@ -143,31 +142,9 @@ impl Database {
         timestamp_source: Arc<dyn TimestampSource>,
         busy_timeout: Duration,
     ) -> Result<Self, DbError> {
-        // A path without a parent creates nothing: `create_dir_all("")` is a
-        // successful no-op.
-        tokio::fs::create_dir_all(db_path.parent().unwrap_or(Path::new(""))).await?;
-
-        let temporary = db_path.as_os_str().is_empty() || db_path == Path::new(":memory:");
-        if !temporary && !tokio::fs::try_exists(db_path).await? {
-            create_wal_database(db_path, busy_timeout).await?;
-        }
-        let pool_options = SqlitePoolOptions::new().acquire_timeout(busy_timeout);
-        // SQLite temporary databases belong to one connection. Additional
-        // pooled connections or eviction would lose their schema and data.
-        let pool_options = if temporary {
-            pool_options
-                .max_connections(1)
-                .idle_timeout(None)
-                .max_lifetime(None)
-                .test_before_acquire(false)
-        } else {
-            pool_options.max_connections(DB_POOL_MAX_CONNECTIONS)
-        };
-        let pool = pool_options
-            .connect_with(on_disk_connect_options(db_path, busy_timeout))
-            .await?;
-
-        migrate(&pool, &MIGRATOR).await?;
+        let pool = ag_sqlite::open(db_path, &MIGRATOR, open_options(busy_timeout))
+            .await
+            .map_err(DbError::from_open)?;
 
         Ok(Self::from_pool(pool, timestamp_source))
     }
@@ -187,15 +164,8 @@ impl From<Database> for AppRepositories {
     }
 }
 
-/// Begins a transaction that takes the database write lock up front, and
+/// Begins a transaction that may write with [`ag_sqlite::begin_write`], and
 /// labels a failure with `operation`.
-///
-/// Use it for every transaction that may write. A deferred transaction that
-/// reads before its first write upgrades its read snapshot to the write lock
-/// at that write; when another connection committed in between, `SQLite`
-/// fails the upgrade at once with `database is locked`, without waiting for
-/// the busy timeout. `BEGIN IMMEDIATE` waits for the lock (up to the busy
-/// timeout) before the first read instead, so lock waits now fail here.
 ///
 /// # Errors
 /// Returns [`DbError::QueryContext`] if no pooled connection is available or
@@ -204,161 +174,51 @@ pub(crate) async fn begin_write(
     pool: &SqlitePool,
     operation: &'static str,
 ) -> Result<Transaction<'static, Sqlite>, DbError> {
-    pool.begin_with("BEGIN IMMEDIATE")
-        .await
-        .db_context(operation)
+    ag_sqlite::begin_write(pool).await.db_context(operation)
 }
 
-/// Opens an in-memory `SQLite` pool with migrations applied.
+/// Begins a read-only snapshot with [`ag_sqlite::begin_read`], and labels a
+/// failure with `operation`.
 ///
-/// The caller chooses the connection cap so tests and runtime code can share
-/// the same setup logic while keeping their own concurrency requirements.
-/// Applies the same busy timeout as [`Database::open`] so pooled test
-/// connections exercise the same writer wait policy.
+/// # Errors
+/// Returns [`DbError::QueryContext`] if no pooled connection is available.
+pub(crate) async fn begin_read(
+    pool: &SqlitePool,
+    operation: &'static str,
+) -> Result<Transaction<'static, Sqlite>, DbError> {
+    ag_sqlite::begin_read(pool).await.db_context(operation)
+}
+
+/// Opens a migrated in-memory `SQLite` pool on one connection that the pool
+/// never evicts, with the interactive busy timeout.
 ///
 /// # Errors
 /// Returns an error if the in-memory database connection or migrations fail.
-pub(crate) async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePool, DbError> {
-    let pool = SqlitePoolOptions::new()
-        .max_connections(max_connections)
-        .acquire_timeout(INTERACTIVE_BUSY_TIMEOUT)
-        .connect_with(in_memory_connect_options())
-        .await?;
-
-    migrate(&pool, &MIGRATOR).await?;
-
-    Ok(pool)
-}
-
-/// Returns in-memory connection settings matching the interactive busy
-/// timeout, durability, and foreign-key policy.
-pub(crate) fn in_memory_connect_options() -> SqliteConnectOptions {
-    SqliteConnectOptions::new()
-        .filename(":memory:")
-        .busy_timeout(INTERACTIVE_BUSY_TIMEOUT)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
-        .foreign_keys(true)
-}
-
-/// Creates the database at `db_path` already in WAL mode, unless another
-/// opener created it first.
-///
-/// `SQLite` does not apply the busy timeout to the switch into WAL mode: it
-/// upgrades a read transaction to the write lock (`sqlite3BtreeSetVersion`),
-/// so concurrent first opens of one file fail at once with `database is
-/// locked`. Switching a private file and moving it into place without
-/// replacing anything gives every connection to `db_path` a file that is
-/// already in WAL mode.
-async fn create_wal_database(db_path: &Path, busy_timeout: Duration) -> Result<(), DbError> {
-    let operation = "create app database";
-    let directory = db_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let staged = tempfile::Builder::new()
-        .prefix(".agentty-")
-        .suffix(".db")
-        .tempfile_in(directory)?
-        .into_temp_path();
-    SqliteConnection::connect_with(&on_disk_connect_options(&staged, busy_timeout))
-        .await
-        .db_context(operation)?
-        .close()
-        .await
-        .db_context(operation)?;
-
-    match staged
-        .persist_noclobber(db_path)
-        .map_err(|error| error.error)
-    {
-        Err(error) if error.kind() != ErrorKind::AlreadyExists => Err(error.into()),
-        _ => Ok(()),
-    }
-}
-
-/// Returns the on-disk connection settings: WAL, `NORMAL` durability,
-/// foreign keys, and `busy_timeout`.
-fn on_disk_connect_options(db_path: &Path, busy_timeout: Duration) -> SqliteConnectOptions {
-    SqliteConnectOptions::new()
-        .filename(db_path)
-        .create_if_missing(true)
-        .busy_timeout(busy_timeout)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
-        .foreign_keys(true)
-}
-
-/// Applies `migrator`'s pending migrations while holding the database write
-/// lock, and only validates applied ones when none is pending.
-///
-/// `SQLx` does not lock `SQLite` migrations (its `Migrate::lock` for `SQLite`
-/// is a no-op), so concurrent opens would each list the same pending
-/// migrations and apply them twice. `BEGIN IMMEDIATE` serializes them: later
-/// openers wait (up to the busy timeout) for the lock, then find every
-/// migration applied. An up-to-date database is checked with reads alone, so
-/// opening it never waits behind another writer.
-async fn migrate(pool: &SqlitePool, migrator: &Migrator) -> Result<(), DbError> {
-    // A migration opting out of transactions would silently run inside the
-    // lock below, where `VACUUM` fails and `PRAGMA foreign_keys` is ignored.
-    if let Some(migration) = migrator.iter().find(|migration| migration.no_tx) {
-        return Err(DbError::Migration(MigrateError::Source(
-            format!(
-                "migration {} opts out of transactions, which the locked migration path cannot \
-                 apply",
-                migration.version
-            )
-            .into(),
-        )));
-    }
-    if !has_pending_migration(pool, migrator).await? {
-        migrator.run(pool).await?;
-
-        return Ok(());
-    }
-
-    let operation = "migrate app database";
-    let mut transaction = begin_write(pool, operation).await?;
-    // `run_direct` is hidden from `SQLx`'s docs and semver. The public
-    // `migrator.run(&mut *transaction)` does not compile here: its `Acquire`
-    // bound trips rust-lang/rust#100013 in this `Send` future, and `SQLx`
-    // keeps `run_direct` for exactly that error. Inside the transaction,
-    // `SQLx`'s `SQLite` `Migrate::apply` nests each migration in a
-    // `SAVEPOINT`. Recheck both assumptions, and whether `Migrate::lock`
-    // still does nothing for `SQLite`, when upgrading `SQLx`; the contention
-    // tests fail if either breaks.
-    migrator.run_direct(None, &mut *transaction, false).await?;
-
-    transaction.commit().await.db_context(operation)
-}
-
-/// Returns whether `migrator` has a migration the database has not applied
-/// successfully, using reads only.
-async fn has_pending_migration(pool: &SqlitePool, migrator: &Migrator) -> Result<bool, DbError> {
-    let operation = "check app database migrations";
-    let mut connection = pool.acquire().await.db_context(operation)?;
-    // Unchecked queries: `_sqlx_migrations` belongs to `SQLx`, not to the
-    // embedded schema, and may not exist yet.
-    let has_table = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
-         '_sqlx_migrations')",
+pub(crate) async fn open_in_memory_pool() -> Result<SqlitePool, DbError> {
+    ag_sqlite::open(
+        Path::new(":memory:"),
+        &MIGRATOR,
+        open_options(INTERACTIVE_BUSY_TIMEOUT),
     )
-    .fetch_one(&mut *connection)
     .await
-    .db_context(operation)?;
-    if !has_table {
-        return Ok(true);
+    .map_err(DbError::from_open)
+}
+
+/// Returns the store's connection policy: `NORMAL` durability, at most
+/// [`DB_POOL_MAX_CONNECTIONS`] pooled connections, `busy_timeout`, and labels
+/// naming the app database.
+pub(crate) fn open_options(busy_timeout: Duration) -> OpenOptions {
+    OpenOptions {
+        busy_timeout,
+        labels: OperationLabels {
+            check_migrations: "check app database migrations",
+            connect: "open app database",
+            create: "create app database",
+            migrate: "migrate app database",
+        },
+        max_connections: DB_POOL_MAX_CONNECTIONS,
+        synchronous: SqliteSynchronous::Normal,
     }
-
-    let applied =
-        sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations WHERE success")
-            .fetch_all(&mut *connection)
-            .await
-            .db_context(operation)?;
-
-    Ok(migrator.iter().any(|migration| {
-        !migration.migration_type.is_down_migration() && !applied.contains(&migration.version)
-    }))
 }
 
 #[cfg(test)]

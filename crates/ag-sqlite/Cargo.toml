@@ -1,0 +1,17 @@
+[package]
+name = "ag-sqlite"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared SQLite open, migration, and transaction helpers for Agentty stores"
+repository.workspace = true
+
+[dependencies]
+sqlx.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

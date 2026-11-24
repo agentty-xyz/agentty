@@ -1,9 +1,11 @@
 //! Session storage tests: database setup and migrations, persisted data
 //! validation, and the message codec.
 
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use sqlx::migrate::MigrateError;
 use tempfile::tempdir;
 
 use super::support::{
@@ -13,10 +15,70 @@ use crate::context::HistoryTurn;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::request_option::OutputMode;
 use crate::session::{NewSession, SessionError};
-use crate::sqlite_store::{Database, EncodedMessage, SQLITE_BUSY_TIMEOUT, TimestampSource};
+use crate::sqlite_store::{
+    Database, EncodedMessage, SQLITE_BUSY_TIMEOUT, TimestampSource, open_error,
+};
 use crate::store::{SessionCheckpoint, StoreBackend as _};
 use crate::store_fixture::image_input;
 use crate::tool::ToolCall;
+
+#[test]
+fn open_failures_keep_their_backend_error_as_the_store_source() {
+    // Arrange
+    let io_error = ag_sqlite::Error::Io(io::Error::other("disk"));
+    let locked = ag_sqlite::Error::Sqlx {
+        operation: "migrate persistent session database",
+        source: sqlx::Error::PoolTimedOut,
+    };
+    let invalid = ag_sqlite::Error::Migrate {
+        operation: "migrate persistent session database",
+        source: MigrateError::VersionMissing(7),
+    };
+
+    // Act
+    let errors = [io_error, locked, invalid].map(open_error);
+
+    // Assert
+    assert!(matches!(errors[0], SessionError::Io(_)));
+    assert!(matches!(
+        &errors[1],
+        SessionError::Store {
+            operation: "migrate persistent session database",
+            source,
+        } if matches!(source.downcast_ref(), Some(sqlx::Error::PoolTimedOut))
+    ));
+    assert!(matches!(
+        &errors[2],
+        SessionError::Store {
+            operation: "migrate persistent session database",
+            source,
+        } if matches!(source.downcast_ref(), Some(MigrateError::VersionMissing(7)))
+    ));
+}
+
+#[tokio::test]
+async fn open_failures_name_the_persistent_session_database() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory should be created");
+
+    // Act
+    let result = Database::open(directory.path()).await;
+
+    // Assert
+    let error = result
+        .err()
+        .expect("a directory should not open as a database");
+    assert!(
+        matches!(
+            error,
+            SessionError::Store {
+                operation: "open persistent session database",
+                ..
+            }
+        ),
+        "unexpected error: {error:?}"
+    );
+}
 
 #[test]
 fn session_config_exposes_values_and_system_prompt() {
@@ -86,6 +148,7 @@ async fn on_disk_database_creates_parent_and_applies_connection_policy() {
         database.pool.options().get_acquire_timeout(),
         SQLITE_BUSY_TIMEOUT
     );
+    assert_eq!(database.pool.options().get_max_connections(), 4);
 }
 
 #[tokio::test]
