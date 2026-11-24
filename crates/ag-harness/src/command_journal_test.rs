@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use crate::bash::{
+    CommandCleanupScope, CommandExit, CommandIntent, CommandOutcome, CommandTermination,
+};
 use crate::reservation::tests::fixture::AcquiredTurnFixture as _;
 #[cfg(feature = "sqlite")]
 use crate::store::SqliteStore;
@@ -39,15 +41,13 @@ fn outcome() -> CommandOutcome {
         cleanup_failed: false,
         cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
         execution_failure: None,
-        exit_code: Some(0),
-        signal: None,
+        exit: CommandExit::new(Some(0), None),
         stderr: String::new(),
         stderr_omitted_bytes: 0,
         stderr_tail: String::new(),
         stdout: "observed".into(),
         stdout_omitted_bytes: 0,
         stdout_tail: String::new(),
-        termination: CommandTermination::Completed,
         truncated: false,
     }
 }
@@ -72,6 +72,65 @@ fn prefix_only_outcomes_recorded_before_head_and_tail_capture_still_decode() {
 
     // Assert
     assert_eq!(decoded, outcome());
+}
+
+#[test]
+fn exit_fields_stay_top_level_and_pipe_status_is_encoded_only_for_a_pipeline() {
+    // Arrange
+    let plain = outcome();
+    let mut piped = outcome();
+    piped.exit = CommandExit::new(Some(0), None).with_pipe_status(vec![101, 0]);
+
+    // Act
+    let plain_encoded = serde_json::to_value(&plain).expect("plain outcome");
+    let piped_encoded = serde_json::to_value(&piped).expect("piped outcome");
+
+    // Assert
+    assert_eq!(
+        (&plain_encoded["exit_code"], &plain_encoded["signal"]),
+        (&json!(0), &json!(null))
+    );
+    assert!(
+        plain_encoded.get("pipe_status").is_none(),
+        "{plain_encoded}"
+    );
+    assert!(plain_encoded.get("exit").is_none(), "{plain_encoded}");
+    assert_eq!(piped_encoded["pipe_status"], json!([101, 0]));
+    assert_eq!(
+        serde_json::from_value::<CommandOutcome>(piped_encoded).expect("decoded"),
+        piped
+    );
+}
+
+#[test]
+fn command_exits_describe_the_exit_signal_and_pipeline() {
+    for (exit, expected) in [
+        (CommandExit::new(Some(101), None), "exit 101"),
+        (
+            CommandExit::new(Some(0), None).with_pipe_status(vec![101, 0]),
+            "exit 0, pipeline 101 0",
+        ),
+        (CommandExit::new(None, Some(9)), "signal 9"),
+        (CommandExit::default(), ""),
+        (
+            CommandExit::new(None, Some(9)).with_termination(CommandTermination::Deadline),
+            "timed out, signal 9",
+        ),
+        (
+            CommandExit::new(Some(130), None).with_termination(CommandTermination::Cancelled),
+            "cancelled, exit 130",
+        ),
+        (
+            CommandExit::default().with_termination(CommandTermination::Failed),
+            "failed to run",
+        ),
+    ] {
+        // Act
+        let described = exit.to_string();
+
+        // Assert
+        assert_eq!(described, expected);
+    }
 }
 
 #[tokio::test]
@@ -144,7 +203,7 @@ async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owne
             .await
             .expect("identical retry");
         let mut conflicting = outcome();
-        conflicting.exit_code = Some(7);
+        conflicting.exit.exit_code = Some(7);
         let conflict = store.finish_command(&owner, id, &conflicting).await;
 
         // Assert

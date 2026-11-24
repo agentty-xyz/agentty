@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 
 use super::{BashTool, command_outcome};
-use crate::bash::{BashArguments, BashConfig, BashError, CommandCleanupScope, CommandTermination};
+use crate::bash::{
+    BashArguments, BashConfig, BashError, CommandCleanupScope, CommandExit, CommandTermination,
+};
 use crate::command_settlement::Commands;
 use crate::effect::Effects;
 use crate::execution::contract::{
@@ -351,7 +353,7 @@ fn outcome_reports_each_termination() {
 
         // Act
         let outcome = command_outcome(
-            &ExecutionResult {
+            &mut ExecutionResult {
                 cleanup_failure: None,
                 execution_failure: None,
                 main_exit: MainExit::Code(0),
@@ -362,8 +364,8 @@ fn outcome_reports_each_termination() {
         );
 
         // Assert
-        assert_eq!(outcome.termination, expected);
-        assert_eq!(outcome.exit_code, Some(0));
+        assert_eq!(outcome.exit.termination, expected);
+        assert_eq!(outcome.exit.exit_code, Some(0));
     }
 }
 
@@ -385,7 +387,7 @@ fn outcome_keeps_exit_output_and_each_failure_dimension() {
 
         // Act
         let outcome = command_outcome(
-            &ExecutionResult {
+            &mut ExecutionResult {
                 cleanup_failure: Some(ExecutionError::Cleanup),
                 execution_failure: Some(failure),
                 main_exit: MainExit::Signal(15),
@@ -398,9 +400,10 @@ fn outcome_keeps_exit_output_and_each_failure_dimension() {
         // Assert
         assert_eq!(outcome.execution_failure, Some(expected));
         assert!(outcome.cleanup_failed);
-        assert_eq!(outcome.exit_code, None);
-        assert_eq!(outcome.signal, Some(15));
-        assert_eq!(outcome.termination, CommandTermination::Failed);
+        assert_eq!(
+            outcome.exit,
+            CommandExit::new(None, Some(15)).with_termination(CommandTermination::Failed)
+        );
         assert_eq!(
             (
                 outcome.stdout.as_str(),

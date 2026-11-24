@@ -80,7 +80,7 @@ fn record_lifecycle_fixtures(lifecycle: &LifecycleEmitter) {
         )
         .expect("observer should request a tool");
     completed_tool.started();
-    completed_tool.completed();
+    completed_tool.completed(None);
     lifecycle
         .request_tool(
             "denied-call".to_string(),
@@ -333,7 +333,7 @@ fn ignores_untracked_turns_tools_and_absent_token_counts() {
         )
         .expect("observer should request a late tool");
     late_tool.started();
-    late_tool.completed();
+    late_tool.completed(None);
     let open_turn = lifecycle
         .start_turn()
         .expect("observer should start a turn");

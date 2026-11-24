@@ -181,7 +181,8 @@ fn cleared_bash_and_write_results_keep_their_outcome_and_forbid_repeats() {
         json!({
             "cleanup_failed": false,
             "execution_failure": null,
-            "exit_code": 101,
+            "exit_code": 0,
+            "pipe_status": [101, 0],
             "signal": null,
             "stdout": "y".repeat(2000),
             "termination": "completed",
@@ -217,7 +218,9 @@ fn cleared_bash_and_write_results_keep_their_outcome_and_forbid_repeats() {
             .expect("notice text")
             .contains("do NOT repeat")
     );
-    assert_eq!(bash_notice["exit_code"], json!(101));
+    // A piped command keeps the stage that failed, not only `tail`'s exit.
+    assert_eq!(bash_notice["exit_code"], json!(0));
+    assert_eq!(bash_notice["pipe_status"], json!([101, 0]));
     assert_eq!(bash_notice["termination"], json!("completed"));
     assert_eq!(bash_notice.get("signal"), None);
     assert_eq!(bash_notice.get("stdout"), None);

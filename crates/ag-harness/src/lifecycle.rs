@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bash::CommandExit;
 use crate::limit::LimitKind;
 use crate::model::{CompletionMetadata, ModelErrorType, ModelMetadata};
 #[cfg(feature = "otel")]
@@ -182,6 +183,9 @@ pub enum LifecycleEventKind {
     ToolCompleted {
         /// Elapsed tool-execution time.
         duration: Duration,
+        /// How a `bash` command exited; `None` for other tools. A nonzero
+        /// exit or a signal still completes the tool.
+        exit: Option<CommandExit>,
         /// Identifier shared by this tool operation's lifecycle events.
         tool_call_id: LifecycleId,
         /// Owning turn.
@@ -1012,10 +1016,12 @@ impl ToolLifecycle {
         self.started_at = Instant::now();
     }
 
-    pub(crate) fn completed(mut self) {
+    /// Reports the call completed, with how a `bash` command exited.
+    pub(crate) fn completed(mut self, exit: Option<CommandExit>) {
         self.active = false;
         self.emitter.emit(LifecycleEventKind::ToolCompleted {
             duration: self.started_at.elapsed(),
+            exit,
             tool_call_id: self.tool_call_id,
             turn_id: self.turn_id,
         });

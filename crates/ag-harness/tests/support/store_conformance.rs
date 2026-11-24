@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use ag_harness::bash::{CommandCleanupScope, CommandExit, CommandIntent, CommandOutcome};
 use ag_harness::event::{SessionId, TurnIndex};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 #[cfg(feature = "sqlite")]
@@ -130,15 +130,13 @@ async fn external_store_without_command_support_fails_closed() {
         cleanup_failed: false,
         cleanup_scope: CommandCleanupScope::PidNamespace,
         execution_failure: None,
-        exit_code: Some(0),
-        signal: None,
+        exit: CommandExit::new(Some(0), None),
         stderr: String::new(),
         stderr_omitted_bytes: 0,
         stderr_tail: String::new(),
         stdout: String::new(),
         stdout_omitted_bytes: 0,
         stdout_tail: String::new(),
-        termination: CommandTermination::Completed,
         truncated: false,
     };
 
@@ -2450,15 +2448,13 @@ fn completed_command() -> CommandOutcome {
         cleanup_failed: false,
         cleanup_scope: CommandCleanupScope::PidNamespace,
         execution_failure: None,
-        exit_code: Some(0),
-        signal: None,
+        exit: CommandExit::new(Some(0), None),
         stderr: String::new(),
         stderr_omitted_bytes: 0,
         stderr_tail: String::new(),
         stdout: String::new(),
         stdout_omitted_bytes: 0,
         stdout_tail: String::new(),
-        termination: CommandTermination::Completed,
         truncated: false,
     }
 }

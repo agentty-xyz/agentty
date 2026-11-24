@@ -24,7 +24,8 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 pub use crate::command_journal::{
-    CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
+    CommandCleanupScope, CommandExit, CommandIntent, CommandOutcome, CommandRecord,
+    CommandTermination,
 };
 pub use crate::execution::{
     BashExecutor, BashProcess, Enforcement, ExecutionAccess, ExecutionCommand, ExecutionError,

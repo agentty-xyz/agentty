@@ -714,6 +714,7 @@ async fn write_tool_applies_patch_through_file_system_boundary() {
     // Assert
     assert_eq!(output.path(), "file.txt");
     assert_eq!(output.bytes_written(), 4);
+    assert_eq!((output.lines_added(), output.lines_removed()), (1, 1));
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
             &output.to_tool_result().expect("result should encode")
@@ -721,6 +722,46 @@ async fn write_tool_applies_patch_through_file_system_boundary() {
         .expect("result should be JSON"),
         json!({ "bytes_written": 4, "path": "file.txt", "status": "applied" })
     );
+}
+
+#[test]
+fn line_changes_count_the_applied_hunks_additions_and_removals() {
+    let numbered = numbered_lines(10, &[]);
+    for (path, current, patch, expected) in [
+        (
+            "new.txt",
+            None,
+            "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+            (3, 0),
+        ),
+        // Two separate hunks count only their own lines, not the span
+        // between them, even when relocated.
+        (
+            "file.txt",
+            Some(numbered.as_bytes()),
+            "--- a/file.txt\n+++ b/file.txt\n@@ -5,3 +5,3 @@\n line-1\n-line-2\n+two\n line-3\n@@ \
+             -8,3 +8,4 @@\n line-8\n-line-9\n+nine\n+ten\n line-10\n",
+            (3, 2),
+        ),
+        // A changed final newline changes the last line.
+        (
+            "file.txt",
+            Some(b"a\nb".as_slice()),
+            "--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of \
+             file\n+b\n",
+            (1, 1),
+        ),
+    ] {
+        // Act
+        let patched = apply_unified_diff(path, current, patch).expect("patch should apply");
+
+        // Assert
+        assert_eq!(
+            (patched.line_changes.added, patched.line_changes.removed),
+            expected,
+            "{patch}"
+        );
+    }
 }
 
 #[tokio::test]

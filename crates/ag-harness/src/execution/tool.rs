@@ -14,11 +14,12 @@ use super::contract::{
 };
 #[cfg(feature = "native-sandbox")]
 use super::native::Native;
+use super::pipe_status::{PipeStatusProbe, take_statuses};
 use super::supervisor::{Monotonic, Supervisor};
 use crate::TurnError;
 use crate::bash::{BashArguments, BashConfig, BashError, Capability};
 use crate::command_journal::{
-    CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination,
+    CommandCleanupScope, CommandExit, CommandIntent, CommandOutcome, CommandTermination,
 };
 use crate::command_settlement::Commands;
 use crate::reservation::WriteJournal;
@@ -101,7 +102,9 @@ impl BashTool {
 
     /// Runs `arguments`: outside the sandbox, through its resolved
     /// executable, when the configuration excludes its command and
-    /// `unsandboxed` says the approval handler allowed that.
+    /// `unsandboxed` says the approval handler allowed that. A command
+    /// whose source ends in a pipeline runs behind a [`PipeStatusProbe`];
+    /// an excluded command has no pipeline.
     pub(crate) async fn execute(
         &self,
         arguments: &BashArguments,
@@ -111,14 +114,31 @@ impl BashTool {
         if let Some((excluded, executable, words)) = self.excluded_launch(arguments, unsandboxed) {
             let words = words.into_iter().map(OsString::from).collect();
 
-            return Box::pin(excluded.run(executable.to_path_buf(), words, arguments, call_id))
-                .await;
+            return Box::pin(excluded.run(
+                executable.to_path_buf(),
+                words,
+                arguments,
+                call_id,
+                None,
+            ))
+            .await;
         }
+        // The probe's status file needs the turn's temporary directory.
+        let probe = self
+            .configuration
+            .snapshot
+            .temporary_directory
+            .as_ref()
+            .and_then(|_| PipeStatusProbe::for_command(arguments.command()));
+        let source = probe.map_or_else(
+            || arguments.command().to_string(),
+            |probe| probe.wrap(arguments.command()),
+        );
         let words = vec![
             "--noprofile".into(),
             "--norc".into(),
             "-c".into(),
-            arguments.command().into(),
+            source.into(),
         ];
 
         // Commands are supervised in a boxed future, keeping each turn's
@@ -128,6 +148,7 @@ impl BashTool {
             words,
             arguments,
             call_id,
+            probe,
         ))
         .await
     }
@@ -239,13 +260,16 @@ impl BashTool {
         Ok(excluded)
     }
 
-    /// Runs `executable` with `words`, recording `arguments`' command.
+    /// Runs `executable` with `words`, recording `arguments`' command, not
+    /// the words; the capture omits the text of the `probe` the words run
+    /// behind.
     async fn run(
         &self,
         executable: PathBuf,
         words: Vec<OsString>,
         arguments: &BashArguments,
         call_id: &str,
+        probe: Option<PipeStatusProbe>,
     ) -> Result<CommandOutcome, TurnError> {
         let configuration = &self.configuration.snapshot;
         let grants = Grants {
@@ -285,7 +309,8 @@ impl BashTool {
             configuration.timeout,
             configuration.capture_bytes,
         )
-        .map_err(|_| BashError::InvalidPolicy)?;
+        .map_err(|_| BashError::InvalidPolicy)?
+        .with_pipe_status(probe);
         let prepared = self
             .executor
             .prepare(command, policy, limits)
@@ -302,6 +327,9 @@ impl BashTool {
         };
         let cleanup_scope = self.cleanup_scope;
         let journal = self.journal.clone();
+        let status_file = probe
+            .zip(configuration.temporary_directory.as_deref())
+            .map(|(probe, directory)| probe.status_file(directory));
         tokio::spawn(async move {
             let _lease = lease;
             let id = match journal.as_ref() {
@@ -314,8 +342,15 @@ impl BashTool {
                 None => None,
             };
             operation.admitted(id);
-            let result = prepared.execution.run().await;
-            let outcome = command_outcome(&result, cleanup_scope);
+            let mut result = prepared.execution.run().await;
+            let mut outcome = command_outcome(&mut result, cleanup_scope);
+            if let Some(status_file) = status_file {
+                let exit_code = outcome.exit.exit_code;
+                outcome.exit.pipe_status =
+                    tokio::task::spawn_blocking(move || take_statuses(&status_file, exit_code))
+                        .await
+                        .unwrap_or_default();
+            }
             operation.observed(outcome.clone());
             operation
                 .persist()
@@ -365,9 +400,24 @@ impl Drop for Cancel {
     }
 }
 
-fn command_outcome(result: &ExecutionResult, cleanup_scope: CommandCleanupScope) -> CommandOutcome {
+/// Normalizes `result` once its streams ended.
+fn command_outcome(
+    result: &mut ExecutionResult,
+    cleanup_scope: CommandCleanupScope,
+) -> CommandOutcome {
+    result.output.finish();
     let stdout = result.output.stdout();
     let stderr = result.output.stderr();
+    let exit_code = if let MainExit::Code(code) = result.main_exit {
+        Some(code)
+    } else {
+        None
+    };
+    let signal = if let MainExit::Signal(signal) = result.main_exit {
+        Some(signal)
+    } else {
+        None
+    };
 
     CommandOutcome {
         cleanup_failed: result.cleanup_failure.is_some(),
@@ -379,28 +429,18 @@ fn command_outcome(result: &ExecutionResult, cleanup_scope: CommandCleanupScope)
             }
             ExecutionError::Cleanup | ExecutionError::CleanupUnconfirmed => BashError::Cleanup,
         }),
-        exit_code: if let MainExit::Code(code) = result.main_exit {
-            Some(code)
-        } else {
-            None
-        },
-        signal: if let MainExit::Signal(signal) = result.main_exit {
-            Some(signal)
-        } else {
-            None
-        },
+        exit: CommandExit::new(exit_code, signal).with_termination(match result.termination {
+            Termination::Completed => CommandTermination::Completed,
+            Termination::Deadline => CommandTermination::Deadline,
+            Termination::Cancelled => CommandTermination::Cancelled,
+            Termination::Failed => CommandTermination::Failed,
+        }),
         stderr: String::from_utf8_lossy(&stderr.head).into_owned(),
         stderr_omitted_bytes: stderr.omitted_bytes,
         stderr_tail: String::from_utf8_lossy(&stderr.tail).into_owned(),
         stdout: String::from_utf8_lossy(&stdout.head).into_owned(),
         stdout_omitted_bytes: stdout.omitted_bytes,
         stdout_tail: String::from_utf8_lossy(&stdout.tail).into_owned(),
-        termination: match result.termination {
-            Termination::Completed => CommandTermination::Completed,
-            Termination::Deadline => CommandTermination::Deadline,
-            Termination::Cancelled => CommandTermination::Cancelled,
-            Termination::Failed => CommandTermination::Failed,
-        },
         truncated: result.output.truncated(),
     }
 }

@@ -141,12 +141,13 @@ impl ToolHandler for BashHandler {
         };
         let mut result = serde_json::to_value(&outcome).map_err(unencodable_outcome)?;
         let duration = started_at.elapsed();
+        let exit = outcome.exit.clone();
         let activity = if self.tool.enforces(&arguments, unsandboxed) && likely_denied(&outcome) {
             result["sandbox"] = Value::from(LIKELY_SANDBOX_DENIAL);
 
-            ToolActivity::BashLikelySandboxDenial { duration }
+            ToolActivity::BashLikelySandboxDenial { duration, exit }
         } else {
-            ToolActivity::Bash { duration }
+            ToolActivity::Bash { duration, exit }
         };
 
         Ok(ToolOutput::builtin(result.to_string(), activity))
@@ -183,10 +184,10 @@ const LINUX_SIGSYS: i32 = 31;
 /// command controls its own output: the signal is advisory and
 /// model-influenceable.
 fn likely_denied(outcome: &CommandOutcome) -> bool {
-    let sigsys =
-        outcome.signal == Some(LINUX_SIGSYS) || outcome.exit_code == Some(128 + LINUX_SIGSYS);
+    let exit = &outcome.exit;
+    let sigsys = exit.signal == Some(LINUX_SIGSYS) || exit.exit_code == Some(128 + LINUX_SIGSYS);
     let seccomp_kill = cfg!(target_os = "linux") && sigsys;
-    let denial_error = outcome.exit_code.is_some_and(|code| code != 0)
+    let denial_error = exit.exit_code.is_some_and(|code| code != 0)
         && [&outcome.stderr, &outcome.stderr_tail]
             .into_iter()
             .any(|text| {
@@ -213,7 +214,7 @@ const SANDBOX_REFUSED: &str = "The sandbox refused to start this command, so not
 /// does.
 fn refused(outcome: &CommandOutcome) -> bool {
     outcome.execution_failure == Some(BashError::Unavailable)
-        && outcome.termination == CommandTermination::Failed
+        && outcome.exit.termination == CommandTermination::Failed
         && !outcome.cleanup_failed
 }
 
@@ -380,6 +381,8 @@ async fn execute_write_tool(
             let activity = ToolActivity::Write {
                 bytes_written: output.bytes_written(),
                 duration: started_at.elapsed(),
+                lines_added: output.lines_added(),
+                lines_removed: output.lines_removed(),
                 path: sanitize_report_text(output.path()),
             };
             let result = output

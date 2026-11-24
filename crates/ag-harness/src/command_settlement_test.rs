@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use crate::bash::{CommandCleanupScope, CommandExit, CommandIntent, CommandOutcome};
 use crate::cancellation::{ControlledTurn, SettlementPhase, TurnControl};
 use crate::command_settlement::{Commands, retained};
 use crate::effect::Effects;
@@ -48,15 +48,13 @@ fn outcome(cleanup_failed: bool) -> CommandOutcome {
         cleanup_failed,
         cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
         execution_failure: None,
-        exit_code: Some(0),
-        signal: None,
+        exit: CommandExit::new(Some(0), None),
         stderr: String::new(),
         stderr_omitted_bytes: 0,
         stderr_tail: String::new(),
         stdout: String::new(),
         stdout_omitted_bytes: 0,
         stdout_tail: String::new(),
-        termination: CommandTermination::Completed,
         truncated: false,
     }
 }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::bash::{BashConfig, BashError};
+use crate::bash::{BashConfig, BashError, CommandExit};
 pub use crate::cancellation::{ControlledTurn, SettlementError, SettlementPhase, TurnControl};
 use crate::catalog::ModelId;
 use crate::comparison::ComparisonBase;
@@ -732,6 +732,10 @@ pub enum ToolActivity {
     Bash {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
+        /// How the command exited, encoded as top-level fields; empty in
+        /// reports recorded before it existed.
+        #[serde(flatten)]
+        exit: CommandExit,
     },
     /// A `bash` command that ran to completion inside the sandbox and
     /// failed with an operating-system denial the sandbox may have caused,
@@ -744,6 +748,10 @@ pub enum ToolActivity {
     BashLikelySandboxDenial {
         /// Time spent executing and observing the sandbox.
         duration: Duration,
+        /// How the command exited, encoded as top-level fields; empty in
+        /// reports recorded before it existed.
+        #[serde(flatten)]
+        exit: CommandExit,
     },
     /// A bounded repository file read.
     #[non_exhaustive]
@@ -853,6 +861,15 @@ pub enum ToolActivity {
         bytes_written: usize,
         /// Elapsed tool-execution time.
         duration: Duration,
+        /// Lines the write added: the addition lines of the patch's hunks,
+        /// so every line of a created file. 0 in reports recorded before it
+        /// existed.
+        #[serde(default)]
+        lines_added: u64,
+        /// Lines the write removed, counted like `lines_added`; 0 in
+        /// reports recorded before it existed.
+        #[serde(default)]
+        lines_removed: u64,
         /// Repository-relative path that was written.
         path: String,
     },
@@ -920,8 +937,8 @@ impl ToolActivity {
     /// Returns the elapsed tool-execution time.
     pub fn duration(&self) -> Duration {
         match self {
-            Self::Bash { duration }
-            | Self::BashLikelySandboxDenial { duration }
+            Self::Bash { duration, .. }
+            | Self::BashLikelySandboxDenial { duration, .. }
             | Self::Read { duration, .. }
             | Self::ReadInspection { duration, .. }
             | Self::ReadInspectionRejected { duration, .. }
@@ -972,19 +989,23 @@ impl ToolActivity {
             | Self::ReadDeferred { summary, .. } => summary,
         }
     }
+
+    /// Returns how a `bash` call's command exited, or `None` for any other
+    /// tool.
+    pub fn command_exit(&self) -> Option<&CommandExit> {
+        match self {
+            Self::Bash { exit, .. } | Self::BashLikelySandboxDenial { exit, .. } => Some(exit),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for ToolActivity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Bash { duration } => {
-                write!(formatter, "bash ({})", format_report_duration(*duration))
+            Self::Bash { exit, .. } | Self::BashLikelySandboxDenial { exit, .. } => {
+                self.write_bash(formatter, exit)
             }
-            Self::BashLikelySandboxDenial { duration } => write!(
-                formatter,
-                "bash, blocked by the sandbox ({})",
-                format_report_duration(*duration)
-            ),
             Self::Read {
                 duration,
                 end_line,
@@ -1064,11 +1085,14 @@ impl fmt::Display for ToolActivity {
             Self::Write {
                 bytes_written,
                 duration,
+                lines_added,
+                lines_removed,
                 path,
             } => write!(
                 formatter,
-                "write {} ({bytes_written} bytes; {})",
+                "write {} ({}{bytes_written} bytes; {})",
                 sanitize_report_text(path),
+                Self::line_counts(*lines_added, *lines_removed),
                 format_report_duration(*duration)
             ),
             Self::WriteRejected { duration, path } => write!(
@@ -1082,6 +1106,33 @@ impl fmt::Display for ToolActivity {
 }
 
 impl ToolActivity {
+    /// Writes a `bash` call with how its command exited, such as
+    /// `bash, exit 101 (31 ms)` or `bash, exit 0, pipeline 101 0 (31 ms)`
+    /// with its final pipeline's statuses; reports without an observed
+    /// exit show none.
+    fn write_bash(&self, formatter: &mut fmt::Formatter<'_>, exit: &CommandExit) -> fmt::Result {
+        formatter.write_str("bash")?;
+        let exit = exit.to_string();
+        if !exit.is_empty() {
+            write!(formatter, ", {exit}")?;
+        }
+        if matches!(self, Self::BashLikelySandboxDenial { .. }) {
+            formatter.write_str(", blocked by the sandbox")?;
+        }
+
+        write!(formatter, " ({})", format_report_duration(self.duration()))
+    }
+
+    /// Returns a write's line counts as `+2 -1, `; empty for reports
+    /// recorded before line counts existed, which have none.
+    fn line_counts(lines_added: u64, lines_removed: u64) -> String {
+        if lines_added == 0 && lines_removed == 0 {
+            String::new()
+        } else {
+            format!("+{lines_added} -{lines_removed}, ")
+        }
+    }
+
     /// Writes an unavailable or host tool call to `tool` with how it was
     /// answered.
     fn write_call(

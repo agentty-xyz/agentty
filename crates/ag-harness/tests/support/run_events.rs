@@ -7,13 +7,15 @@ use std::io;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_harness::bash::{BashConfig, CommandExit, UnsandboxedExecutor};
 use ag_harness::catalog::{ModelId, ModelSpec};
 use ag_harness::event::{
-    CompactionOutcome, Item, ItemKind, RunSummary, ToolCallItem, ToolCallStatus,
+    CompactionOutcome, Item, ItemKind, RunSummary, ToolCallItem, ToolCallOutcome, ToolCallStatus,
 };
+use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
 use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ContextBudget, ContextPolicy, ModelCompletion,
     ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
@@ -206,6 +208,7 @@ fn labels(events: &[RunEvent]) -> Vec<String> {
                 Item::ToolCall(_) => "completed ToolCall".to_string(),
                 _ => "completed other".to_string(),
             },
+            RunEventKind::ToolCallRequested { .. } => "requested ToolCall".to_string(),
             RunEventKind::ModelRequestCompleted { .. } => "request".to_string(),
             RunEventKind::Completed(_) => "completed".to_string(),
             _ => "other".to_string(),
@@ -241,6 +244,130 @@ fn completed_error(events: &[RunEvent]) -> Result<Option<ErrorKind>, String> {
     Ok(last_summary(events)?.error.as_ref().map(|error| error.kind))
 }
 
+/// Answers the first request with a piped `bash` call and a `write` that
+/// creates a file, and the next with output.
+struct OutcomeModel;
+
+#[async_trait]
+impl Model for OutcomeModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let response = if matches!(request.messages().last(), Some(ModelMessage::User(_))) {
+            ModelResponse::ToolCalls(vec![
+                ToolCall::from_json(
+                    "piped".into(),
+                    "bash",
+                    r#"{"command":"(exit 101) | tail -1"}"#,
+                    None,
+                )?,
+                ToolCall::from_json(
+                    "created".into(),
+                    "write",
+                    &json!({
+                        "path": "notes.txt",
+                        "patch": "--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1,2 @@\n+one\n+two\n",
+                    })
+                    .to_string(),
+                    None,
+                )?,
+            ])
+        } else {
+            ModelResponse::Output(json!({"done": true}))
+        };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
+#[tokio::test]
+async fn completed_tool_calls_stream_their_structured_outcomes() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let temporary = tempfile::tempdir()?;
+    let configuration = BashConfig::for_executor(
+        Arc::new(UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        4096,
+    )?
+    .with_host_information()
+    .with_temporary_directory(temporary.path().canonicalize()?)?;
+    let recorder = LifecycleRecorder::default();
+    let harness = Harness::new(OutcomeModel, unbounded_context_budget())
+        .repository(repository_with_host_git(&root))
+        .with_lifecycle_observer(recorder.clone());
+    let request = RunRequest::new("Run and write")
+        .output(OutputSchema::new(json!({"type": "object"}))?)
+        .tools(ToolSet::empty().with_bash().with_write())
+        .bash(configuration);
+
+    // Act
+    let (events, outcome) = streamed(harness.run(request)).await;
+
+    // Assert
+    outcome.result?;
+    let calls = completed_items(&events)
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [piped, created] = calls.as_slice() else {
+        return Err(format!("expected two tool calls, got {calls:?}").into());
+    };
+    assert_eq!(piped.call_id, "piped");
+    assert!(piped.duration.is_some());
+    assert_eq!(
+        piped.outcome,
+        Some(ToolCallOutcome::Command(
+            CommandExit::new(Some(0), None).with_pipe_status(vec![101, 0])
+        ))
+    );
+    assert_eq!(created.call_id, "created");
+    assert!(created.duration.is_some());
+    assert!(matches!(
+        created.outcome,
+        Some(ToolCallOutcome::Write {
+            lines_added: 2,
+            lines_removed: 0,
+            ..
+        })
+    ));
+    let completed = recorder
+        .exits
+        .lock()
+        .map_err(|_| "lifecycle recorder lock")?
+        .clone();
+    assert_eq!(
+        completed,
+        [
+            Some(CommandExit::new(Some(0), None).with_pipe_status(vec![101, 0])),
+            None,
+        ],
+        "lifecycle `ToolCompleted` events carry each call's exit"
+    );
+
+    Ok(())
+}
+
+/// Records the exit of every completed tool call.
+#[derive(Clone, Default)]
+struct LifecycleRecorder {
+    exits: Arc<Mutex<Vec<Option<CommandExit>>>>,
+}
+
+impl LifecycleObserver for LifecycleRecorder {
+    fn observe(&self, event: LifecycleEvent) {
+        if let LifecycleEventKind::ToolCompleted { exit, .. } = event.kind()
+            && let Ok(mut exits) = self.exits.lock()
+        {
+            exits.push(exit.clone());
+        }
+    }
+}
+
 #[tokio::test]
 async fn tool_turn_streams_ordered_items_and_usage() -> Result<(), Box<dyn Error>> {
     // Arrange
@@ -262,6 +389,7 @@ async fn tool_turn_streams_ordered_items_and_usage() -> Result<(), Box<dyn Error
             "started Message",
             "completed Message",
             "started ToolCall",
+            "requested ToolCall",
             "completed ToolCall",
             "request",
             "started Output",
@@ -271,7 +399,7 @@ async fn tool_turn_streams_ordered_items_and_usage() -> Result<(), Box<dyn Error
     );
     assert_eq!(
         sequence_numbers(&events),
-        (0..12).collect::<Vec<u64>>(),
+        (0..13).collect::<Vec<u64>>(),
         "events are numbered without gaps"
     );
     assert!(events.iter().all(|event| event.run == events[0].run));
@@ -466,6 +594,7 @@ async fn run_cancelled_during_a_tool_call_leaves_the_call_open() -> Result<(), B
             "started Message",
             "completed Message",
             "started ToolCall",
+            "requested ToolCall",
             "completed",
         ],
         "the interrupted call never completes"
@@ -522,7 +651,8 @@ async fn slow_consumer_holds_the_run_back_without_losing_events() -> Result<(), 
 
     // Assert
     assert!(held_back, "the run waits while its stream is full");
-    let expected = 2 * BATCH_CALLS + 3;
+    // Each call starts, is requested, and completes.
+    let expected = 3 * BATCH_CALLS + 3;
     assert_eq!(
         sequence_numbers(&events),
         (0..u64::try_from(expected)?).collect::<Vec<u64>>()

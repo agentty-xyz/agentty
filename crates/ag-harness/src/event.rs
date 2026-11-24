@@ -25,6 +25,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::approval::ApprovalRequest;
+use crate::bash::CommandExit;
 use crate::catalog::ModelId;
 use crate::error::{ErrorKind, ErrorKindName, ErrorKindWireError, RunError};
 use crate::limit::LimitKind;
@@ -232,6 +233,23 @@ pub enum RunEventKind {
         id: ItemId,
         /// The finished item.
         item: Item,
+    },
+    /// The harness is about to answer a tool call the model made, such as
+    /// running it. It follows the call's [`Self::ItemStarted`] and precedes
+    /// any [`Self::ApprovalRequested`] and the [`Self::ItemCompleted`] with
+    /// the same `id`, in the order the model made the response's calls, so
+    /// a consumer can show the call while it runs.
+    #[non_exhaustive]
+    ToolCallRequested {
+        /// Arguments as the model sent them, as in
+        /// [`ToolCallItem::arguments`].
+        arguments: String,
+        /// Provider identifier of the call.
+        call_id: String,
+        /// Identifier of the call's [`ItemKind::ToolCall`] item.
+        id: ItemId,
+        /// Function name the model called.
+        name: String,
     },
     /// A tool call that changes state waits for the harness's
     /// [`crate::approval::ApprovalHandler`], which the harness asks right
@@ -485,6 +503,18 @@ pub struct ToolCallItem {
     pub arguments: String,
     /// Provider identifier of the call.
     pub call_id: String,
+    /// Time the call took to answer, as [`ToolActivity::duration`] reports
+    /// it, in whole milliseconds as `duration_ms` on the wire; `None` in a
+    /// [`crate::TurnRecord`], since sessions do not store it.
+    #[schemars(rename = "duration_ms", with = "Option<u64>")]
+    #[serde(
+        default,
+        deserialize_with = "ToolCallItem::deserialize_duration",
+        rename = "duration_ms",
+        serialize_with = "ToolCallItem::serialize_duration",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub duration: Option<Duration>,
     /// Whether a `bash` call ran inside the sandbox and failed with an
     /// operating-system denial the sandbox may have caused, as
     /// [`ToolActivity::BashLikelySandboxDenial`] reports; the result told
@@ -496,6 +526,11 @@ pub struct ToolCallItem {
     pub likely_sandbox_denial: bool,
     /// Function name the model called.
     pub name: String,
+    /// What the tool reported beyond its result text: how a `bash` command
+    /// exited, or a `write`'s line counts; `None` for other tools and in a
+    /// [`crate::TurnRecord`], since sessions do not store it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<ToolCallOutcome>,
     /// Result text the model received; empty for a call that was never
     /// answered.
     pub output: String,
@@ -509,14 +544,32 @@ pub struct ToolCallItem {
 impl ToolCallItem {
     /// Describes `call` answered with `output`, as `activity` reports it.
     pub(crate) fn new(call: &ToolCall, output: &str, activity: &ToolActivity) -> Self {
+        let outcome = match activity {
+            ToolActivity::Bash { exit, .. }
+            | ToolActivity::BashLikelySandboxDenial { exit, .. } => {
+                Some(ToolCallOutcome::Command(exit.clone()))
+            }
+            ToolActivity::Write {
+                lines_added,
+                lines_removed,
+                ..
+            } => Some(ToolCallOutcome::Write {
+                lines_added: *lines_added,
+                lines_removed: *lines_removed,
+            }),
+            _ => None,
+        };
+
         Self {
-            arguments: call.arguments_json().unwrap_or_default(),
-            call_id: call.id().to_string(),
+            duration: Some(Duration::from_millis(RunEventKind::whole_millis(
+                activity.duration(),
+            ))),
             likely_sandbox_denial: matches!(activity, ToolActivity::BashLikelySandboxDenial { .. }),
-            name: call.name().to_string(),
+            outcome,
             output: output.to_string(),
             status: ToolCallStatus::from(activity),
             summary: activity.to_string(),
+            ..Self::unanswered(call)
         }
     }
 
@@ -525,13 +578,53 @@ impl ToolCallItem {
         Self {
             arguments: call.arguments_json().unwrap_or_default(),
             call_id: call.id().to_string(),
+            duration: None,
             likely_sandbox_denial: false,
             name: call.name().to_string(),
+            outcome: None,
             output: String::new(),
             status: ToolCallStatus::Unanswered,
             summary: String::new(),
         }
     }
+
+    /// Encodes a [`Self::duration`] as whole milliseconds; only called for
+    /// `Some`, since `None` is skipped. Generic because serde passes the
+    /// field by reference.
+    fn serialize_duration<D: Copy + Into<Option<Duration>>, S: Serializer>(
+        duration: &D,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let duration: Option<Duration> = (*duration).into();
+
+        serializer.serialize_u64(duration.map_or(0, RunEventKind::whole_millis))
+    }
+
+    /// Decodes a [`Self::duration`] from milliseconds.
+    fn deserialize_duration<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Duration>, D::Error> {
+        Ok(Some(Duration::from_millis(u64::deserialize(deserializer)?)))
+    }
+}
+
+/// What a tool reported beyond its result text, carried by a live
+/// [`ToolCallItem`].
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ToolCallOutcome {
+    /// How a `bash` command exited.
+    Command(CommandExit),
+    /// The lines a `write` added and removed, as [`ToolActivity::Write`]
+    /// counts them.
+    #[non_exhaustive]
+    Write {
+        /// Lines the write added.
+        lines_added: u64,
+        /// Lines the write removed.
+        lines_removed: u64,
+    },
 }
 
 /// How a tool call was answered.

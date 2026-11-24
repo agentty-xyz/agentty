@@ -7,8 +7,9 @@ use serde_json::json;
 use super::{
     CompactionOutcome, CompactionReport, Delta, EVENT_BUFFER, EventSink, EventStream, Item, ItemId,
     ItemKind, RunEvent, RunEventKind, RunFailure, RunId, RunSummary, SessionId, ToolCallItem,
-    ToolCallStatus, TurnIndex,
+    ToolCallOutcome, ToolCallStatus, TurnIndex,
 };
+use crate::bash::CommandExit;
 use crate::catalog::{ModelId, Pricing};
 use crate::error::{ErrorKind, RunError};
 use crate::lifecycle::ToolUnavailableReason;
@@ -145,11 +146,8 @@ fn tool_activity_maps_to_how_the_call_was_answered() {
     // Arrange
     let duration = Duration::from_millis(1);
     let cases = [
-        (ToolActivity::Bash { duration }, ToolCallStatus::Completed),
-        (
-            ToolActivity::BashLikelySandboxDenial { duration },
-            ToolCallStatus::Completed,
-        ),
+        (bash(duration, Some(3)), ToolCallStatus::Completed),
+        (sandbox_denial(duration), ToolCallStatus::Completed),
         (
             ToolActivity::ReadRejected {
                 duration,
@@ -212,12 +210,8 @@ fn only_a_likely_sandbox_denial_sets_the_advisory_flag() -> Result<(), Box<dyn E
     let duration = Duration::from_millis(1);
 
     // Act
-    let flagged = ToolCallItem::new(
-        &call,
-        "{}",
-        &ToolActivity::BashLikelySandboxDenial { duration },
-    );
-    let plain = ToolCallItem::new(&call, "{}", &ToolActivity::Bash { duration });
+    let flagged = ToolCallItem::new(&call, "{}", &sandbox_denial(duration));
+    let plain = ToolCallItem::new(&call, "{}", &bash(duration, Some(0)));
     let unanswered = ToolCallItem::unanswered(&call);
 
     // Assert
@@ -236,6 +230,91 @@ fn only_a_likely_sandbox_denial_sets_the_advisory_flag() -> Result<(), Box<dyn E
     assert!(!unanswered.likely_sandbox_denial);
 
     Ok(())
+}
+
+#[test]
+fn tool_call_items_carry_structured_outcomes_only_when_live() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let bash_call = ToolCall::from_json(
+        "call-1".into(),
+        "bash",
+        r#"{"command":"cargo test 2>&1 | tail -20"}"#,
+        None,
+    )?;
+    let write_call = ToolCall::from_json("call-2".into(), "write", r#"{"path":"a.rs"}"#, None)?;
+    let piped_exit = CommandExit::new(Some(0), None).with_pipe_status(vec![101, 0]);
+    let piped = ToolActivity::Bash {
+        duration: Duration::from_millis(31),
+        exit: piped_exit.clone(),
+    };
+    let write = ToolActivity::Write {
+        bytes_written: 12,
+        duration: Duration::from_millis(4),
+        lines_added: 3,
+        lines_removed: 1,
+        path: "a.rs".into(),
+    };
+
+    // Act
+    let piped_item = ToolCallItem::new(&bash_call, "{}", &piped);
+    let write = ToolCallItem::new(&write_call, "{}", &write);
+    let read = read_call_item()?;
+    let unanswered = ToolCallItem::unanswered(&bash_call);
+
+    // Assert
+    assert_eq!(piped_item.duration, Some(Duration::from_millis(31)));
+    assert_eq!(piped_item.summary, piped.to_string());
+    assert_eq!(
+        piped_item.outcome,
+        Some(ToolCallOutcome::Command(piped_exit))
+    );
+    let piped_encoded = serde_json::to_value(&piped_item)?;
+    assert_eq!(piped_encoded["duration_ms"], 31);
+    assert_eq!(
+        piped_encoded["outcome"],
+        json!({
+            "type": "command",
+            "exit_code": 0,
+            "pipe_status": [101, 0],
+            "signal": null,
+            "termination": "completed",
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ToolCallItem>(piped_encoded)?,
+        piped_item
+    );
+    assert_eq!(
+        serde_json::to_value(&write)?["outcome"],
+        json!({"type": "write", "lines_added": 3, "lines_removed": 1})
+    );
+    let Item::ToolCall(read) = read else {
+        return Err("expected a tool call item".into());
+    };
+    assert_eq!(read.duration, Some(Duration::from_millis(3)));
+    assert_eq!(read.outcome, None);
+    assert_eq!(read.summary, "read a.txt (lines 1-1; 3 ms)");
+    let unanswered = serde_json::to_value(&unanswered)?;
+    assert!(unanswered.get("duration_ms").is_none(), "{unanswered}");
+    assert!(unanswered.get("outcome").is_none(), "{unanswered}");
+
+    Ok(())
+}
+
+/// Returns a `bash` activity that exited with `exit_code`.
+fn bash(duration: Duration, exit_code: Option<i32>) -> ToolActivity {
+    ToolActivity::Bash {
+        duration,
+        exit: CommandExit::new(exit_code, None),
+    }
+}
+
+/// Returns a `bash` activity the sandbox may have blocked.
+fn sandbox_denial(duration: Duration) -> ToolActivity {
+    ToolActivity::BashLikelySandboxDenial {
+        duration,
+        exit: CommandExit::new(Some(1), None),
+    }
 }
 
 /// Returns a completed `read` call item.

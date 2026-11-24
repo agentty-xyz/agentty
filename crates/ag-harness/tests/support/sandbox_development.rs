@@ -184,7 +184,7 @@ async fn native_git_stages_and_commits_in_a_linked_worktree_with_links() {
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(
         result.stdout, "tracked-valueguide-valuetemporaryconfined",
         "{result:?}"
@@ -245,7 +245,7 @@ async fn native_grants_are_not_inspected() {
     }
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "tool-value", "{result:?}");
     assert!(fixture.worktree().join("output/written").exists());
 }
@@ -289,7 +289,7 @@ async fn native_macos_denies_hard_links_to_files_outside_the_grants() {
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "granted-valuetracked-value", "{result:?}");
     for (path, contents) in [(&granted, "granted-value"), (&ungranted, "ungranted-value")] {
         assert_eq!(std::fs::metadata(path).expect("outside file").nlink(), 1);
@@ -349,9 +349,9 @@ async fn native_runs_a_toolchain_granted_by_path() {
     let result = fixture.run(&command, configuration).await;
 
     // Assert
-    assert_ne!(ungranted.exit_code, Some(0), "{ungranted:?}");
+    assert_ne!(ungranted.exit.exit_code, Some(0), "{ungranted:?}");
     assert_eq!(ungranted.stdout, "", "{ungranted:?}");
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(
         result.stdout,
         String::from_utf8(expected.stdout).expect("version"),
@@ -397,7 +397,7 @@ async fn native_git_command_latency_stays_bounded() {
         let result = fixture
             .run("git status --porcelain", fixture.configuration())
             .await;
-        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
         durations.push(started.elapsed());
     }
 
@@ -496,7 +496,7 @@ async fn native_git_writes_in_a_main_worktree_keep_the_git_directory_in_place() 
     {
         let result: CommandOutcome =
             serde_json::from_value(output.into_output()).expect("command result");
-        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
         assert_eq!(result.stdout, "confined", "{result:?}");
         assert_eq!(
             git(&main, &["log", "-1", "--format=%s"]).trim(),
@@ -539,7 +539,7 @@ async fn native_linux_system_reads_mount_a_private_proc_and_a_minimal_dev() {
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "private", "{result:?}");
 }
 
@@ -574,7 +574,7 @@ async fn native_git_writes_keep_history_rewrites_read_only() {
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "confined", "{result:?}");
     assert_eq!(git(&fixture.worktree(), &["replace", "-l"]), "");
     assert_eq!(
@@ -633,7 +633,7 @@ async fn native_git_writes_cover_only_the_session_branch() {
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "confined", "{result:?}");
     assert_eq!(
         git(&main, &["log", "-1", "--format=%s", SESSION_BRANCH]).trim(),
@@ -689,7 +689,7 @@ async fn native_temporary_directory_stays_the_granted_directory() {
         .expect("linked turn");
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "kept", "{result:?}");
     assert!(kept, "the temporary directory should stay in place");
     assert_eq!(
@@ -731,7 +731,7 @@ async fn native_git_writes_keep_rebase_state_read_only() {
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "confined", "{result:?}");
     assert_eq!(
         std::fs::read_to_string(todo).expect("to-do list"),
@@ -767,9 +767,9 @@ async fn native_network_grant_reaches_a_local_listener() {
         .await;
 
     // Assert
-    assert_ne!(denied.exit_code, Some(0), "{denied:?}");
+    assert_ne!(denied.exit.exit_code, Some(0), "{denied:?}");
     assert_eq!(denied.stdout, "", "{denied:?}");
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "pong", "{result:?}");
     assert_eq!(&server.join().expect("listener thread"), b"ping");
 }

@@ -33,6 +33,8 @@ enum Seen {
     Started(u64, ItemKind),
     Delta(u64, Delta),
     Completed(u64, Item),
+    /// A tool call about to run, with its provider call identifier.
+    CallRequested(u64, String),
     /// A completed tool-call item, whose result the tool decides.
     CallCompleted(u64),
     Request,
@@ -133,6 +135,9 @@ async fn drain(mut stream: EventStream) -> Vec<Seen> {
                 Some(Seen::Started(id.get(), item_kind))
             }
             RunEventKind::ItemDelta { delta, id, .. } => Some(Seen::Delta(id.get(), delta)),
+            RunEventKind::ToolCallRequested { call_id, id, .. } => {
+                Some(Seen::CallRequested(id.get(), call_id))
+            }
             RunEventKind::ItemCompleted {
                 id,
                 item: Item::ToolCall(_),
@@ -201,7 +206,11 @@ async fn streams_deltas_into_the_items_each_response_completes() -> Result<(), B
                 }
             ),
             Seen::message(1, "Checking."),
+            // Each streamed call is requested under its own item, in call
+            // order, before it completes.
+            Seen::CallRequested(2, "call_a".to_string()),
             Seen::CallCompleted(2),
+            Seen::CallRequested(3, "call_b".to_string()),
             Seen::CallCompleted(3),
             Seen::Started(4, ItemKind::Message),
             Seen::text(4, "Ada "),

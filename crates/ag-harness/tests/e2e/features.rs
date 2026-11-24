@@ -1788,8 +1788,8 @@ impl BashStep {
         let ok = match (self.label, executor) {
             ("write-grant", _) => {
                 std::fs::read_to_string(root.join("output/result.txt"))? == "SEED=42\n"
-                    && result.termination == CommandTermination::Completed
-                    && result.exit_code == Some(0)
+                    && result.exit.termination == CommandTermination::Completed
+                    && result.exit.exit_code == Some(0)
                     && stdout.contains("SEED=42")
                     && model_stdout.contains("SEED=42")
             }
@@ -1803,7 +1803,8 @@ impl BashStep {
             ("network", Executor::Native) => stdout.contains("net=1"),
             ("network", Executor::Unsandboxed) => stdout.starts_with("net="),
             ("deadline", _) => {
-                result.termination == CommandTermination::Deadline && !stdout.contains("finished")
+                result.exit.termination == CommandTermination::Deadline
+                    && !stdout.contains("finished")
             }
             ("truncation", _) => result.truncated && result.stdout.len() <= self.capture,
             _ => false,
@@ -1863,8 +1864,8 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
                 "{}: unexpected outcome termination={:?} exit={:?} truncated={} stdout={stdout:?} \
                  stderr={:?} model_output={}",
                 step.label,
-                result.termination,
-                result.exit_code,
+                result.exit.termination,
+                result.exit.exit_code,
                 result.truncated,
                 result.stderr.trim(),
                 outcome.output()
@@ -1873,7 +1874,7 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
         }
         details.push(format!(
             "{}={:?}/{:?}",
-            step.label, result.termination, result.cleanup_scope
+            step.label, result.exit.termination, result.cleanup_scope
         ));
     }
 
