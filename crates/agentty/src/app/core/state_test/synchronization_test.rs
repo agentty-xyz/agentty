@@ -1196,6 +1196,22 @@ async fn merge_queue_drain_waits_for_active_project_sync() {
 }
 
 #[tokio::test]
+async fn merge_queue_drain_waits_for_the_active_merge() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    app.merge_queue.set_active("active-merge".into());
+    app.merge_queue.enqueue("pending-merge".into());
+
+    // Act
+    let result = app.start_next_merge_from_queue(false).await;
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(app.merge_queue.is_queued_or_active("active-merge"));
+    assert!(app.merge_queue.is_queued_or_active("pending-merge"));
+}
+
+#[tokio::test]
 async fn apply_branch_publish_action_update_persists_gitlab_merge_request_notice() {
     // Arrange
     let session_folder = tempdir().expect("failed to create temp dir");
