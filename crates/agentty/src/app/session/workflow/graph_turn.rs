@@ -200,7 +200,7 @@ async fn execute(
     let base_branch_scope = turn::base_branch_scope(context);
     let base_branch =
         BaseBranchSnapshot::capture(&base_branch_scope, dispatch.node.agent.kind()).await?;
-    let (result, ()) = tokio::join!(
+    let (result, _) = tokio::join!(
         client.submit(prepared, event_tx, task.cancellation.as_ref().clone()),
         turn::relay_turn_events(context, permission_mode, relayed_rx, relay_tx),
     );

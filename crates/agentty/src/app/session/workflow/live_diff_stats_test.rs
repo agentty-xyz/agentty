@@ -56,6 +56,22 @@ fn recording_refresher(duration: Duration) -> (LiveDiffStats, mpsc::UnboundedRec
     (refresher, refreshed_rx)
 }
 
+/// Returns the next refresh start time, failing instead of hanging when no
+/// refresh arrives; paused-time tests reach the deadline at once.
+async fn next_refresh(refreshed_rx: &mut mpsc::UnboundedReceiver<Instant>) -> Instant {
+    tokio::time::timeout(LIVE_REFRESH_INTERVAL * 10, refreshed_rx.recv())
+        .await
+        .expect("refresh timed out")
+        .expect("refresher stopped")
+}
+
+/// Waits for `notify`, failing after five seconds instead of hanging.
+async fn notified_within_deadline(notify: &Notify) {
+    tokio::time::timeout(Duration::from_secs(5), notify.notified())
+        .await
+        .expect("notification timed out");
+}
+
 #[test]
 fn only_finished_calls_that_may_edit_files_request_a_refresh() {
     // Arrange
@@ -108,11 +124,11 @@ async fn relay_forwards_every_event_and_refreshes_after_a_finished_edit() {
 
     // Act
     refresher.relay(event_rx, forward_tx).await;
-    let refresh_time = refreshed_rx.recv().await;
-    refresher.finish().await;
+    next_refresh(&mut refreshed_rx).await;
+    let refreshed_on_finish = refresher.finish().await;
 
     // Assert
-    assert!(refresh_time.is_some());
+    assert!(!refreshed_on_finish);
     assert!(matches!(
         forward_rx.recv().await,
         Some(TurnEvent::ThoughtDelta(_))
@@ -133,18 +149,19 @@ async fn signals_within_the_interval_coalesce_into_one_trailing_refresh() {
 
     // Act
     refresher.trigger.notify_one();
-    let first = refreshed_rx.recv().await.expect("first refresh");
+    let first = next_refresh(&mut refreshed_rx).await;
     refresher.trigger.notify_one();
     refresher.trigger.notify_one();
-    let trailing = refreshed_rx.recv().await.expect("trailing refresh");
+    let trailing = next_refresh(&mut refreshed_rx).await;
     tokio::time::sleep(LIVE_REFRESH_INTERVAL * 3).await;
     let extra = refreshed_rx.try_recv();
-    refresher.finish().await;
+    let refreshed_on_finish = refresher.finish().await;
 
     // Assert
     assert_eq!(first, started);
     assert_eq!(trailing - first, LIVE_REFRESH_INTERVAL);
     assert!(extra.is_err(), "coalesced signals refreshed again");
+    assert!(!refreshed_on_finish);
     assert!(refreshed_rx.recv().await.is_none());
 }
 
@@ -156,9 +173,9 @@ async fn slow_refreshes_wait_their_own_duration_before_the_next() {
 
     // Act
     refresher.trigger.notify_one();
-    let first = refreshed_rx.recv().await.expect("first refresh");
+    let first = next_refresh(&mut refreshed_rx).await;
     refresher.trigger.notify_one();
-    let next = refreshed_rx.recv().await.expect("next refresh");
+    let next = next_refresh(&mut refreshed_rx).await;
     refresher.finish().await;
 
     // Assert
@@ -170,14 +187,15 @@ async fn finish_runs_a_pending_refresh_without_waiting_for_the_interval() {
     // Arrange
     let (refresher, mut refreshed_rx) = recording_refresher(Duration::ZERO);
     refresher.trigger.notify_one();
-    let first = refreshed_rx.recv().await.expect("first refresh");
+    let first = next_refresh(&mut refreshed_rx).await;
     refresher.trigger.notify_one();
 
     // Act
-    refresher.finish().await;
-    let pending = refreshed_rx.recv().await.expect("pending refresh");
+    let refreshed_on_finish = refresher.finish().await;
+    let pending = next_refresh(&mut refreshed_rx).await;
 
     // Assert
+    assert!(refreshed_on_finish);
     assert_eq!(pending, first);
     assert!(refreshed_rx.recv().await.is_none());
 }
@@ -205,19 +223,20 @@ async fn finish_waits_for_an_in_flight_refresh_then_runs_one_pending_refresh() {
         }
     });
     refresher.trigger.notify_one();
-    started.notified().await;
+    notified_within_deadline(&started).await;
     refresher.trigger.notify_one();
     refresher.trigger.notify_one();
 
     // Act
     let finishing = tokio::spawn(refresher.finish());
     release.notify_one();
-    started.notified().await;
+    notified_within_deadline(&started).await;
     let completed_before_pending = completed.load(Ordering::SeqCst);
     release.notify_one();
-    finishing.await.expect("finish");
+    let refreshed_on_finish = finishing.await.expect("finish");
 
     // Assert
+    assert!(refreshed_on_finish);
     assert_eq!(completed_before_pending, 1);
     assert_eq!(completed.load(Ordering::SeqCst), 2);
 }
@@ -228,9 +247,10 @@ async fn finish_without_a_signal_runs_no_refresh() {
     let (refresher, mut refreshed_rx) = recording_refresher(Duration::ZERO);
 
     // Act
-    refresher.finish().await;
+    let refreshed_on_finish = refresher.finish().await;
 
     // Assert
+    assert!(!refreshed_on_finish);
     assert!(refreshed_rx.recv().await.is_none());
 }
 

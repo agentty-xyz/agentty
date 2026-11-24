@@ -100,7 +100,7 @@ async fn execute(
         history.context.context.assignment.agent.kind(),
     )
     .await?;
-    let (result, ()) = tokio::join!(
+    let (result, refreshed_final_diff) = tokio::join!(
         client.submit(prepared, event_tx, cancellation.clone()),
         turn::relay_turn_events(context, permission_mode, relayed_rx, relay_tx),
     );
@@ -136,10 +136,11 @@ async fn execute(
             },
         )
         .await?;
-    if assignment.role == TaskAgentRole::Implementer {
+    if assignment.role == TaskAgentRole::Implementer && !refreshed_final_diff {
         // The answer can be visible while commit hooks and publishing still
-        // run. Project its changes before exposing that answer, then refresh
-        // again during finalization to include any post-turn edits.
+        // run. Project its changes before exposing that answer, unless the
+        // event relay just did, then refresh again during finalization to
+        // include any post-turn edits.
         post_turn::refresh_channel_diff_stats(&TurnFinalizerContext::from_worker(context)).await;
     }
     // Task questions are retained in task history; they never replace the

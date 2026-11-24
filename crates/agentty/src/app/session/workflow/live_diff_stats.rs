@@ -33,7 +33,7 @@ pub(super) struct LiveDiffStats {
     stop: DropGuard,
     /// Refresher task, awaited so a pending refresh lands before post-turn
     /// effects start.
-    task: JoinHandle<()>,
+    task: JoinHandle<bool>,
     /// Pending-refresh signal; holds at most one stored permit.
     trigger: Arc<Notify>,
 }
@@ -71,12 +71,15 @@ impl LiveDiffStats {
     /// Stops live refreshing and waits for any in-flight refresh, then runs
     /// the refresh still pending for edits that finished during the throttle
     /// interval, so post-turn effects start from the turn's final totals.
-    pub(super) async fn finish(self) {
+    ///
+    /// Returns whether that pending refresh ran.
+    pub(super) async fn finish(self) -> bool {
         let Self { stop, task, .. } = self;
         drop(stop);
+
         // A panicked refresher only loses live updates; finalization
         // refreshes again.
-        let _ = task.await;
+        task.await.unwrap_or(false)
     }
 
     /// Starts a refresher that runs `refresh` for each coalesced signal,
@@ -120,7 +123,7 @@ impl LiveDiffStats {
     }
 
     /// Refreshes once per coalesced signal until `stop` is cancelled, then
-    /// once more if a signal is still pending.
+    /// once more if a signal is still pending, returning whether it did.
     ///
     /// After each refresh it waits [`LIVE_REFRESH_INTERVAL`] or the refresh's
     /// own duration, whichever is longer, so slow worktrees spend at most
@@ -130,7 +133,8 @@ impl LiveDiffStats {
         refresh: Refresh,
         trigger: Arc<Notify>,
         stop: CancellationToken,
-    ) where
+    ) -> bool
+    where
         Refresh: Fn() -> Work,
         Work: Future<Output = ()>,
     {
@@ -162,6 +166,8 @@ impl LiveDiffStats {
         if pending {
             refresh().await;
         }
+
+        pending
     }
 }
 
