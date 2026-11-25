@@ -12,9 +12,10 @@ use ag_agent::{
 };
 use ag_contracts::{
     ActivityFailure, ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
-    AgentRequestKind, ContextCompaction, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient,
-    OneShotRequest, OutputEvent, OutputKind, PermissionMode, ProviderCallBudget, ReasoningLevel,
-    ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
+    AgentRequestKind, ContextCompaction, ExecutionPolicy, HostCacheSharing, LiveTranscript,
+    McpPolicy, OneShotClient, OneShotRequest, OutputEvent, OutputKind, PermissionMode,
+    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent,
+    TurnNotice, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
 use ag_harness::provider::ModelProvider;
@@ -93,6 +94,7 @@ fn turn_request(folder: &Path, model: &str, prompt: &str) -> TurnRequest {
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::Concise,
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::Normal,
     }
 }

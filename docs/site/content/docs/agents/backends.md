@@ -362,6 +362,29 @@ a key or sign-in is never chosen as the default.
   at any time. Projects that replace crates.io in their own `.cargo/config.toml`, Git
   dependencies, and other tools' caches are still downloaded per session, and a failed
   fetch only means the session downloads its dependencies itself.
+- <a id="backends-harness-host-caches"></a> `Share Host Caches`, a project setting that
+  is off by default, makes the next turn of every session in the project use your own
+  Cargo registry and Git dependencies, Go module and build caches, pip cache, and npm
+  cache instead, so dependencies download once. The setting is per project, but the
+  caches are not: a session in this project could plant code that later runs in the
+  builds of all your other projects and of your own terminal. Leave it off unless you
+  trust every session in this project with that.
+- Cargo's programs, configuration, and credentials stay out of reach, and sessions do
+  not clean the shared Cargo cache. Agentty creates Cargo's cache directories when they
+  are missing; Go, pip, and npm caches that do not exist yet stay per session. A cache
+  that is a link, lies outside your home directory, in its `Library`, or on `PATH`,
+  overlaps the worktree or another shared cache, or has a hard-linked lock file also
+  stays per session, and the session says which. On macOS that includes the default Go
+  build and pip caches under `~/Library/Caches`; point `GOCACHE` or `PIP_CACHE_DIR`
+  elsewhere in your home directory to share them. Commands can change what is inside a
+  shared cache, but cannot move or remove the cache directory itself. One-shot utility
+  prompts, such as titles and commit messages, never share caches; sync conflict
+  assistance runs in the session and does. Turning the setting off returns later turns
+  to the session's own caches.
+- While the setting shares your Cargo caches, it takes the place of the project's
+  [Cargo cache](#backends-harness-cargo-cache): your own registry already keeps every
+  download, so nothing is copied in. When your Cargo caches cannot be shared, sessions
+  use the project's Cargo cache, as with the setting off.
 - Your Cargo configuration still applies: Cargo finds `~/.cargo/config.toml` above a
   worktree in the home directory, and otherwise Agentty links your `CARGO_HOME`'s
   configuration into the sandbox before each turn, replacing whatever configuration or

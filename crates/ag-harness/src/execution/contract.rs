@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::pipe_status::{PipeStatusProbe, StreamFilter};
+use crate::bash::HostCachePins;
 use crate::command_journal::CommandCleanupScope;
 
 /// Host-selected Bash execution boundary consumed through `BashConfig`.
@@ -198,6 +199,9 @@ impl ExecutionCommand {
 pub(super) struct Grants {
     pub(super) environment: Vec<(OsString, OsString)>,
     pub(super) external_reads: Vec<PathBuf>,
+    pub(super) host_cache_directories: Vec<PathBuf>,
+    pub(super) host_cache_files: Vec<PathBuf>,
+    pub(super) host_cache_pins: HostCachePins,
     pub(super) host_information: bool,
     pub(super) hidden_paths: Vec<PathBuf>,
     pub(super) network: bool,
@@ -230,6 +234,13 @@ pub struct ExecutionPolicy {
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
     hidden_paths: Vec<PathBuf>,
+    host_cache_directories: Vec<PathBuf>,
+    host_cache_files: Vec<PathBuf>,
+    #[cfg_attr(
+        not(feature = "native-sandbox"),
+        expect(dead_code, reason = "only the native sandbox checks host cache pins")
+    )]
+    host_cache_pins: HostCachePins,
     host_information: bool,
     network: bool,
     read_scope: ReadScope,
@@ -278,6 +289,8 @@ impl ExecutionPolicy {
             .temporary_directory
             .iter()
             .chain(&grants.writable_roots)
+            .chain(&grants.host_cache_directories)
+            .chain(&grants.host_cache_files)
             .cloned()
             .chain(
                 grants
@@ -297,6 +310,8 @@ impl ExecutionPolicy {
             .temporary_directory
             .iter()
             .chain(&grants.writable_roots)
+            .chain(&grants.host_cache_directories)
+            .chain(&grants.host_cache_files)
         {
             validate_path(path, true)?;
             if path.starts_with(&workspace)
@@ -332,6 +347,9 @@ impl ExecutionPolicy {
             external_reads: grants.external_reads,
             git_metadata,
             hidden_paths: grants.hidden_paths,
+            host_cache_directories: grants.host_cache_directories,
+            host_cache_files: grants.host_cache_files,
+            host_cache_pins: grants.host_cache_pins,
             host_information: grants.host_information,
             network: grants.network,
             read_scope: grants.read_scope,
@@ -417,6 +435,29 @@ impl ExecutionPolicy {
         &self.writable_roots
     }
 
+    /// Absolute directories of the host's own dependency caches granted
+    /// recursive reads and writes, the narrow exception to keeping writes
+    /// out of home directories; `BashConfig::with_host_cache_directory`
+    /// describes the risk and what preparation refuses. An executor that
+    /// ignores them denies those writes.
+    pub fn host_cache_directories(&self) -> &[PathBuf] {
+        &self.host_cache_directories
+    }
+
+    /// Absolute regular files of the host's dependency caches, such as
+    /// lock files, whose contents commands may read and write but which
+    /// they may not remove, rename, or replace.
+    pub fn host_cache_files(&self) -> &[PathBuf] {
+        &self.host_cache_files
+    }
+
+    /// Identities the host caches had when granted, which each command's
+    /// resolution must match.
+    #[cfg(feature = "native-sandbox")]
+    pub(super) fn host_cache_pins(&self) -> &HostCachePins {
+        &self.host_cache_pins
+    }
+
     /// Absolute paths of the Unix-domain sockets commands may connect to.
     /// An executor that cannot allow sockets by path keeps them all denied.
     pub fn unix_sockets(&self) -> &[PathBuf] {
@@ -439,7 +480,9 @@ impl ExecutionPolicy {
             .temporary_directory
             .iter()
             .chain(&self.writable_roots)
-            .any(|root| path.starts_with(root));
+            .chain(&self.host_cache_directories)
+            .any(|root| path.starts_with(root))
+            || self.host_cache_files.iter().any(|file| path == file);
         if !in_writable_root && self.hidden_paths.iter().any(|root| path.starts_with(root))
             || !in_workspace
                 && !in_writable_root
@@ -478,7 +521,7 @@ pub enum ExecutionAccess {
     /// The path is readable but no grant permits writing it.
     ReadOnly,
     /// The path lies beneath a workspace write grant, the temporary
-    /// directory, or a writable root.
+    /// directory, a writable root, or a host cache.
     ReadWrite,
 }
 

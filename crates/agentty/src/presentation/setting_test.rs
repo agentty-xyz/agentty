@@ -48,6 +48,7 @@ fn test_settings_view(launch_configuration: &str) -> SettingsView {
         include_coauthored_by_agentty: false,
         launch_configuration: launch_configuration.to_string(),
         max_concurrent_subagents: SubagentLimit::Two,
+        host_caches: ag_contracts::HostCacheSharing::PerSession,
         theme: ColorTheme::Current,
         use_last_used_model_as_default: false,
     }

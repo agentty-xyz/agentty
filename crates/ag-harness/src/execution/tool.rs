@@ -196,8 +196,8 @@ impl BashTool {
     /// # Errors
     /// Returns [`BashError::InvalidPolicy`] when an excluded executable or
     /// an environment value lies inside the workspace, the temporary
-    /// directory, or a writable root, where a command could plant what it
-    /// names.
+    /// directory, a writable root, or a host cache, where a command could
+    /// plant what it names.
     fn excluded_configuration(
         configuration: &BashConfig,
         root: &Path,
@@ -206,6 +206,8 @@ impl BashTool {
         let writable = std::iter::once(root.to_path_buf())
             .chain(snapshot.temporary_directory.iter().cloned())
             .chain(snapshot.writable_roots.iter().cloned())
+            .chain(snapshot.host_cache_directories.iter().cloned())
+            .chain(snapshot.host_cache_files.iter().cloned())
             .flat_map(|path| {
                 let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
 
@@ -272,35 +274,12 @@ impl BashTool {
         probe: Option<PipeStatusProbe>,
     ) -> Result<CommandOutcome, TurnError> {
         let configuration = &self.configuration.snapshot;
-        let grants = Grants {
-            environment: self
-                .configuration
-                .environment
-                .iter()
-                .map(|(name, value)| (OsString::from(name), OsString::from(value)))
-                .chain(
-                    configuration
-                        .temporary_directory
-                        .iter()
-                        .map(|path| (OsString::from("TMPDIR"), path.clone().into_os_string())),
-                )
-                .collect(),
-            external_reads: self.external_reads.clone(),
-            host_information: configuration.host_information,
-            network: configuration.grants(Capability::Network),
-            hidden_paths: configuration.hidden_paths.clone(),
-            read_scope: if configuration.grants(Capability::FullDiskRead) {
-                ReadScope::FullDisk
-            } else {
-                ReadScope::Granted
-            },
-            temporary_directory: configuration.temporary_directory.clone(),
-            unix_sockets: configuration.unix_sockets.clone(),
-            workspace_writes: configuration.workspace_writes.clone(),
-            writable_roots: configuration.writable_roots.clone(),
-        };
-        let policy = ExecutionPolicy::new(self.root.clone(), vec![self.root.join(".git")], grants)
-            .map_err(|_| BashError::InvalidPolicy)?;
+        let policy = ExecutionPolicy::new(
+            self.root.clone(),
+            vec![self.root.join(".git")],
+            self.grants(),
+        )
+        .map_err(|_| BashError::InvalidPolicy)?;
         let command = ExecutionCommand::new(executable, words, ".".into())
             .map_err(|_| BashError::InvalidArguments)?;
         let limits = Limits::new(
@@ -368,6 +347,42 @@ impl BashTool {
         })
         .await
         .map_err(|_| BashError::Execution)?
+    }
+
+    /// Returns the grants this tool's configuration gives each command.
+    fn grants(&self) -> Grants {
+        let configuration = &self.configuration.snapshot;
+
+        Grants {
+            environment: self
+                .configuration
+                .environment
+                .iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+                .chain(
+                    configuration
+                        .temporary_directory
+                        .iter()
+                        .map(|path| (OsString::from("TMPDIR"), path.clone().into_os_string())),
+                )
+                .collect(),
+            external_reads: self.external_reads.clone(),
+            host_cache_directories: configuration.host_cache_directories.clone(),
+            host_cache_files: configuration.host_cache_files.clone(),
+            host_cache_pins: self.configuration.host_cache_pins.clone(),
+            host_information: configuration.host_information,
+            network: configuration.grants(Capability::Network),
+            hidden_paths: configuration.hidden_paths.clone(),
+            read_scope: if configuration.grants(Capability::FullDiskRead) {
+                ReadScope::FullDisk
+            } else {
+                ReadScope::Granted
+            },
+            temporary_directory: configuration.temporary_directory.clone(),
+            unix_sockets: configuration.unix_sockets.clone(),
+            workspace_writes: configuration.workspace_writes.clone(),
+            writable_roots: configuration.writable_roots.clone(),
+        }
     }
 }
 

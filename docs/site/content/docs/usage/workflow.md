@@ -609,7 +609,11 @@ Move the selection with `j` / `k`, then press `Enter` to open or edit a setting.
 [subagent limit](@/docs/agents/backends.md#subagent-limits), which applies after
 restart. **Project settings** include model, reasoning, speed, and style defaults,
 commit trailers, launch configurations, and automatic review addressing. Defaults affect
-new sessions; use slash commands to change an existing one. See
+new sessions; use slash commands to change an existing one. `Share Host Caches` is not a
+default: it applies from the next turn of every session in the project and has no slash
+command. It lets sandboxed Harness sessions
+[write your dependency caches](@/docs/agents/backends.md#backends-harness-host-caches),
+which every build on your machine uses. See
 [Backend Defaults](@/docs/agents/backends.md#selecting-a-backend) for the Smart, Fast,
 and Review roles.
 

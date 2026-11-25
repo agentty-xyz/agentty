@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentError, AgentRequestKind, LiveTranscript, TurnContinuation,
-    TurnEvent, TurnRequest, TurnResult,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, HostCacheSharing, LiveTranscript,
+    TurnContinuation, TurnEvent, TurnRequest, TurnResult,
 };
 use ag_session::ResolvedEnv;
 use ag_telemetry::{Outcome, Span};
@@ -359,6 +359,7 @@ async fn prepare_turn_workspace(
 /// lifetimes and deliberately remain outside this value.
 struct ResolvedTurnSettings {
     agent_profile: AgentDefinitionPrompt,
+    host_caches: HostCacheSharing,
     reasoning_level: ReasoningLevel,
     response_style: ResponseStyle,
     speed_mode: SpeedMode,
@@ -379,6 +380,8 @@ impl ResolvedTurnContext {
         let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
         let response_style = load_session_response_style(&context.db, &context.session_id).await;
         let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
+        let host_caches =
+            SessionTaskService::load_host_cache_sharing(&context.db, &context.session_id).await;
         let continuation = load_turn_continuation(context, replay_transcript).await;
         let agent_profile = AgentDefinitionPrompt::cleared(
             continuation.persisted_instruction_conversation_id()
@@ -390,6 +393,7 @@ impl ResolvedTurnContext {
             session_project_id,
             settings: ResolvedTurnSettings {
                 agent_profile,
+                host_caches,
                 reasoning_level,
                 response_style,
                 speed_mode,
@@ -435,6 +439,7 @@ async fn prepare_turn_request(
                     execution_policy: ag_contracts::ExecutionPolicy::default(),
                     continuation,
                     folder: env.folder.clone(),
+                    host_caches: settings.host_caches,
                     main_checkout_root: env.main_checkout.clone(),
                     model: model.to_string(),
                     permission_mode: PermissionMode::AutoEdit,

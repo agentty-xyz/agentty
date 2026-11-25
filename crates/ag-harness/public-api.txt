@@ -214,6 +214,8 @@ pub fn ag_harness::bash::BashConfig::with_excluded_command(self, std::path::Path
 pub fn ag_harness::bash::BashConfig::with_excluded_environment(self, alloc::string::String, alloc::string::String) -> core::result::Result<Self, ag_harness::bash::BashError>
 pub fn ag_harness::bash::BashConfig::with_full_disk_read(self) -> core::result::Result<Self, ag_harness::bash::BashError>
 pub fn ag_harness::bash::BashConfig::with_hidden_path(self, std::path::PathBuf) -> core::result::Result<Self, ag_harness::bash::BashError>
+pub fn ag_harness::bash::BashConfig::with_host_cache_directory(self, std::path::PathBuf) -> core::result::Result<Self, ag_harness::bash::BashError>
+pub fn ag_harness::bash::BashConfig::with_host_cache_file(self, std::path::PathBuf) -> core::result::Result<Self, ag_harness::bash::BashError>
 pub fn ag_harness::bash::BashConfig::with_host_information(self) -> Self
 pub fn ag_harness::bash::BashConfig::with_linux_bubblewrap(self, std::path::PathBuf) -> core::result::Result<Self, ag_harness::bash::BashError>
 pub fn ag_harness::bash::BashConfig::with_network(self) -> Self
@@ -330,6 +332,8 @@ pub fn ag_harness::bash::ExecutionPolicy::exposes_host_information(&self) -> boo
 pub fn ag_harness::bash::ExecutionPolicy::external_reads(&self) -> &[std::path::PathBuf]
 pub fn ag_harness::bash::ExecutionPolicy::git_metadata(&self) -> &[std::path::PathBuf]
 pub fn ag_harness::bash::ExecutionPolicy::hidden_paths(&self) -> &[std::path::PathBuf]
+pub fn ag_harness::bash::ExecutionPolicy::host_cache_directories(&self) -> &[std::path::PathBuf]
+pub fn ag_harness::bash::ExecutionPolicy::host_cache_files(&self) -> &[std::path::PathBuf]
 pub fn ag_harness::bash::ExecutionPolicy::requested_access(&self, &std::path::Path) -> ag_harness::bash::ExecutionAccess
 pub fn ag_harness::bash::ExecutionPolicy::temporary_directory(&self) -> core::option::Option<&std::path::Path>
 pub fn ag_harness::bash::ExecutionPolicy::unix_sockets(&self) -> &[std::path::PathBuf]

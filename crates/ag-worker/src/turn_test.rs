@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, ModelUsage,
-    PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
-    TurnResult, TurnUsage,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, HostCacheSharing, MockAgentChannel,
+    ModelUsage, PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
+    TurnRequest, TurnResult, TurnUsage,
 };
 use ag_protocol::TurnPrompt;
 use ag_telemetry::{Context, KeyValue, Span, TraceContextExt as _};
@@ -98,6 +98,7 @@ fn request() -> TurnRequest {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::default(),
     }
 }

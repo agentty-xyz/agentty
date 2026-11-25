@@ -4,13 +4,15 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ag_contracts::TurnNotice;
+use ag_contracts::{HostCacheSharing, TurnNotice};
 use ag_harness::RunEventKind;
 use ag_harness::bash::BashConfig;
 use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, SandboxWarning};
 use serde_json::json;
 
-use super::{CommandSandbox, SESSION_SANDBOX, UTILITY_SANDBOX, notice};
+use super::{
+    CargoCacheSource, CommandSandbox, SESSION_SANDBOX, ShareLimits, UTILITY_SANDBOX, notice,
+};
 use crate::agent::native::cargo_cache::TrustedCargoCache;
 
 /// Returns a native policy without Agentty's grants.
@@ -29,6 +31,24 @@ fn base_policy() -> BashConfig {
 /// application database and pasted images of the Agentty root
 /// `/agentty-root` hidden too.
 fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> BashConfig {
+    expected_shared_policy(temporary, data_root, auth_file, &HostCaches::default())
+}
+
+/// The host's caches a sandbox shares, in grant order.
+#[derive(Default)]
+struct HostCaches {
+    directories: Vec<PathBuf>,
+    files: Vec<PathBuf>,
+    variables: BTreeMap<&'static str, PathBuf>,
+}
+
+/// Returns [`expected_policy`] with `caches` shared.
+fn expected_shared_policy(
+    temporary: &Path,
+    data_root: &Path,
+    auth_file: &Path,
+    caches: &HostCaches,
+) -> BashConfig {
     let mut expected = base_policy()
         .with_full_disk_read()
         .and_then(|config| config.with_write(PathBuf::from(".")))
@@ -40,6 +60,16 @@ fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> Bash
         .and_then(|config| config.with_hidden_path(PathBuf::from("/agentty-root/db")))
         .and_then(|config| config.with_hidden_path(PathBuf::from("/agentty-root/tmp")))
         .expect("expected grants");
+    for directory in &caches.directories {
+        expected = expected
+            .with_host_cache_directory(directory.clone())
+            .expect("host cache");
+    }
+    for file in &caches.files {
+        expected = expected
+            .with_host_cache_file(file.clone())
+            .expect("host cache file");
+    }
     for (name, directory) in [
         ("CARGO_HOME", "cargo"),
         ("GOCACHE", "go-build"),
@@ -48,13 +78,47 @@ fn expected_policy(temporary: &Path, data_root: &Path, auth_file: &Path) -> Bash
         ("XDG_CACHE_HOME", "cache"),
         ("npm_config_cache", "npm"),
     ] {
-        let value = temporary.join(directory).display().to_string();
+        let value = caches
+            .variables
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| temporary.join(directory))
+            .display()
+            .to_string();
         expected = expected
             .with_environment(name.to_string(), value)
             .expect("cache variable");
     }
+    // Only Cargo shares lock files; its automatic cleaning stays off then.
+    if !caches.files.is_empty() {
+        expected = expected
+            .with_environment(
+                "CARGO_CACHE_AUTO_CLEAN_FREQUENCY".to_string(),
+                "never".to_string(),
+            )
+            .expect("Cargo cleaning");
+    }
 
     expected
+}
+
+/// Prepares `temporary` for commands in `workspace` with every cache per
+/// session.
+async fn per_session(
+    data_root: &Path,
+    temporary: PathBuf,
+    workspace: &Path,
+    environment: &BTreeMap<String, String>,
+) -> Result<CommandSandbox, String> {
+    CommandSandbox::prepare(
+        data_root,
+        temporary,
+        workspace,
+        environment,
+        None,
+        HostCacheSharing::PerSession,
+    )
+    .await
 }
 
 #[test]
@@ -245,28 +309,19 @@ async fn prepare_replaces_planted_cargo_files_and_links() {
     let environment = BTreeMap::new();
 
     // Act
-    let planted = CommandSandbox::prepare(
-        &data_root,
-        temporary.clone(),
-        root.path(),
-        &environment,
-        None,
-    )
-    .await;
-    let linked = CommandSandbox::prepare(
+    let planted = per_session(&data_root, temporary.clone(), root.path(), &environment).await;
+    let linked = per_session(
         &data_root,
         linked_temporary.clone(),
         root.path(),
         &environment,
-        None,
     )
     .await;
-    let filed = CommandSandbox::prepare(
+    let filed = per_session(
         &data_root,
         filed_temporary.clone(),
         root.path(),
         &environment,
-        None,
     )
     .await;
 
@@ -343,8 +398,7 @@ async fn prepare_reports_an_unusable_temporary_directory() {
     std::fs::write(&temporary, "").expect("file in place of the directory");
 
     // Act
-    let failure =
-        CommandSandbox::prepare(root.path(), temporary, root.path(), &BTreeMap::new(), None).await;
+    let failure = per_session(root.path(), temporary, root.path(), &BTreeMap::new()).await;
 
     // Assert
     assert!(
@@ -379,17 +433,15 @@ async fn prepare_links_the_host_cargo_configuration() {
     let temporary = data_root.join("session-1/tmp");
 
     // Act
-    CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &custom, None)
+    per_session(&data_root, temporary.clone(), &workspace, &custom)
         .await
         .expect("linked sandbox");
     let link = temporary.join("cargo/config.toml");
     let linked_target = std::fs::read_link(&link).ok();
-    let found =
-        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &home_above, None).await;
+    let found = per_session(&data_root, temporary.clone(), &workspace, &home_above).await;
     let after_found = std::fs::symlink_metadata(&link).is_ok();
-    let missing =
-        CommandSandbox::prepare(&data_root, temporary.clone(), &workspace, &empty_home, None).await;
-    let unset = CommandSandbox::prepare(&data_root, temporary, &workspace, &relative, None).await;
+    let missing = per_session(&data_root, temporary.clone(), &workspace, &empty_home).await;
+    let unset = per_session(&data_root, temporary, &workspace, &relative).await;
 
     // Assert
     assert_eq!(linked_target, Some(custom_home.join("config")));
@@ -417,6 +469,7 @@ async fn prepare_hides_the_cargo_cache() {
         root.path(),
         &BTreeMap::new(),
         Some(cache.clone()),
+        HostCacheSharing::PerSession,
     )
     .await
     .expect("sandbox");
@@ -427,4 +480,451 @@ async fn prepare_hides_the_cargo_cache() {
         root.path().join("cache").is_dir(),
         "the hidden cache root exists before any sandbox starts"
     );
+    assert_eq!(sandbox.cargo, CargoCacheSource::Project(cache));
+}
+
+/// A data root and a fake host home for preparing shared sandboxes.
+struct SharedFixture {
+    _root: tempfile::TempDir,
+    data_root: PathBuf,
+    environment: BTreeMap<String, String>,
+    home: PathBuf,
+    temporary: PathBuf,
+    workspace: PathBuf,
+}
+
+impl SharedFixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().expect("root");
+        let base = root.path().canonicalize().expect("canonical root");
+        let data_root = base.join("data");
+        let home = base.join("home");
+        let workspace = base.join("workspace");
+        for directory in [&home, &workspace] {
+            std::fs::create_dir_all(directory).expect("fixture directory");
+        }
+        let environment = BTreeMap::from([
+            ("AGENTTY_ROOT".to_string(), "/agentty-root".to_string()),
+            ("HOME".to_string(), home.display().to_string()),
+        ]);
+
+        Self {
+            _root: root,
+            temporary: data_root.join("session-1/tmp"),
+            data_root,
+            environment,
+            home,
+            workspace,
+        }
+    }
+
+    async fn prepare(&self, share_host_caches: bool) -> CommandSandbox {
+        self.prepare_with(share_host_caches, None).await
+    }
+
+    /// Prepares the sandbox with the project's trusted `cargo_cache`.
+    async fn prepare_with(
+        &self,
+        share_host_caches: bool,
+        cargo_cache: Option<TrustedCargoCache>,
+    ) -> CommandSandbox {
+        CommandSandbox::prepare(
+            &self.data_root,
+            self.temporary.clone(),
+            &self.workspace,
+            &self.environment,
+            cargo_cache,
+            HostCacheSharing::from_enabled(share_host_caches),
+        )
+        .await
+        .expect("prepared sandbox")
+    }
+
+    /// Returns the policy `sandbox` grants.
+    fn granted(sandbox: &CommandSandbox) -> BashConfig {
+        sandbox.grant(base_policy()).expect("granted policy")
+    }
+
+    /// Returns the policy expected with `caches` shared.
+    fn expected(&self, caches: &HostCaches) -> BashConfig {
+        expected_shared_policy(
+            &self.temporary,
+            &self.data_root,
+            Path::new("/agentty-root/auth/chatgpt.json"),
+            caches,
+        )
+    }
+}
+
+#[tokio::test]
+/// Sharing links the sandbox `CARGO_HOME`'s registry, Git dependencies,
+/// and cache locks to the host's, creating them there, replacing whatever
+/// the session left, and granting exactly them; it never links Cargo's
+/// programs, configuration, or credentials. Turning sharing off removes
+/// the links and keeps the session's own caches.
+async fn sharing_links_the_host_cargo_caches_and_stopping_removes_the_links() {
+    // Arrange
+    let fixture = SharedFixture::new();
+    let cargo = fixture.temporary.join("cargo");
+    std::fs::create_dir_all(cargo.join("registry/cache")).expect("session registry");
+    std::fs::write(cargo.join("registry/cache/old.crate"), "old").expect("session crate");
+    std::os::unix::fs::symlink(&fixture.workspace, cargo.join("git")).expect("planted link");
+    std::fs::write(cargo.join(".package-cache"), "").expect("session lock");
+    let host_cargo = fixture.home.join(".cargo");
+
+    // Act
+    let shared = fixture.prepare(true).await;
+    let links = ["registry", "git", ".package-cache", ".package-cache-mutate"]
+        .map(|name| std::fs::read_link(cargo.join(name)).ok());
+    let shared_policy = SharedFixture::granted(&shared);
+    let isolated = fixture.prepare(false).await;
+    let after_stopping = ["registry", "git", ".package-cache", ".package-cache-mutate"]
+        .map(|name| std::fs::symlink_metadata(cargo.join(name)).is_ok());
+    std::fs::create_dir(cargo.join("registry")).expect("session registry again");
+    fixture.prepare(false).await;
+
+    // Assert
+    assert_eq!(
+        links,
+        ["registry", "git", ".package-cache", ".package-cache-mutate"]
+            .map(|name| Some(host_cargo.join(name)))
+    );
+    assert!(host_cargo.join("registry").is_dir() && host_cargo.join("git").is_dir());
+    assert!(host_cargo.join(".package-cache").is_file());
+    assert!(!host_cargo.join("bin").exists() && !host_cargo.join("config.toml").exists());
+    assert!(
+        std::fs::symlink_metadata(fixture.temporary.join(".agentty-discarded-cargo-entry"))
+            .is_err()
+    );
+    assert!(shared.shares_host_caches());
+    assert_eq!(
+        shared_policy,
+        fixture.expected(&HostCaches {
+            directories: vec![host_cargo.join("registry"), host_cargo.join("git")],
+            files: vec![
+                host_cargo.join(".package-cache"),
+                host_cargo.join(".package-cache-mutate")
+            ],
+            variables: BTreeMap::new(),
+        })
+    );
+    assert_eq!(shared.notice(), None);
+    assert!(!isolated.shares_host_caches());
+    assert_eq!(isolated.notice(), None);
+    assert_eq!(after_stopping, [false; 4]);
+    assert_eq!(
+        SharedFixture::granted(&isolated),
+        fixture.expected(&HostCaches::default())
+    );
+    assert!(
+        cargo.join("registry").is_dir(),
+        "a session's own registry stays when not sharing"
+    );
+}
+
+#[tokio::test]
+/// Sharing grants the Go, pip, and npm caches that exist on the host and
+/// points their variables there, keeps the missing ones and
+/// `XDG_CACHE_HOME` per session, and keeps Cargo per session when the
+/// host's Cargo caches are links or its Cargo home cannot be created.
+async fn sharing_grants_existing_tool_caches_and_refuses_linked_cargo_caches() {
+    // Arrange
+    let mut fixture = SharedFixture::new();
+    let mod_cache = fixture.home.join("go/pkg/mod");
+    let npm_cache = fixture.home.join(".npm");
+    for directory in [&mod_cache, &npm_cache, &fixture.home.join("elsewhere")] {
+        std::fs::create_dir_all(directory).expect("host cache");
+    }
+    std::fs::create_dir_all(fixture.home.join(".cargo")).expect("host Cargo home");
+    std::os::unix::fs::symlink(
+        fixture.home.join("elsewhere"),
+        fixture.home.join(".cargo/registry"),
+    )
+    .expect("linked registry");
+
+    // Act
+    let linked = fixture.prepare(true).await;
+    let linked_policy = SharedFixture::granted(&linked);
+    std::fs::write(fixture.home.join("file"), "").expect("file");
+    fixture.environment.insert(
+        "CARGO_HOME".to_string(),
+        fixture.home.join("file/cargo").display().to_string(),
+    );
+    let uncreatable = fixture.prepare(true).await;
+
+    // Assert
+    let tools = HostCaches {
+        directories: vec![mod_cache.clone(), npm_cache.clone()],
+        files: Vec::new(),
+        variables: BTreeMap::from([("GOMODCACHE", mod_cache), ("npm_config_cache", npm_cache)]),
+    };
+    assert_eq!(linked_policy, fixture.expected(&tools));
+    assert_eq!(
+        SharedFixture::granted(&uncreatable),
+        fixture.expected(&tools)
+    );
+    let cargo_kept = Some(TurnNotice::HostCachesNotShared {
+        caches: vec!["Cargo".to_string()],
+    });
+    assert_eq!(linked.notice(), cargo_kept);
+    assert_eq!(uncreatable.notice(), cargo_kept);
+    assert!(std::fs::symlink_metadata(fixture.temporary.join("cargo/registry")).is_err());
+    assert!(!fixture.home.join(".cargo/git").exists());
+}
+
+#[tokio::test]
+/// Keeps per session, and names, every cache the native sandbox would
+/// refuse, so sharing never makes every command fail: a Cargo home outside
+/// the home directory, such as a system-wide `/usr/local/cargo`, a lock
+/// file with another link, and tool caches that are links, lie on `PATH`,
+/// or are files.
+async fn sharing_keeps_caches_the_sandbox_would_refuse_per_session() {
+    // Arrange
+    let mut fixture = SharedFixture::new();
+    let outside_home = fixture.data_root.with_file_name("system-cargo");
+    std::fs::create_dir_all(&outside_home).expect("Cargo home outside the home directory");
+    let host_cargo = fixture.home.join(".cargo");
+    std::fs::create_dir_all(host_cargo.join("registry")).expect("host registry");
+    std::fs::write(host_cargo.join(".package-cache"), "").expect("host lock");
+    std::fs::hard_link(
+        host_cargo.join(".package-cache"),
+        fixture.home.join("backup-lock"),
+    )
+    .expect("hard-linked lock");
+    std::fs::create_dir_all(fixture.home.join("elsewhere")).expect("link target");
+    std::os::unix::fs::symlink(fixture.home.join("elsewhere"), fixture.home.join(".npm"))
+        .expect("linked npm cache");
+    std::fs::create_dir_all(fixture.home.join("go/pkg/mod")).expect("Go module cache");
+    std::fs::create_dir_all(fixture.home.join("Library/Caches")).expect("macOS cache root");
+    std::fs::create_dir_all(fixture.home.join(".cache")).expect("Linux cache root");
+    std::fs::write(fixture.home.join("Library/Caches/pip"), "").expect("pip file");
+    std::fs::write(fixture.home.join(".cache/pip"), "").expect("pip file");
+    fixture.environment.insert(
+        "PATH".to_string(),
+        fixture.home.join("go").display().to_string(),
+    );
+
+    // Act
+    let hard_linked = fixture.prepare(true).await;
+    fixture
+        .environment
+        .insert("CARGO_HOME".to_string(), outside_home.display().to_string());
+    let outside = fixture.prepare(true).await;
+
+    // Assert
+    for sandbox in [&hard_linked, &outside] {
+        assert!(!sandbox.shares_host_caches());
+        assert_eq!(
+            sandbox.notice(),
+            Some(TurnNotice::HostCachesNotShared {
+                caches: ["Cargo", "Go modules", "pip", "npm"]
+                    .map(String::from)
+                    .to_vec(),
+            })
+        );
+        assert_eq!(
+            SharedFixture::granted(sandbox),
+            fixture.expected(&HostCaches::default())
+        );
+    }
+    assert!(std::fs::symlink_metadata(fixture.temporary.join("cargo/registry")).is_err());
+    assert!(!outside_home.join("registry").exists());
+}
+
+#[test]
+/// Finds each tool's cache where the host keeps it: the variable that moves
+/// it when absolute, else the tool's default for the platform.
+fn host_tool_caches_follow_each_tools_documented_defaults() {
+    // Arrange
+    let home = BTreeMap::from([("HOME".to_string(), "/home/user".to_string())]);
+    let moved = BTreeMap::from([
+        ("HOME".to_string(), "/home/user".to_string()),
+        ("XDG_CACHE_HOME".to_string(), "/xdg".to_string()),
+        ("GOPATH".to_string(), "/gopath:/second".to_string()),
+        ("NPM_CONFIG_CACHE".to_string(), "/npm-upper".to_string()),
+    ]);
+    let explicit = BTreeMap::from([
+        ("GOMODCACHE".to_string(), "/mod".to_string()),
+        ("GOCACHE".to_string(), "/build".to_string()),
+        ("GOPATH".to_string(), "relative".to_string()),
+        ("PIP_CACHE_DIR".to_string(), "/pip".to_string()),
+        ("npm_config_cache".to_string(), "/npm".to_string()),
+        ("NPM_CONFIG_CACHE".to_string(), "/npm-upper".to_string()),
+        ("XDG_CACHE_HOME".to_string(), "relative".to_string()),
+    ]);
+    let caches = |pairs: [(&'static str, &str); 4]| {
+        pairs
+            .map(|(variable, path)| (variable, PathBuf::from(path)))
+            .to_vec()
+    };
+    let found = |environment: &BTreeMap<String, String>, platform: &str| {
+        CommandSandbox::host_tool_caches(environment, platform)
+            .into_iter()
+            .map(|(variable, _, path)| (variable, path))
+            .collect::<Vec<_>>()
+    };
+
+    // Act / Assert
+    assert_eq!(
+        CommandSandbox::host_tool_caches(&home, "linux")
+            .iter()
+            .map(|(_, name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["Go modules", "Go build", "pip", "npm"]
+    );
+    assert_eq!(
+        found(&home, "macos"),
+        caches([
+            ("GOMODCACHE", "/home/user/go/pkg/mod"),
+            ("GOCACHE", "/home/user/Library/Caches/go-build"),
+            ("PIP_CACHE_DIR", "/home/user/Library/Caches/pip"),
+            ("npm_config_cache", "/home/user/.npm"),
+        ])
+    );
+    assert_eq!(
+        found(&home, "linux"),
+        caches([
+            ("GOMODCACHE", "/home/user/go/pkg/mod"),
+            ("GOCACHE", "/home/user/.cache/go-build"),
+            ("PIP_CACHE_DIR", "/home/user/.cache/pip"),
+            ("npm_config_cache", "/home/user/.npm"),
+        ])
+    );
+    assert_eq!(
+        found(&moved, "linux"),
+        caches([
+            ("GOMODCACHE", "/gopath/pkg/mod"),
+            ("GOCACHE", "/xdg/go-build"),
+            ("PIP_CACHE_DIR", "/xdg/pip"),
+            ("npm_config_cache", "/npm-upper"),
+        ])
+    );
+    assert_eq!(
+        found(&moved, "macos")[1..3],
+        caches([
+            ("GOMODCACHE", ""),
+            ("GOCACHE", "/home/user/Library/Caches/go-build"),
+            ("PIP_CACHE_DIR", "/xdg/pip"),
+            ("npm_config_cache", ""),
+        ])[1..3]
+    );
+    assert_eq!(
+        found(&explicit, "linux"),
+        caches([
+            ("GOMODCACHE", "/mod"),
+            ("GOCACHE", "/build"),
+            ("PIP_CACHE_DIR", "/pip"),
+            ("npm_config_cache", "/npm"),
+        ])
+    );
+    assert_eq!(found(&BTreeMap::new(), "linux"), Vec::new());
+}
+
+#[tokio::test]
+/// Sharing the host's Cargo caches takes the place of the project's
+/// trusted cache, which stays hidden and copies nothing into the linked
+/// registry; when the host's Cargo caches cannot be shared, the session
+/// uses the project's cache instead and the notice names Cargo.
+async fn host_cargo_sharing_wins_over_the_project_cache_and_falls_back_to_it() {
+    // Arrange
+    let mut fixture = SharedFixture::new();
+    let cache_root = fixture.data_root.with_file_name("cache");
+    let cache = TrustedCargoCache::for_project(&cache_root, &fixture.workspace);
+    let host_cargo = fixture.home.join(".cargo");
+
+    // Act
+    let shared = fixture.prepare_with(true, Some(cache.clone())).await;
+    let linked = std::fs::read_link(fixture.temporary.join("cargo/registry")).ok();
+    fixture.environment.insert(
+        "CARGO_HOME".to_string(),
+        fixture
+            .data_root
+            .with_file_name("system-cargo")
+            .display()
+            .to_string(),
+    );
+    let refused = fixture.prepare_with(true, Some(cache.clone())).await;
+
+    // Assert
+    assert_eq!(shared.cargo, CargoCacheSource::Host(host_cargo.clone()));
+    assert_eq!(linked, Some(host_cargo.join("registry")));
+    assert!(shared.hidden.contains(&cache_root));
+    assert_eq!(shared.notice(), None);
+    assert_eq!(refused.cargo, CargoCacheSource::Project(cache));
+    assert!(refused.hidden.contains(&cache_root));
+    assert!(std::fs::symlink_metadata(fixture.temporary.join("cargo/registry")).is_err());
+    assert_eq!(
+        refused.notice(),
+        Some(TurnNotice::HostCachesNotShared {
+            caches: vec!["Cargo".to_string()],
+        })
+    );
+}
+
+#[tokio::test]
+/// Shares Cargo's caches although Cargo's `bin` is on `PATH`, grants a tool
+/// cache by its resolved path, and keeps per session, and names, the tool
+/// caches the native sandbox's write-grant rules would refuse: one under
+/// the home's `Library`, one inside a cache already shared, and one inside
+/// a hidden path, the project's trusted Cargo cache.
+async fn sharing_keeps_library_and_overlapping_caches_per_session() {
+    // Arrange
+    let mut fixture = SharedFixture::new();
+    let mod_cache = fixture.home.join("go/pkg/mod");
+    let build_cache = fixture.home.join("Library/Caches/go-build");
+    let pip_cache = mod_cache.join("pip");
+    let cache_root = fixture.home.join("trusted");
+    let npm_cache = cache_root.join("npm");
+    for directory in [&mod_cache, &build_cache, &pip_cache, &npm_cache] {
+        std::fs::create_dir_all(directory).expect("host cache");
+    }
+    std::os::unix::fs::symlink(fixture.home.join("go"), fixture.home.join("go-alias"))
+        .expect("linked ancestor");
+    for (variable, path) in [
+        ("GOMODCACHE", fixture.home.join("go-alias/pkg/mod")),
+        ("GOCACHE", build_cache),
+        ("PIP_CACHE_DIR", pip_cache),
+        ("npm_config_cache", npm_cache),
+        ("PATH", fixture.home.join(".cargo/bin")),
+    ] {
+        fixture
+            .environment
+            .insert(variable.to_string(), path.display().to_string());
+    }
+    let cache = TrustedCargoCache::for_project(&cache_root, &fixture.workspace);
+
+    // Act
+    let sandbox = fixture.prepare_with(true, Some(cache)).await;
+
+    // Assert
+    assert_eq!(
+        sandbox.host_cache_directories,
+        [
+            fixture.home.join(".cargo/registry"),
+            fixture.home.join(".cargo/git"),
+            mod_cache.clone(),
+        ]
+    );
+    assert_eq!(
+        sandbox.shared_environment.get("GOMODCACHE"),
+        Some(&mod_cache)
+    );
+    assert_eq!(
+        sandbox.notice(),
+        Some(TurnNotice::HostCachesNotShared {
+            caches: ["Go build", "pip", "npm"].map(String::from).to_vec(),
+        })
+    );
+}
+
+#[test]
+/// Refuses a cache with a Git metadata component, whatever its case.
+fn share_limits_refuse_git_metadata_components() {
+    // Arrange
+    let environment = BTreeMap::from([("HOME".to_string(), "/home/user".to_string())]);
+    let limits = ShareLimits::new(&environment, &[]);
+
+    // Act / Assert
+    assert!(limits.allows(Path::new("/home/user/cache")));
+    assert!(!limits.allows(Path::new("/home/user/repository/.GIT/cache")));
 }

@@ -397,6 +397,36 @@ async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
 }
 
 #[tokio::test]
+/// Verifies host-cache sharing stays off until the session's project
+/// enables it, and follows the persisted value after that.
+async fn test_load_host_cache_sharing_reads_the_project_toggle() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
+    let project_id = database
+        .sessions()
+        .load_session_project_id("session-id")
+        .await
+        .expect("failed to load session project id")
+        .expect("session should have project id");
+    let unset = SessionTaskService::load_host_cache_sharing(&database, "session-id").await;
+    database
+        .settings()
+        .upsert_project_setting(project_id, SettingName::ShareHostCaches, "true")
+        .await
+        .expect("failed to persist host-cache flag");
+
+    // Act
+    let enabled = SessionTaskService::load_host_cache_sharing(&database, "session-id").await;
+    let unknown = SessionTaskService::load_host_cache_sharing(&database, "missing").await;
+
+    // Assert
+    assert_eq!(unset, ag_contracts::HostCacheSharing::PerSession);
+    assert_eq!(enabled, ag_contracts::HostCacheSharing::Shared);
+    assert_eq!(unknown, ag_contracts::HostCacheSharing::PerSession);
+}
+
+#[tokio::test]
 /// Verifies the coauthor trailer setting defaults to disabled when the
 /// stored value cannot be parsed as a boolean.
 async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {

@@ -348,6 +348,85 @@ fn coding_grants_read_everything_but_hidden_paths_and_write_writable_roots() {
 }
 
 #[test]
+fn host_caches_are_writable_and_stay_clear_of_the_workspace_and_hidden_paths() {
+    // Arrange
+    let granted = policy(Grants {
+        host_cache_directories: vec!["/home/.cargo/registry".into()],
+        host_cache_files: vec!["/home/.cargo/.package-cache".into()],
+        ..Grants::default()
+    });
+    let refused = [
+        (
+            Grants {
+                host_cache_directories: vec!["relative".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidPath,
+        ),
+        (
+            Grants {
+                host_cache_files: vec!["/workspace/lock".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            Grants {
+                host_cache_directories: vec!["/admin".into()],
+                ..Grants::default()
+            },
+            ValidationError::InvalidWorkspace,
+        ),
+        (
+            Grants {
+                hidden_paths: vec!["/home/.cargo/registry/secret".into()],
+                host_cache_directories: vec!["/home/.cargo/registry".into()],
+                ..Grants::default()
+            },
+            ValidationError::HiddenPathUnenforceable,
+        ),
+        (
+            Grants {
+                hidden_paths: vec!["/home/.cargo/.package-cache".into()],
+                host_cache_files: vec!["/home/.cargo/.package-cache".into()],
+                ..Grants::default()
+            },
+            ValidationError::HiddenPathUnenforceable,
+        ),
+    ];
+
+    // Act / Assert
+    assert_eq!(
+        granted.host_cache_directories(),
+        [PathBuf::from("/home/.cargo/registry")]
+    );
+    assert_eq!(
+        granted.host_cache_files(),
+        [PathBuf::from("/home/.cargo/.package-cache")]
+    );
+    for (path, access) in [
+        (
+            "/home/.cargo/registry/cache/x.crate",
+            ExecutionAccess::ReadWrite,
+        ),
+        ("/home/.cargo/.package-cache", ExecutionAccess::ReadWrite),
+        (
+            "/home/.cargo/.package-cache-mutate",
+            ExecutionAccess::Denied,
+        ),
+        ("/home/.cargo/config.toml", ExecutionAccess::Denied),
+    ] {
+        assert_eq!(granted.requested_access(Path::new(path)), access, "{path}");
+    }
+    for (grants, expected) in refused {
+        assert_eq!(
+            ExecutionPolicy::new("/workspace".into(), vec!["/admin/repo".into()], grants).err(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn coding_grants_must_be_absolute_and_keep_the_workspace_reachable() {
     // Arrange
     let cases = [

@@ -94,6 +94,7 @@ impl SettingsFixture {
             include_coauthored_by_agentty: false,
             launch_configuration: launch_configuration.unwrap_or_default().to_string(),
             max_concurrent_subagents: SubagentLimit::Two,
+            host_caches: ag_contracts::HostCacheSharing::PerSession,
             theme: ColorTheme::Current,
             use_last_used_model_as_default: false,
         };
@@ -761,7 +762,7 @@ async fn test_handle_enter_key_opens_launch_configuration_list_editor_in_setting
 }
 
 #[tokio::test]
-async fn test_settings_previous_key_wraps_to_auto_address_comments_row() {
+async fn test_settings_previous_key_wraps_to_share_host_caches_row() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     app.tabs.set(Tab::Settings);
@@ -780,7 +781,7 @@ async fn test_settings_previous_key_wraps_to_auto_address_comments_row() {
         app.settings_presentation
             .snapshot(&app.settings.view())
             .selected_row_index,
-        Some(8)
+        Some(9)
     );
 }
 

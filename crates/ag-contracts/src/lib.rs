@@ -27,9 +27,9 @@ pub use activity::{
 pub use contract::MockAgentChannel;
 pub use contract::{
     AgentChannel, AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentError, AgentFuture,
-    AgentRequestKind, ContextCompaction, LiveTranscript, SessionRef, StartSessionRequest,
-    TurnContinuation, TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
-    normalize_instruction_conversation_id,
+    AgentRequestKind, ContextCompaction, HostCacheSharing, LiveTranscript, SessionRef,
+    StartSessionRequest, TurnContinuation, TurnContinuationParts, TurnEvent, TurnRequest,
+    TurnResult, normalize_instruction_conversation_id,
 };
 pub use execution_policy::{ExecutionPolicy, McpPolicy, ToolPolicy};
 pub use input_size::is_input_size_error;

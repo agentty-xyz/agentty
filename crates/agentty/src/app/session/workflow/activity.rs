@@ -107,7 +107,8 @@ impl TurnActivity {
         let text = match notice {
             TurnNotice::SandboxUnavailable { .. }
             | TurnNotice::SandboxAvailable
-            | TurnNotice::LikelySandboxDenial => return,
+            | TurnNotice::LikelySandboxDenial
+            | TurnNotice::HostCachesNotShared { .. } => return,
             TurnNotice::ContextCompacted { model: Some(model) } => TranscriptNotice::Context
                 .format(format_args!(
                     "Summarized earlier turns with `{model}` to fit the context window."

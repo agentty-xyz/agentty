@@ -60,6 +60,34 @@ fn the_warning_is_shown_once_per_change_of_the_sandbox_state() {
 }
 
 #[test]
+fn caches_kept_per_session_are_named_once_per_session_and_set() {
+    // Arrange
+    let mut sandbox = SandboxNotices::default();
+    let kept = |caches: &[&str]| TurnNotice::HostCachesNotShared {
+        caches: caches.iter().map(ToString::to_string).collect(),
+    };
+    let first = sandbox
+        .notice(&kept(&["Cargo", "npm"]), &[])
+        .expect("first notice");
+    let shown = transcript(&[&first, "\n[Commit] committed\n"]);
+
+    // Act
+    let repeated = sandbox.notice(&kept(&["Cargo", "npm"]), &shown);
+    let changed = sandbox.notice(&kept(&["Cargo"]), &shown);
+
+    // Assert
+    assert!(
+        first.starts_with(
+            "\n[Sandbox] `Share Host Caches` is on, but these caches stay per session"
+        ),
+        "{first}"
+    );
+    assert!(first.ends_with(": Cargo, npm.\n"), "{first}");
+    assert_eq!(repeated, None);
+    assert!(changed.is_some_and(|text| text.ends_with(": Cargo.\n")));
+}
+
+#[test]
 fn a_working_sandbox_adds_nothing_to_a_session_without_warnings() {
     // Arrange
     let mut sandbox = SandboxNotices::default();

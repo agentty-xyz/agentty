@@ -106,6 +106,7 @@ impl SettingsTestHarness {
                 include_coauthored_by_agentty: false,
                 launch_configuration: String::new(),
                 max_concurrent_subagents: SubagentLimit::Two,
+                host_caches: ag_contracts::HostCacheSharing::PerSession,
                 theme: ColorTheme::Current,
                 use_last_used_model_as_default: false,
             },

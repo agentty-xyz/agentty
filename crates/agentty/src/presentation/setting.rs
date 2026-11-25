@@ -1,5 +1,7 @@
 //! Presentation-owned settings screen state and input translation.
 
+use ag_contracts::HostCacheSharing;
+
 use crate::domain::agent::{
     AgentKind, AgentSelection, HarnessModelOption, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -28,6 +30,9 @@ pub(crate) struct SettingsView {
     pub(crate) default_smart_speed_mode: SpeedMode,
     /// Ready harness models the Fast model may use.
     pub(crate) fast_harness_models: Vec<HarnessModelOption>,
+    /// Which dependency caches the active project's sandboxed harness
+    /// sessions use.
+    pub(crate) host_caches: HostCacheSharing,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
     pub(crate) max_concurrent_subagents: SubagentLimit,
@@ -59,6 +64,7 @@ pub(crate) enum SettingsOperation {
     IncludeCoauthoredByAgentty(bool),
     LaunchConfiguration(String),
     MaxConcurrentSubagents(SubagentLimit),
+    ShareHostCaches(HostCacheSharing),
     Theme(ColorTheme),
 }
 
@@ -744,6 +750,9 @@ fn settings_operation_for_primary_selector(
         (SettingRow::MaxConcurrentSubagents, SettingSelectorValue::SubagentLimit(value)) => {
             Some(SettingsOperation::MaxConcurrentSubagents(value))
         }
+        (SettingRow::ShareHostCaches, SettingSelectorValue::Bool(value)) => Some(
+            SettingsOperation::ShareHostCaches(HostCacheSharing::from_enabled(value)),
+        ),
         (SettingRow::Theme, SettingSelectorValue::Theme(value)) => {
             Some(SettingsOperation::Theme(value))
         }
@@ -767,11 +776,12 @@ enum SettingRow {
     IncludeCoauthoredByAgentty,
     LaunchConfiguration,
     MaxConcurrentSubagents,
+    ShareHostCaches,
     Theme,
 }
 
 impl SettingRow {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Theme,
         Self::MaxConcurrentSubagents,
         Self::DefaultSmartModel,
@@ -781,9 +791,10 @@ impl SettingRow {
         Self::LaunchConfiguration,
         Self::DefaultResponseStyle,
         Self::AutoAddressReviewComments,
+        Self::ShareHostCaches,
     ];
     const GLOBAL: [Self; 2] = [Self::Theme, Self::MaxConcurrentSubagents];
-    const PROJECT: [Self; 7] = [
+    const PROJECT: [Self; 8] = [
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
@@ -791,6 +802,7 @@ impl SettingRow {
         Self::LaunchConfiguration,
         Self::DefaultResponseStyle,
         Self::AutoAddressReviewComments,
+        Self::ShareHostCaches,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
 
@@ -818,6 +830,7 @@ impl SettingRow {
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::LaunchConfiguration => "Launch Configurations",
             Self::MaxConcurrentSubagents => "Max Subagents",
+            Self::ShareHostCaches => "Share Host Caches",
             Self::Theme => "Theme",
         }
     }
@@ -980,6 +993,9 @@ impl SettingSelectorOption {
             (SettingRow::MaxConcurrentSubagents, SettingSelectorValue::SubagentLimit(value)) => {
                 view.max_concurrent_subagents == value
             }
+            (SettingRow::ShareHostCaches, SettingSelectorValue::Bool(value)) => {
+                view.host_caches.is_shared() == value
+            }
             (SettingRow::Theme, SettingSelectorValue::Theme(value)) => view.theme == value,
             _ => false,
         }
@@ -1051,6 +1067,13 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
         SettingRow::AutoAddressReviewComments | SettingRow::IncludeCoauthoredByAgentty => {
             bool_selector_options()
         }
+        SettingRow::ShareHostCaches => [false, true]
+            .into_iter()
+            .map(|value| SettingSelectorOption {
+                label: share_host_caches_display(value),
+                value: SettingSelectorValue::Bool(value),
+            })
+            .collect(),
         SettingRow::DefaultSmartModel => {
             let mut options = model_selector_options(view);
             options.push(SettingSelectorOption {
@@ -1183,6 +1206,7 @@ fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
             "{} (applies after restart)",
             view.max_concurrent_subagents.as_str()
         ),
+        SettingRow::ShareHostCaches => share_host_caches_display(view.host_caches.is_shared()),
         SettingRow::Theme => view.theme.label().to_string(),
     }
 }
@@ -1192,6 +1216,16 @@ fn bool_setting_display(value: bool) -> String {
         "Enabled".to_string()
     } else {
         "Disabled".to_string()
+    }
+}
+
+/// Words the host-cache sharing toggle with its risk, so enabling it is
+/// never a blind choice.
+fn share_host_caches_display(value: bool) -> String {
+    if value {
+        "Enabled (sessions can tamper with caches all your builds use)".to_string()
+    } else {
+        "Disabled (per-session caches)".to_string()
     }
 }
 

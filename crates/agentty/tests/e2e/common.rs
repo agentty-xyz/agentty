@@ -1623,12 +1623,13 @@ pub(crate) enum SettingsRow {
     LaunchConfigurations,
     DefaultResponseStyle,
     AutoAddressComments,
+    ShareHostCaches,
 }
 
 impl SettingsRow {
     /// Rows in on-screen order, global rows first. Keep aligned with the
     /// Settings tab.
-    const ORDER: [Self; 9] = [
+    const ORDER: [Self; 10] = [
         Self::Theme,
         Self::MaxSubagents,
         Self::DefaultSmartModel,
@@ -1638,6 +1639,7 @@ impl SettingsRow {
         Self::LaunchConfigurations,
         Self::DefaultResponseStyle,
         Self::AutoAddressComments,
+        Self::ShareHostCaches,
     ];
 
     /// Returns the `snake_case` name used for this row's journey.
@@ -1652,6 +1654,7 @@ impl SettingsRow {
             Self::LaunchConfigurations => "launch_configurations",
             Self::DefaultResponseStyle => "default_response_style",
             Self::AutoAddressComments => "auto_address_comments",
+            Self::ShareHostCaches => "share_host_caches",
         }
     }
 }

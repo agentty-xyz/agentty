@@ -142,10 +142,7 @@ async fn run_session_turn(
     let profile = req.request_kind.protocol_profile();
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
-    let sandbox = config
-        .session_sandbox(&session_id, &req, &environment)
-        .await?;
-    let options = RunOptions::new(profile, req.permission_mode, &environment, &sandbox)?;
+    let options = session_run_options(config, &session_id, &req, &environment, &events).await?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
         .map_err(failure("Failed to apply the response style"))?
         .agent_text();
@@ -237,6 +234,29 @@ async fn run_session_turn(
         provider_conversation_id,
         usage,
     })
+}
+
+/// Prepares the session's command sandbox for `req`, sharing the host's
+/// dependency caches when the turn asks for it, reports the caches it keeps
+/// per session instead on `events`, and returns the turn's run options.
+///
+/// # Errors
+/// Returns an error when the sandbox cannot be prepared or the options are
+/// rejected.
+async fn session_run_options(
+    config: &NativeHarnessConfig,
+    session_id: &str,
+    req: &TurnRequest,
+    environment: &BTreeMap<String, String>,
+    events: &mpsc::UnboundedSender<TurnEvent>,
+) -> Result<RunOptions, String> {
+    let sandbox = config.session_sandbox(session_id, req, environment).await?;
+    if let Some(notice) = sandbox.notice() {
+        let _ = events.send(TurnEvent::Notice(notice));
+    }
+    let profile = req.request_kind.protocol_profile();
+
+    RunOptions::new(profile, req.permission_mode, environment, &sandbox)
 }
 
 /// Forwards, in stream order, the output a run streams as

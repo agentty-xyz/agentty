@@ -5,7 +5,9 @@ use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentError, MockAgentChannel, PermissionMode, ProviderCallBudget};
+use ag_contracts::{
+    AgentError, HostCacheSharing, MockAgentChannel, PermissionMode, ProviderCallBudget,
+};
 use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_protocol::QuestionItem;
 use ag_session::{ExecutionGraph, GraphPostProcessing, GraphWorkspaceAccess, TaskAttemptStatus};
@@ -526,6 +528,25 @@ async fn graph_task_command(
             .expect("claim"),
     );
     let operation_id = task_operation_id(&dispatch.record.execution).to_string();
+    // The session's project shares host caches, which graph turns carry.
+    if let Some(project_id) = context
+        .db
+        .sessions()
+        .load_session_project_id(&context.session_id)
+        .await
+        .expect("project lookup")
+    {
+        context
+            .db
+            .settings()
+            .upsert_project_setting(
+                project_id,
+                crate::domain::setting::SettingName::ShareHostCaches,
+                "true",
+            )
+            .await
+            .expect("host-cache sharing");
+    }
     let cancellation = CancellationToken::new();
     let factory = graph_factory(scenario, &cancellation);
     if scenario == "pre-canceled" {
@@ -585,6 +606,7 @@ fn graph_factory(
             .returning(move |_, request, _| {
                 assert_eq!(request.continuation.provider_conversation_id(), None);
                 assert_eq!(request.continuation.replay_transcript(), None);
+                assert_eq!(request.host_caches, HostCacheSharing::Shared);
                 Box::pin(async move {
                     if scenario == "provider" {
                         return Err(AgentError::Backend("provider failed".into()));

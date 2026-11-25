@@ -73,6 +73,9 @@ pub struct BashConfig {
     /// [`Self::with_excluded_environment`] values.
     pub(crate) excluded_environment: BTreeMap<String, String>,
     pub(crate) executor: Option<Arc<dyn BashExecutor>>,
+    /// Resolved identities of the host caches, which preparation requires
+    /// each command's resolution to match.
+    pub(crate) host_cache_pins: HostCachePins,
     pub(crate) snapshot: BashPolicySnapshot,
 }
 
@@ -220,6 +223,7 @@ impl BashConfig {
             environment: BTreeMap::new(),
             excluded_environment: BTreeMap::new(),
             executor,
+            host_cache_pins: HostCachePins::default(),
             snapshot: BashPolicySnapshot {
                 bash,
                 capabilities: BTreeSet::new(),
@@ -231,6 +235,8 @@ impl BashConfig {
                 external_reads: Vec::new(),
                 git_branch: None,
                 hidden_paths: Vec::new(),
+                host_cache_directories: Vec::new(),
+                host_cache_files: Vec::new(),
                 host_information: false,
                 launcher,
                 linux_bubblewrap: None,
@@ -363,7 +369,9 @@ impl BashConfig {
     /// directory. Point tool caches at the
     /// temporary directory through their environment instead, for example
     /// `CARGO_HOME`, `npm_config_cache`, `GOMODCACHE`, `GOCACHE`, and
-    /// `PIP_CACHE_DIR`.
+    /// `PIP_CACHE_DIR`; only where the user accepts the risk, share the
+    /// host's own caches with the narrower
+    /// [`Self::with_host_cache_directory`].
     ///
     /// A root must be the directory itself rather than a link to one, and
     /// commands cannot move or remove the root itself.
@@ -385,6 +393,90 @@ impl BashConfig {
             return Err(BashError::InvalidPolicy);
         }
         self.snapshot.writable_roots.push(path);
+
+        Ok(self)
+    }
+
+    /// Grants reads and writes beneath an existing directory of the host's
+    /// own dependency caches, such as `~/.cargo/registry`, `~/.npm`, or
+    /// `~/go/pkg/mod`: the one narrow exception to the rule that keeps
+    /// [`Self::with_writable_root`] out of home directories.
+    ///
+    /// It shares exactly the trust that unsandboxed agents get: commands
+    /// can tamper with packages that other sessions and the host's own
+    /// builds later use without re-verifying them, such as a cached
+    /// `.crate` whose `build.rs` then runs on the host, or Git configuration
+    /// planted in a cached repository that the host's Git later reads, even
+    /// from a Git-aware shell prompt. Grant it only when the user explicitly
+    /// accepts that for the sessions concerned.
+    ///
+    /// Preparation resolves links and refuses a directory that is a home
+    /// directory or contains one; that is, contains, or lies inside a
+    /// hidden path or a credential store [`Self::with_full_disk_read`]
+    /// hides, so `~/.cargo`, which holds Cargo's credentials, is refused
+    /// while `~/.cargo/registry` is allowed; that contains or lies inside a
+    /// directory on the `PATH` of the harness or the commands, such as
+    /// `~/.cargo/bin`, where planted programs would run; that overlaps the
+    /// workspace, its Git metadata, the temporary directory, another write
+    /// grant or host cache, or a system or toolchain directory, as for
+    /// [`Self::with_writable_root`]; that lies in a home's `Library`, as for
+    /// [`Self::with_temporary_directory`], which on macOS includes the
+    /// default Go build and pip caches under `~/Library/Caches`; or that has
+    /// a `.git` component. It refuses every host cache when the account has
+    /// no home directory.
+    ///
+    /// The directory is pinned now: it must be the directory itself rather
+    /// than a link to one, and each command is refused once its path
+    /// resolves elsewhere, names another directory, or differs in letter
+    /// case from the directory on disk, so a command that replaces the
+    /// directory with a link cannot redirect the grant for later commands.
+    /// Commands cannot remove, rename, or replace the directory itself
+    /// either, as for every write grant: macOS denies it by rule and checks
+    /// its identity at launch, and Linux mounts it.
+    ///
+    /// # Errors
+    /// Rejects relative paths, traversal, `/`, Git metadata components, a
+    /// path that is a link or does not name an existing directory, a
+    /// directory given twice, and more than 64 directories.
+    pub fn with_host_cache_directory(mut self, path: PathBuf) -> Result<Self, BashError> {
+        if self.snapshot.host_cache_directories.contains(&path)
+            || self.snapshot.host_cache_directories.len() >= MAX_PATH_GRANTS
+        {
+            return Err(BashError::InvalidPolicy);
+        }
+        let pin = HostCachePin::resolve(&path, true)?;
+        self.snapshot.host_cache_directories.push(path);
+        self.host_cache_pins.directories.push(pin);
+
+        Ok(self)
+    }
+
+    /// Grants reading and writing the contents of one existing regular
+    /// file of the host's dependency caches, such as Cargo's
+    /// `.package-cache` lock file, which commands must lock to download
+    /// into a cache [`Self::with_host_cache_directory`] shares without
+    /// racing the host's own tools. Commands can open, lock, and write the
+    /// file but cannot remove, rename, or replace it. The file is pinned
+    /// now, as for [`Self::with_host_cache_directory`].
+    ///
+    /// Preparation refuses the same places as for
+    /// [`Self::with_host_cache_directory`], including a file inside a host
+    /// cache directory, and anything but a regular file with a single link
+    /// named by its own path.
+    ///
+    /// # Errors
+    /// Rejects relative paths, traversal, `/`, Git metadata components, a
+    /// path that is a link or does not name an existing regular file, a
+    /// file given twice, and more than 64 files.
+    pub fn with_host_cache_file(mut self, path: PathBuf) -> Result<Self, BashError> {
+        if self.snapshot.host_cache_files.contains(&path)
+            || self.snapshot.host_cache_files.len() >= MAX_PATH_GRANTS
+        {
+            return Err(BashError::InvalidPolicy);
+        }
+        let pin = HostCachePin::resolve(&path, false)?;
+        self.snapshot.host_cache_files.push(path);
+        self.host_cache_pins.files.push(pin);
 
         Ok(self)
     }
@@ -457,8 +549,8 @@ impl BashConfig {
     /// [`Self::with_excluded_environment`] passes; never the values
     /// [`Self::with_environment`] grants or the temporary directory. The
     /// harness refuses the turn when the executable or one of those values
-    /// lies inside the workspace, the temporary directory, or a writable
-    /// root.
+    /// lies inside the workspace, the temporary directory, a writable root,
+    /// or a host cache.
     /// The excluded command's record names the unsandboxed executor. It
     /// applies only to a configuration whose executor enforces isolation,
     /// and the model-facing `bash` description names the program.
@@ -817,6 +909,12 @@ pub(crate) struct BashPolicySnapshot {
     /// [`BashConfig::with_hidden_path`] paths.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) hidden_paths: Vec<PathBuf>,
+    /// [`BashConfig::with_host_cache_directory`] directories.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) host_cache_directories: Vec<PathBuf>,
+    /// [`BashConfig::with_host_cache_file`] files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) host_cache_files: Vec<PathBuf>,
     pub(crate) host_information: bool,
     pub(crate) launcher: Option<PathBuf>,
     pub(crate) linux_bubblewrap: Option<PathBuf>,
@@ -853,6 +951,57 @@ pub(crate) enum Capability {
     Network,
     /// [`BashConfig::with_system_reads`].
     SystemReads,
+}
+
+/// Resolved identities of the host caches a configuration grants, in grant
+/// order.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct HostCachePins {
+    /// [`BashConfig::with_host_cache_directory`] directories.
+    pub(crate) directories: Vec<HostCachePin>,
+    /// [`BashConfig::with_host_cache_file`] files.
+    pub(crate) files: Vec<HostCachePin>,
+}
+
+/// The resolved path and `(device, inode)` identity of one host cache when
+/// it was granted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HostCachePin {
+    pub(crate) node: (u64, u64),
+    pub(crate) resolved: PathBuf,
+}
+
+impl HostCachePin {
+    /// Resolves `path`, which must be a valid grant path that is not a link
+    /// and names an existing directory, or regular file without
+    /// `directory`.
+    ///
+    /// # Errors
+    /// Returns [`BashError::InvalidPolicy`] for any other path.
+    fn resolve(path: &Path, directory: bool) -> Result<Self, BashError> {
+        let resolved = std::fs::symlink_metadata(path)
+            .ok()
+            .filter(|metadata| valid_grant_path(path) && !metadata.file_type().is_symlink())
+            .and_then(|_| std::fs::canonicalize(path).ok());
+        let metadata = resolved
+            .as_ref()
+            .and_then(|resolved| std::fs::metadata(resolved).ok())
+            .filter(|metadata| {
+                if directory {
+                    metadata.is_dir()
+                } else {
+                    metadata.is_file()
+                }
+            });
+        let (Some(resolved), Some(metadata)) = (resolved, metadata) else {
+            return Err(BashError::InvalidPolicy);
+        };
+
+        Ok(Self {
+            node: (metadata.dev(), metadata.ino()),
+            resolved,
+        })
+    }
 }
 
 fn native_executor_identity() -> String {
@@ -973,6 +1122,12 @@ fn valid_variable(environment: &BTreeMap<String, String>, name: &str, value: &st
             .saturating_add(value.len())
             <= 65536
         && !environment.contains_key(name)
+}
+
+/// Returns whether `path` may name a host cache: absolute, without
+/// traversal or Git metadata components, and not `/`.
+fn valid_grant_path(path: &Path) -> bool {
+    valid_path(path, true) && path.parent().is_some() && !has_git_component(path)
 }
 
 fn has_git_component(path: &Path) -> bool {

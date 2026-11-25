@@ -519,6 +519,56 @@ fn excluded_commands_search_only_absolute_directories_commands_cannot_write() {
 }
 
 #[test]
+fn excluded_commands_refuse_programs_and_values_in_host_caches() {
+    // Arrange
+    let cache = tempfile::tempdir().expect("host cache");
+    let root = cache.path().canonicalize().expect("canonical cache");
+    let tool = root.join("tool");
+    std::fs::write(&tool, "#!/bin/sh\n").expect("program");
+    std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("mode");
+    std::fs::write(root.join("cache.lock"), "").expect("cache file");
+    let configuration = || {
+        BashConfig::for_executor(
+            Arc::new(crate::bash::UnsandboxedExecutor::without_isolation()),
+            "/bin/bash".into(),
+            "revision".into(),
+            Duration::from_secs(5),
+            1024,
+        )
+        .expect("configuration")
+        .with_host_information()
+        .with_excluded_command("/bin/ls".into())
+        .expect("excluded command")
+    };
+    let workspace = std::path::Path::new("/workspace");
+
+    // Act
+    let in_directory = BashTool::excluded_configuration(
+        &configuration()
+            .with_excluded_command(tool)
+            .expect("excluded command")
+            .with_host_cache_directory(root.clone())
+            .expect("host cache"),
+        workspace,
+    )
+    .map(|_| ());
+    let in_file = BashTool::excluded_configuration(
+        &configuration()
+            .with_host_cache_file(root.join("cache.lock"))
+            .expect("host cache file")
+            .with_excluded_environment("LOCK".into(), root.join("cache.lock").display().to_string())
+            .expect("excluded value"),
+        workspace,
+    )
+    .map(|_| ());
+
+    // Assert
+    assert_eq!(in_directory, Err(BashError::InvalidPolicy));
+    assert_eq!(in_file, Err(BashError::InvalidPolicy));
+}
+
+#[test]
 fn excluded_values_resolve_paths_that_do_not_exist_yet() {
     // Arrange
     let directory = tempfile::tempdir().expect("fixture directory");

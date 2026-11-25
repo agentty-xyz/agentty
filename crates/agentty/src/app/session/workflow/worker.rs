@@ -824,6 +824,8 @@ impl SessionWorkerRebaseAssistClient {
             reasoning_level,
             request_kind: AgentRequestKind::UtilityPrompt,
             response_style: ag_contracts::ResponseStyle::default(),
+            host_caches: SessionTaskService::load_host_cache_sharing(&self.db, &self.session_id)
+                .await,
             speed_mode,
         };
         let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();

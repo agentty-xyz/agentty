@@ -5,9 +5,9 @@ use std::num::NonZeroUsize;
 use std::process::Command;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, ExecutionPolicy, McpPolicy, OneShotRequest,
-    PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy, TurnContinuation,
-    TurnRequest,
+    AgentDefinitionPrompt, AgentRequestKind, ExecutionPolicy, HostCacheSharing, McpPolicy,
+    OneShotRequest, PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy,
+    TurnContinuation, TurnRequest,
 };
 use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel, HarnessModelStatus};
 
@@ -190,6 +190,7 @@ async fn native_harness_configuration_runs_harness_work_in_process() {
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::Concise,
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::Normal,
     };
     let utility = OneShotRequest {

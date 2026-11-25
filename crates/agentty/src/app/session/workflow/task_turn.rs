@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use super::base_branch::BaseBranchSnapshot;
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::worker::{SessionWorkerContext, TurnMetadata};
-use super::{StatusTransition, isolation, post_turn, turn};
+use super::{SessionTaskService, StatusTransition, isolation, post_turn, turn};
 use crate::app::service::SessionRunFactory;
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, spawn};
@@ -281,6 +281,8 @@ async fn prepare(
             AgentRequestKind::SessionResume
         },
         response_style: turn::load_session_response_style(&context.db, &context.session_id).await,
+        host_caches: SessionTaskService::load_host_cache_sharing(&context.db, &context.session_id)
+            .await,
         speed_mode: turn::load_session_speed_mode(&context.db, &context.session_id).await,
     };
 

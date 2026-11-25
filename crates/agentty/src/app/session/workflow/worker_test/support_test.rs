@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use ag_contracts::test_support::token_usage;
 use ag_contracts::{
-    AgentError, AgentRequestKind, MockAgentChannel, OneShotSubmission, PermissionMode, TurnResult,
+    AgentError, AgentRequestKind, HostCacheSharing, MockAgentChannel, OneShotSubmission,
+    PermissionMode, TurnResult,
 };
 use ag_forge as forge;
 use ag_git::{BranchPushOutcome, DiffStats, MockGitClient, RebaseStepResult};
@@ -1163,13 +1164,22 @@ pub(super) fn write_rebase_conflict_file(base_dir: &std::path::Path) {
     .expect("failed to write conflict file");
 }
 
-/// Seeds one rebasing session with existing provider conversation ids.
+/// Seeds one rebasing session with existing provider conversation ids, in a
+/// project that shares host caches.
 pub(super) async fn seed_existing_session_rebase_metadata(db: &AppRepositories) {
     let project_id = db
         .projects()
         .upsert_project("/tmp/project", Some("main".to_string()))
         .await
         .expect("failed to upsert project");
+    db.settings()
+        .upsert_project_setting(
+            project_id,
+            crate::domain::setting::SettingName::ShareHostCaches,
+            "true",
+        )
+        .await
+        .expect("failed to persist host-cache sharing");
     db.sessions()
         .insert_session(
             "sess1",
@@ -1202,6 +1212,7 @@ pub(super) fn mock_existing_session_rebase_channel(
             session_id == "sess1"
                 && request.request_kind == AgentRequestKind::UtilityPrompt
                 && request.permission_mode == PermissionMode::AutoEdit
+                && request.host_caches == HostCacheSharing::Shared
                 && request.main_checkout_root.as_ref() == Some(&main_checkout_root)
                 && request.continuation.provider_conversation_id() == Some("thread-before")
                 && request.continuation.persisted_instruction_conversation_id()

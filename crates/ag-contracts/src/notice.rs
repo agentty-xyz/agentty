@@ -35,4 +35,12 @@ pub enum TurnNotice {
     /// own output can trigger it; hosts never rerun a command outside the
     /// sandbox because of it.
     LikelySandboxDenial,
+    /// The turn asked to share the host's dependency caches, but these stay
+    /// per session because sharing them could not be confined: a cache that
+    /// is a link, lies outside the home directory or on `PATH`, or whose
+    /// lock file has another link.
+    HostCachesNotShared {
+        /// The caches kept per session, named for the user, such as `Cargo`.
+        caches: Vec<String>,
+    },
 }
