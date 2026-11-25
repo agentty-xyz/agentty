@@ -13,12 +13,12 @@
 use ag_session::{
     AgentSelection, AgentSelectionMetadata, CreateSessionMode, ExecutionGraphStatus,
     ExtendGraphBudgetRequest, GraphNodeProgress, GraphNodeStatus, GraphResultState, HostContext,
-    HostProjectStatus, HostProjectSync, HostProjectSyncPhase, QuestionItem, ReviewRequestSummary,
-    Session, SessionDiffFile, SessionDiffFileStatus, SessionError, SessionFileEntry,
-    SessionFocusedReview, SessionGraph, SessionGraphAction, SessionGraphActionKind,
-    SessionGraphActionRequest, SessionGraphNode, SessionGraphProposal, SessionGraphProposalPhase,
-    SessionGraphSummary, SessionGraphs, SessionId, SessionListEntry, SessionMessage,
-    SessionMessageKind, SessionService, session_branch,
+    HostProject, HostProjectStatus, HostProjectSync, HostProjectSyncPhase, ProjectScope,
+    QuestionItem, ReviewRequestSummary, Session, SessionDiffFile, SessionDiffFileStatus,
+    SessionError, SessionFileEntry, SessionFocusedReview, SessionGraph, SessionGraphAction,
+    SessionGraphActionKind, SessionGraphActionRequest, SessionGraphNode, SessionGraphProposal,
+    SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs, SessionId, SessionListEntry,
+    SessionMessage, SessionMessageKind, SessionService, session_branch,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -61,6 +61,15 @@ pub enum ClientFrame {
 /// for remote devices. A server offers an optional request only through its
 /// capability, and every request that names a session reaches only sessions
 /// the host lists.
+///
+/// The requests about a project, `get_host`, `list_project_files`,
+/// `list_sessions`, `sync_project`, and `create_session`, are for the
+/// host's active project, read when the host serves the request, unless they
+/// name another in `project_id`, which reaches only a project the host
+/// lists. A client sends `project_id` only to a server that offers the
+/// `projects` capability: an older server ignores the field it does not
+/// know and answers for its active project, so a client also checks that
+/// the project an answer names is the one it asked for.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum RemoteRequest {
@@ -99,12 +108,19 @@ pub enum RemoteRequest {
         /// Session to cancel.
         session_id: RequestedSessionId,
     },
-    /// Creates a session in the host's active project, with its worktree
-    /// and branch. Offered through the `create_session` capability.
+    /// Creates a session in the host's active project, or the one
+    /// `project_id` names, with its worktree and branch. Offered through the
+    /// `create_session` capability.
     CreateSession {
-        /// How the session runs; one of the modes `get_host` lists.
+        /// How the session runs; one of the modes `get_host` lists for the
+        /// same project.
         #[serde(default)]
         mode: RemoteSessionMode,
+        /// Listed project to create the session in, as `list_projects`
+        /// names it; absent for the active project. Understood only by a
+        /// server that offers `projects`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<RequestedProjectId>,
     },
     /// Starts model work that proposes an execution graph for the task in
     /// `message`, as the terminal's `/graph` does. The proposal appears in
@@ -118,9 +134,15 @@ pub enum RemoteRequest {
         /// Session that owns the proposal.
         session_id: RequestedSessionId,
     },
-    /// Describes the host's active project. Offered through the `host`
-    /// capability.
-    GetHost,
+    /// Describes the host's active project, or the one `project_id` names,
+    /// as new sessions in it start. Offered through the `host` capability.
+    GetHost {
+        /// Listed project to describe, as `list_projects` names it; absent
+        /// for the active project. Understood only by a server that offers
+        /// `projects`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<RequestedProjectId>,
+    },
     /// Reads what a session changes against its base branch. Without `path`
     /// the response lists the changed files; with `path` it also carries
     /// that file's patch. Offered through the `diff` capability.
@@ -157,11 +179,22 @@ pub enum RemoteRequest {
         /// Session to read.
         session_id: RequestedSessionId,
     },
-    /// Lists the names of the files and directories in the host's active
-    /// project checkout, directories first, without their contents, for
-    /// mentioning files in a new session's first message. Offered through
-    /// the `project_files` capability.
-    ListProjectFiles,
+    /// Lists the names of the files and directories in the checkout of the
+    /// host's active project, or the one `project_id` names, directories
+    /// first, without their contents, for mentioning files in a new
+    /// session's first message. Offered through the `project_files`
+    /// capability.
+    ListProjectFiles {
+        /// Listed project whose checkout to list, as `list_projects` names
+        /// it; absent for the active project. Understood only by a server
+        /// that offers `projects`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<RequestedProjectId>,
+    },
+    /// Lists the projects the host lists, in its project switcher's order:
+    /// its active project and every other one the switcher offers. Offered
+    /// through the `projects` capability.
+    ListProjects,
     /// Lists the names of the files and directories in a session's worktree,
     /// directories first, without their contents. A session without a
     /// worktree lists nothing. Offered through the `files` capability.
@@ -169,8 +202,15 @@ pub enum RemoteRequest {
         /// Session whose worktree to list.
         session_id: RequestedSessionId,
     },
-    /// Lists the host's loaded sessions.
-    ListSessions,
+    /// Lists the sessions of the host's active project, or of the one
+    /// `project_id` names, with that project's status.
+    ListSessions {
+        /// Listed project whose sessions to list, as `list_projects` names
+        /// it; absent for the active project. Understood only by a server
+        /// that offers `projects`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<RequestedProjectId>,
+    },
     /// Merges a review-ready session into its base branch in the host's
     /// checkout. Offered through the `merge` capability.
     MergeSession {
@@ -205,13 +245,19 @@ pub enum RemoteRequest {
         /// Session whose turn stops.
         session_id: RequestedSessionId,
     },
-    /// Syncs the branch of the host's active project with its upstream: a
-    /// pull with rebase, then a push, in the host's checkout with the
-    /// user's Git credentials. A conflict starts an agent-assisted
-    /// resolution. The `project` of a `list_sessions` response reports the
-    /// progress and the outcome. Offered through the `sync_project`
-    /// capability.
-    SyncProject,
+    /// Syncs the branch of the host's active project, or of the one
+    /// `project_id` names, with its upstream: a pull with rebase, then a
+    /// push, in that project's checkout with the user's Git credentials. A
+    /// conflict starts an agent-assisted resolution. The `project` of a
+    /// `list_sessions` response for the same project reports the progress
+    /// and the outcome. Offered through the `sync_project` capability.
+    SyncProject {
+        /// Listed project to sync, as `list_projects` names it; absent for
+        /// the active project. Understood only by a server that offers
+        /// `projects`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<RequestedProjectId>,
+    },
     /// Rebases the session branch onto its base branch, or queues the rebase
     /// behind a running turn. A conflict starts an agent-assisted resolution
     /// turn. Offered through the `sync` capability.
@@ -271,21 +317,20 @@ impl RequestedSessionId {
     ///
     /// Remote clients see only the listed sessions, so every request that
     /// names a session goes through this check before it reaches the host.
+    /// It asks the host once, through
+    /// [`SessionService::is_session_listed`], whichever listed project the
+    /// session belongs to.
     ///
     /// # Errors
     /// Returns [`SessionError::NotFound`] for a session the host does not
-    /// list, and the host's error when listing fails.
+    /// list, and the host's error when it cannot tell.
     pub(crate) async fn listed(self, sessions: &SessionService) -> Result<SessionId, SessionError> {
-        let is_listed = sessions
-            .list_sessions()
-            .await?
-            .iter()
-            .any(|summary| summary.id.as_str() == self.0);
-        if !is_listed {
+        let session_id = SessionId::from(self.0);
+        if !sessions.is_session_listed(&session_id).await? {
             return Err(SessionError::NotFound);
         }
 
-        Ok(SessionId::from(self.0))
+        Ok(session_id)
     }
 }
 
@@ -293,6 +338,68 @@ impl From<&str> for RequestedSessionId {
     fn from(session_id: &str) -> Self {
         Self(session_id.to_string())
     }
+}
+
+/// A project id as a device sent it: the decimal `id` of an entry
+/// `list_projects` returned.
+///
+/// A request reaches the host's project methods only with a
+/// [`ProjectScope`], and [`Self::listed`] is the only way to a
+/// [`ProjectScope::Project`] from a device's id, so a request cannot reach
+/// a project the host does not list. The id inside stays private to this
+/// module. It travels as a string, so no client has to keep a large integer
+/// exact.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct RequestedProjectId(String);
+
+impl RequestedProjectId {
+    /// Returns the scope of the project when the host lists it, and a
+    /// not-found error otherwise.
+    ///
+    /// Remote clients reach only the listed projects, so every request
+    /// that names a project goes through this check before it reaches the
+    /// host. An id that is not the decimal form of a project id is not
+    /// found without asking the host.
+    ///
+    /// # Errors
+    /// Returns a not-found error for a project the host does not list, and
+    /// the host's error when listing fails.
+    pub(crate) async fn listed(
+        &self,
+        sessions: &SessionService,
+    ) -> Result<ProjectScope, SessionError> {
+        let id = self
+            .0
+            .parse::<i64>()
+            .ok()
+            .filter(|id| id.to_string() == self.0)
+            .ok_or_else(project_not_found)?;
+        let is_listed = sessions
+            .list_projects()
+            .await?
+            .iter()
+            .any(|project| project.id == id);
+        if !is_listed {
+            return Err(project_not_found());
+        }
+
+        Ok(ProjectScope::Project(id))
+    }
+}
+
+impl From<&str> for RequestedProjectId {
+    fn from(project_id: &str) -> Self {
+        Self(project_id.to_string())
+    }
+}
+
+/// Error returned for a project the host does not list.
+const PROJECT_NOT_FOUND: &str = "Project not found";
+
+/// The error for a project the host does not list.
+fn project_not_found() -> SessionError {
+    SessionError::Operation(PROJECT_NOT_FOUND.to_string())
 }
 
 /// How a session created remotely runs.
@@ -654,7 +761,8 @@ pub enum RemoteResponse {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         version: String,
     },
-    /// The host's active project, where new sessions are created.
+    /// The project a `get_host` request is for, where `create_session` for
+    /// the same project creates new sessions.
     Host {
         /// Branch new sessions start from.
         base_branch: String,
@@ -667,10 +775,19 @@ pub enum RemoteResponse {
         /// Models a session can switch to now, in display order.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         models: Vec<RemoteModelOption>,
-        /// Display name of the active project.
+        /// Display name of the project.
         project: String,
+        /// Identifier of the project, as `list_projects` names it. Absent
+        /// from older servers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
         /// Modes `create_session` accepts now, in display order.
         session_modes: Vec<RemoteSessionMode>,
+    },
+    /// The projects the host lists, answering `list_projects`.
+    Projects {
+        /// Listed projects in the host's project switcher's order.
+        projects: Vec<RemoteProjectEntry>,
     },
     /// One session snapshot, or `None` when it does not exist.
     Session {
@@ -693,10 +810,11 @@ pub enum RemoteResponse {
         /// Review request as the forge reported it.
         review_request: RemoteReviewRequest,
     },
-    /// The host's loaded sessions in display order.
+    /// The sessions of the project a `list_sessions` request is for, in
+    /// display order.
     Sessions {
-        /// The active project the sessions belong to. Absent from hosts
-        /// that do not report it and from older servers.
+        /// The project the sessions belong to. Absent from hosts that do
+        /// not report it and from older servers.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<RemoteProject>,
         /// Session listing entries.
@@ -1418,6 +1536,7 @@ impl From<HostContext> for RemoteResponse {
                 .map(RemoteModelOption::from)
                 .collect(),
             project: host.project_name,
+            project_id: Some(host.project_id.to_string()),
             session_modes: mode_models
                 .iter()
                 .map(|mode_model| mode_model.mode)
@@ -1427,7 +1546,42 @@ impl From<HostContext> for RemoteResponse {
     }
 }
 
-/// The host's active project as the session list shows it.
+/// One project the host lists, as `list_projects` returns it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteProjectEntry {
+    /// Sessions of the project still in an active lifecycle state. Absent
+    /// when there are none.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub active_sessions: u32,
+    /// Opaque identifier a request's `project_id` names the project by.
+    pub id: String,
+    /// Whether the project is the one the terminal has open. Absent when it
+    /// is not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_active: bool,
+    /// Display name of the project.
+    pub name: String,
+}
+
+impl From<HostProject> for RemoteProjectEntry {
+    fn from(project: HostProject) -> Self {
+        Self {
+            active_sessions: project.active_session_count,
+            id: project.id.to_string(),
+            is_active: project.is_active,
+            name: project.name,
+        }
+    }
+}
+
+/// Whether `value` is its type's default, such as a zero count, so the
+/// field is left out.
+fn is_default<Value: Default + PartialEq>(value: &Value) -> bool {
+    *value == Value::default()
+}
+
+/// One project as the session list shows it: the host's active project, or
+/// the one a `list_sessions` request named.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoteProject {
     /// Commits the branch is ahead of its upstream, as of the host's latest
@@ -1441,6 +1595,12 @@ pub struct RemoteProject {
     /// Branch the project's checkout is on. Absent when it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// Identifier of the project, as `list_projects` names it, when the
+    /// host read the sessions and this status together. Absent otherwise
+    /// and from older servers, so a client that asked for a project treats
+    /// a listing without it as not that project's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Display name of the project.
     pub name: String,
     /// Latest sync of this project, started by a device or in the terminal,
@@ -1449,19 +1609,31 @@ pub struct RemoteProject {
     pub sync: Option<RemoteProjectSync>,
 }
 
+impl RemoteProject {
+    /// Returns the project of a session listing: `status`, named by
+    /// `project_id` when the host read both together.
+    pub(crate) fn listed(status: HostProjectStatus, project_id: Option<i64>) -> Self {
+        Self {
+            id: project_id.map(|id| id.to_string()),
+            ..Self::from(status)
+        }
+    }
+}
+
 impl From<HostProjectStatus> for RemoteProject {
     fn from(status: HostProjectStatus) -> Self {
         Self {
             ahead: status.ahead_behind.map(|(ahead, _)| ahead),
             behind: status.ahead_behind.map(|(_, behind)| behind),
             branch: status.branch,
+            id: None,
             name: status.project_name,
             sync: status.sync.map(RemoteProjectSync::from),
         }
     }
 }
 
-/// One sync of the active project's branch with its upstream.
+/// One sync of a project's branch with its upstream.
 ///
 /// The count and message fields depend on `phase`; a page ignores the ones
 /// it does not expect.

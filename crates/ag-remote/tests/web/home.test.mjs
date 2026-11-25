@@ -120,14 +120,16 @@ test("parseHost keeps what home shows and refuses other answers", () => {
     models: [],
     modes: ["regular", "harness"],
     project: "agentty",
+    projectId: null,
   });
-  assert.deepEqual(parseHost({ kind: "host", project: "p" }), {
+  assert.deepEqual(parseHost({ kind: "host", project: "p", project_id: "2" }), {
     baseBranch: "",
     model: "",
     modeModels: {},
     models: [],
     modes: [],
     project: "p",
+    projectId: "2",
   });
   assert.equal(parseHost({ kind: "accepted" }), null);
   assert.equal(parseHost({ kind: "host" }), null);
@@ -645,6 +647,61 @@ test("home described for another Agentty drops what it looked up for the first",
   assert.equal(page.home.isCreating(), false);
   // Each Agentty's project files are looked up once.
   assert.equal(page.requests.filter((body) => body.method === "list_project_files").length, 2);
+});
+
+test("home for a picked project names it in every request about the project", async () => {
+  // Arrange
+  const page = mountHome({
+    host: { ...HOST, project: "website", project_id: "2" },
+    respond: (body) => {
+      if (body.method === "list_project_files") {
+        return { files: [{ is_dir: false, path: "index.html" }], kind: "session_files" };
+      }
+
+      return body.method === "create_session" ? { kind: "created", session_id: "new" } : { kind: "accepted" };
+    },
+  });
+
+  // Act
+  await page.home.setCapabilities([...CAPABILITIES, "project_files"], "A", "2");
+  type(page, "Fix @ind");
+  await settle();
+  page.byId("home-message").dispatchEvent(new FakeEvent("keydown", { key: "Enter" }));
+  page.byId("home-message").dispatchEvent(new FakeEvent("keydown", { ctrlKey: true, key: "Enter" }));
+  await settle();
+
+  // Assert
+  assert.equal(page.home.host().project, "website");
+  assert.equal(page.home.host().scope, "A#2");
+  assert.deepEqual(page.requests, [
+    { method: "get_host", project_id: "2" },
+    { method: "list_project_files", project_id: "2" },
+    { method: "create_session", mode: "regular", project_id: "2" },
+    { method: "send_message", message: "Fix @index.html ", session_id: "new" },
+  ]);
+});
+
+test("home shows no composer for a description of another project than the one picked", async () => {
+  // Arrange: a server that predates `projects` answers for its own.
+  const page = mountHome({ host: { ...HOST, project_id: "1" } });
+
+  // Act
+  await page.home.setCapabilities(CAPABILITIES, "", "2");
+  const other = { error: page.byId("home-error").textContent, formHidden: page.byId("home-form").hidden };
+  await page.home.setCapabilities(CAPABILITIES, "", "1");
+
+  // Assert
+  assert.deepEqual(other, {
+    error: "Could not describe the project: Agentty described another project",
+    formHidden: true,
+  });
+  assert.deepEqual(page.hosts.slice(0, 1), [null]);
+  assert.equal(page.home.host().project, "agentty");
+  assert.equal(page.byId("home-error").textContent, "");
+  assert.deepEqual(page.requests, [
+    { method: "get_host", project_id: "2" },
+    { method: "get_host", project_id: "1" },
+  ]);
 });
 
 test("newSession ids name the Agentty a host was described for", () => {

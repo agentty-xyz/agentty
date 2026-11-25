@@ -1267,6 +1267,14 @@ body {
   flex: 0 2 auto;
 }
 
+/* The project picker takes the name's place, as wide as its longest
+   name, and gives way before the counts. */
+.project-select {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
 .project-counts {
   flex: none;
   color: var(--color-muted);

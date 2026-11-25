@@ -21,8 +21,8 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{
-    Client, TestResult, TestServer, relay_limits, start_linked_server, start_relay,
-    start_relay_with_admission, start_server_linked_to,
+    Client, RecordingBackend, TestResult, TestServer, relay_limits, start_linked_server,
+    start_relay, start_relay_with_admission, start_server_linked_to,
 };
 
 /// Largest frame the test device accepts, in bytes.
@@ -138,7 +138,7 @@ async fn relay_device_pairs_requests_and_reconnects_with_its_key() -> TestResult
     device
         .send(&ClientFrame::Request {
             id: 1,
-            request: RemoteRequest::ListSessions,
+            request: RemoteRequest::ListSessions { project_id: None },
         })
         .await?;
     let listed = device.next_frame().await?;
@@ -343,10 +343,13 @@ async fn unreachable_relay_keeps_the_local_listener_working() -> TestResult {
     let unused = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let address = unused.local_addr()?;
     drop(unused);
-    let server = TestServer::start_linked(RemoteRelayConfig {
-        instance_key: StaticKeypair::generate()?,
-        url: format!("ws://{address}"),
-    })
+    let server = TestServer::start_linked(
+        RemoteRelayConfig {
+            instance_key: StaticKeypair::generate()?,
+            url: format!("ws://{address}"),
+        },
+        RecordingBackend::default(),
+    )
     .await?;
 
     // Act

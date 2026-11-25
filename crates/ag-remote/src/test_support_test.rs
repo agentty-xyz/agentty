@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
-    DurableMessageRequest, GenerateGraphProposalRequest, HostContext, HostProjectStatus,
-    HostProjectSync, HostProjectSyncPhase, HostSessionMode, MessageImage, QuestionItem,
-    ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend, SessionDiffFile,
-    SessionError, SessionFileEntry, SessionGraphActionRequest, SessionGraphs, SessionGraphsRequest,
-    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
-    SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
+    DurableMessageRequest, GenerateGraphProposalRequest, HostContext, HostProject,
+    HostProjectStatus, HostProjectSync, HostProjectSyncPhase, HostSessionMode, MessageImage,
+    QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend,
+    SessionDiffFile, SessionError, SessionFileEntry, SessionGraphActionRequest, SessionGraphs,
+    SessionGraphsRequest, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
+    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
+    SpeedMode,
 };
 use async_trait::async_trait;
 use rustls::crypto::ring;
@@ -285,6 +286,27 @@ impl SessionBackend for RecordingBackend {
         self.record(
             format!("create:{:?}:{}", request.mode, request.project_id),
             SessionId::from("created"),
+        )
+    }
+
+    // Lists project `1`, `agentty`, which is active, and project `2`.
+    async fn list_projects(&self) -> Result<Vec<HostProject>, SessionError> {
+        self.record(
+            "projects".to_string(),
+            vec![
+                HostProject {
+                    active_session_count: 2,
+                    id: 1,
+                    is_active: true,
+                    name: "agentty".to_string(),
+                },
+                HostProject {
+                    active_session_count: 0,
+                    id: 2,
+                    is_active: false,
+                    name: "website".to_string(),
+                },
+            ],
         )
     }
 

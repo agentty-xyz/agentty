@@ -1,6 +1,7 @@
-//! The policy of every request variant: the operation the host must serve,
-//! the listed-session check, the capability that offers it, and how it
-//! queues behind other changes of its session.
+//! The policy of every request variant: the operations the host must serve,
+//! the listed-project and listed-session checks, the capability that offers
+//! each operation, and how the request queues behind other changes of its
+//! session.
 
 use std::sync::Arc;
 
@@ -8,13 +9,16 @@ use ag_session::SessionOperation;
 
 use crate::protocol::{
     RemoteGraphAction, RemoteGraphActionRequest, RemoteImage, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteSessionMode, RequestedSessionId,
+    RemoteResult, RemoteSessionMode, RequestedProjectId, RequestedSessionId,
 };
 use crate::request::{CAPABILITIES, RequestOrder, RequestPolicy, execute};
 use crate::test_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
 
 /// Session every sample names; the test backend never lists it.
 const UNLISTED: &str = "unlisted";
+/// Project every sample that names one names; the test backend lists only
+/// projects `1` and `2`.
+const UNLISTED_PROJECT: &str = "9";
 
 /// How a request must run relative to others for the same session.
 enum Order {
@@ -28,16 +32,18 @@ enum Order {
 
 /// One sample of a request variant and the policy it must have.
 struct Case {
-    /// Operation the host must serve, `None` for requests every host serves.
-    operation: Option<SessionOperation>,
     /// How the request queues; before policies, `mutated_session` returned
     /// the session for exactly the `Queued` requests.
     order: Order,
+    /// Operations the host must serve, empty for requests every host
+    /// serves.
+    requires: &'static [SessionOperation],
     /// A request of the variant, naming [`UNLISTED`] and carrying invalid
     /// fields wherever it can.
     sample: RemoteRequest,
-    /// What the request answers for an unlisted session, `None` exactly
-    /// when its frame carries no `session_id`.
+    /// What the request answers for an unlisted session or, when it names
+    /// one, [`UNLISTED_PROJECT`]; `None` exactly when its frame carries no
+    /// `session_id` or `project_id`.
     unlisted: Option<RemoteResult>,
 }
 
@@ -71,8 +77,8 @@ macro_rules! cases {
 
 cases! {
     RemoteRequest::ActOnSessionGraph(_) => Case {
-        operation: Some(SessionOperation::GraphActions),
         order: Order::Queued,
+        requires: &[SessionOperation::GraphActions],
         sample: RemoteRequest::ActOnSessionGraph(RemoteGraphActionRequest {
             action: RemoteGraphAction::Unsupported,
             additional_calls: None,
@@ -87,8 +93,8 @@ cases! {
         unlisted: Some(not_found()),
     },
     RemoteRequest::AnswerQuestions { .. } => Case {
-        operation: None,
         order: Order::Queued,
+        requires: &[],
         sample: RemoteRequest::AnswerQuestions {
             answers: Vec::new(),
             graph_question_target: None,
@@ -97,47 +103,48 @@ cases! {
         unlisted: Some(not_found()),
     },
     RemoteRequest::CancelSession { .. } => Case {
-        operation: None,
         order: Order::Queued,
+        requires: &[],
         sample: RemoteRequest::CancelSession {
             session_id: UNLISTED.into(),
         },
         unlisted: Some(not_found()),
     },
     RemoteRequest::CreateSession { .. } => Case {
-        operation: Some(SessionOperation::CreateSession),
         order: Order::Unqueued,
+        requires: &[SessionOperation::CreateSession],
         sample: RemoteRequest::CreateSession {
             mode: RemoteSessionMode::Harness,
+            project_id: None,
         },
         unlisted: None,
     },
     RemoteRequest::GenerateGraphProposal { .. } => Case {
-        operation: Some(SessionOperation::GenerateGraphProposal),
         order: Order::Queued,
+        requires: &[SessionOperation::GenerateGraphProposal],
         sample: RemoteRequest::GenerateGraphProposal {
             message: String::new(),
             session_id: UNLISTED.into(),
         },
         unlisted: Some(not_found()),
     },
-    RemoteRequest::GetHost => Case {
-        operation: Some(SessionOperation::HostContext),
+    RemoteRequest::GetHost { .. } => Case {
         order: Order::Read,
-        sample: RemoteRequest::GetHost,
+        requires: &[SessionOperation::HostContext],
+        sample: RemoteRequest::GetHost { project_id: None },
         unlisted: None,
     },
     RemoteRequest::GetSession { .. } => Case {
-        operation: None,
         order: Order::Read,
+        requires: &[],
         sample: RemoteRequest::GetSession {
             session_id: UNLISTED.into(),
         },
         unlisted: Some(RemoteResult::Ok(RemoteResponse::Session { session: None })),
     },
     RemoteRequest::GetSessionDiff { .. } => Case {
-        operation: Some(SessionOperation::SessionDiff),
         order: Order::Read,
+        requires: &[SessionOperation::SessionDiff],
         sample: RemoteRequest::GetSessionDiff {
             path: Some("absent.rs".to_string()),
             session_id: UNLISTED.into(),
@@ -145,8 +152,8 @@ cases! {
         unlisted: Some(not_found()),
     },
     RemoteRequest::GetSessionGraphs { .. } => Case {
-        operation: Some(SessionOperation::Graphs),
         order: Order::Read,
+        requires: &[SessionOperation::Graphs],
         sample: RemoteRequest::GetSessionGraphs {
             graph_id: None,
             known: None,
@@ -155,45 +162,51 @@ cases! {
         },
         unlisted: Some(not_found()),
     },
-    RemoteRequest::ListProjectFiles => Case {
-        operation: Some(SessionOperation::ProjectFiles),
+    RemoteRequest::ListProjectFiles { .. } => Case {
         order: Order::Read,
-        sample: RemoteRequest::ListProjectFiles,
+        requires: &[SessionOperation::ProjectFiles],
+        sample: RemoteRequest::ListProjectFiles { project_id: None },
+        unlisted: None,
+    },
+    RemoteRequest::ListProjects => Case {
+        order: Order::Read,
+        requires: &[SessionOperation::Projects],
+        sample: RemoteRequest::ListProjects,
         unlisted: None,
     },
     RemoteRequest::ListSessionFiles { .. } => Case {
-        operation: Some(SessionOperation::SessionFiles),
         order: Order::Read,
+        requires: &[SessionOperation::SessionFiles],
         sample: RemoteRequest::ListSessionFiles {
             session_id: UNLISTED.into(),
         },
         unlisted: Some(not_found()),
     },
-    RemoteRequest::ListSessions => Case {
-        operation: None,
+    RemoteRequest::ListSessions { .. } => Case {
         order: Order::Read,
-        sample: RemoteRequest::ListSessions,
+        requires: &[],
+        sample: RemoteRequest::ListSessions { project_id: None },
         unlisted: None,
     },
     RemoteRequest::MergeSession { .. } => Case {
-        operation: Some(SessionOperation::MergeSession),
         order: Order::Queued,
+        requires: &[SessionOperation::MergeSession],
         sample: RemoteRequest::MergeSession {
             session_id: UNLISTED.into(),
         },
         unlisted: Some(not_found()),
     },
     RemoteRequest::PublishSession { .. } => Case {
-        operation: Some(SessionOperation::PublishSession),
         order: Order::Unqueued,
+        requires: &[SessionOperation::PublishSession],
         sample: RemoteRequest::PublishSession {
             session_id: UNLISTED.into(),
         },
         unlisted: Some(not_found()),
     },
     RemoteRequest::SendMessage { .. } => Case {
-        operation: None,
         order: Order::Queued,
+        requires: &[],
         sample: RemoteRequest::SendMessage {
             images: Vec::new(),
             message: "hi".to_string(),
@@ -202,8 +215,8 @@ cases! {
         unlisted: Some(not_found()),
     },
     RemoteRequest::SetSessionSettings { .. } => Case {
-        operation: Some(SessionOperation::SessionSettings),
         order: Order::Queued,
+        requires: &[SessionOperation::SessionSettings],
         sample: RemoteRequest::SetSessionSettings {
             agent: Some("vi".to_string()),
             model: Some("vim".to_string()),
@@ -215,30 +228,30 @@ cases! {
         unlisted: Some(not_found()),
     },
     RemoteRequest::StopTurn { .. } => Case {
-        operation: Some(SessionOperation::StopTurn),
         order: Order::Queued,
+        requires: &[SessionOperation::StopTurn],
         sample: RemoteRequest::StopTurn {
             session_id: UNLISTED.into(),
         },
         unlisted: Some(not_found()),
     },
-    RemoteRequest::SyncProject => Case {
-        operation: Some(SessionOperation::SyncProject),
+    RemoteRequest::SyncProject { .. } => Case {
         order: Order::Unqueued,
-        sample: RemoteRequest::SyncProject,
+        requires: &[SessionOperation::SyncProject],
+        sample: RemoteRequest::SyncProject { project_id: None },
         unlisted: None,
     },
     RemoteRequest::SyncSession { .. } => Case {
-        operation: Some(SessionOperation::RebaseSession),
         order: Order::Queued,
+        requires: &[SessionOperation::RebaseSession],
         sample: RemoteRequest::SyncSession {
             session_id: UNLISTED.into(),
         },
         unlisted: Some(not_found()),
     },
     RemoteRequest::Unsupported => Case {
-        operation: None,
         order: Order::Read,
+        requires: &[],
         sample: RemoteRequest::Unsupported,
         unlisted: None,
     },
@@ -249,14 +262,20 @@ fn not_found() -> RemoteResult {
     RemoteResult::Error("Session not found".to_string())
 }
 
+/// The answer to a request for a project the host does not list.
+fn project_not_found() -> RemoteResult {
+    RemoteResult::Error("Project not found".to_string())
+}
+
 /// Returns one case per request variant, and one per payload that changes
 /// a variant's policy: a message with images needs the `images`
-/// capability.
+/// capability, and each request about a project that names
+/// [`UNLISTED_PROJECT`] needs the `projects` capability too.
 fn cases() -> Vec<Case> {
     let mut cases = variant_cases();
     cases.push(Case {
-        operation: Some(SessionOperation::MessageImages),
         order: Order::Queued,
+        requires: &[SessionOperation::MessageImages],
         sample: RemoteRequest::SendMessage {
             images: vec![RemoteImage {
                 data: "not base64".to_string(),
@@ -266,8 +285,65 @@ fn cases() -> Vec<Case> {
         },
         unlisted: Some(not_found()),
     });
+    let named = || Some(RequestedProjectId::from(UNLISTED_PROJECT));
+    let named_cases: [(Order, &'static [SessionOperation], RemoteRequest); 5] = [
+        (
+            Order::Unqueued,
+            &[SessionOperation::CreateSession, SessionOperation::Projects],
+            RemoteRequest::CreateSession {
+                mode: RemoteSessionMode::Harness,
+                project_id: named(),
+            },
+        ),
+        (
+            Order::Read,
+            &[SessionOperation::HostContext, SessionOperation::Projects],
+            RemoteRequest::GetHost {
+                project_id: named(),
+            },
+        ),
+        (
+            Order::Read,
+            &[SessionOperation::ProjectFiles, SessionOperation::Projects],
+            RemoteRequest::ListProjectFiles {
+                project_id: named(),
+            },
+        ),
+        (
+            Order::Read,
+            &[SessionOperation::Projects],
+            RemoteRequest::ListSessions {
+                project_id: named(),
+            },
+        ),
+        (
+            Order::Unqueued,
+            &[SessionOperation::SyncProject, SessionOperation::Projects],
+            RemoteRequest::SyncProject {
+                project_id: named(),
+            },
+        ),
+    ];
+    cases.extend(
+        named_cases
+            .into_iter()
+            .map(|(order, requires, sample)| Case {
+                order,
+                requires,
+                sample,
+                unlisted: Some(project_not_found()),
+            }),
+    );
 
     cases
+}
+
+/// Whether `request`'s frame names a project.
+fn names_project(request: &RemoteRequest) -> bool {
+    serde_json::to_value(request)
+        .expect("request should encode")
+        .get("project_id")
+        .is_some()
 }
 
 /// Every operation a capability offers, plus the project status that
@@ -301,25 +377,38 @@ async fn run(
     (result, fixture.backend.calls())
 }
 
+/// A policy as the tests compare it: what it requires, how it queues, and
+/// the project it names.
+type Policy<'request> = (
+    &'static [SessionOperation],
+    RequestOrder<'request>,
+    Option<&'request RequestedProjectId>,
+);
+
 #[test]
 fn every_request_has_the_policy_of_its_table_entry() {
     // Arrange
     let cases = cases();
     let unlisted = RequestedSessionId::from(UNLISTED);
+    let unlisted_project = RequestedProjectId::from(UNLISTED_PROJECT);
 
     // Act
-    let policies: Vec<(Option<SessionOperation>, RequestOrder<'_>)> = cases
+    let policies: Vec<Policy<'_>> = cases
         .iter()
         .map(|case| {
             assert_covered(&case.sample);
-            let RequestPolicy { order, operation } = RequestPolicy::of(&case.sample);
+            let RequestPolicy {
+                order,
+                project,
+                requires,
+            } = RequestPolicy::of(&case.sample);
 
-            (operation, order)
+            (requires, order, project)
         })
         .collect();
 
     // Assert
-    let expected: Vec<(Option<SessionOperation>, RequestOrder<'_>)> = cases
+    let expected: Vec<Policy<'_>> = cases
         .iter()
         .map(|case| {
             let order = match case.order {
@@ -327,15 +416,16 @@ fn every_request_has_the_policy_of_its_table_entry() {
                 Order::Queued => RequestOrder::Queued(&unlisted),
                 Order::Unqueued => RequestOrder::Unqueued,
             };
+            let project = names_project(&case.sample).then_some(&unlisted_project);
 
-            (case.operation, order)
+            (case.requires, order, project)
         })
         .collect();
     assert_eq!(policies, expected);
 }
 
 #[test]
-fn a_sample_has_an_unlisted_answer_exactly_when_it_names_a_session() {
+fn a_sample_has_an_unlisted_answer_exactly_when_it_names_a_session_or_a_project() {
     for case in cases() {
         // Arrange
         let has_unlisted_answer = case.unlisted.is_some();
@@ -345,7 +435,7 @@ fn a_sample_has_an_unlisted_answer_exactly_when_it_names_a_session() {
 
         // Assert
         assert_eq!(
-            frame.get("session_id").is_some(),
+            frame.get("session_id").is_some() || frame.get("project_id").is_some(),
             has_unlisted_answer,
             "{:?}",
             case.sample
@@ -358,7 +448,8 @@ fn capabilities_offer_exactly_the_operations_policies_require() {
     // Arrange
     let required: Vec<SessionOperation> = cases()
         .iter()
-        .filter_map(|case| RequestPolicy::of(&case.sample).operation)
+        .flat_map(|case| RequestPolicy::of(&case.sample).requires)
+        .copied()
         .collect();
 
     // Act
@@ -380,41 +471,49 @@ fn capabilities_offer_exactly_the_operations_policies_require() {
             "{operation:?} is offered but no request requires it"
         );
     }
-    assert_eq!(offered.len(), required.len());
 }
 
 #[tokio::test]
-async fn a_request_whose_operation_the_host_does_not_serve_reaches_nothing() {
+async fn a_request_whose_operations_the_host_does_not_all_serve_reaches_nothing() {
     for case in cases() {
-        // Arrange
-        let Some(operation) = case.operation else {
-            continue;
-        };
-        let served: Vec<SessionOperation> = every_operation()
-            .into_iter()
-            .filter(|served| *served != operation)
-            .collect();
+        for operation in case.requires {
+            // Arrange
+            let served: Vec<SessionOperation> = every_operation()
+                .into_iter()
+                .filter(|served| served != operation)
+                .collect();
 
-        // Act
-        let (result, calls) = run(case.sample.clone(), &served).await;
+            // Act
+            let (result, calls) = run(case.sample.clone(), &served).await;
 
-        // Assert
-        assert_eq!(
-            result,
-            RemoteResult::Error("Unsupported request".to_string()),
-            "{:?}",
-            case.sample
-        );
-        assert_eq!(calls, Vec::<String>::new(), "{:?}", case.sample);
+            // Assert
+            assert_eq!(
+                result,
+                RemoteResult::Error("Unsupported request".to_string()),
+                "{:?} without {operation:?}",
+                case.sample
+            );
+            assert_eq!(
+                calls,
+                Vec::<String>::new(),
+                "{:?} without {operation:?}",
+                case.sample
+            );
+        }
     }
 }
 
 #[tokio::test]
-async fn a_request_for_an_unlisted_session_reaches_only_the_listing() {
+async fn a_request_for_an_unlisted_session_or_project_reaches_only_the_listing() {
     for case in cases() {
         // Arrange
         let Some(expected) = case.unlisted else {
             continue;
+        };
+        let listing = if names_project(&case.sample) {
+            "projects"
+        } else {
+            "list"
         };
 
         // Act
@@ -422,6 +521,6 @@ async fn a_request_for_an_unlisted_session_reaches_only_the_listing() {
 
         // Assert
         assert_eq!(result, expected, "{:?}", case.sample);
-        assert_eq!(calls, ["list"], "{:?}", case.sample);
+        assert_eq!(calls, [listing], "{:?}", case.sample);
     }
 }

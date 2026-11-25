@@ -281,9 +281,10 @@ export function branchCounts(ahead, behind) {
   return "↓" + behind + " ↑" + ahead;
 }
 
-// The active project a listing names, with the fields the sidebar shows,
-// or `null` when the host does not report it. `ahead` and `behind` are
-// `null` until the host has compared the branch with its upstream.
+// The project a listing names, with the fields the sidebar shows, or
+// `null` when the host does not report it. `ahead` and `behind` are `null`
+// until the host has compared the branch with its upstream, and `id` is
+// `null` when the server does not say which project it listed.
 export function parseProject(listed) {
   const project = listed?.project;
   const name = text(project?.name);
@@ -295,6 +296,7 @@ export function parseProject(listed) {
     ahead: count(project.ahead),
     behind: count(project.behind),
     branch: text(project.branch),
+    id: text(project.id),
     name: name,
     sync: parseProjectSync(project.sync),
   };

@@ -673,6 +673,7 @@ test("parseProject reads the project a listing names and drops what it cannot us
         ahead: 1,
         behind: 2,
         branch: "main",
+        id: "3",
         name: "agentty",
         sync: { branch: "main", conflicts: 3, phase: "resolving_conflicts" },
       },
@@ -681,6 +682,7 @@ test("parseProject reads the project a listing names and drops what it cannot us
       ahead: 1,
       behind: 2,
       branch: "main",
+      id: "3",
       name: "agentty",
       sync: {
         branch: "main",
@@ -694,11 +696,13 @@ test("parseProject reads the project a listing names and drops what it cannot us
       },
     },
   );
-  // A host that has not compared the branch yet, or has none.
-  assert.deepEqual(parseProject({ project: { name: "agentty" } }), {
+  // A host that has not compared the branch yet, or has none, and a server
+  // that does not say which project it listed.
+  assert.deepEqual(parseProject({ project: { id: 3, name: "agentty" } }), {
     ahead: null,
     behind: null,
     branch: null,
+    id: null,
     name: "agentty",
     sync: null,
   });

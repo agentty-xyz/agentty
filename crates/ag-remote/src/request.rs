@@ -5,17 +5,17 @@ use std::str::FromStr;
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, GenerateGraphProposalRequest, MessageImage,
-    QuestionAnswer, SessionError, SessionGraphsRequest, SessionOperation, SessionService,
-    SessionSettingsChange,
+    ProjectScope, QuestionAnswer, SessionError, SessionGraphsRequest, SessionOperation,
+    SessionService, SessionSettingsChange,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
 use crate::entropy::{Entropy, random_hex};
 use crate::protocol::{
-    RemoteGraphActionRequest, RemoteImage, RemoteProject, RemoteQuestionAnswer, RemoteRequest,
-    RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionMode,
-    RemoteSessionSummary, RequestedSessionId,
+    RemoteGraphActionRequest, RemoteImage, RemoteProject, RemoteProjectEntry, RemoteQuestionAnswer,
+    RemoteRequest, RemoteResponse, RemoteResult, RemoteReviewRequest, RemoteSession,
+    RemoteSessionMode, RemoteSessionSummary, RequestedProjectId, RequestedSessionId,
 };
 
 /// Error returned for a request method this server does not know, and for
@@ -39,6 +39,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::GraphActions, "graph_actions"),
     (SessionOperation::GenerateGraphProposal, "graph_proposal"),
     (SessionOperation::MessageImages, "images"),
+    (SessionOperation::Projects, "projects"),
 ];
 /// Capabilities that extend the request another one offers, each listed
 /// with it: `settings_agent` says `set_session_settings` takes an `agent`.
@@ -108,101 +109,148 @@ pub(crate) async fn execute(
 /// What the server checks before it dispatches a request, and how the
 /// request runs relative to others.
 ///
-/// Every request declares its policy in [`Self::of`]. The session a request
-/// names is checked by its type instead: a request reaches the host only
-/// with the `SessionId` that [`RequestedSessionId::listed`] returns.
+/// Every request declares its policy in [`Self::of`]. The project and the
+/// session a request names are checked by their types instead: a request
+/// reaches the host only with the `ProjectScope` that
+/// [`RequestedProjectId::listed`] returns and the `SessionId` that
+/// [`RequestedSessionId::listed`] returns.
 pub(crate) struct RequestPolicy<'request> {
     /// How the request runs relative to others for the same session.
     pub(crate) order: RequestOrder<'request>,
-    /// Operation the host must serve, which a capability in
-    /// [`CAPABILITIES`] offers. `None` for the requests every host serves:
-    /// those of the first protocol version, and `Unsupported`, which answers
-    /// an error itself.
-    operation: Option<SessionOperation>,
+    /// Project the request names, checked before its session and fields;
+    /// `None` for the host's active project and for requests about no
+    /// project.
+    pub(crate) project: Option<&'request RequestedProjectId>,
+    /// Operations the host must serve, each of which a capability in
+    /// [`CAPABILITIES`] offers: the request's own, and
+    /// [`SessionOperation::Projects`] whenever it names a project. Empty for
+    /// the requests every host serves: those of the first protocol version,
+    /// and `Unsupported`, which answers an error itself.
+    pub(crate) requires: &'static [SessionOperation],
 }
 
 impl<'request> RequestPolicy<'request> {
     /// Returns the policy of `request`.
     pub(crate) fn of(request: &'request RemoteRequest) -> Self {
-        let (operation, order) = match request {
-            RemoteRequest::ActOnSessionGraph(request) => (
-                Some(SessionOperation::GraphActions),
+        let unscoped = |requires, order| Self {
+            order,
+            project: None,
+            requires,
+        };
+        // A request about a project needs `Projects` too when it names one.
+        let scoped =
+            |project_id: &'request Option<RequestedProjectId>, active, named, order| Self {
+                order,
+                project: project_id.as_ref(),
+                requires: if project_id.is_some() { named } else { active },
+            };
+
+        match request {
+            RemoteRequest::ActOnSessionGraph(request) => unscoped(
+                &[SessionOperation::GraphActions],
                 RequestOrder::Queued(&request.session_id),
             ),
             RemoteRequest::SendMessage {
                 images, session_id, ..
-            } if !images.is_empty() => (
-                Some(SessionOperation::MessageImages),
+            } if !images.is_empty() => unscoped(
+                &[SessionOperation::MessageImages],
                 RequestOrder::Queued(session_id),
             ),
             RemoteRequest::AnswerQuestions { session_id, .. }
             | RemoteRequest::CancelSession { session_id }
             | RemoteRequest::SendMessage { session_id, .. } => {
-                (None, RequestOrder::Queued(session_id))
+                unscoped(&[], RequestOrder::Queued(session_id))
             }
-            RemoteRequest::CreateSession { .. } => (
-                Some(SessionOperation::CreateSession),
+            RemoteRequest::CreateSession { project_id, .. } => scoped(
+                project_id,
+                &[SessionOperation::CreateSession],
+                &[SessionOperation::CreateSession, SessionOperation::Projects],
                 RequestOrder::Unqueued,
             ),
-            RemoteRequest::GenerateGraphProposal { session_id, .. } => (
-                Some(SessionOperation::GenerateGraphProposal),
+            RemoteRequest::GenerateGraphProposal { session_id, .. } => unscoped(
+                &[SessionOperation::GenerateGraphProposal],
                 RequestOrder::Queued(session_id),
             ),
-            RemoteRequest::GetHost => (Some(SessionOperation::HostContext), RequestOrder::Read),
-            RemoteRequest::GetSession { .. } | RemoteRequest::ListSessions => {
-                (None, RequestOrder::Read)
+            RemoteRequest::GetHost { project_id } => scoped(
+                project_id,
+                &[SessionOperation::HostContext],
+                &[SessionOperation::HostContext, SessionOperation::Projects],
+                RequestOrder::Read,
+            ),
+            RemoteRequest::GetSession { .. } | RemoteRequest::Unsupported => {
+                unscoped(&[], RequestOrder::Read)
             }
             RemoteRequest::GetSessionDiff { .. } => {
-                (Some(SessionOperation::SessionDiff), RequestOrder::Read)
+                unscoped(&[SessionOperation::SessionDiff], RequestOrder::Read)
             }
             RemoteRequest::GetSessionGraphs { .. } => {
-                (Some(SessionOperation::Graphs), RequestOrder::Read)
+                unscoped(&[SessionOperation::Graphs], RequestOrder::Read)
             }
-            RemoteRequest::ListProjectFiles => {
-                (Some(SessionOperation::ProjectFiles), RequestOrder::Read)
+            RemoteRequest::ListProjectFiles { project_id } => scoped(
+                project_id,
+                &[SessionOperation::ProjectFiles],
+                &[SessionOperation::ProjectFiles, SessionOperation::Projects],
+                RequestOrder::Read,
+            ),
+            RemoteRequest::ListProjects => {
+                unscoped(&[SessionOperation::Projects], RequestOrder::Read)
             }
             RemoteRequest::ListSessionFiles { .. } => {
-                (Some(SessionOperation::SessionFiles), RequestOrder::Read)
+                unscoped(&[SessionOperation::SessionFiles], RequestOrder::Read)
             }
-            RemoteRequest::MergeSession { session_id } => (
-                Some(SessionOperation::MergeSession),
+            RemoteRequest::ListSessions { project_id } => scoped(
+                project_id,
+                &[],
+                &[SessionOperation::Projects],
+                RequestOrder::Read,
+            ),
+            RemoteRequest::MergeSession { session_id } => unscoped(
+                &[SessionOperation::MergeSession],
                 RequestOrder::Queued(session_id),
             ),
-            RemoteRequest::PublishSession { .. } => (
-                Some(SessionOperation::PublishSession),
+            RemoteRequest::PublishSession { .. } => {
+                unscoped(&[SessionOperation::PublishSession], RequestOrder::Unqueued)
+            }
+            RemoteRequest::SetSessionSettings { session_id, .. } => unscoped(
+                &[SessionOperation::SessionSettings],
+                RequestOrder::Queued(session_id),
+            ),
+            RemoteRequest::StopTurn { session_id } => unscoped(
+                &[SessionOperation::StopTurn],
+                RequestOrder::Queued(session_id),
+            ),
+            RemoteRequest::SyncProject { project_id } => scoped(
+                project_id,
+                &[SessionOperation::SyncProject],
+                &[SessionOperation::SyncProject, SessionOperation::Projects],
                 RequestOrder::Unqueued,
             ),
-            RemoteRequest::SetSessionSettings { session_id, .. } => (
-                Some(SessionOperation::SessionSettings),
+            RemoteRequest::SyncSession { session_id } => unscoped(
+                &[SessionOperation::RebaseSession],
                 RequestOrder::Queued(session_id),
             ),
-            RemoteRequest::StopTurn { session_id } => (
-                Some(SessionOperation::StopTurn),
-                RequestOrder::Queued(session_id),
-            ),
-            RemoteRequest::SyncProject => {
-                (Some(SessionOperation::SyncProject), RequestOrder::Unqueued)
-            }
-            RemoteRequest::SyncSession { session_id } => (
-                Some(SessionOperation::RebaseSession),
-                RequestOrder::Queued(session_id),
-            ),
-            RemoteRequest::Unsupported => (None, RequestOrder::Read),
-        };
-
-        Self { order, operation }
+        }
     }
 
-    /// Refuses a request whose operation the host does not serve, so a
-    /// client that skips the capability list still reaches nothing more.
-    fn require(&self, sessions: &SessionService) -> Result<(), SessionError> {
-        if let Some(operation) = self.operation
-            && !sessions.supports(operation)
+    /// Refuses a request whose operations the host does not serve, so a
+    /// client that skips the capability list still reaches nothing more,
+    /// and a request that names a project never reaches a host that serves
+    /// only its active project, which would answer for that one instead.
+    /// Then returns the scope of the project the request names, which
+    /// reaches only a project the host lists.
+    async fn admit(&self, sessions: &SessionService) -> Result<ProjectScope, SessionError> {
+        if !self
+            .requires
+            .iter()
+            .all(|operation| sessions.supports(*operation))
         {
             return Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string()));
         }
 
-        Ok(())
+        match self.project {
+            Some(project_id) => project_id.listed(sessions).await,
+            None => Ok(ProjectScope::Active),
+        }
     }
 }
 
@@ -223,14 +271,15 @@ pub(crate) enum RequestOrder<'request> {
 
 /// Answers one request once its policy allows it.
 ///
-/// The host must serve the request's operation, then the session it names
-/// must be listed, and only then are its fields validated.
+/// The host must serve the request's operations, then the project it names
+/// must be listed, then the session it names, and only then are its fields
+/// validated.
 async fn respond(
     sessions: &SessionService,
     entropy: &dyn Entropy,
     request: RemoteRequest,
 ) -> Result<RemoteResponse, SessionError> {
-    RequestPolicy::of(&request).require(sessions)?;
+    let scope = RequestPolicy::of(&request).admit(sessions).await?;
 
     match request {
         RemoteRequest::ActOnSessionGraph(request) => {
@@ -247,12 +296,14 @@ async fn respond(
 
             Ok(RemoteResponse::Accepted)
         }
-        RemoteRequest::CreateSession { mode } => create_session(sessions, mode).await,
+        RemoteRequest::CreateSession { mode, .. } => create_session(sessions, scope, mode).await,
         RemoteRequest::GenerateGraphProposal {
             message,
             session_id,
         } => generate_listed_graph_proposal(sessions, entropy, session_id, message).await,
-        RemoteRequest::GetHost => Ok(RemoteResponse::from(sessions.host_context().await?)),
+        RemoteRequest::GetHost { .. } => Ok(RemoteResponse::from(
+            sessions.host_context_for(scope).await?,
+        )),
         RemoteRequest::GetSession { session_id } => get_listed_session(sessions, session_id).await,
         RemoteRequest::GetSessionDiff { path, session_id } => {
             get_listed_session_diff(sessions, session_id, path.as_deref()).await
@@ -266,13 +317,14 @@ async fn respond(
             get_listed_session_graphs(sessions, session_id, graph_id, node_id, known.as_deref())
                 .await
         }
-        RemoteRequest::ListProjectFiles => Ok(RemoteResponse::from_session_files(
-            &sessions.list_project_files().await?,
+        RemoteRequest::ListProjectFiles { .. } => Ok(RemoteResponse::from_session_files(
+            &sessions.list_project_files_for(scope).await?,
         )),
+        RemoteRequest::ListProjects => list_projects(sessions).await,
         RemoteRequest::ListSessionFiles { session_id } => {
             list_listed_session_files(sessions, session_id).await
         }
-        RemoteRequest::ListSessions => list_sessions(sessions).await,
+        RemoteRequest::ListSessions { .. } => list_sessions(sessions, scope).await,
         RemoteRequest::MergeSession { session_id } => {
             let session_id = session_id.listed(sessions).await?;
             sessions.merge_session(&session_id).await?;
@@ -293,8 +345,8 @@ async fn respond(
 
             Ok(RemoteResponse::Accepted)
         }
-        RemoteRequest::SyncProject => {
-            sessions.sync_project().await?;
+        RemoteRequest::SyncProject { .. } => {
+            sessions.sync_project_for(scope).await?;
 
             Ok(RemoteResponse::Accepted)
         }
@@ -416,19 +468,20 @@ fn decode_images(images: Vec<RemoteImage>) -> Result<Vec<MessageImage>, SessionE
         .collect()
 }
 
-/// Creates a session in the host's active project, the only project the
-/// host accepts, and only in a mode the host serves now.
+/// Creates a session in the project of `scope`, as the host describes it,
+/// and only in a mode the host serves there now.
 ///
 /// The mode rule belongs to the remote surface and is stricter than the
-/// host, which also creates drafts. It reads the served modes from
-/// `host_context`, which the `create_session` capability does not require
-/// the host to serve: a host that creates sessions without describing its
-/// project answers its own `host_context` error here.
+/// host, which also creates drafts. It reads the served modes and the
+/// project from `host_context_for`, which the `create_session` capability
+/// does not require the host to serve: a host that creates sessions without
+/// describing its project answers its own `host_context` error here.
 async fn create_session(
     sessions: &SessionService,
+    scope: ProjectScope,
     mode: RemoteSessionMode,
 ) -> Result<RemoteResponse, SessionError> {
-    let host = sessions.host_context().await?;
+    let host = sessions.host_context_for(scope).await?;
     let mode = mode.session_mode();
     if !host
         .session_modes
@@ -548,19 +601,30 @@ async fn list_listed_session_files(
     Ok(RemoteResponse::from_session_files(&entries))
 }
 
-/// Lists the host's sessions and, when the host reports it, the active
-/// project they belong to.
-async fn list_sessions(sessions: &SessionService) -> Result<RemoteResponse, SessionError> {
-    let summaries = sessions.list_session_entries().await?;
-    let project = if sessions.supports(SessionOperation::ProjectStatus) {
-        Some(RemoteProject::from(sessions.project_status().await?))
-    } else {
-        None
-    };
+/// Lists the projects the host lists, in its order.
+async fn list_projects(sessions: &SessionService) -> Result<RemoteResponse, SessionError> {
+    let projects = sessions.list_projects().await?;
+
+    Ok(RemoteResponse::Projects {
+        projects: projects.into_iter().map(RemoteProjectEntry::from).collect(),
+    })
+}
+
+/// Lists the sessions of the project of `scope` and, when the host reports
+/// it, that project's status, in one host call, named by the project's id
+/// when the host read both together.
+async fn list_sessions(
+    sessions: &SessionService,
+    scope: ProjectScope,
+) -> Result<RemoteResponse, SessionError> {
+    let listed = sessions.project_sessions(scope).await?;
 
     Ok(RemoteResponse::Sessions {
-        project,
-        sessions: summaries
+        project: listed
+            .status
+            .map(|status| RemoteProject::listed(status, listed.project_id)),
+        sessions: listed
+            .entries
             .into_iter()
             .map(RemoteSessionSummary::from)
             .collect(),

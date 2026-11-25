@@ -171,6 +171,32 @@ test("the project scope lists the project checkout, and never the session's entr
   assert.deepEqual(page.shown(), ["README.md"]);
 });
 
+test("a picked project's checkout is asked for by its id and kept apart from the terminal's", async () => {
+  // Arrange
+  const page = mountMentions();
+  Object.assign(page.context, { capabilities: ["project_files"], fileScope: "project", session: null });
+  page.type("@READ");
+  await settle();
+  page.mentions.close();
+
+  // Act: the device picks project `2`; the terminal's entries do not show
+  // for it.
+  page.context.projectId = "2";
+  page.mentions.refresh();
+  const shownBefore = page.suggestions.isOpen();
+  page.type("@REA");
+
+  // Assert
+  assert.equal(shownBefore, false);
+  assert.deepEqual(page.requests, [
+    { method: "list_project_files" },
+    { method: "list_project_files", project_id: "2" },
+  ]);
+  assert.equal(page.suggestions.isOpen(), false);
+  await settle();
+  assert.deepEqual(page.shown(), ["README.md"]);
+});
+
 test("typing @ lists the session's files once they arrive", async () => {
   const page = mountMentions();
 
