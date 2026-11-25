@@ -1,6 +1,5 @@
 //! Runtime event loop, event-reader task, and frame-rendering unit tests.
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::io;
@@ -39,7 +38,7 @@ use crate::runtime::latency::{CycleTiming, SLOW_CYCLE_THRESHOLD};
 use crate::runtime::synchronized_writer::{FrameHold, SynchronizedWriter};
 use crate::runtime::{FRAME_INTERVAL, PresentationState};
 use crate::test_support::telemetry::{TRACER_PROVIDER_LOCK, capture_events};
-use crate::test_support::{FixedClock, SessionFixtureBuilder};
+use crate::test_support::{FixedClock, SessionFixtureBuilder, SharedBuffer};
 
 /// Starts a synchronized update.
 const SYNCHRONIZED_UPDATE_BEGIN: &[u8] = b"\x1b[?2026h";
@@ -332,29 +331,6 @@ impl Backend for CountingBackend {
     }
 }
 
-/// Terminal output shared between a test and the writer that fills it.
-#[derive(Clone, Default)]
-struct SharedOutput(Rc<RefCell<Vec<u8>>>);
-
-impl SharedOutput {
-    /// Returns and forgets everything written so far.
-    fn take(&self) -> Vec<u8> {
-        std::mem::take(&mut self.0.borrow_mut())
-    }
-}
-
-impl io::Write for SharedOutput {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(buf);
-
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 /// Counts the occurrences of `needle` in `output`.
 fn occurrences(output: &[u8], needle: &[u8]) -> usize {
     output
@@ -370,7 +346,7 @@ fn occurrences(output: &[u8], needle: &[u8]) -> usize {
 async fn render_presents_a_page_clear_and_its_repaint_as_one_update() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    let output = SharedOutput::default();
+    let output = SharedBuffer::default();
     let frame_hold = FrameHold::default();
     let backend =
         CrosstermBackend::new(SynchronizedWriter::new(output.clone(), frame_hold.clone()));

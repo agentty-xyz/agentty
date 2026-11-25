@@ -163,6 +163,42 @@ pub(crate) fn poison_lock<Value: Send + 'static>(lock: Arc<std::sync::Mutex<Valu
     .join();
 }
 
+/// Writer that keeps everything written in a buffer shared with its clones,
+/// standing in for terminal output.
+#[derive(Clone, Default)]
+pub(crate) struct SharedBuffer(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl SharedBuffer {
+    /// Returns and forgets everything written so far.
+    pub(crate) fn take(&self) -> Vec<u8> {
+        std::mem::take(&mut *self.bytes())
+    }
+
+    /// Returns everything written so far as text.
+    pub(crate) fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes()).into_owned()
+    }
+
+    /// Locks the written bytes, recovering them from a poisoned lock.
+    fn bytes(&self) -> std::sync::MutexGuard<'_, Vec<u8>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl std::io::Write for SharedBuffer {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes().extend_from_slice(buffer);
+
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Chainable builder that produces deterministic [`Session`] values for unit
 /// tests.
 pub(crate) struct SessionFixtureBuilder {
