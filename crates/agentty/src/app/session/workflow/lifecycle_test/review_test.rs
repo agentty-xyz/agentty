@@ -30,7 +30,7 @@ async fn test_review_request_web_url_returns_linked_review_request_url() {
     let database = database_with_session(
         session_manager
             .state
-            .sessions
+            .sessions()
             .first()
             .expect("fixture session should exist"),
     )

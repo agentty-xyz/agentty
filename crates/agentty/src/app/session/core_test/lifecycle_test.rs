@@ -731,6 +731,7 @@ async fn test_clear_title_generation_task_if_matches_removes_matching_generation
     // Arrange
     let state = SessionState::new(
         HashMap::new(),
+        1,
         Vec::new(),
         SelectionState::default(),
         Arc::new(RealClock),

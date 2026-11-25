@@ -780,6 +780,7 @@ pub(crate) fn session_manager_with_handles(
         Arc::new(git::MockGitClient::new()),
         SessionState::new(
             handles,
+            1,
             sessions,
             SelectionState::default(),
             Arc::new(FixedClock::unix_epoch()),

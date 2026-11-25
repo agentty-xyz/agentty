@@ -112,6 +112,7 @@ pub(super) fn session_manager_with_one_session(session: Session) -> SessionManag
 
     let state = SessionState::new(
         handles,
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(RealClock),
@@ -395,6 +396,7 @@ pub(super) fn session_manager_with_sessions(sessions: Vec<Session>) -> SessionMa
     let row_count = i64::try_from(sessions.len()).unwrap_or(0);
     let state = SessionState::new(
         handles,
+        1,
         sessions,
         SelectionState::default(),
         Arc::new(RealClock),

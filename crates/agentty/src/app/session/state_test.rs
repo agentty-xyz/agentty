@@ -1,5 +1,6 @@
-//! `SessionState` unit tests covering handle synchronization, session
-//! indexing, archive selection, git statuses, and follow-up tasks.
+//! `SessionState` and `SessionPage` unit tests covering handle
+//! synchronization, session indexing, archive selection and accounting, git
+//! statuses, and follow-up tasks.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use crate::domain::session::{
     SessionSize, Status,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-use crate::domain::session_order::ArchiveAction;
+use crate::domain::session_order::{self, ArchiveAction};
 use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
     TransientMessageLifecycle, TransientMessageSlot,
@@ -86,6 +87,7 @@ fn sync_from_handles_updates_transcript_snapshot() {
     )]);
     let mut state = SessionState::new(
         handles,
+        1,
         vec![session, unhandled_session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -122,6 +124,7 @@ fn transition_status_if_current_updates_snapshot_and_live_handle() {
     let handles = HashMap::from([(session_id.clone(), SessionHandles::new(Status::Review))]);
     let mut state = SessionState::new(
         handles,
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -184,6 +187,7 @@ fn sync_from_handles_clears_review_resolution_loader_after_failed_turn() {
     let handles = HashMap::from([(session_id, SessionHandles::new(Status::Review))]);
     let mut state = SessionState::new(
         handles,
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -195,9 +199,9 @@ fn sync_from_handles_clears_review_resolution_loader_after_failed_turn() {
     state.sync_from_handles();
 
     // Assert
-    assert_eq!(state.sessions[0].status, Status::Review);
+    assert_eq!(state.sessions()[0].status, Status::Review);
     assert!(
-        state.sessions[0]
+        state.sessions()[0]
             .transient_messages
             .get(TransientMessageSlot::GeneratedTurnProgress)
             .is_none()
@@ -256,6 +260,7 @@ fn apply_session_diff_stats_updated_updates_matching_session() {
     let session = state_session_fixture(session_id.clone(), Status::Review);
     let mut state = SessionState::new(
         HashMap::new(),
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -285,14 +290,14 @@ fn apply_session_diff_stats_updated_updates_matching_session() {
     );
 
     // Assert
-    assert_eq!(state.sessions.len(), 1);
-    assert_eq!(state.sessions[0].stats.added_lines, 12);
-    assert_eq!(state.sessions[0].stats.deleted_lines, 4);
+    assert_eq!(state.sessions().len(), 1);
+    assert_eq!(state.sessions()[0].stats.added_lines, 12);
+    assert_eq!(state.sessions()[0].stats.deleted_lines, 4);
     assert_eq!(
-        state.sessions[0].stats.diff_state,
+        state.sessions()[0].stats.diff_state,
         SessionDiffState::Unknown
     );
-    assert_eq!(state.sessions[0].size, SessionSize::Small);
+    assert_eq!(state.sessions()[0].size, SessionSize::Small);
 }
 
 #[test]
@@ -303,6 +308,7 @@ fn replace_sessions_rebuilds_session_id_index() {
     let replacement_session = state_session_fixture("session-2", Status::Review);
     let mut state = SessionState::new(
         HashMap::new(),
+        1,
         vec![initial_session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -331,13 +337,14 @@ fn push_session_preserves_archive_pagination_selection() {
         // Arrange
         let mut state = SessionState::new(
             HashMap::new(),
+            1,
             vec![state_session_fixture("archive", Status::Done)],
             SelectionState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,
         );
-        state.has_more_archived_sessions = has_more;
+        state.active.has_more_archived_sessions = has_more;
         state.table_state.select(selected);
 
         // Act
@@ -362,14 +369,15 @@ fn push_session_preserves_each_archive_action_selection() {
         // Arrange
         let mut state = SessionState::new(
             HashMap::new(),
+            1,
             vec![state_session_fixture("archive", Status::Done)],
             SelectionState::default(),
             Arc::new(FixedClock::new()),
             0,
             0,
         );
-        state.has_more_archived_sessions = true;
-        state.archive_limit = 20;
+        state.active.has_more_archived_sessions = true;
+        state.active.archive_limit = 20;
         state.table_state.select(selected);
 
         // Act
@@ -402,6 +410,7 @@ fn replace_sessions_preserves_active_transient_messages() {
     refreshed_session.published_upstream_ref = Some("origin/wt/session-1".to_string());
     let mut state = SessionState::new(
         HashMap::new(),
+        1,
         vec![initial_session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -413,7 +422,7 @@ fn replace_sessions_preserves_active_transient_messages() {
     state.replace_sessions(vec![refreshed_session]);
 
     // Assert
-    let refreshed_session = &state.sessions[0];
+    let refreshed_session = &state.sessions()[0];
     assert_eq!(
         refreshed_session.published_upstream_ref.as_deref(),
         Some("origin/wt/session-1")
@@ -436,6 +445,7 @@ fn remove_session_at_rebuilds_session_id_index() {
     let second_session = state_session_fixture("session-2", Status::Review);
     let mut state = SessionState::new(
         HashMap::new(),
+        1,
         vec![first_session, second_session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -481,6 +491,7 @@ fn retain_session_git_statuses_drops_removed_sessions() {
     // Arrange
     let mut state = SessionState::new(
         HashMap::new(),
+        1,
         Vec::new(),
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -511,9 +522,9 @@ fn retain_session_git_statuses_drops_removed_sessions() {
     state.retain_session_git_statuses(&active_session_ids);
 
     // Assert
-    assert_eq!(state.session_git_statuses.get("session-1"), None);
+    assert_eq!(state.active.session_git_statuses.get("session-1"), None);
     assert_eq!(
-        state.session_git_statuses.get("session-2"),
+        state.active.session_git_statuses.get("session-2"),
         Some(&SessionGitStatus {
             base_status: Some((0, 2)),
             has_merge_conflict: Some(false),
@@ -546,6 +557,7 @@ fn retain_follow_up_task_positions_clamps_and_drops_invalid_entries() {
     let taskless_session = state_session_fixture("session-2", Status::Done);
     let mut state = SessionState::new(
         HashMap::new(),
+        1,
         vec![surviving_session, taskless_session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -583,6 +595,7 @@ fn follow_up_state(task_count: usize) -> SessionState {
 
     SessionState::new(
         HashMap::new(),
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(FixedClock::new()),
@@ -683,7 +696,7 @@ fn session_scoped_mutations_ignore_missing_targets() {
         session.follow_up_tasks[0].launched_session_id,
         Some("launched-session".into())
     );
-    assert_eq!(state.sessions.len(), 1);
+    assert_eq!(state.sessions().len(), 1);
 }
 
 #[test]
@@ -721,4 +734,72 @@ fn sync_session_with_handles_keeps_snapshot_when_handle_locks_are_poisoned() {
     // Assert
     assert_eq!(session.status, Status::Review);
     assert_eq!(session_replay_text(&session), "kept\n\n");
+}
+
+#[test]
+/// Verifies a new state places its sessions on the active page of the given
+/// project, on the first archive page, with the archived rows it holds.
+fn new_places_sessions_on_the_projects_active_page() {
+    // Arrange
+    let sessions = vec![
+        state_session_fixture("done", Status::Done),
+        state_session_fixture("review", Status::Review),
+        state_session_fixture("canceled", Status::Canceled),
+    ];
+
+    // Act
+    let state = SessionState::new(
+        HashMap::new(),
+        7,
+        sessions,
+        SelectionState::default(),
+        Arc::new(FixedClock::new()),
+        3,
+        9,
+    );
+
+    // Assert
+    let page = state.active_page();
+    assert_eq!(page.project_id(), 7);
+    assert_eq!(page.sessions_metadata(), (3, 9));
+    assert_eq!(page.archive_limit, session_order::ARCHIVE_PAGE_SIZE);
+    assert_eq!(page.archived_session_count(), 2);
+    assert!(!page.has_more_archived_sessions);
+    assert_eq!(
+        page.session_index_by_id(),
+        &HashMap::from([
+            (SessionId::from("done"), 0),
+            (SessionId::from("review"), 1),
+            (SessionId::from("canceled"), 2),
+        ])
+    );
+}
+
+#[test]
+/// Verifies resetting an expanded archive returns the page to its first
+/// window and clears older rows while keeping the project's archive total.
+fn reset_archive_page_returns_to_first_window_and_keeps_archive_total() {
+    // Arrange
+    let mut state = SessionState::new(
+        HashMap::new(),
+        1,
+        Vec::new(),
+        SelectionState::default(),
+        Arc::new(FixedClock::new()),
+        0,
+        0,
+    );
+    state.active_page_mut().set_archive_page(23, true);
+    state.active_page_mut().archive_limit = session_order::ARCHIVE_PAGE_SIZE * 2;
+    assert!(state.is_archive_expanded());
+
+    // Act
+    state.active_page_mut().reset_archive_page();
+
+    // Assert
+    let page = state.active_page();
+    assert_eq!(page.archive_limit, session_order::ARCHIVE_PAGE_SIZE);
+    assert!(!page.has_more_archived_sessions);
+    assert_eq!(page.archived_session_count(), 23);
+    assert!(!state.is_archive_expanded());
 }

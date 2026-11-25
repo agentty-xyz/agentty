@@ -1527,7 +1527,10 @@ async fn archive_list_help_tracks_session_and_pagination_selection() {
             "archived",
             Status::Done,
         ));
-    app.sessions.state_mut().has_more_archived_sessions = true;
+    app.sessions
+        .state_mut()
+        .active_page_mut()
+        .has_more_archived_sessions = true;
     app.sessions.select_session_index(Some(0));
     app.tabs.set(Tab::Sessions);
 
@@ -1626,7 +1629,7 @@ async fn archive_load_more_enter_survives_programmatic_creation() {
         // Assert
         assert!(matches!(app.mode, AppMode::List));
         assert_eq!(app.sessions.sessions().len(), 21);
-        assert_eq!(app.sessions.state().archive_limit, 20);
+        assert_eq!(app.sessions.state().active_page().archive_limit, 20);
         assert_eq!(
             app.selected_session().expect("first new archive").id,
             "archive-10"

@@ -361,7 +361,7 @@ fn test_apply_session_reasoning_level_updated_updates_only_matching_session() {
     // Act
     session_manager.apply_session_reasoning_level_updated("other-session", ReasoningLevel::High);
     let reasoning_level_after_non_matching_update =
-        session_manager.state.sessions[0].reasoning_level_override;
+        session_manager.state.sessions()[0].reasoning_level_override;
     session_manager.apply_session_reasoning_level_updated("session-id", ReasoningLevel::Medium);
 
     // Assert
@@ -370,7 +370,7 @@ fn test_apply_session_reasoning_level_updated_updates_only_matching_session() {
         Some(ReasoningLevel::Low)
     );
     assert_eq!(
-        session_manager.state.sessions[0].reasoning_level_override,
+        session_manager.state.sessions()[0].reasoning_level_override,
         Some(ReasoningLevel::Medium)
     );
 }
@@ -384,13 +384,13 @@ fn test_apply_session_response_style_updated_updates_only_matching_session() {
 
     // Act
     session_manager.apply_session_response_style_updated("other-session", ResponseStyle::Detailed);
-    let style_after_non_matching_update = session_manager.state.sessions[0].response_style;
+    let style_after_non_matching_update = session_manager.state.sessions()[0].response_style;
     session_manager.apply_session_response_style_updated("session-id", ResponseStyle::Balanced);
 
     // Assert
     assert_eq!(style_after_non_matching_update, ResponseStyle::Concise);
     assert_eq!(
-        session_manager.state.sessions[0].response_style,
+        session_manager.state.sessions()[0].response_style,
         ResponseStyle::Balanced
     );
 }
@@ -404,13 +404,13 @@ fn test_apply_session_speed_mode_updated_updates_only_matching_session() {
 
     // Act
     session_manager.apply_session_speed_mode_updated("other-session", SpeedMode::Fast);
-    let speed_mode_after_non_matching_update = session_manager.state.sessions[0].speed_mode;
+    let speed_mode_after_non_matching_update = session_manager.state.sessions()[0].speed_mode;
     session_manager.apply_session_speed_mode_updated("session-id", SpeedMode::Fast);
 
     // Assert
     assert_eq!(speed_mode_after_non_matching_update, SpeedMode::Normal);
     assert_eq!(
-        session_manager.state.sessions[0].speed_mode,
+        session_manager.state.sessions()[0].speed_mode,
         SpeedMode::Fast
     );
 }

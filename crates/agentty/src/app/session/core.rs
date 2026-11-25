@@ -28,7 +28,7 @@ use crate::domain::session::{
     SessionStats, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
-use crate::domain::session_order::{self, ArchiveAction};
+use crate::domain::session_order::ArchiveAction;
 use crate::domain::transient_message::{
     GeneratedTurnUpdate, QueuedAction, TransientMessage, TransientMessageAnchor,
     TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot,
@@ -166,7 +166,7 @@ impl SessionManager {
         state: SessionState,
         stats_activity: Vec<DailyActivity>,
     ) -> Self {
-        let pending_history_replay = Self::startup_history_replay_set(&state.sessions);
+        let pending_history_replay = Self::startup_history_replay_set(state.sessions());
 
         Self {
             active_prompt_outputs: HashMap::new(),
@@ -311,13 +311,15 @@ impl SessionManager {
     /// [`crate::ui::render_app`] can avoid cloning session maps or active
     /// prompt output blocks while runtime retains the concrete table viewport.
     pub(crate) fn render_parts(&self) -> SessionRenderParts<'_> {
+        let page = self.state.active_page();
+
         SessionRenderParts {
             active_prompt_outputs: &self.active_prompt_outputs,
             process_resources: self.resources.resources,
-            session_branch_names: &self.state.session_branch_names,
-            session_git_statuses: &self.state.session_git_statuses,
-            session_index_by_id: &self.state.session_index_by_id,
-            sessions: &self.state.sessions,
+            session_branch_names: page.session_branch_names(),
+            session_git_statuses: page.session_git_statuses(),
+            session_index_by_id: page.session_index_by_id(),
+            sessions: page.sessions(),
             stats_activity: &self.stats_activity,
             selected_index: self.state.table_state.selected(),
         }
@@ -331,13 +333,13 @@ impl SessionManager {
 
     /// Returns all loaded session snapshots in current list order.
     pub(crate) fn sessions(&self) -> &[Session] {
-        &self.state.sessions
+        self.state.sessions()
     }
 
     /// Returns mutable access to all loaded session snapshots for focused
     /// reducers and tests that need to stage state directly.
     pub(crate) fn sessions_mut(&mut self) -> &mut [Session] {
-        &mut self.state.sessions
+        self.state.sessions_mut()
     }
 
     /// Removes one loaded session snapshot by list index.
@@ -357,7 +359,7 @@ impl SessionManager {
 
     /// Returns one mutable session snapshot by current list index.
     pub(crate) fn session_at_mut(&mut self, session_index: usize) -> Option<&mut Session> {
-        self.state.sessions.get_mut(session_index)
+        self.state.sessions_mut().get_mut(session_index)
     }
 
     /// Returns one immutable session snapshot by stable identifier.
@@ -395,7 +397,12 @@ impl SessionManager {
 
     /// Returns whether older archived rows can be loaded.
     pub(crate) fn has_more_archived_sessions(&self) -> bool {
-        self.state.has_more_archived_sessions
+        self.state.active_page().has_more_archived_sessions
+    }
+
+    /// Returns the active project's archive total across every page.
+    pub(crate) fn archived_session_count(&self) -> usize {
+        self.state.active_page().archived_session_count()
     }
 
     /// Returns whether loaded archived rows extend beyond the first page.
@@ -410,8 +417,7 @@ impl SessionManager {
 
     /// Resets the archive window when switching active projects.
     pub(crate) fn reset_archive_page(&mut self) {
-        self.state.archive_limit = session_order::ARCHIVE_PAGE_SIZE;
-        self.state.has_more_archived_sessions = false;
+        self.state.active_page_mut().reset_archive_page();
     }
 
     /// Returns shared immutable access to session render and refresh state.
@@ -438,7 +444,7 @@ impl SessionManager {
     ) {
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -455,7 +461,7 @@ impl SessionManager {
     ) {
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -472,7 +478,7 @@ impl SessionManager {
     ) {
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -489,7 +495,7 @@ impl SessionManager {
     ) {
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -506,7 +512,7 @@ impl SessionManager {
     ) {
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -519,7 +525,7 @@ impl SessionManager {
     pub(crate) fn apply_review_request(&mut self, session_id: &str, review_request: ReviewRequest) {
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -533,7 +539,7 @@ impl SessionManager {
             .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -652,7 +658,7 @@ impl SessionManager {
             self.show_generated_turn_progress(session_id, label);
         } else if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -667,7 +673,7 @@ impl SessionManager {
     pub(crate) fn show_generated_turn_progress(&mut self, session_id: &str, label: String) {
         let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
@@ -703,7 +709,7 @@ impl SessionManager {
         let persistent_notice = body.text().to_string();
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -738,7 +744,7 @@ impl SessionManager {
         }
         let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
@@ -799,7 +805,7 @@ impl SessionManager {
 
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -847,7 +853,7 @@ impl SessionManager {
 
         let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
@@ -870,7 +876,7 @@ impl SessionManager {
     pub(crate) fn append_workflow_notice(&mut self, session_id: &str, notice: String) {
         if let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         {
@@ -899,7 +905,7 @@ impl SessionManager {
     pub(crate) fn update_live_activity(&mut self, session_id: &str, activity: Option<String>) {
         let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
@@ -971,7 +977,7 @@ impl SessionManager {
     fn show_live_output(&mut self, session_id: &str, markdown: Option<String>) {
         let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
@@ -1002,7 +1008,7 @@ impl SessionManager {
     ) {
         let Some(session) = self
             .state
-            .sessions
+            .sessions_mut()
             .iter_mut()
             .find(|session| session.id == session_id)
         else {
@@ -1083,7 +1089,7 @@ impl SessionManager {
     pub(crate) fn retain_active_prompt_outputs(&mut self) {
         self.active_prompt_outputs.retain(|session_id, _| {
             self.state
-                .sessions
+                .sessions()
                 .iter()
                 .find(|session| session.id == *session_id)
                 .is_some_and(|session| {
@@ -1131,7 +1137,7 @@ impl SessionManager {
 
     /// Returns cached worktree availability keyed by session id.
     pub(crate) fn session_worktree_availability(&self) -> &HashMap<SessionId, bool> {
-        &self.state.session_worktree_availability
+        self.state.active_page().session_worktree_availability()
     }
 
     /// Replaces cached detected session branch names from the latest reload.
@@ -1146,7 +1152,8 @@ impl SessionManager {
     /// Returns the cached or derived branch name for one session.
     pub(crate) fn session_branch_name(&self, session_id: &str) -> Option<&str> {
         self.state
-            .session_branch_names
+            .active_page()
+            .session_branch_names()
             .get(session_id)
             .map(String::as_str)
     }
@@ -1172,7 +1179,7 @@ impl SessionManager {
     pub(crate) async fn refresh_session_branch_names(&mut self) {
         let session_inputs = self
             .state
-            .sessions
+            .sessions()
             .iter()
             .map(|session| {
                 let session_id = session.id.clone();
@@ -1228,7 +1235,7 @@ impl SessionManager {
         let position = self.selected_follow_up_task_position(session_id)?;
         let session = self
             .state
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)?;
 
@@ -1243,7 +1250,7 @@ impl SessionManager {
     /// Returns whether one session has more than one follow-up task.
     pub(crate) fn has_multiple_follow_up_tasks(&self, session_id: &str) -> bool {
         self.state
-            .sessions
+            .sessions()
             .iter()
             .find(|session| session.id == session_id)
             .is_some_and(|session| session.follow_up_tasks.len() > 1)
