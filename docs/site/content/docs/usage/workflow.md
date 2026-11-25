@@ -257,6 +257,12 @@ a [harness model](@/docs/agents/backends.md#backends-harness-fast-model). The se
 commit message covers the cumulative changes, and a later commit covers only its turn.
 If message generation fails, auto-commit stops and the worktree stays intact.
 
+Agentty never commits a Git repository nested in the worktree, such as one an agent
+created there; it stays on disk, untracked. Its diffs and status checks ignore
+submodules. An initialized submodule still works as before. While any other repository
+sits at a submodule path, Agentty stops committing and rebasing and says which path to
+clear.
+
 <a id="usage-title-refinement"></a> The Fast model also refines session titles from the
 overall goal. Draft titles update as messages are staged, committed work uses the
 session commit title, and failed refinement keeps the provisional title. Commits added

@@ -325,7 +325,7 @@ fn diff_reports_repository_unavailable_when_removed_after_index_resolution() {
     assert!(matches!(
         result,
         Err(GitError::RepositoryUnavailable { detail })
-            if detail.contains("git add -A --intent-to-add")
+            if detail.contains("git ls-files -z --others")
     ));
 }
 

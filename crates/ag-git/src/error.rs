@@ -57,6 +57,19 @@ pub enum GitError {
         config_file: String,
     },
 
+    /// A Git repository sits inside the worktree where Agentty's own Git
+    /// would run its configuration, such as one a session committed at a
+    /// submodule path, so Agentty refuses to work on the worktree.
+    #[error(
+        "`{path}` holds a Git repository that the session left in its worktree; Agentty does not \
+         stage, commit, or rebase the worktree while it is there. Remove it, or move it out of \
+         the worktree, then try again."
+    )]
+    EmbeddedRepository {
+        /// Worktree-relative path of the repository.
+        path: String,
+    },
+
     /// A `tokio::task::spawn_blocking` join failed.
     #[error("Join error: {0}")]
     Join(#[from] tokio::task::JoinError),

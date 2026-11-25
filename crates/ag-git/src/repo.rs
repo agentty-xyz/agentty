@@ -674,7 +674,10 @@ fn apply_non_interactive_environment(command: &mut Command) {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
-        .envs(trusted_history_environment());
+        .envs(trusted_history_environment())
+        .envs(no_submodule_recursion_environment(
+            std::env::var("GIT_CONFIG_COUNT").ok(),
+        ));
 }
 
 /// Disables optional index writes and interactive prompts for async Git.
@@ -687,8 +690,43 @@ fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
-        .envs(trusted_history_environment());
+        .envs(trusted_history_environment())
+        .envs(no_submodule_recursion_environment(
+            std::env::var("GIT_CONFIG_COUNT").ok(),
+        ));
 }
+
+/// Sets [`SUBMODULE_ISOLATION_CONFIGURATION`] through Git's environment
+/// configuration, after the `configured_count` pairs the caller's
+/// environment already passes. The environment overrides every
+/// configuration file, including a user's global `submodule.recurse=true`.
+fn no_submodule_recursion_environment(configured_count: Option<String>) -> Vec<(String, String)> {
+    let first = configured_count
+        .and_then(|count| count.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut environment = Vec::new();
+    for (offset, (key, value)) in SUBMODULE_ISOLATION_CONFIGURATION.iter().enumerate() {
+        let index = first.saturating_add(offset);
+        environment.push((format!("GIT_CONFIG_KEY_{index}"), (*key).to_string()));
+        environment.push((format!("GIT_CONFIG_VALUE_{index}"), (*value).to_string()));
+    }
+    environment.push((
+        "GIT_CONFIG_COUNT".to_string(),
+        first
+            .saturating_add(SUBMODULE_ISOLATION_CONFIGURATION.len())
+            .to_string(),
+    ));
+
+    environment
+}
+
+/// Configuration every host Git command runs with, because a session may
+/// have left a repository at a submodule path whose hooks and configuration
+/// would otherwise run: commands such as checkout, reset, fetch, and rebase
+/// never recurse into submodules, and commits, including those a rebase
+/// makes, never print a status, which would run `git status` inside them.
+const SUBMODULE_ISOLATION_CONFIGURATION: [(&str, &str); 2] =
+    [("submodule.recurse", "false"), ("commit.status", "false")];
 
 /// Makes Git read the history the objects record, ignoring `refs/replace`
 /// and grafts, which an agent working in a session can write: otherwise a

@@ -14,8 +14,9 @@ use tokio::time;
 
 use super::error::GitError;
 use super::rebase::{
-    GIT_INDEX_LOCK_RETRY_ATTEMPTS, GIT_INDEX_LOCK_RETRY_DELAY, is_git_index_lock_error,
-    is_rebase_conflict, run_git_command_with_index_lock_retry,
+    GIT_INDEX_LOCK_RETRY_ATTEMPTS, GIT_INDEX_LOCK_RETRY_DELAY, GitCommandRunner,
+    ProcessGitCommandRunner, is_git_index_lock_error, is_rebase_conflict,
+    run_git_command_with_index_lock_retry, run_git_command_with_index_lock_retry_with_dependencies,
 };
 use super::repo::{
     AsyncGitCommand, AsyncGitCommandOutput, AsyncGitCommandRunner, ProcessAsyncGitCommandRunner,
@@ -23,6 +24,7 @@ use super::repo::{
     run_git_command_output_with_env_sync, run_git_command_sync, run_git_command_with_runner,
     spawn_blocking_in_context,
 };
+use crate::ThreadSleeper;
 
 /// Map of local branch names to their tip commit and tracked-upstream status.
 pub type BranchTrackingMap = HashMap<String, BranchTrackingStatus>;
@@ -620,10 +622,15 @@ fn diff_output_after_index_resolution(
 ) -> Result<String, GitError> {
     let result = (|| -> Result<String, GitError> {
         let temporary_index = copy_git_index_to_temp(index_path)?;
+        let exclusions = embedded_repository_exclusions(repo_path)?;
+        let intent_to_add = ["add", "-A", "--intent-to-add", "--", "."]
+            .into_iter()
+            .chain(exclusions.iter().map(String::as_str))
+            .collect::<Vec<_>>();
 
         run_git_command_with_index_sync(
             repo_path,
-            &["add", "-A", "--intent-to-add"],
+            &intent_to_add,
             &temporary_index,
             "Git add --intent-to-add failed",
         )?;
@@ -652,6 +659,7 @@ fn diff_output_after_index_resolution(
             "--no-color",
             "--no-textconv",
             "--no-ext-diff",
+            SUBMODULE_ISOLATION,
             "--src-prefix=a/",
             "--dst-prefix=b/",
         ];
@@ -829,6 +837,12 @@ fn run_git_command_with_index_sync(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Keeps status and diff from inspecting tracked submodule paths: Git would
+/// otherwise run `git status` inside each one, and so the configuration of
+/// whatever repository a session left there. The command-line flag
+/// overrides any `ignore` setting in `.gitmodules`, which sessions can edit.
+const SUBMODULE_ISOLATION: &str = "--ignore-submodules=all";
+
 /// Returns whether a repository or worktree has no uncommitted changes.
 ///
 /// # Arguments
@@ -865,6 +879,7 @@ pub(crate) async fn worktree_status(repo_path: PathBuf) -> Result<String, GitErr
             "status".to_string(),
             "--porcelain=v1".to_string(),
             "--untracked-files=all".to_string(),
+            SUBMODULE_ISOLATION.to_string(),
         ],
         "Git status --porcelain=v1 failed".to_string(),
     )
@@ -892,6 +907,7 @@ pub(crate) async fn tracked_worktree_status(repo_path: PathBuf) -> Result<String
             "status".to_string(),
             "--porcelain=v1".to_string(),
             "--untracked-files=no".to_string(),
+            SUBMODULE_ISOLATION.to_string(),
         ],
         "Git tracked status --porcelain=v1 failed".to_string(),
     )
@@ -2006,7 +2022,33 @@ fn reset_empty_amend_sync(repo_path: &Path) -> Result<(), GitError> {
 ///
 /// Uses shared git retry behavior for transient `index.lock` contention.
 fn stage_all_sync(repo_path: &Path) -> Result<(), GitError> {
-    let output = run_git_command_with_index_lock_retry(repo_path, &["add", "-A"], &[])?;
+    stage_all_with_runner(repo_path, &ProcessGitCommandRunner)
+}
+
+/// Stages all changes like [`stage_all_sync`], running `git add` through
+/// `command_runner`.
+///
+/// # Errors
+/// Returns [`GitError::EmbeddedRepository`] when a repository sits at a
+/// gitlink path or was staged as one, or a [`GitError`] if Git fails.
+fn stage_all_with_runner(
+    repo_path: &Path,
+    command_runner: &dyn GitCommandRunner,
+) -> Result<(), GitError> {
+    refuse_embedded_gitlink_repositories(repo_path)?;
+    let exclusions = embedded_repository_exclusions(repo_path)?;
+    let args = ["add", "-A", "--", "."]
+        .into_iter()
+        .chain(exclusions.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    let staged_gitlinks = gitlink_paths(repo_path)?;
+    let output = run_git_command_with_index_lock_retry_with_dependencies(
+        repo_path,
+        &args,
+        &[],
+        command_runner,
+        &ThreadSleeper,
+    )?;
 
     if !output.status.success() {
         let detail = command_output_detail(&output.stdout, &output.stderr);
@@ -2016,9 +2058,188 @@ fn stage_all_sync(repo_path: &Path) -> Result<(), GitError> {
             stderr: format!("Failed to stage changes: {detail}"),
         });
     }
+    // A repository that appeared after the listing, for example one a
+    // still-running command moved in, would have been staged anyway, so it
+    // is unstaged again before staging stops.
+    let Some(path) = gitlink_paths(repo_path)?
+        .into_iter()
+        .find(|path| !staged_gitlinks.contains(path))
+    else {
+        return Ok(());
+    };
+    run_git_command_sync(
+        repo_path,
+        &["update-index", "--force-remove", "--", &path],
+        "Failed to unstage an embedded repository",
+    )?;
 
-    Ok(())
+    Err(GitError::EmbeddedRepository { path })
 }
+
+/// Returns pathspecs that keep `git add -A` away from every repository
+/// embedded in the worktree at `repo_path`: untracked ones, which
+/// `git ls-files --others` lists with a trailing slash instead of
+/// descending into them, and tracked gitlinks other than initialized
+/// submodules.
+///
+/// Staging an embedded repository would record it as a gitlink, and Git
+/// then runs `git status` inside it, and so its configuration such as
+/// `core.fsmonitor`, whenever the host stages, diffs, or reports status. An
+/// agent can leave such a repository in a session worktree, so the host
+/// never stages one; listing them reads only the worktree and the index.
+///
+/// # Errors
+/// Returns a [`GitError`] if a listing fails or the Git directory cannot be
+/// resolved.
+fn embedded_repository_exclusions(repo_path: &Path) -> Result<Vec<String>, GitError> {
+    let untracked = git_records(
+        repo_path,
+        &["ls-files", "-z", "--others", "--exclude-standard"],
+        "Failed to list untracked files",
+    )?;
+    let mut repositories = untracked
+        .iter()
+        .filter_map(|path| path.strip_suffix(b"/"))
+        .map(repository_path)
+        .collect::<Result<Vec<_>, _>>()?;
+    // An initialized submodule's recorded commit stays stageable, for
+    // example to resolve a conflicting submodule update.
+    let modules = submodule_store(repo_path)?;
+    repositories.extend(
+        gitlink_paths(repo_path)?
+            .into_iter()
+            .filter(|path| !is_initialized_submodule(repo_path, path, &modules)),
+    );
+
+    Ok(repositories
+        .into_iter()
+        .map(|path| format!(":(exclude,literal){path}"))
+        .collect())
+}
+
+/// Refuses to let host Git work on the worktree at `repo_path` while a
+/// tracked gitlink path holds a Git repository.
+///
+/// Git runs `git status` inside such a repository, and so whatever its
+/// configuration names, when it prints a commit's status, continues a
+/// rebase, or compares the worktree without `--ignore-submodules`, and
+/// neither `.gitmodules` nor configuration passed to Git can turn that off
+/// reliably. Agentty never initializes submodules in session worktrees, and
+/// sandboxed commands cannot write the submodule stores of the shared Git
+/// directory, so such a repository can only be one a session committed or
+/// moved there. An initialized submodule, whose `.git` file points into
+/// those stores, is the user's own and stays allowed.
+///
+/// # Errors
+/// Returns [`GitError::EmbeddedRepository`] naming the first such path, or
+/// a [`GitError`] if the index or the Git directory cannot be read.
+pub(crate) fn refuse_embedded_gitlink_repositories(repo_path: &Path) -> Result<(), GitError> {
+    let modules = submodule_store(repo_path)?;
+    match gitlink_paths(repo_path)?.into_iter().find(|path| {
+        std::fs::symlink_metadata(repo_path.join(path).join(".git")).is_ok()
+            && !is_initialized_submodule(repo_path, path, &modules)
+    }) {
+        Some(path) => Err(GitError::EmbeddedRepository { path }),
+        None => Ok(()),
+    }
+}
+
+/// Returns the resolved directory where the repository at `repo_path` keeps
+/// its submodules' Git directories, `modules` in its common Git directory.
+///
+/// # Errors
+/// Returns a [`GitError`] if the common Git directory cannot be resolved.
+fn submodule_store(repo_path: &Path) -> Result<PathBuf, GitError> {
+    let common = run_git_command_sync(
+        repo_path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        "Failed to resolve the common Git directory",
+    )?;
+    let common = PathBuf::from(common.trim());
+
+    Ok(std::fs::canonicalize(&common)
+        .unwrap_or(common)
+        .join("modules"))
+}
+
+/// Returns whether the gitlink `path` of `repo_path` holds an initialized
+/// submodule: its `.git` is a file whose `gitdir:` resolves inside
+/// `modules`, which sandboxed commands cannot write.
+fn is_initialized_submodule(repo_path: &Path, path: &str, modules: &Path) -> bool {
+    let submodule = repo_path.join(path);
+    let Ok(pointer) = std::fs::read_to_string(submodule.join(".git")) else {
+        return false;
+    };
+
+    pointer
+        .trim()
+        .strip_prefix("gitdir: ")
+        .and_then(|target| std::fs::canonicalize(submodule.join(target)).ok())
+        .is_some_and(|target| target.starts_with(modules))
+}
+
+/// Returns the paths the index of `repo_path` records as gitlinks.
+///
+/// # Errors
+/// Returns a [`GitError`] if the index cannot be listed.
+fn gitlink_paths(repo_path: &Path) -> Result<Vec<String>, GitError> {
+    let staged = git_records(
+        repo_path,
+        &["ls-files", "-z", "--stage"],
+        "Failed to list staged files",
+    )?;
+
+    staged
+        .iter()
+        .filter(|entry| entry.starts_with(GITLINK_MODE.as_bytes()))
+        .filter_map(|entry| entry.splitn(2, |byte| *byte == b'\t').nth(1))
+        .map(repository_path)
+        .collect()
+}
+
+/// Returns the NUL-separated records `git <args>` prints in `repo_path` as
+/// raw bytes, so paths that are not UTF-8 keep their exact names.
+///
+/// # Errors
+/// Returns a [`GitError`] carrying `error_context` if Git fails.
+fn git_records(
+    repo_path: &Path,
+    args: &[&str],
+    error_context: &str,
+) -> Result<Vec<Vec<u8>>, GitError> {
+    let output = run_git_command_output_sync(repo_path, args)?;
+    if !output.status.success() {
+        return Err(GitError::CommandFailed {
+            command: format!("git {}", args.join(" ")),
+            stderr: format!(
+                "{error_context}: {}",
+                command_output_detail(&output.stdout, &output.stderr)
+            ),
+        });
+    }
+
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect())
+}
+
+/// Returns an embedded repository's worktree-relative `path` as text.
+///
+/// # Errors
+/// Returns [`GitError::EmbeddedRepository`] for a path that is not UTF-8,
+/// which no pathspec Agentty passes could exclude, so staging stops instead.
+fn repository_path(path: &[u8]) -> Result<String, GitError> {
+    String::from_utf8(path.to_vec()).map_err(|_| GitError::EmbeddedRepository {
+        path: String::from_utf8_lossy(path).into_owned(),
+    })
+}
+
+/// Index mode Git records for a gitlink, followed by the separator before
+/// its object name.
+const GITLINK_MODE: &str = "160000 ";
 
 /// Returns the full `HEAD` commit message, or `None` when no commits exist.
 fn head_commit_message_sync(repo_path: &Path) -> Result<Option<String>, GitError> {
