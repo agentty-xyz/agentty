@@ -42,6 +42,7 @@ impl AppServerClient for RestartOnlyServer {
             let _ = stream.send(AppServerStreamEvent::Activity(ActivityEvent {
                 attempt_id: if malformed { "initial" } else { "final" }.into(),
                 exit_code: None,
+                facts: Box::default(),
                 id: "call".into(),
                 input: None,
                 output: None,

@@ -1022,6 +1022,7 @@ async fn utility_forwards_activity_sink_to_runtime() {
     let event = ag_contracts::ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "call".into(),
         input: None,
         kind: ag_contracts::ActivityKind::Tool,

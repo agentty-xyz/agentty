@@ -435,6 +435,7 @@ async fn session_worker_forwards_structured_activity_unchanged() {
     let event = ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "call".into(),
         input: Some("review README.md".into()),
         kind: ActivityKind::Skill,

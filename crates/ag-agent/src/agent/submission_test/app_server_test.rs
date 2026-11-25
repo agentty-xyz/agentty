@@ -386,6 +386,7 @@ fn activity_event(status: ActivityStatus) -> ActivityEvent {
     ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "call".into(),
         input: None,
         kind: ActivityKind::Tool,

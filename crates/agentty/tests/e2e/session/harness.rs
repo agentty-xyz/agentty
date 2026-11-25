@@ -213,6 +213,9 @@ async fn test_harness_session_runs_with_a_provider_key() -> E2eResult {
 /// answered as unavailable.
 const UNAVAILABLE_TOOL_ANSWER: &str = "Answered without the missing tool.";
 
+/// Saved footer of the turn whose invented tool call was unavailable.
+const UNAVAILABLE_TOOL_FOOTER: &str = "Tools: read_file ×1 (1 failed)";
+
 /// Scripts a provider that first calls `read_file`, a tool the harness does
 /// not have, then answers once the harness returns that call's result.
 async fn unavailable_tool_provider() -> MockServer {
@@ -280,8 +283,15 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
                         Duration::from_millis(100),
                         |frame| {
                             let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(frame, UNAVAILABLE_TOOL_ANSWER, &full)?;
+                            // The answer streams before the turn saves its
+                            // footer, so wait for the finished turn.
+                            assertion::match_text_in_region(frame, UNAVAILABLE_TOOL_FOOTER, &full)?;
+                            for hidden in ["Working...", "Status:"] {
+                                assertion::match_not_visible(frame, hidden)?;
+                            }
 
-                            assertion::match_text_in_region(frame, UNAVAILABLE_TOOL_ANSWER, &full)
+                            Ok(())
                         },
                     )
                     .capture_labeled(
@@ -293,6 +303,9 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, UNAVAILABLE_TOOL_ANSWER, &full);
+                    // The run's own tool rows count the unavailable call as
+                    // failed in the turn's footer.
+                    assertion::assert_text_in_region(frame, UNAVAILABLE_TOOL_FOOTER, &full);
                 })
             },
         )

@@ -11,7 +11,7 @@ use ag_agent::{
     NativeHarnessConfig, RealOneShotClient, create_agent_channel, instruction_bootstrap_key,
 };
 use ag_contracts::{
-    ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
+    ActivityFailure, ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
     AgentRequestKind, ContextCompaction, ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient,
     OneShotRequest, OutputEvent, OutputKind, PermissionMode, ProviderCallBudget, ReasoningLevel,
     ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
@@ -822,8 +822,8 @@ async fn edit_mode_turn_reads_writes_and_runs_bash_without_provider_secrets() {
         [
             ("write", ActivityKind::FileChange, ActivityStatus::Running),
             ("write", ActivityKind::FileChange, ActivityStatus::Completed),
-            ("read", ActivityKind::Tool, ActivityStatus::Running),
-            ("read", ActivityKind::Tool, ActivityStatus::Failed),
+            ("read", ActivityKind::Read, ActivityStatus::Running),
+            ("read", ActivityKind::Read, ActivityStatus::Failed),
             ("bash", ActivityKind::Command, ActivityStatus::Running),
             ("bash", ActivityKind::Command, ActivityStatus::Completed),
         ]
@@ -955,6 +955,104 @@ async fn read_only_turn_answers_writes_as_unavailable_and_continues() {
             ("write", ActivityStatus::Running),
             ("write", ActivityStatus::Failed)
         ]
+    );
+}
+
+#[tokio::test]
+async fn rejected_write_reports_a_failed_row_with_its_reason_after_its_narration() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(
+        &server,
+        r#""tool_call_id":"call-write""#,
+        answer("Could not edit the notes"),
+        1,
+    )
+    .await;
+    let narrated_write = ResponseTemplate::new(200).set_body_json(json!({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {
+                "content": "Updating the notes",
+                "tool_calls": [{
+                    "id": "call-write",
+                    "type": "function",
+                    "function": {
+                        "name": "write",
+                        "arguments": json!({
+                            "path": "notes.txt",
+                            "patch": "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-absent line\n+new line\n"
+                        })
+                        .to_string()
+                    }
+                }]
+            }
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+    }));
+    respond(&server, "Edit the notes", narrated_write, 2).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    std::fs::write(worktree.path().join("notes.txt"), "hello\n").expect("notes");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (result, events) = run_turn(
+        &channel,
+        "session-rejected-write",
+        turn_request(worktree.path(), MUSE_MODEL, "Edit the notes"),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(
+        result.expect("turn").assistant_message.answer,
+        "Could not edit the notes"
+    );
+    let narration = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                TurnEvent::Output(OutputEvent::Completed { text, .. }) if text == "Updating the notes"
+            )
+        })
+        .expect("the narration should stream");
+    let row_in = |status: ActivityStatus| {
+        events
+            .iter()
+            .enumerate()
+            .find_map(|(index, event)| match event {
+                TurnEvent::Activity(row) if row.status == status => Some((index, row)),
+                _ => None,
+            })
+            .expect("the write should report its row")
+    };
+    let (running_index, running) = row_in(ActivityStatus::Running);
+    let (row_index, row) = row_in(ActivityStatus::Failed);
+    assert!(
+        narration < running_index && running_index < row_index,
+        "{events:?}"
+    );
+    assert_eq!(
+        (&running.attempt_id, &running.id),
+        (&row.attempt_id, &row.id)
+    );
+    assert_eq!(row.facts.failure, Some(ActivityFailure::Rejected));
+    assert_eq!(row.name, "write");
+    assert_eq!(row.kind, ActivityKind::FileChange);
+    assert_eq!(row.facts.target.as_deref(), Some("notes.txt"));
+    assert!(
+        row.facts
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("invalid patch")),
+        "{row:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.path().join("notes.txt")).expect("notes"),
+        "hello\n"
     );
 }
 
@@ -1743,15 +1841,17 @@ async fn shutdown_cancels_a_running_command_and_waits_for_cleanup() {
     // Assert
     assert!(matches!(shutdown, Ok(Ok(()))), "{shutdown:?}");
     assert!(repeated.is_ok());
-    let mut interrupted = false;
+    // The aborted turn stops forwarding its run's events, so its row stays
+    // running and the host settles it when the event stream closes.
+    let mut settled = false;
     while let Ok(event) = events_rx.try_recv() {
-        interrupted |= matches!(
+        settled |= matches!(
             event,
             TurnEvent::Activity(activity)
-                if activity.name == "bash" && activity.status == ActivityStatus::Interrupted
+                if activity.name == "bash" && activity.status != ActivityStatus::Running
         );
     }
-    assert!(interrupted);
+    assert!(!settled);
 }
 
 #[tokio::test]
@@ -2311,20 +2411,39 @@ async fn utility_run_forwards_tool_activity() {
     let server = MockServer::start().await;
     respond(
         &server,
-        r#""tool_call_id":"call-read""#,
+        r#""tool_call_id":"call-write""#,
         utility_answer("Harness title"),
         1,
     )
     .await;
     respond(
         &server,
-        "Name this session",
-        tool_call("call-read", "read", &json!({"path": "missing.txt"})),
+        r#""tool_call_id":"call-missing""#,
+        tool_call(
+            "call-write",
+            "write",
+            &json!({"path": "notes.txt", "patch": "--- /dev/null\n+++ b/notes.txt\n"}),
+        ),
         2,
+    )
+    .await;
+    respond(
+        &server,
+        r#""tool_call_id":"call-read""#,
+        tool_call("call-missing", "read", &json!({"path": "missing.txt"})),
+        3,
+    )
+    .await;
+    respond(
+        &server,
+        "Name this session",
+        tool_call("call-read", "read", &json!({"path": "notes.txt"})),
+        4,
     )
     .await;
     let data_root = tempfile::tempdir().expect("data root");
     let worktree = tempfile::tempdir().expect("worktree");
+    std::fs::write(worktree.path().join("notes.txt"), "hello\n").expect("notes");
     let client = RealOneShotClient::pooled(None)
         .with_native_harness(config(data_root.path(), environment(&server)));
     let (activity_tx, mut activity_rx) = mpsc::unbounded_channel();
@@ -2342,11 +2461,26 @@ async fn utility_run_forwards_tool_activity() {
             .answer,
         "Harness title"
     );
-    let activity = activity_rx.try_recv().expect("read activity");
+    let mut activity = Vec::new();
+    while let Ok(event) = activity_rx.try_recv() {
+        activity.push(event);
+    }
+    let rows = activity
+        .iter()
+        .map(|event| (event.name.as_str(), event.status))
+        .collect::<Vec<_>>();
     assert_eq!(
-        (activity.name.as_str(), activity.status),
-        ("read", ActivityStatus::Running)
+        rows,
+        [
+            ("read", ActivityStatus::Running),
+            ("read", ActivityStatus::Completed),
+            ("read", ActivityStatus::Running),
+            ("read", ActivityStatus::Failed),
+            ("write", ActivityStatus::Running),
+            ("write", ActivityStatus::Failed),
+        ]
     );
+    assert!(activity[1].facts.duration.is_some());
 }
 
 #[tokio::test]

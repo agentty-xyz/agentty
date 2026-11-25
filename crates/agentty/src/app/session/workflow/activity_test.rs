@@ -3,7 +3,7 @@
 
 use std::time::SystemTime;
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};
+use ag_contracts::{ActivityEvent, ActivityFacts, ActivityKind, ActivityStatus};
 use tokio::sync::mpsc;
 
 use super::{ActivityState, TurnActivity};
@@ -16,6 +16,7 @@ fn summary_counts_invocations_not_updates_and_separates_attempts_and_skills() {
     let event = ActivityEvent {
         attempt_id: "one".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "call".into(),
         input: None,
         kind: ActivityKind::Tool,
@@ -59,6 +60,7 @@ fn mcp_calls_group_by_server_tool_between_tools_and_skills() {
     let event = ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "query-1".into(),
         input: Some(r#"{"query":"SELECT 1"}"#.into()),
         kind: ActivityKind::Mcp,
@@ -122,6 +124,7 @@ fn summary_retains_failed_command_count_after_live_rows_clear() {
     let event = ActivityEvent {
         attempt_id: "antigravity-attempt".into(),
         exit_code: Some(1),
+        facts: Box::default(),
         id: "1".into(),
         input: None,
         kind: ActivityKind::Command,
@@ -156,6 +159,7 @@ fn summary_bounds_unique_calls_but_accepts_terminal_updates() {
     let mut event = ActivityEvent {
         attempt_id: "one".into(),
         exit_code: None,
+        facts: Box::default(),
         id: String::new(),
         input: None,
         kind: ActivityKind::Command,
@@ -191,6 +195,7 @@ fn live_rows_keep_invocation_order_update_status_and_clear() {
     let event = ActivityEvent {
         attempt_id: "one".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "z".into(),
         input: None,
         kind: ActivityKind::Tool,
@@ -267,6 +272,7 @@ fn failed_calls_retain_counts_without_command_or_output_previews() {
     let event = ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: Some(1),
+        facts: Box::default(),
         id: "call".into(),
         input: Some("rg '**example**' README.md".into()),
         kind: ActivityKind::Command,
@@ -306,6 +312,7 @@ fn live_activity_bursts_bound_pending_snapshots_and_rearm_after_consumption() {
     let mut event = ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "call".into(),
         input: None,
         kind: ActivityKind::Tool,
@@ -384,6 +391,11 @@ fn compact_rows_hide_successful_output_and_flatten_multiline_commands() {
     let event = ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
+        // Adapters flatten a command onto one line for its target.
+        facts: Box::new(ActivityFacts {
+            target: Some("cargo test --workspace".into()),
+            ..ActivityFacts::default()
+        }),
         id: "call".into(),
         input: Some("  cargo\n test\t --workspace  ".into()),
         kind: ActivityKind::Command,
@@ -610,7 +622,12 @@ fn command_previews_preserve_shell_syntax_while_running() {
     ] {
         // Arrange
         let mut activity = TurnActivity::default();
+        // Adapters flatten a command onto one line for its target.
         let event = ActivityEvent {
+            facts: Box::new(ActivityFacts {
+                target: Some(expected.into()),
+                ..ActivityFacts::default()
+            }),
             input: Some(input.into()),
             ..activity_event()
         };
@@ -633,10 +650,50 @@ fn command_previews_preserve_shell_syntax_while_running() {
     }
 }
 
+#[test]
+fn piped_failures_count_as_failed_and_rows_preview_their_targets() {
+    // Arrange
+    let mut activity = TurnActivity::default();
+    let running = ActivityEvent {
+        facts: Box::new(ActivityFacts {
+            target: Some("cargo test 2>&1 | tail -20".into()),
+            ..ActivityFacts::default()
+        }),
+        input: Some("cargo test 2>&1 | tail -20\necho done".into()),
+        name: "bash".into(),
+        ..activity_event()
+    };
+
+    // Act
+    activity.observe(running.clone());
+    let live = activity.live.snapshot();
+    activity.observe(ActivityEvent {
+        exit_code: Some(0),
+        facts: Box::new(ActivityFacts {
+            pipe_status: vec![101, 0],
+            ..*running.facts.clone()
+        }),
+        status: ActivityStatus::Completed,
+        ..running
+    });
+
+    // Assert
+    assert!(
+        live.contains("… bash · cargo test 2>&1 | tail -20\n"),
+        "{live}"
+    );
+    assert_eq!(
+        activity.live.snapshot(),
+        "Tools: bash ×1\nStatus: 0 succeeded · 1 failed · 0 running\n\n"
+    );
+    assert_eq!(activity.summary(), "Tools: bash ×1 (1 failed)\n");
+}
+
 fn activity_event() -> ActivityEvent {
     ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
+        facts: Box::default(),
         id: "call".into(),
         input: None,
         kind: ActivityKind::Command,

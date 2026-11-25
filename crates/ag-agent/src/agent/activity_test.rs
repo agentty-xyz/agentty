@@ -2,8 +2,9 @@
 //! events.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use ag_contracts::{ActivityKind, ActivityStatus};
+use ag_contracts::{ActivityFailure, ActivityKind, ActivityStatus, DiffStat, LineRange};
 use ag_session::AgentKind;
 use serde_json::json;
 
@@ -38,7 +39,9 @@ fn codex_lifecycle_deduplicates_snapshots_and_settles_unfinished_calls() {
     let events = events.lock().expect("test fixture should succeed");
     assert_eq!(events.len(), 5);
     assert_eq!(events[0].name, "shell");
-    assert_eq!(events[1].status, ActivityStatus::Failed);
+    // A nonzero exit leaves the item completed for its outcome to judge.
+    assert_eq!(events[1].status, ActivityStatus::Completed);
+    assert_eq!(events[1].outcome(), ActivityStatus::Failed);
     assert_eq!(events[1].exit_code, Some(1));
     assert_eq!(events[2].status, ActivityStatus::Completed);
     assert_eq!(events[4].status, ActivityStatus::Interrupted);
@@ -68,7 +71,9 @@ fn claude_preserves_skill_parent_and_content() {
     assert_eq!(events[0].name, "review");
     assert_eq!(events[0].kind, ActivityKind::Skill);
     assert_eq!(events[0].parent_id.as_deref(), Some("parent"));
-    assert_eq!(events[1].kind, ActivityKind::Tool);
+    assert_eq!(events[1].kind, ActivityKind::Read);
+    assert_eq!(events[1].facts.target.as_deref(), Some("SKILL.md"));
+    assert_eq!(events[1].facts.lines, None);
     assert_eq!(events[2].kind, ActivityKind::Skill);
     assert_eq!(events[2].status, ActivityStatus::Completed);
     assert_eq!(events[3].status, ActivityStatus::Failed);
@@ -126,7 +131,16 @@ fn claude_oversized_edits_and_writes_preserve_paths_through_failure_updates() {
         assert_eq!(events[1].status, ActivityStatus::Failed);
         for event in events.iter() {
             assert_eq!(event.name, name);
+            assert_eq!(event.kind, ActivityKind::FileChange);
             assert_eq!(event.input.as_deref(), Some("src/example.rs"));
+            assert_eq!(event.facts.target.as_deref(), Some("src/example.rs"));
+            assert_eq!(
+                event.facts.diff_stat,
+                Some(DiffStat {
+                    added: 1,
+                    removed: u64::from(name == "Edit")
+                })
+            );
         }
         assert_eq!(events[1].output.as_deref(), Some("edit failed"));
     }
@@ -280,11 +294,24 @@ fn codex_terminal_variants_and_unknown_claude_results_are_retained() {
     observer.observe(AgentKind::Claude, &json!({"content":[{"type":"tool_result","tool_use_id":"orphan"},{"type":"tool_use","id":"unnamed-skill","name":"Skill"}]}));
 
     // Assert
-    assert_eq!(observer.calls["0"].status, ActivityStatus::Failed);
-    assert_eq!(observer.calls["1"].status, ActivityStatus::Failed);
-    assert_eq!(observer.calls["2"].status, ActivityStatus::Interrupted);
-    assert_eq!(observer.calls["3"].status, ActivityStatus::Failed);
-    assert_eq!(observer.calls["4"].status, ActivityStatus::Failed);
+    let state = |id: &str| (observer.calls[id].status, observer.calls[id].facts.failure);
+    assert_eq!(
+        state("0"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Error))
+    );
+    assert_eq!(
+        state("1"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Error))
+    );
+    assert_eq!(state("2"), (ActivityStatus::Interrupted, None));
+    assert_eq!(
+        state("3"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Denied))
+    );
+    assert_eq!(
+        state("4"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Denied))
+    );
     assert_eq!(observer.calls["orphan"].name, "tool");
     assert_eq!(observer.calls["unnamed-skill"].kind, ActivityKind::Skill);
 }
@@ -425,7 +452,7 @@ fn antigravity_projects_tool_steps_with_commands_output_and_failures() {
 }
 
 #[test]
-fn antigravity_emits_failed_status_for_completed_nonzero_exits_without_errors() {
+fn antigravity_completed_nonzero_exits_without_errors_have_a_failed_outcome() {
     for (state, info, expected) in [
         ("DONE", json!({"exit_code":1}), ActivityStatus::Failed),
         (
@@ -470,7 +497,7 @@ fn antigravity_emits_failed_status_for_completed_nonzero_exits_without_errors() 
         // Assert
         let events = events.lock().expect("events lock");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].status, expected, "state={state}, info={info}");
+        assert_eq!(events[0].outcome(), expected, "state={state}, info={info}");
         assert_eq!(events[0].kind, ActivityKind::Command);
         assert_eq!(events[0].exit_code, info["exit_code"].as_i64());
     }
@@ -492,4 +519,218 @@ fn malformed_antigravity_updates_are_ignored() {
 
     // Assert
     assert!(observer.calls.is_empty());
+}
+
+#[test]
+fn claude_exploration_tools_report_kinds_targets_and_read_ranges() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let blocks = json!([
+        {"type":"tool_use","id":"read","name":"Read","input":{"file_path":"src/a.rs","offset":1129,"limit":100}},
+        {"type":"tool_use","id":"grep","name":"Grep","input":{"pattern":"fn render","path":"src"}},
+        {"type":"tool_use","id":"glob","name":"Glob","input":{"pattern":"**/*.rs"}},
+        {"type":"tool_use","id":"ls","name":"LS","input":{"path":"crates"}},
+        {"type":"tool_use","id":"multi","name":"MultiEdit","input":{"file_path":"src/b.rs","edits":[
+            {"old_string":"a\nb","new_string":"c"},
+            {"old_string":"d","new_string":"e\nf\ng"}
+        ]}},
+        {"type":"tool_use","id":"multi-empty","name":"MultiEdit","input":{"file_path":"src/c.rs"}}
+    ]);
+
+    // Act
+    observer.observe(
+        AgentKind::Claude,
+        &json!({"type":"assistant","message":{"content":blocks}}),
+    );
+
+    // Assert
+    let call = |id: &str| {
+        let call = &observer.calls[id];
+
+        (call.kind, call.facts.target.as_deref())
+    };
+    assert_eq!(call("read"), (ActivityKind::Read, Some("src/a.rs")));
+    assert_eq!(
+        observer.calls["read"].facts.lines,
+        Some(LineRange {
+            first: 1129,
+            last: Some(1228)
+        })
+    );
+    assert_eq!(call("grep"), (ActivityKind::Search, Some("fn render")));
+    assert_eq!(call("glob"), (ActivityKind::List, Some("**/*.rs")));
+    assert_eq!(call("ls"), (ActivityKind::List, Some("crates")));
+    assert_eq!(call("multi"), (ActivityKind::FileChange, Some("src/b.rs")));
+    assert_eq!(
+        observer.calls["multi"].facts.diff_stat,
+        Some(DiffStat {
+            added: 4,
+            removed: 3
+        })
+    );
+    assert_eq!(observer.calls["multi-empty"].facts.diff_stat, None);
+}
+
+#[test]
+fn codex_command_actions_report_exploration_kinds_and_durations() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let items = [
+        json!({"id":"read","type":"commandExecution","command":"sed -n 1,20p src/a.rs","durationMs":36000,"exitCode":0,
+            "commandActions":[{"type":"read","command":"sed","name":"a.rs","path":"src/a.rs"}]}),
+        json!({"id":"search","type":"commandExecution","command":"rg -n render src",
+            "commandActions":[{"type":"search","command":"rg","query":"render","path":"src"}]}),
+        json!({"id":"list","type":"commandExecution","command":"ls crates",
+            "commandActions":[{"type":"listFiles","command":"ls","path":"crates"}]}),
+        json!({"id":"list-root","type":"commandExecution","command":"ls",
+            "commandActions":[{"type":"listFiles","command":"ls","path":null}]}),
+        json!({"id":"mixed","type":"commandExecution","command":"cat a.rs | rg x",
+            "commandActions":[{"type":"read","command":"cat","name":"a.rs","path":"a.rs"},{"type":"search","command":"rg","query":"x","path":null}]}),
+        json!({"id":"build","type":"commandExecution","command":"cargo build\n--release",
+            "commandActions":[{"type":"unknown","command":"cargo build"}]}),
+    ];
+
+    // Act
+    for item in &items {
+        observer.observe(
+            AgentKind::Codex,
+            &json!({"method":"item/completed","params":{"item":item}}),
+        );
+    }
+
+    // Assert
+    let call = |id: &str| {
+        let call = &observer.calls[id];
+
+        (call.kind, call.facts.target.as_deref())
+    };
+    assert_eq!(call("read"), (ActivityKind::Read, Some("src/a.rs")));
+    assert_eq!(
+        observer.calls["read"].facts.duration,
+        Some(Duration::from_secs(36))
+    );
+    assert_eq!(call("search"), (ActivityKind::Search, Some("render")));
+    assert_eq!(call("list"), (ActivityKind::List, Some("crates")));
+    assert_eq!(call("list-root"), (ActivityKind::List, Some("ls")));
+    assert_eq!(
+        call("mixed"),
+        (ActivityKind::Command, Some("cat a.rs | rg x"))
+    );
+    assert_eq!(
+        call("build"),
+        (ActivityKind::Command, Some("cargo build --release"))
+    );
+    assert_eq!(observer.calls["build"].facts.duration, None);
+}
+
+#[test]
+fn codex_failed_commands_with_an_exit_code_are_judged_by_their_outcome() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let items = [
+        json!({"id":"search","type":"commandExecution","command":"rg -n render src","status":"failed","exitCode":1,
+            "aggregatedOutput":"","durationMs":12,
+            "commandActions":[{"type":"search","command":"rg","query":"render","path":"src"}]}),
+        json!({"id":"test","type":"commandExecution","command":"cargo test","status":"failed","exitCode":1,
+            "aggregatedOutput":"test result: FAILED","durationMs":900,
+            "commandActions":[{"type":"unknown","command":"cargo test"}]}),
+        json!({"id":"spawn","type":"commandExecution","command":"missing-tool","status":"failed","exitCode":null,
+            "aggregatedOutput":null,"commandActions":[]}),
+    ];
+
+    // Act
+    for item in &items {
+        observer.observe(
+            AgentKind::Codex,
+            &json!({"method":"item/completed","params":{"item":item}}),
+        );
+    }
+
+    // Assert
+    let state = |id: &str| {
+        let call = &observer.calls[id];
+
+        (call.outcome(), call.facts.failure)
+    };
+    assert_eq!(state("search"), (ActivityStatus::Completed, None));
+    assert_eq!(state("test"), (ActivityStatus::Failed, None));
+    assert_eq!(
+        state("spawn"),
+        (ActivityStatus::Failed, Some(ActivityFailure::Error))
+    );
+}
+
+#[test]
+fn codex_output_deltas_keep_an_exploration_kind() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let started = json!({"method":"item/started","params":{"item":{"id":"search","type":"commandExecution","command":"rg -n render src",
+        "commandActions":[{"type":"search","command":"rg","query":"render","path":"src"}]}}});
+
+    // Act
+    observer.observe(AgentKind::Codex, &started);
+    observer.observe(
+        AgentKind::Codex,
+        &json!({"method":"item/commandExecution/outputDelta","params":{"itemId":"search","delta":"src/a.rs:1: render"}}),
+    );
+
+    // Assert
+    let call = &observer.calls["search"];
+    assert_eq!(call.kind, ActivityKind::Search);
+    assert_eq!(call.output.as_deref(), Some("src/a.rs:1: render"));
+}
+
+#[test]
+fn codex_file_changes_report_line_counts_and_their_first_path() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+    let changes = json!([
+        {"path":"src/new.rs","kind":{"type":"add"},"diff":"one\ntwo\n"},
+        {"path":"src/old.rs","kind":{"type":"delete"},"diff":"gone\n"},
+        {"path":"src/lib.rs","kind":{"type":"update","move_path":null},
+            "diff":"--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n+more\n context\n"}
+    ]);
+
+    // Act
+    observer.observe(
+        AgentKind::Codex,
+        &json!({"method":"item/completed","params":{"item":{"id":"patch","type":"fileChange","status":"completed","changes":changes}}}),
+    );
+    observer.observe(
+        AgentKind::Codex,
+        &json!({"method":"item/started","params":{"item":{"id":"bare","type":"fileChange"}}}),
+    );
+
+    // Assert
+    let patch = &observer.calls["patch"];
+    assert_eq!(patch.kind, ActivityKind::FileChange);
+    assert_eq!(patch.facts.target.as_deref(), Some("src/new.rs"));
+    assert_eq!(
+        patch.facts.diff_stat,
+        Some(DiffStat {
+            added: 4,
+            removed: 2
+        })
+    );
+    assert_eq!(observer.calls["bare"].facts.diff_stat, None);
+    assert_eq!(observer.calls["bare"].facts.target, None);
+}
+
+#[test]
+fn antigravity_exploration_tools_report_their_kinds() {
+    // Arrange
+    let mut observer = ActivityObserver::new(|_| {});
+
+    // Act
+    for (index, name) in ["view_file", "grep_search", "list_dir"].iter().enumerate() {
+        observer.observe(
+            AgentKind::Antigravity,
+            &json!({"event":"step_update","step_update":{"step_type":"tool","step_index":index,"state":"ACTIVE","tool_name":name}}),
+        );
+    }
+
+    // Assert
+    assert_eq!(observer.calls["0"].kind, ActivityKind::Read);
+    assert_eq!(observer.calls["1"].kind, ActivityKind::Search);
+    assert_eq!(observer.calls["2"].kind, ActivityKind::List);
 }

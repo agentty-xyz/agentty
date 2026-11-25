@@ -237,9 +237,9 @@ struct ActivityState {
 impl ActivityState {
     fn observe(&mut self, event: ActivityEvent) {
         let key = (event.attempt_id.clone(), event.id.clone());
-        let status = Self::status(&event);
+        let status = event.outcome();
         let (index, previous_status) = if let Some(&index) = self.indices.get(&key) {
-            let previous_status = Self::status(&self.calls[index]);
+            let previous_status = self.calls[index].outcome();
             self.calls[index] = event;
 
             (index, Some(previous_status))
@@ -274,7 +274,7 @@ impl ActivityState {
                 .entry((Self::usage_section(event.kind), event.name.as_str()))
                 .or_default();
             counts.0 += 1;
-            counts.1 += usize::from(Self::status(event) == ActivityStatus::Failed);
+            counts.1 += usize::from(event.outcome() == ActivityStatus::Failed);
             counts.2 += usize::from(matches!(
                 event.status,
                 ActivityStatus::Running | ActivityStatus::Interrupted
@@ -310,6 +310,9 @@ impl ActivityState {
             ActivityKind::Skill => 2,
             ActivityKind::Command
             | ActivityKind::FileChange
+            | ActivityKind::List
+            | ActivityKind::Read
+            | ActivityKind::Search
             | ActivityKind::Tool
             | ActivityKind::WebSearch => 0,
         }
@@ -325,7 +328,7 @@ impl ActivityState {
         let mut text = self.usage_text(false);
         let mut counts = [0_usize; 4];
         for event in &self.calls {
-            let index = match Self::status(event) {
+            let index = match event.outcome() {
                 ActivityStatus::Completed => 0,
                 ActivityStatus::Failed => 1,
                 ActivityStatus::Running => 2,
@@ -351,7 +354,7 @@ impl ActivityState {
             Self::append_call(&mut text, &self.calls[index], "!");
         }
         if let Some(index) = self.last_completed
-            && Self::status(&self.calls[index]) == ActivityStatus::Completed
+            && self.calls[index].outcome() == ActivityStatus::Completed
         {
             Self::append_call(&mut text, &self.calls[index], "✓");
         }
@@ -375,17 +378,6 @@ impl ActivityState {
         text
     }
 
-    /// Accounts for backends that report completion with a nonzero exit code.
-    fn status(event: &ActivityEvent) -> ActivityStatus {
-        if event.status == ActivityStatus::Completed
-            && event.exit_code.is_some_and(|code| code != 0)
-        {
-            ActivityStatus::Failed
-        } else {
-            event.status
-        }
-    }
-
     /// Renders one call row. Callers supply the marker of the row group they
     /// render: interrupted (`!`), last completed (`✓`), or running (`…`).
     /// Failed calls only contribute to the status counts.
@@ -395,6 +387,9 @@ impl ActivityState {
             ActivityKind::Skill => "skill ",
             ActivityKind::Command
             | ActivityKind::FileChange
+            | ActivityKind::List
+            | ActivityKind::Read
+            | ActivityKind::Search
             | ActivityKind::Tool
             | ActivityKind::WebSearch => "",
         };
@@ -402,14 +397,16 @@ impl ActivityState {
         if event.status == ActivityStatus::Interrupted {
             text.push_str(" (interrupted)");
         }
-        if let Some(exit_code) = event.exit_code.filter(|code| *code != 0) {
+        if let Some(exit_code) = event.effective_exit_code().filter(|code| *code != 0) {
             let _ = write!(text, " (exit {exit_code})");
         }
         if event.kind != ActivityKind::Skill
-            && let Some(input) = event
-                .input
-                .as_deref()
-                .and_then(|input| Self::input_preview(input, event.kind))
+            && let Some(input) = event.facts.target.clone().or_else(|| {
+                event
+                    .input
+                    .as_deref()
+                    .and_then(|input| Self::input_preview(input, event.kind))
+            })
             && !input.is_empty()
         {
             let _ = write!(text, " · {input}");

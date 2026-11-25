@@ -982,6 +982,7 @@ async fn chat_turn_projects_its_edits_before_auto_commit_starts() {
         let _ = events.send(TurnEvent::Activity(ActivityEvent {
             attempt_id: "attempt".into(),
             exit_code: Some(0),
+            facts: Box::default(),
             id: "edit".into(),
             input: None,
             kind: ActivityKind::FileChange,

@@ -369,6 +369,7 @@ async fn activity_stream_preserves_snapshots_during_normal_and_repair_turns() {
                         ag_contracts::ActivityEvent {
                             attempt_id: current.to_string(),
                             exit_code: Some(0),
+                            facts: Box::default(),
                             id: "call".into(),
                             input: None,
                             kind: ag_contracts::ActivityKind::Tool,

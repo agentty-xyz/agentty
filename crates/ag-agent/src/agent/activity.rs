@@ -1,13 +1,15 @@
 //! Bounded activity projection from provider protocols, independent of tracing.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};
+use ag_contracts::{
+    ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
+};
 use ag_session::AgentKind;
 use serde_json::Value;
 
-use super::activity_content::{ActivityDetails, append_output};
+use super::activity_content::{ActivityDetails, append_output, line_range, one_line};
 
 const MAX_ACTIVITIES: usize = 512;
 
@@ -89,49 +91,120 @@ impl ActivityObserver {
         let Some(id) = item.get("id").and_then(Value::as_str) else {
             return;
         };
-        let status = if !completed {
-            ActivityStatus::Running
-        } else if matches!(
-            item.get("status").and_then(Value::as_str),
-            Some("interrupted" | "canceled" | "cancelled")
-        ) {
-            ActivityStatus::Interrupted
-        } else if matches!(
-            item.get("status").and_then(Value::as_str),
-            Some("failed" | "declined" | "denied")
-        ) || item.get("success").and_then(Value::as_bool) == Some(false)
-            || item
-                .get("exitCode")
-                .and_then(Value::as_i64)
-                .is_some_and(|code| code != 0)
+        let item_status = item.get("status").and_then(Value::as_str);
+        let exit_code = item.get("exitCode").and_then(Value::as_i64);
+        // Codex reports every nonzero exit as `failed`. A command with an
+        // exit code stays completed for the event's outcome to judge, so a
+        // search that found nothing stays completed.
+        let (status, failure) = if !completed {
+            (ActivityStatus::Running, None)
+        } else if matches!(item_status, Some("interrupted" | "canceled" | "cancelled")) {
+            (ActivityStatus::Interrupted, None)
+        } else if matches!(item_status, Some("declined" | "denied")) {
+            (ActivityStatus::Failed, Some(ActivityFailure::Denied))
+        } else if (item_status == Some("failed") && exit_code.is_none())
+            || item.get("success").and_then(Value::as_bool) == Some(false)
             || item.get("error").is_some_and(|value| !value.is_null())
         {
-            ActivityStatus::Failed
+            (ActivityStatus::Failed, Some(ActivityFailure::Error))
         } else {
-            ActivityStatus::Completed
+            (ActivityStatus::Completed, None)
         };
         let name = match item.get("server").and_then(Value::as_str) {
             Some(server) => format!("{server}/{name}"),
             None => name.to_string(),
         };
-        self.record(
-            id,
-            kind,
-            &name,
-            None,
-            status,
-            ActivityDetails::new(
-                item.get("command")
-                    .or_else(|| item.get("arguments"))
-                    .or_else(|| item.get("query")),
-                item.get("aggregatedOutput")
-                    .filter(|value| !value.is_null())
-                    .or_else(|| item.get("result").filter(|value| !value.is_null()))
-                    .or_else(|| item.get("contentItems").filter(|value| !value.is_null()))
-                    .or_else(|| item.get("error")),
-                item.get("exitCode").and_then(Value::as_i64),
-            ),
+        let mut details = ActivityDetails::new(
+            item.get("command")
+                .or_else(|| item.get("arguments"))
+                .or_else(|| item.get("query")),
+            item.get("aggregatedOutput")
+                .filter(|value| !value.is_null())
+                .or_else(|| item.get("result").filter(|value| !value.is_null()))
+                .or_else(|| item.get("contentItems").filter(|value| !value.is_null()))
+                .or_else(|| item.get("error")),
+            exit_code,
         );
+        details.facts.failure = failure;
+        details.facts.duration = item
+            .get("durationMs")
+            .and_then(Value::as_u64)
+            .map(Duration::from_millis);
+        let kind = match kind {
+            ActivityKind::Command => match Self::codex_exploration(item) {
+                Some((exploration, target)) => {
+                    details.facts.target = target.or(details.facts.target);
+
+                    exploration
+                }
+                None => kind,
+            },
+            ActivityKind::FileChange => {
+                details.facts.diff_stat = Self::codex_diff_stat(item);
+                details.facts.target = item
+                    .pointer("/changes/0/path")
+                    .and_then(Value::as_str)
+                    .and_then(one_line);
+
+                kind
+            }
+            _ => kind,
+        };
+        self.record(id, kind, &name, None, status, details);
+    }
+
+    /// Returns the exploration kind of a Codex command whose parsed actions
+    /// all read, search, or list files, with the first action's target.
+    fn codex_exploration(item: &Value) -> Option<(ActivityKind, Option<String>)> {
+        let actions = item.get("commandActions")?.as_array()?;
+        let action_type = actions.first()?.get("type")?.as_str()?;
+        let (kind, target_key) = match action_type {
+            "read" => (ActivityKind::Read, "path"),
+            "search" => (ActivityKind::Search, "query"),
+            "listFiles" => (ActivityKind::List, "path"),
+            _ => return None,
+        };
+        if actions
+            .iter()
+            .any(|action| action.get("type").and_then(Value::as_str) != Some(action_type))
+        {
+            return None;
+        }
+        let target = actions[0]
+            .get(target_key)
+            .and_then(Value::as_str)
+            .and_then(one_line);
+
+        Some((kind, target))
+    }
+
+    /// Counts the lines a Codex file change adds and removes: every line of
+    /// an added or deleted file, and the `+` and `-` lines of an update's
+    /// diff. Approximate, since diff headers are recognized by prefix.
+    fn codex_diff_stat(item: &Value) -> Option<DiffStat> {
+        let changes = item.get("changes")?.as_array()?;
+        let mut stat = DiffStat::default();
+        for change in changes {
+            let diff = change
+                .get("diff")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match change.pointer("/kind/type").and_then(Value::as_str) {
+                Some("add") => stat.added += line_count(diff),
+                Some("delete") => stat.removed += line_count(diff),
+                _ => {
+                    for line in diff.lines() {
+                        if line.starts_with('+') && !line.starts_with("+++ ") {
+                            stat.added += 1;
+                        } else if line.starts_with('-') && !line.starts_with("--- ") {
+                            stat.removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        (!changes.is_empty()).then_some(stat)
     }
 
     fn codex_output(&mut self, payload: &Value) {
@@ -148,9 +221,11 @@ impl ActivityObserver {
             return;
         }
         let output = append_output(previous.output.as_deref(), delta);
+        // Keep the kind the item reported, such as a read or a search.
+        let kind = previous.kind;
         self.record(
             id,
-            ActivityKind::Command,
+            kind,
             "shell",
             None,
             ActivityStatus::Running,
@@ -189,19 +264,20 @@ impl ActivityObserver {
             .and_then(Value::as_str)
             .is_some_and(|state| state.eq_ignore_ascii_case("DONE"));
         let exit_code = info.get("exit_code").and_then(Value::as_i64);
-        let status = if info.get("error").is_some_and(|error| !error.is_null())
-            || (completed && exit_code.is_some_and(|code| code != 0))
-        {
+        // As for Codex, the event's outcome judges a nonzero exit code.
+        let status = if info.get("error").is_some_and(|error| !error.is_null()) {
             ActivityStatus::Failed
         } else if completed {
             ActivityStatus::Completed
         } else {
             ActivityStatus::Running
         };
-        let kind = if name == "run_command" {
-            ActivityKind::Command
-        } else {
-            ActivityKind::Tool
+        let kind = match name {
+            "run_command" => ActivityKind::Command,
+            "view_file" => ActivityKind::Read,
+            "grep_search" => ActivityKind::Search,
+            "list_dir" => ActivityKind::List,
+            _ => ActivityKind::Tool,
         };
         self.record(
             &index.to_string(),
@@ -257,8 +333,8 @@ impl ActivityObserver {
                                 .and_then(Value::as_str)
                                 .unwrap_or("Skill"),
                         )
-                    } else if name == "Bash" {
-                        (ActivityKind::Command, name)
+                    } else if let Some(kind) = Self::claude_builtin_kind(name) {
+                        (kind, name)
                     } else if let Some((server, tool)) = name
                         .strip_prefix("mcp__")
                         .and_then(|qualified| qualified.split_once("__"))
@@ -271,14 +347,11 @@ impl ActivityObserver {
                     } else {
                         (ActivityKind::Tool, name)
                     };
-                    self.record(
-                        id,
-                        kind,
-                        name,
-                        parent,
-                        ActivityStatus::Running,
-                        ActivityDetails::new(block.get("input"), None, None),
-                    );
+                    let mut details = ActivityDetails::new(block.get("input"), None, None);
+                    if let Some(input) = block.get("input") {
+                        Self::claude_input_facts(name, input, &mut details.facts);
+                    }
+                    self.record(id, kind, name, parent, ActivityStatus::Running, details);
                 }
                 Some("tool_result") => {
                     let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
@@ -300,6 +373,62 @@ impl ActivityObserver {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Classifies a Claude built-in tool whose kind is more specific than a
+    /// generic tool.
+    fn claude_builtin_kind(name: &str) -> Option<ActivityKind> {
+        match name {
+            "Bash" => Some(ActivityKind::Command),
+            "Edit" | "MultiEdit" | "NotebookEdit" | "Write" => Some(ActivityKind::FileChange),
+            "Glob" | "LS" => Some(ActivityKind::List),
+            "Grep" => Some(ActivityKind::Search),
+            "Read" => Some(ActivityKind::Read),
+            _ => None,
+        }
+    }
+
+    /// Fills the facts a Claude tool's input implies: a read's line range,
+    /// and an edit's or write's approximate line counts, which count every
+    /// replaced line as removed and every replacement line as added.
+    fn claude_input_facts(name: &str, input: &Value, facts: &mut ActivityFacts) {
+        let text = |value: &Value, key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let edit_stat = |edit: &Value| DiffStat {
+            added: line_count(&text(edit, "new_string")),
+            removed: line_count(&text(edit, "old_string")),
+        };
+        match name {
+            "Edit" => facts.diff_stat = Some(edit_stat(input)),
+            "MultiEdit" => {
+                let edits = input.get("edits").and_then(Value::as_array);
+                facts.diff_stat = edits.map(|edits| {
+                    edits
+                        .iter()
+                        .map(edit_stat)
+                        .fold(DiffStat::default(), |total, stat| DiffStat {
+                            added: total.added + stat.added,
+                            removed: total.removed + stat.removed,
+                        })
+                });
+            }
+            "Write" => {
+                facts.diff_stat = Some(DiffStat {
+                    added: line_count(&text(input, "content")),
+                    removed: 0,
+                });
+            }
+            "Read" => {
+                let number = |key: &str| input.get(key).and_then(Value::as_u64);
+                facts.lines = line_range(number("offset"), number("limit"));
+            }
+            _ => {}
         }
     }
 
@@ -325,9 +454,7 @@ impl ActivityObserver {
                 event.name = Self::display_name(name);
                 event.kind = kind;
             }
-            event.input = details.input.or(event.input);
-            event.output = details.output.or(event.output);
-            event.exit_code = details.exit_code.or(event.exit_code);
+            details.apply(&mut event);
             if event == *previous {
                 return;
             }
@@ -341,6 +468,7 @@ impl ActivityObserver {
             ActivityEvent {
                 attempt_id: self.attempt_id.clone(),
                 exit_code: details.exit_code,
+                facts: Box::new(details.facts),
                 id: id.to_string(),
                 input: details.input,
                 kind,
@@ -365,6 +493,12 @@ impl ActivityObserver {
     fn valid_id(id: &str) -> bool {
         !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
     }
+}
+
+/// Counts the lines of `text`, so a file of three lines counts 3 with or
+/// without a final newline.
+fn line_count(text: &str) -> u64 {
+    u64::try_from(text.lines().count()).unwrap_or(u64::MAX)
 }
 
 impl Drop for ActivityObserver {

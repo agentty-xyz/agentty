@@ -34,9 +34,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
-    NativeTurnError, OutputProjector, RunOptions, SESSION_SANDBOX, cleanup_failure, failure,
+    NativeTurnError, RunOptions, RunProjector, SESSION_SANDBOX, cleanup_failure, failure,
     output_schema, parse_output, reject_attachments, repository, running_context_window,
-    sandbox_notice, system_prompt, turn_notice, with_stored_api_keys,
+    system_prompt, with_stored_api_keys,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -239,17 +239,15 @@ async fn run_session_turn(
     })
 }
 
-/// Forwards the output a run streams as [`TurnEvent::Output`] events, and
-/// its compaction attempts and what it reports about the sandbox as
-/// [`TurnEvent::Notice`] events, until the run's stream ends.
+/// Forwards, in stream order, the output a run streams as
+/// [`TurnEvent::Output`] events, its tool calls as [`TurnEvent::Activity`]
+/// rows, and its compaction attempts and what it reports about the sandbox
+/// as [`TurnEvent::Notice`] events, until the run's stream ends.
 async fn forward_output(mut stream: EventStream, events: &mpsc::UnboundedSender<TurnEvent>) {
-    let mut projector = OutputProjector::default();
+    let mut projector = RunProjector::new();
     while let Some(event) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
-        if let Some(notice) = turn_notice(&event.kind).or_else(|| sandbox_notice(&event.kind)) {
-            let _ = events.send(TurnEvent::Notice(notice));
-        }
-        for output in projector.project(event.kind) {
-            let _ = events.send(TurnEvent::Output(output));
+        for turn_event in projector.project(event.kind) {
+            let _ = events.send(turn_event);
         }
     }
 }
@@ -521,8 +519,9 @@ impl SessionOpener<'_> {
         self.build_harness(|context, observer| selection.harness(context, observer))
     }
 
-    /// Builds a harness with this turn's context and activity forwarding,
-    /// storing history in the session database.
+    /// Builds a harness with this turn's context and model-wait forwarding,
+    /// storing history in the session database. Tool rows come from the
+    /// run's event stream instead, ordered with its output.
     fn build_harness(
         &self,
         build: impl FnOnce(&HarnessContext<'_>, ActivityBridge) -> Result<Harness, String>,
@@ -530,7 +529,7 @@ impl SessionOpener<'_> {
         let events = self.events.clone();
         let harness = build(
             &self.context(),
-            ActivityBridge::new(move |event| {
+            ActivityBridge::model_waits(move |event| {
                 let _ = events.send(event);
             }),
         )?;
