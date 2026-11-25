@@ -8,21 +8,15 @@
 //! separate span attributes, and separate `agentty.usage.cost` series whose
 //! basis is `api_equivalent`.
 
-use ag_contracts::{CostEstimate, ModelUsage, PricedCost, TurnUsage};
+use ag_contracts::{CostEstimate, ModelUsage, PlanLogin, PricedCost, TurnUsage};
+use ag_telemetry::usage::{self, ATTRIBUTE_COST_BASIS, ATTRIBUTE_COST_UPPER_BOUND, CostAmount};
 use ag_telemetry::{Context, KeyValue, Span, TraceContextExt as _};
 use opentelemetry::global;
 
-const ATTRIBUTE_API_EQUIVALENT_BASIS: &str = "agentty.usage.api_equivalent.basis";
-const ATTRIBUTE_API_EQUIVALENT_LOGIN: &str = "agentty.usage.api_equivalent.login";
-const ATTRIBUTE_API_EQUIVALENT_MICRO_USD: &str = "agentty.usage.api_equivalent.micro_usd";
-const ATTRIBUTE_API_EQUIVALENT_UPPER_BOUND: &str = "agentty.usage.api_equivalent.upper_bound";
 const ATTRIBUTE_CACHE_OP: &str = "agentty.cache.op";
 const ATTRIBUTE_CACHE_CREATION_INPUT_TOKENS: &str = "gen_ai.usage.cache_creation.input_tokens";
 const ATTRIBUTE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
 const ATTRIBUTE_CONTEXT_PEAK_TOKENS: &str = "agentty.context.peak_tokens";
-const ATTRIBUTE_COST_BASIS: &str = "agentty.usage.cost.basis";
-const ATTRIBUTE_COST_MICRO_USD: &str = "agentty.usage.cost.micro_usd";
-const ATTRIBUTE_COST_UPPER_BOUND: &str = "agentty.usage.cost.upper_bound";
 const ATTRIBUTE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 const ATTRIBUTE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
 const ATTRIBUTE_REASONING_OUTPUT_TOKENS: &str = "gen_ai.usage.reasoning.output_tokens";
@@ -60,14 +54,14 @@ pub(crate) fn record_run_usage(span: &Span, usage: &TurnUsage) {
 
 /// Returns the span attributes of the totals of `usage` over every model:
 /// token counts, request counts, the estimated cost when every model's is
-/// known, and the peak context fill. Usage of no model has none.
+/// known, and the peak context fill. Usage of no model has none, and usage
+/// whose every request went unreported has no input or output count.
 fn usage_attributes(usage: &TurnUsage) -> Vec<KeyValue> {
     let Some(total) = usage.total() else {
         return Vec::new();
     };
+    let tokens_reported = total.unreported_requests < total.requests;
     let mut attributes = vec![
-        count(ATTRIBUTE_INPUT_TOKENS, total.input_tokens),
-        count(ATTRIBUTE_OUTPUT_TOKENS, total.output_tokens),
         count(ATTRIBUTE_REQUESTS, u64::from(total.requests)),
         count(
             ATTRIBUTE_UNREPORTED_REQUESTS,
@@ -76,6 +70,14 @@ fn usage_attributes(usage: &TurnUsage) -> Vec<KeyValue> {
     ];
     attributes.extend(
         [
+            (
+                ATTRIBUTE_INPUT_TOKENS,
+                tokens_reported.then_some(total.input_tokens),
+            ),
+            (
+                ATTRIBUTE_OUTPUT_TOKENS,
+                tokens_reported.then_some(total.output_tokens),
+            ),
             (ATTRIBUTE_CACHE_READ_INPUT_TOKENS, total.cache_read_tokens),
             (
                 ATTRIBUTE_CACHE_CREATION_INPUT_TOKENS,
@@ -97,48 +99,23 @@ fn usage_attributes(usage: &TurnUsage) -> Vec<KeyValue> {
     attributes
 }
 
-/// Returns the attributes of an estimated `cost`: its charge under
-/// `agentty.usage.cost.*` and its API equivalent, with the plan login when
-/// known, under `agentty.usage.api_equivalent.*`.
+/// Returns the attributes of an estimated `cost`, as
+/// [`ag_telemetry::usage::cost_attributes`] names them.
 fn cost_attributes(cost: CostEstimate) -> Vec<KeyValue> {
-    let priced = |cost: PricedCost, keys: [&'static str; 3]| {
-        let [micro_usd, basis, upper_bound] = keys;
-
-        [
-            count(micro_usd, cost.micro_usd),
-            KeyValue::new(basis, cost.basis.as_str()),
-            KeyValue::new(upper_bound, cost.upper_bound),
-        ]
+    let amount = |cost: PricedCost| CostAmount {
+        basis: cost.basis.as_str(),
+        micro_usd: cost.micro_usd,
+        upper_bound: cost.upper_bound,
     };
-    let mut attributes = Vec::new();
-    if let Some(charge) = cost.charge() {
-        attributes.extend(priced(
-            charge,
-            [
-                ATTRIBUTE_COST_MICRO_USD,
-                ATTRIBUTE_COST_BASIS,
-                ATTRIBUTE_COST_UPPER_BOUND,
-            ],
-        ));
-    }
-    if let Some(equivalent) = cost.api_equivalent() {
-        attributes.extend(priced(
-            equivalent.cost,
-            [
-                ATTRIBUTE_API_EQUIVALENT_MICRO_USD,
-                ATTRIBUTE_API_EQUIVALENT_BASIS,
-                ATTRIBUTE_API_EQUIVALENT_UPPER_BOUND,
-            ],
-        ));
-        if let Some(login) = equivalent.login {
-            attributes.push(KeyValue::new(
-                ATTRIBUTE_API_EQUIVALENT_LOGIN,
-                login.as_str(),
-            ));
-        }
-    }
+    let api_equivalent = cost.api_equivalent();
 
-    attributes
+    usage::cost_attributes(
+        cost.charge().map(amount),
+        api_equivalent.map(|equivalent| amount(equivalent.cost)),
+        api_equivalent
+            .and_then(|equivalent| equivalent.login)
+            .map(PlanLogin::as_str),
+    )
 }
 
 /// Adds each model's known estimated cost and prompt-cache tokens in

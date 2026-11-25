@@ -15,7 +15,7 @@ use opentelemetry_sdk::metrics::data::{
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
-use super::{record_turn_usage, record_usage_metrics, usage_attributes};
+use super::{record_run_usage, record_turn_usage, record_usage_metrics, usage_attributes};
 use crate::test_support::TRACER_PROVIDER_LOCK;
 
 /// Returns usage of `model` with every detail known, estimated at `cost`.
@@ -101,6 +101,14 @@ fn usage_attributes_report_known_totals_and_omit_unknown_ones() {
     };
     let cases = [
         (TurnUsage::default(), expected(&[])),
+        // Tokens of usage whose every request went unreported are unknown.
+        (
+            TurnUsage::single(ModelUsage::unreported("silent-model", 2)),
+            expected(&[
+                ("agentty.usage.requests", "2"),
+                ("agentty.usage.unreported_requests", "2"),
+            ]),
+        ),
         (
             TurnUsage::single(detailed_usage("priced-model", list)),
             expected(&[
@@ -223,6 +231,44 @@ async fn record_turn_usage_annotates_the_current_span() {
         .find(|span| span.name == "session.turn")
         .expect("turn span should be exported");
     let recorded = turn
+        .attributes
+        .iter()
+        .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    for (key, value) in attribute_map(&usage) {
+        assert_eq!(recorded.get(&key), Some(&value), "{key}");
+    }
+}
+
+#[tokio::test]
+async fn record_run_usage_annotates_the_given_span_outside_its_scope() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider.clone());
+    let usage = TurnUsage::single(detailed_usage(
+        "priced-model",
+        CostEstimate::new(CostBasis::ListPrice, 250),
+    ));
+    let span = Span::root("agent.run", Vec::new());
+
+    // Act
+    record_run_usage(&span, &usage);
+    drop(span);
+    provider.force_flush().expect("spans should flush");
+
+    // Assert
+    let spans = exporter
+        .get_finished_spans()
+        .expect("spans should be exported");
+    let run = spans
+        .iter()
+        .find(|span| span.name == "agent.run")
+        .expect("run span should be exported");
+    let recorded = run
         .attributes
         .iter()
         .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
