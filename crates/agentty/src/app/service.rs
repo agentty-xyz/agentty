@@ -725,6 +725,19 @@ impl HarnessModels {
         })
     }
 
+    /// Returns the listed harness models a local server runs, whose usage
+    /// has no marginal charge.
+    pub(crate) fn local_models(&self) -> Vec<AgentModel> {
+        self.with_catalog(|catalog| {
+            catalog
+                .options()
+                .iter()
+                .filter(|option| !option.cost.is_paid())
+                .map(|option| option.model)
+                .collect()
+        })
+    }
+
     /// Runs `action` on the shared catalog, which stays usable after a panic.
     fn with_catalog<T>(&self, action: impl FnOnce(&mut HarnessModelCatalog) -> T) -> T {
         action(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))

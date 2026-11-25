@@ -11,8 +11,8 @@ use ratatui::widgets::Paragraph;
 
 use super::{
     CHAT_INPUT_MAX_PANEL_HEIGHT, QuestionPanelState, SessionChatLayoutInput, SessionChatLayoutPlan,
-    SessionChatPage, SessionChatPageInput, non_prompt_bottom_height, render_question_panel,
-    session_composer_title, transcript_view_height,
+    SessionChatPage, SessionChatPageInput, TimingFooter, non_prompt_bottom_height,
+    render_question_panel, session_composer_title, transcript_view_height,
 };
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
@@ -32,6 +32,10 @@ use crate::presentation::prompt::{
     PromptHistoryState, PromptSlashState,
 };
 use crate::ui::component::session_output::{SessionOutputLayoutCache, SessionOutputLineContext};
+use crate::ui::usage_format::{
+    CostFigure, ReadoutContext, ReadoutFigures, ReadoutTurn, UsageFigure,
+};
+use crate::ui::usage_readout::UsageReadout;
 use crate::ui::{Page, layout, markdown, prompt_format, session_format, style};
 
 fn session_fixture() -> Session {
@@ -287,23 +291,7 @@ fn test_render_view_mode_omits_keybinding_help_line() {
 #[test]
 fn test_live_timeline_renders_a_status_line_above_the_composer() {
     // Arrange
-    let mut session = session_fixture();
-    session.status = Status::InProgress;
-    let mut timeline = TurnTimeline::default();
-    timeline.observe_activity(
-        ActivityEvent {
-            input: Some("cargo test".into()),
-            ..crate::test_support::activity_event("call")
-        },
-        0,
-    );
-    session.transient_messages.upsert(TransientMessage {
-        anchor: TransientMessageAnchor::AfterActiveTurn,
-        body: TransientMessageBody::Timeline(Arc::new(timeline.snapshot())),
-        lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
-        slot: TransientMessageSlot::Turn,
-        turn_position: None,
-    });
+    let session = running_timeline_session();
     let mode = AppMode::View {
         session_id: "session-id".into(),
         scroll_offset: None,
@@ -344,6 +332,137 @@ fn test_live_timeline_renders_a_status_line_above_the_composer() {
         .find(|row| row.contains("Running   cargo test"))
         .expect("running row");
     assert!(running_row.trim_end().ends_with(" 12s"), "{running_row}");
+}
+
+/// Returns an in-progress session whose live timeline runs `cargo test`.
+fn running_timeline_session() -> Session {
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    let mut timeline = TurnTimeline::default();
+    timeline.observe_activity(
+        ActivityEvent {
+            input: Some("cargo test".into()),
+            ..crate::test_support::activity_event("call")
+        },
+        0,
+    );
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::AfterActiveTurn,
+        body: TransientMessageBody::Timeline(Arc::new(timeline.snapshot())),
+        lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+        slot: TransientMessageSlot::Turn,
+        turn_position: None,
+    });
+
+    session
+}
+
+/// Returns a priced readout of a running turn at 38% context.
+fn running_usage_readout() -> UsageReadout {
+    let cost = |text: &str| {
+        UsageFigure::Cost(CostFigure {
+            is_api_equivalent: false,
+            is_lower_bound: false,
+            is_upper_bound: false,
+            text: text.to_string(),
+        })
+    };
+    let tokens = |text: &str| UsageFigure::Known {
+        is_lower_bound: false,
+        text: text.to_string(),
+    };
+
+    UsageReadout::new(
+        ReadoutFigures {
+            context: Some(ReadoutContext {
+                gauge_filled: Some(2),
+                percent: Some(38),
+                tokens: "380.0k".to_string(),
+            }),
+            session_cost: cost("$3.27"),
+            turn: Some(ReadoutTurn {
+                cost: cost("$0.24"),
+                input: tokens("412k"),
+                output: tokens("3.1k"),
+            }),
+        },
+        false,
+    )
+}
+
+/// The running turn's readout fills the status line's right slot, and the
+/// composer border keeps only the timer while it does.
+#[test]
+fn test_running_turn_readout_fills_the_status_line_and_leaves_the_border() {
+    // Arrange
+    let session = running_timeline_session();
+    let mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+    let readout = running_usage_readout();
+    let mut page =
+        SessionChatPage::new(test_page_input(&session, &mode)).usage_readout(Some(&readout));
+    let backend = ratatui::backend::TestBackend::new(130, 16);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let plan = SessionChatLayoutPlan::new(layout_input(Rect::new(0, 0, 130, 16), &session, &mode));
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw session");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let status_area = plan.turn_status_area.expect("status row");
+    let status_row = buffer_row_text(buffer, status_area.y, 130);
+    assert!(
+        status_row
+            .trim_end()
+            .ends_with("↑412k ↓3.1k · ctx ▰▰▱▱▱ 38% · $0.24 turn"),
+        "{status_row}"
+    );
+    let border_row = buffer_row_text(buffer, plan.areas.bottom_area.bottom() - 1, 130);
+    assert!(border_row.contains("Timer:"), "{border_row}");
+    assert!(!border_row.contains("session"), "{border_row}");
+}
+
+/// A pane too narrow for the status line's readout slot keeps the session
+/// figures in the composer border while the turn runs.
+#[test]
+fn test_running_turn_readout_stays_in_the_border_on_a_narrow_pane() {
+    // Arrange
+    let session = running_timeline_session();
+    let mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+    let readout = running_usage_readout();
+    let mut page =
+        SessionChatPage::new(test_page_input(&session, &mode)).usage_readout(Some(&readout));
+    let backend = ratatui::backend::TestBackend::new(72, 16);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let plan = SessionChatLayoutPlan::new(layout_input(Rect::new(0, 0, 72, 16), &session, &mode));
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw session");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let status_area = plan.turn_status_area.expect("status row");
+    let status_row = buffer_row_text(buffer, status_area.y, 72);
+    assert!(!status_row.contains("ctx"), "{status_row}");
+    let border_row = buffer_row_text(buffer, plan.areas.bottom_area.bottom() - 1, 72);
+    assert!(border_row.contains("$3.27 session"), "{border_row}");
+    assert!(border_row.contains("Timer:"), "{border_row}");
 }
 
 #[test]
@@ -814,6 +933,7 @@ fn test_render_question_panel_preserves_frame_without_prepared_areas() {
         selected_option_index: None,
         spinner_frame: 0,
         timing_label: "",
+        usage_readout: None,
     };
 
     // Act
@@ -1052,6 +1172,7 @@ fn test_render_question_lookup_requires_space_for_a_complete_result_row() {
             selected_option_index: None,
             spinner_frame: 0,
             timing_label: "",
+            usage_readout: None,
         };
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, height))
             .expect("failed to create terminal");
@@ -1400,7 +1521,16 @@ fn prompt_composer_keeps_its_border_when_only_one_row_is_available() {
     // Act
     terminal
         .draw(|frame| {
-            page.render_prompt_composer(frame, frame.area(), &panel, &input, "Timer: 0s");
+            page.render_prompt_composer(
+                frame,
+                frame.area(),
+                &panel,
+                &input,
+                &TimingFooter {
+                    label: "Timer: 0s".to_string(),
+                    readout: None,
+                },
+            );
         })
         .expect("render short composer");
     let text = buffer_text(terminal.backend().buffer());

@@ -1,13 +1,22 @@
 //! Usage formatting tests: money edges, column dropping, row cells and
 //! marks, totals, summary figures, and notes.
 
-use ag_contracts::{CostBasis, PlanLogin, UsagePurpose};
+use std::collections::HashMap;
+
+use ag_contracts::{
+    ContextFill, CostBasis, CostEstimate, ModelUsage, PlanLogin, TurnUsage, UsagePurpose,
+};
 
 use super::{
-    UsageColumn, UsageFigure, UsageNote, UsageTableRow, format_money, format_percent, login_label,
-    purpose_label, usage_panel_content, visible_usage_columns,
+    CostFigure, ReadoutContext, UsageColumn, UsageFigure, UsageNote, UsageTableRow, context_gauge,
+    context_tone, format_money, format_percent, login_label, purpose_label,
+    session_readout_figures, usage_panel_content, visible_usage_columns,
 };
-use crate::domain::session_usage::{ContextNow, SessionUsage, UsageRecord};
+use crate::domain::session::SessionId;
+use crate::domain::session_usage::{
+    ContextNow, LiveUsageKey, LiveUsageRun, SessionUsage, UsageRecord,
+};
+use crate::ui::style::palette;
 
 /// Returns a fully detailed, priced record of `model` under `purpose`.
 fn priced_record(model: &str, purpose: UsagePurpose) -> UsageRecord {
@@ -754,4 +763,209 @@ fn test_api_equivalents_are_never_summed_into_charged_estimates() {
     );
     assert_eq!(lower_equivalent.summary.cost.panel_text(), "≥≈$3.27");
     assert_eq!(note_marks(&lower_equivalent.notes), ["≥", "≈", "$"]);
+}
+
+/// Returns one priced request of `model` with `input_tokens` of input, a
+/// million-token window, and an estimate of `micro_usd`.
+fn live_request(model: &str, input_tokens: u64, micro_usd: u64) -> ModelUsage {
+    ModelUsage {
+        cache_read_tokens: Some(input_tokens / 2),
+        cache_write_tokens: Some(0),
+        context: Some(ContextFill::of_request(input_tokens, Some(1_000_000))),
+        cost: Some(CostEstimate::new(CostBasis::ListPrice, micro_usd)),
+        input_tokens,
+        output_tokens: 3_100,
+        reasoning_tokens: Some(0),
+        requests: 1,
+        ..ModelUsage::new(model)
+    }
+}
+
+/// Returns live usage of `run` in `session_id` made of `models`.
+fn live_entry(
+    session_id: &str,
+    run: LiveUsageRun,
+    models: Vec<ModelUsage>,
+) -> (LiveUsageKey, TurnUsage) {
+    (
+        LiveUsageKey {
+            run,
+            session_id: SessionId::from(session_id),
+        },
+        TurnUsage {
+            models,
+            ..TurnUsage::default()
+        },
+    )
+}
+
+#[test]
+fn test_readout_figures_are_absent_until_the_session_records_usage() {
+    // Arrange
+    let live = HashMap::from([live_entry(
+        "other",
+        LiveUsageRun::SessionTurn,
+        vec![live_request("model", 10, 10)],
+    )]);
+
+    // Act
+    let figures = session_readout_figures(None, &SessionId::from("session"), &live);
+
+    // Assert
+    assert_eq!(figures, None);
+}
+
+#[test]
+fn test_idle_readout_figures_restore_stored_context_and_session_cost() {
+    // Arrange
+    let stored = session_usage(vec![priced_record("model", UsagePurpose::Turn)]);
+
+    // Act
+    let figures =
+        session_readout_figures(Some(&stored), &SessionId::from("session"), &HashMap::new())
+            .expect("stored usage has readout figures");
+
+    // Assert
+    assert_eq!(figures.turn, None);
+    assert_eq!(
+        figures.context,
+        Some(ReadoutContext {
+            gauge_filled: Some(2),
+            percent: Some(38),
+            tokens: "384.2k".to_string(),
+        })
+    );
+    assert_eq!(figures.session_cost.panel_text(), "$3.27");
+}
+
+#[test]
+fn test_running_readout_figures_show_the_session_turn_and_fold_every_run_into_the_session() {
+    // Arrange
+    let stored = session_usage(vec![priced_record("model", UsagePurpose::Turn)]);
+    let live = HashMap::from([
+        live_entry(
+            "session",
+            LiveUsageRun::SessionTurn,
+            vec![live_request("model", 412_000, 240_000)],
+        ),
+        live_entry(
+            "session",
+            LiveUsageRun::Attempt("attempt-1".to_string()),
+            vec![live_request("model", 100, 1_000_000)],
+        ),
+        live_entry(
+            "other",
+            LiveUsageRun::SessionTurn,
+            vec![live_request("model", 900_000, 9_000_000)],
+        ),
+    ]);
+
+    // Act
+    let figures = session_readout_figures(Some(&stored), &SessionId::from("session"), &live)
+        .expect("running session has readout figures");
+
+    // Assert
+    let turn = figures.turn.expect("session turn reported a request");
+    assert_eq!(turn.input.panel_text(), "412.0k");
+    assert_eq!(turn.output.panel_text(), "3.1k");
+    assert_eq!(turn.cost.panel_text(), "$0.24");
+    assert_eq!(figures.session_cost.panel_text(), "$4.51");
+    assert_eq!(
+        figures.context.map(|context| context.percent),
+        Some(Some(41)),
+        "the session turn's fill wins over the attempt's"
+    );
+}
+
+#[test]
+fn test_readout_turn_figures_cover_money_edges_and_unreported_requests() {
+    // Arrange
+    let session_id = SessionId::from("session");
+    let turn_cost = |models: Vec<ModelUsage>| {
+        let live = HashMap::from([live_entry("session", LiveUsageRun::SessionTurn, models)]);
+        let figures = session_readout_figures(None, &session_id, &live)
+            .expect("live usage has readout figures");
+
+        figures.turn.expect("session turn reported a request")
+    };
+    let mut lower_bound_request = live_request("model", 1_000, 4_000);
+    lower_bound_request.unreported_requests = 1;
+
+    // Act
+    let sub_cent = turn_cost(vec![live_request("model", 1_000, 4_000)]);
+    let lower_bound_sub_cent = turn_cost(vec![lower_bound_request]);
+    let thousands = turn_cost(vec![live_request("model", 1_000, 1_234_000_000)]);
+    let unreported = turn_cost(vec![ModelUsage::unreported("model", 2)]);
+
+    // Assert
+    assert_eq!(sub_cent.cost.panel_text(), "<$0.01");
+    assert_eq!(lower_bound_sub_cent.cost.panel_text(), "≥$0.00");
+    assert_eq!(lower_bound_sub_cent.input.panel_text(), "≥1.0k");
+    assert_eq!(thousands.cost.panel_text(), "$1,230");
+    assert_eq!(unreported.input, UsageFigure::Unreported);
+    assert_eq!(unreported.cost, UsageFigure::Unpriced);
+}
+
+#[test]
+fn test_readout_figures_ignore_a_session_turn_without_model_usage() {
+    // Arrange
+    let stored = session_usage(vec![priced_record("model", UsagePurpose::Turn)]);
+    let live = HashMap::from([live_entry("session", LiveUsageRun::SessionTurn, Vec::new())]);
+
+    // Act
+    let figures = session_readout_figures(Some(&stored), &SessionId::from("session"), &live)
+        .expect("stored usage has readout figures");
+
+    // Assert
+    assert_eq!(figures.turn, None);
+    assert_eq!(
+        figures.session_cost,
+        UsageFigure::Cost(CostFigure {
+            is_api_equivalent: false,
+            is_lower_bound: false,
+            is_upper_bound: false,
+            text: "$3.27".to_string(),
+        })
+    );
+}
+
+#[test]
+fn test_readout_context_without_window_keeps_the_absolute_size() {
+    // Arrange
+    let stored = SessionUsage {
+        context: Some(ContextNow {
+            tokens: 71_200,
+            window_tokens: Some(0),
+        }),
+        records: Vec::new(),
+        turn_count: 1,
+    };
+
+    // Act
+    let figures =
+        session_readout_figures(Some(&stored), &SessionId::from("session"), &HashMap::new())
+            .expect("stored context has readout figures");
+
+    // Assert
+    assert_eq!(
+        figures.context,
+        Some(ReadoutContext {
+            gauge_filled: None,
+            percent: None,
+            tokens: "71.2k".to_string(),
+        })
+    );
+    assert_eq!(figures.session_cost, UsageFigure::NotRecorded);
+}
+
+#[test]
+fn test_context_gauge_and_tone_follow_the_fill() {
+    // Arrange, Act, Assert
+    assert_eq!(context_gauge(0), "▱▱▱▱▱");
+    assert_eq!(context_gauge(2), "▰▰▱▱▱");
+    assert_eq!(context_gauge(9), "▰▰▰▰▰");
+    assert_eq!(context_tone(None), palette::text_muted());
+    assert_eq!(context_tone(Some(74)), palette::text_muted());
+    assert_eq!(context_tone(Some(75)), palette::warning());
+    assert_eq!(context_tone(Some(90)), palette::danger());
 }

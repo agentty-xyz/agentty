@@ -1,5 +1,6 @@
-//! Usage display formatting: money and token figures, honesty states, and
-//! the per-session usage panel's cells, summary, and notes.
+//! Usage display formatting: money and token figures, honesty states, the
+//! per-session usage panel's cells, summary, and notes, and the figures of
+//! the live usage readout.
 //!
 //! Each figure is a [`UsageFigure`] that records how exact it is, so every
 //! surface renders the same states its own way. The panel writes a lower
@@ -14,9 +15,13 @@ use std::collections::HashMap;
 
 use ag_contracts::{CostBasis, PlanLogin, TurnUsage, UsagePurpose};
 use ag_tui_text::text_util;
+use ratatui::style::Color;
 
 use crate::domain::session::SessionId;
-use crate::domain::session_usage::{ContextNow, LiveUsageKey, SessionUsage, UsageRecord};
+use crate::domain::session_usage::{
+    ContextNow, LiveUsageKey, LiveUsageRun, SessionUsage, UsageRecord,
+};
+use crate::ui::style::palette;
 
 /// Prefix of a figure that is a lower bound.
 const LOWER_BOUND_MARK: &str = "≥";
@@ -53,7 +58,13 @@ const LOWER_BOUND_SUB_CENT_TEXT: &str = "$0.00";
 const SESSION_TOTAL_LABEL: &str = "Session total";
 
 /// Cells of the context gauge.
-pub(crate) const CONTEXT_GAUGE_CELLS: u64 = 5;
+const CONTEXT_GAUGE_CELLS: u64 = 5;
+
+/// Context fill from which the gauge turns to the warning tone.
+const CONTEXT_WARNING_PERCENT: u64 = 75;
+
+/// Context fill from which the gauge turns to the danger tone.
+const CONTEXT_DANGER_PERCENT: u64 = 90;
 
 const MICRO_USD_PER_CENT: u64 = 10_000;
 const MICRO_USD_PER_DOLLAR: u64 = 1_000_000;
@@ -405,6 +416,117 @@ pub(crate) fn session_panel_content(
         .map(|(key, turn_usage)| (&key.run, turn_usage));
 
     usage_panel_content(&usage.with_live(session_live))
+}
+
+/// Context fill of the live readout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadoutContext {
+    /// Gauge cells the fill covers, when the window is known.
+    pub(crate) gauge_filled: Option<u64>,
+    /// Rounded share of the window, when the window is known.
+    pub(crate) percent: Option<u64>,
+    /// Input tokens of the latest request, formatted.
+    pub(crate) tokens: String,
+}
+
+/// Figures of the running session turn in the live readout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadoutTurn {
+    /// Estimated charge of the turn so far.
+    pub(crate) cost: UsageFigure,
+    /// Input tokens of the turn so far, cache included.
+    pub(crate) input: UsageFigure,
+    /// Output tokens of the turn so far.
+    pub(crate) output: UsageFigure,
+}
+
+/// Figures the live readout shows for one session: the running turn, the
+/// latest context fill, and the session's estimated charge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadoutFigures {
+    /// Latest context fill, when any request reported its input.
+    pub(crate) context: Option<ReadoutContext>,
+    /// Estimated charge of the whole session, running turns included.
+    pub(crate) session_cost: UsageFigure,
+    /// Running session turn, once a model request of it completed.
+    pub(crate) turn: Option<ReadoutTurn>,
+}
+
+/// Builds the live readout figures of `session_id` from its recorded
+/// `stored` usage and the running turns in `live`; `None` until the session
+/// records any usage.
+pub(crate) fn session_readout_figures(
+    stored: Option<&SessionUsage>,
+    session_id: &SessionId,
+    live: &HashMap<LiveUsageKey, TurnUsage>,
+) -> Option<ReadoutFigures> {
+    let session_live = live
+        .iter()
+        .filter(|(key, _)| key.session_id == *session_id)
+        .map(|(key, turn_usage)| (&key.run, turn_usage));
+    let empty = SessionUsage::default();
+    let usage = stored.unwrap_or(&empty).with_live(session_live);
+    if usage.records.is_empty() && usage.context.is_none() {
+        return None;
+    }
+    let turn = live
+        .get(&LiveUsageKey {
+            run: LiveUsageRun::SessionTurn,
+            session_id: session_id.clone(),
+        })
+        .filter(|turn_usage| !turn_usage.models.is_empty())
+        .map(|turn_usage| {
+            let turn_records = SessionUsage::default()
+                .with_live([(&LiveUsageRun::SessionTurn, turn_usage)])
+                .records;
+            let total = total_row(&turn_records);
+
+            ReadoutTurn {
+                cost: total.cell(UsageColumn::Cost).clone(),
+                input: total.cell(UsageColumn::Input).clone(),
+                output: total.cell(UsageColumn::Output).clone(),
+            }
+        });
+
+    Some(ReadoutFigures {
+        context: usage.context.map(readout_context),
+        session_cost: total_cost_cell(&usage.records),
+        turn,
+    })
+}
+
+/// Returns the gauge tone for a context fill: muted, then warning, then
+/// danger; the percentage label always accompanies it.
+pub(crate) fn context_tone(percent: Option<u64>) -> Color {
+    match percent {
+        Some(percent) if percent >= CONTEXT_DANGER_PERCENT => palette::danger(),
+        Some(percent) if percent >= CONTEXT_WARNING_PERCENT => palette::warning(),
+        _ => palette::text_muted(),
+    }
+}
+
+/// Returns the context gauge with `filled` of its cells filled.
+pub(crate) fn context_gauge(filled: u64) -> String {
+    let filled = filled.min(CONTEXT_GAUGE_CELLS);
+
+    format!(
+        "{}{}",
+        "▰".repeat(usize::try_from(filled).unwrap_or_default()),
+        "▱".repeat(usize::try_from(CONTEXT_GAUGE_CELLS - filled).unwrap_or_default())
+    )
+}
+
+/// Returns the readout's context fill of `context`.
+fn readout_context(context: ContextNow) -> ReadoutContext {
+    let window = context.window_tokens.filter(|window| *window > 0);
+
+    ReadoutContext {
+        gauge_filled: window.map(|window| gauge_filled(context.tokens, window)),
+        percent: window.map(|window| {
+            u64::try_from(rounded_percent(context.tokens, window)).unwrap_or(u64::MAX)
+        }),
+        tokens: text_util::format_token_count(context.tokens),
+    }
 }
 
 /// Builds the usage panel's rows, totals, summary, and notes for `usage`.

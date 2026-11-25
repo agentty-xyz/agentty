@@ -15,6 +15,9 @@ use crate::ui::input_layout::{
 };
 use crate::ui::{Component, style};
 
+/// Separator between a footer readout and the footer.
+pub(crate) const FOOTER_SEPARATOR: &str = " │ ";
+
 /// One row rendered inside a prompt suggestion dropdown.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SuggestionItem {
@@ -47,6 +50,7 @@ pub struct ChatInput<'a> {
     clear_style: Option<Style>,
     cursor: usize,
     footer: Option<&'a str>,
+    footer_readout: Option<&'a Line<'static>>,
     input: &'a str,
     status: Option<&'a str>,
     suggestion_list: Option<&'a SuggestionList>,
@@ -62,6 +66,7 @@ impl<'a> ChatInput<'a> {
             clear_style: None,
             cursor,
             footer: None,
+            footer_readout: None,
             input,
             status: None,
             suggestion_list: None,
@@ -109,6 +114,14 @@ impl<'a> ChatInput<'a> {
         self
     }
 
+    /// Sets a styled readout shown before the footer, separated by `│`,
+    /// when both fit in full; otherwise the footer shows alone.
+    #[must_use]
+    pub fn footer_readout(mut self, readout: Option<&'a Line<'static>>) -> Self {
+        self.footer_readout = readout;
+        self
+    }
+
     /// Sets the style reapplied after clearing the input area.
     ///
     /// Overlay-hosted inputs use this to keep popup-local cells on the
@@ -139,13 +152,15 @@ impl<'a> ChatInput<'a> {
         if let Some(footer) = self.footer
             && footer.width().saturating_add(4) <= usize::from(width)
         {
-            block = block.title_bottom(
-                Line::styled(
-                    format!(" {footer} "),
-                    Style::default().fg(style::palette::text_muted()),
-                )
-                .right_aligned(),
-            );
+            let readout = self.footer_readout.filter(|readout| {
+                readout.width() + FOOTER_SEPARATOR.width() + footer.width() + 4
+                    <= usize::from(width)
+            });
+            let padding = Span::styled(" ", Style::default().fg(style::palette::text_muted()));
+            let mut line = footer_line(readout, footer);
+            line.spans.insert(0, padding.clone());
+            line.spans.push(padding);
+            block = block.title_bottom(line.right_aligned());
         }
 
         block
@@ -386,6 +401,21 @@ impl Component for ChatInput<'_> {
 
         self.render_input(frame, area);
     }
+}
+
+/// Returns the muted timing `footer`, after `readout` and a `│` separator
+/// when given.
+pub(crate) fn footer_line(readout: Option<&Line<'static>>, footer: &str) -> Line<'static> {
+    let muted = Style::default().fg(style::palette::text_muted());
+    let mut spans = readout.map_or_else(Vec::new, |readout| {
+        let mut spans = readout.spans.clone();
+        spans.push(Span::styled(FOOTER_SEPARATOR, muted));
+
+        spans
+    });
+    spans.push(Span::styled(footer.to_string(), muted));
+
+    Line::from(spans)
 }
 
 #[cfg(test)]

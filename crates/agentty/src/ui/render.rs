@@ -79,6 +79,8 @@ pub struct RenderContext<'a> {
     pub is_archive_expanded: bool,
     /// Newer stable version when one is available.
     pub latest_available_version: Option<&'a str>,
+    /// Listed harness models a local server runs.
+    pub local_harness_models: &'a [crate::domain::agent::AgentModel],
     /// Current app mode and its transient state.
     pub mode: &'a AppMode,
     /// Cached most-recently-opened ordering over `projects`, reused by the
@@ -113,6 +115,8 @@ pub struct RenderContext<'a> {
     pub session_review_snapshot: Option<&'a SessionReviewSnapshot<'a>>,
     /// Latest observable update versions keyed by session id.
     pub session_update_versions: &'a HashMap<SessionId, u64>,
+    /// Recorded usage of each session the live readout has shown.
+    pub session_usage_totals: &'a HashMap<SessionId, crate::domain::session_usage::SessionUsage>,
     /// Session rows available for rendering.
     pub sessions: &'a [Session],
     /// Daily session activity series used by dashboard activity summaries.

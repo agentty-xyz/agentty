@@ -16,7 +16,7 @@ use super::support::{
 use crate::app::AppServices;
 use crate::db::AppRepositories;
 use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, HarnessModelStatus, ReasoningLevel, SpeedMode,
+    AgentKind, AgentModel, AgentSelection, HarnessModelStatus, ModelCost, ReasoningLevel, SpeedMode,
 };
 use crate::domain::setting::SettingName;
 use crate::domain::subagent::SubagentLimit;
@@ -1274,6 +1274,23 @@ async fn shared_harness_models_report_ready_models_as_the_list_changes() {
     assert_eq!(without_models, []);
     assert_eq!(after_listing, [AgentModel::Qwen38Flash]);
     assert_eq!(after_refresh, []);
+}
+
+#[tokio::test]
+async fn shared_harness_models_report_local_models_by_cost() {
+    // Arrange
+    let (services, _project_id) =
+        test_services_with_available_agent_kinds(vec![AgentKind::Codex]).await;
+    let mut local = crate::test_support::ready_harness_model(AgentModel::Qwen38Flash);
+    local.cost = ModelCost::Local;
+    let hosted = crate::test_support::ready_harness_model(AgentModel::KimiK3);
+
+    // Act
+    services.replace_harness_model_options(vec![local, hosted]);
+    let local_models = services.harness_models().local_models();
+
+    // Assert
+    assert_eq!(local_models, [AgentModel::Qwen38Flash]);
 }
 
 #[tokio::test]

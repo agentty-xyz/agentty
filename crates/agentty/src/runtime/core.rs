@@ -249,6 +249,7 @@ where
         self.app.process_pending_app_events().await;
         self.app.reconcile_terminal_session_input_mode().await;
         self.app.reconcile_open_session_question_mode().await;
+        self.app.load_visible_session_usage().await;
         self.app.request_visible_at_mention_descriptions();
         self.app
             .expire_project_sync_status(self.clock.now_instant());

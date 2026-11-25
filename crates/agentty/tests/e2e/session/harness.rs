@@ -1942,7 +1942,7 @@ const STREAM_ANSWER_HEAD: &str = "Streaming part one";
 /// Answer text the gated provider streams after its gate opens.
 const STREAM_ANSWER_TAIL: &str = " and part two.";
 /// Heading of the title-generation prompt, which repeats the session request.
-const TITLE_PROMPT: &str = "Generate a concise, commit-style title";
+pub(super) const TITLE_PROMPT: &str = "Generate a concise, commit-style title";
 
 /// Serves Chat Completions on a local port and returns its base URL.
 ///
@@ -2019,7 +2019,7 @@ fn sse_chunks(chunks: &[serde_json::Value]) -> String {
 
 /// Reads one HTTP request from `stream` and returns its body, or `None`
 /// when the connection closes first.
-fn read_request_body(stream: &mut TcpStream) -> Option<String> {
+pub(super) fn read_request_body(stream: &mut TcpStream) -> Option<String> {
     let mut request = Vec::new();
     let mut chunk = [0; 8192];
     let header_end = loop {
@@ -2373,14 +2373,18 @@ fn assert_live_timeline_report(frame: &testty::frame::TerminalFrame, report: &Pr
     }
     let text = running.all_text();
     // The held turn waits for the model's next response; the pinned clock
-    // keeps both timers at zero.
+    // keeps both timers at zero, and the turn's usage readout fills the
+    // status line's right slot.
     let status_row = text
         .lines()
         .find(|line| line.contains("  ·  step 3"))
         .map(str::trim);
     assert_eq!(
         status_row,
-        Some("⠋ Waiting for muse-spark-1.3 0s  ·  step 3  ·  turn 0s")
+        Some(
+            "⠋ Waiting for muse-spark-1.3 0s  ·  step 3  ·  turn 0s                             \
+             ↑20 ↓4 · ctx ▱▱▱▱▱ 0% · <$0.01 turn"
+        )
     );
     assert!(text.find("Checking the notes") < text.find("Adding beta below"));
     assert!(text.find("✗ Edit") < text.find("✓ Edit"));

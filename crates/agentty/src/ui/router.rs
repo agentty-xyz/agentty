@@ -11,12 +11,12 @@ use ratatui::widgets::TableState;
 
 use crate::app::Tab;
 use crate::app::session_state::SessionGitStatus;
-use crate::domain::agent::{AgentCliInfo, AgentKind, ReasoningLevel};
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
-use crate::domain::session_usage::LiveUsageKey;
+use crate::domain::session_usage::{LiveUsageKey, SessionUsage};
 use crate::presentation::api_key::{API_KEY_TITLE, ApiKeyDialog};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget,
@@ -35,6 +35,7 @@ use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
 use crate::ui::component::diff_comment_submit_overlay::DiffCommentSubmitOverlay;
 use crate::ui::component::info_overlay::InfoOverlay;
 use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
+use crate::ui::usage_readout::UsageReadout;
 use crate::ui::{
     Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
     style, usage_format,
@@ -150,6 +151,35 @@ struct SessionChatRenderContext<'a> {
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
     sessions: &'a [Session],
+    usage: UsageSources<'a>,
+}
+
+/// Usage the live readout reads for the visible session.
+#[derive(Clone, Copy)]
+struct UsageSources<'a> {
+    /// Cumulative usage of each running turn.
+    live: &'a HashMap<LiveUsageKey, TurnUsage>,
+    /// Listed harness models a local server runs.
+    local_models: &'a [AgentModel],
+    /// Recorded usage of each session the readout has shown.
+    totals: &'a HashMap<SessionId, SessionUsage>,
+}
+
+impl UsageSources<'_> {
+    /// Returns the live readout of `session`, or `None` before it records
+    /// any usage.
+    fn readout(self, session: &Session) -> Option<UsageReadout> {
+        let figures = usage_format::session_readout_figures(
+            self.totals.get(&session.id),
+            &session.id,
+            self.live,
+        )?;
+
+        Some(UsageReadout::new(
+            figures,
+            self.local_models.contains(&session.agent.model()),
+        ))
+    }
 }
 
 /// UI-owned immutable resources shared by every surface in one frame.
@@ -173,6 +203,7 @@ struct FrameResources<'a> {
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_update_versions: &'a HashMap<SessionId, u64>,
+    usage: UsageSources<'a>,
 }
 
 impl<'a> FrameResources<'a> {
@@ -204,6 +235,7 @@ impl<'a> FrameResources<'a> {
             sessions,
             scroll_offset,
             frame_time: self.frame_time,
+            usage: self.usage,
         }
     }
 }
@@ -233,6 +265,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         current_tab,
         default_reasoning_level,
         harness_availability,
+        local_harness_models,
         mode,
         mru_project_order,
         platform,
@@ -246,6 +279,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         session_live_usage,
         session_progress_messages,
         session_update_versions,
+        session_usage_totals,
         settings_screen,
         stats_activity,
         sessions,
@@ -291,6 +325,11 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         session_progress_messages,
         session_update_versions,
         frame_time,
+        usage: UsageSources {
+            live: session_live_usage,
+            local_models: local_harness_models,
+            totals: session_usage_totals,
+        },
     };
 
     render_surface(frame, area, surface_for_mode(mode), &mut shared, resources);
@@ -866,6 +905,7 @@ fn render_session_chat(frame: &mut Frame, area: Rect, context: SessionChatRender
         sessions,
         scroll_offset,
         frame_time,
+        usage,
     } = context;
 
     let Some(session_index) = sessions.iter().position(|session| session.id == session_id) else {
@@ -905,9 +945,11 @@ fn render_session_chat(frame: &mut Frame, area: Rect, context: SessionChatRender
         sessions,
         frame_time,
     };
+    let usage_readout = usage.readout(&sessions[session_index]);
 
     page::session_chat::SessionChatPage::new(page_input)
         .graph_chat(graph_chat.filter(|snapshot| snapshot.proposal.input.session_id == session_id))
+        .usage_readout(usage_readout.as_ref())
         .render(frame, area);
 }
 

@@ -192,6 +192,7 @@ impl App {
             project_sync_statuses: std::collections::HashMap::new(),
             session_live_usage: std::collections::HashMap::new(),
             session_progress_messages: std::collections::HashMap::new(),
+            session_usage_totals: std::collections::HashMap::new(),
             update_status: None,
             // Build the runner before `sync_handle` moves into the struct.
             sync_main_runner: clients

@@ -7,10 +7,9 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::{UsageOverlay, context_spans, context_tone, max_scroll_offset};
+use super::{UsageOverlay, context_spans, max_scroll_offset};
 use crate::domain::session_usage::{ContextNow, SessionUsage, UsageRecord};
 use crate::ui::Component;
-use crate::ui::style::palette;
 use crate::ui::usage_format::{ContextSummary, UsagePanelContent, usage_panel_content};
 
 /// Returns a priced record of `model` under `purpose`.
@@ -233,15 +232,6 @@ fn test_empty_overlay_explains_that_no_usage_is_recorded() {
     // Assert
     assert!(contains(&rows, "No usage recorded for this session yet."));
     assert!(!contains(&rows, "Session total"));
-}
-
-#[test]
-fn test_context_tone_rises_with_fill() {
-    // Arrange, Act, Assert
-    assert_eq!(context_tone(None), palette::text_muted());
-    assert_eq!(context_tone(Some(74)), palette::text_muted());
-    assert_eq!(context_tone(Some(75)), palette::warning());
-    assert_eq!(context_tone(Some(90)), palette::danger());
 }
 
 #[test]

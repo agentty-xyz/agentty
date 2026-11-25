@@ -57,6 +57,38 @@ fn test_builder_methods() {
 }
 
 #[test]
+fn test_footer_readout_precedes_the_footer_only_when_both_fit() {
+    // Arrange
+    let readout = ratatui::text::Line::from("ctx 38% · $3.27 session");
+
+    for (width, expected) in [
+        (52, " ctx 38% · $3.27 session │ Timer: 2m ╯"),
+        (30, " Timer: 2m ╯"),
+    ] {
+        let backend = ratatui::backend::TestBackend::new(width, 3);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        let chat_input = ChatInput::new("Prompt", "", 0)
+            .footer("Timer: 2m")
+            .footer_readout(Some(&readout));
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                chat_input.render(frame, area);
+            })
+            .expect("render input");
+        let bottom_row = buffer_row_text(terminal.backend().buffer(), 2, width);
+
+        // Assert
+        assert!(bottom_row.ends_with(expected), "{bottom_row}");
+        if width == 30 {
+            assert!(!bottom_row.contains("ctx"), "{bottom_row}");
+        }
+    }
+}
+
+#[test]
 fn test_footer_stays_in_bottom_border_across_focus_changes_when_it_fits() {
     // Arrange
     let footer = "Started 4m ago";

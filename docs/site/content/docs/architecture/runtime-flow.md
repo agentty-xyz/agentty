@@ -186,6 +186,10 @@ sends `AppEvent::SessionUsageRecorded` once its usage is stored, or when it ends
 it, and the reducer drops that turn's live usage. Utility runs report their stored usage
 the same way through the Run Worker's run repository. The usage panel folds live usage
 into the recorded rows and reloads them on every `SessionUsageRecorded` for its session.
+The live usage readout, in the turn status line while a turn runs and beside the
+composer timer between turns, does the same: the runtime loop loads a session's recorded
+usage the first time the session is visible, which restores idle totals after a restart,
+and the reducer reloads it on every `SessionUsageRecorded` for that session.
 
 Sandbox notices travel the same path as `TurnEvent::Notice`. Session turns, sync
 assistance turns, and execution-graph and task turns relay the turn's events before the
