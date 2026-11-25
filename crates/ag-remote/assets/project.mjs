@@ -73,15 +73,15 @@ export function pickProject(projects, wanted) {
 // private window; the pick then lasts only for this page.
 export function projectPicks(storage, instanceId) {
   function read() {
+    let picks = null;
     try {
-      const picks = JSON.parse(storage.getItem(PROJECT_PICKS_KEY) ?? "{}");
-
-      return picks && typeof picks === "object" && !Array.isArray(picks) ? picks : {};
+      picks = JSON.parse(storage.getItem(PROJECT_PICKS_KEY) ?? "{}");
     } catch (_error) {
       // Unreadable storage or a damaged value holds no picks; the next
       // pick writes the map anew.
-      return {};
     }
+
+    return picks && typeof picks === "object" && !Array.isArray(picks) ? picks : {};
   }
 
   return {
