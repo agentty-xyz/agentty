@@ -1146,6 +1146,7 @@ async fn idle_tick_marks_the_frame_dirty_after_a_session_refresh() {
         Arc::new(ag_git::MockGitClient::new()),
         SessionState::new(
             HashMap::new(),
+            app.active_project_id(),
             vec![stale_session],
             SelectionState::default(),
             session_clock.clone(),

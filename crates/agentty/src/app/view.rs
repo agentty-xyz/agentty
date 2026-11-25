@@ -108,7 +108,7 @@ impl App {
             git_branch: project.git_branch,
             git_status: project.git_status,
             git_upstream_ref: project.git_upstream_ref,
-            archived_session_count: self.sessions.state().archived_session_count,
+            archived_session_count: self.sessions.archived_session_count(),
             has_more_archived_sessions: self.sessions.has_more_archived_sessions(),
             is_archive_expanded: self.sessions.is_archive_expanded(),
             latest_available_version: self.latest_available_version.as_deref(),

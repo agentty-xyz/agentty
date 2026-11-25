@@ -871,7 +871,7 @@ fn archive_load_more_navigation_wraps_and_skips_group_headers() {
         session_with_id("archive", Status::Done),
         session_with_id("active", Status::Review),
     ]);
-    manager.state.has_more_archived_sessions = true;
+    manager.state.active_page_mut().has_more_archived_sessions = true;
     manager.state.table_state.select(Some(1));
 
     // Act
@@ -900,15 +900,15 @@ fn archive_load_more_navigation_wraps_and_skips_group_headers() {
     assert!(wrapped_backward);
     assert_eq!(back_to_active, Some(1));
     assert!(!manager.has_more_archived_sessions());
-    assert_eq!(manager.state.archive_limit, 10);
+    assert_eq!(manager.state.active_page().archive_limit, 10);
 }
 
 #[test]
 fn archive_navigation_visits_load_more_then_show_less() {
     // Arrange
     let mut manager = session_manager_with_sessions(vec![session_with_id("archive", Status::Done)]);
-    manager.state.has_more_archived_sessions = true;
-    manager.state.archive_limit = 20;
+    manager.state.active_page_mut().has_more_archived_sessions = true;
+    manager.state.active_page_mut().archive_limit = 20;
     manager.state.table_state.select(Some(0));
 
     // Act

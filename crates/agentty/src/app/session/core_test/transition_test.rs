@@ -481,6 +481,7 @@ async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() 
     // Arrange
     let state = SessionState::new(
         HashMap::new(),
+        1,
         Vec::new(),
         SelectionState::default(),
         Arc::new(RealClock),
@@ -883,6 +884,7 @@ async fn test_replace_title_generation_task_aborts_superseded_task() {
     // Arrange
     let state = SessionState::new(
         HashMap::new(),
+        1,
         Vec::new(),
         SelectionState::default(),
         Arc::new(RealClock),

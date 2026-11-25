@@ -1,5 +1,6 @@
-//! `SessionState`, the in-memory session list with its live worker handles,
-//! selection, refresh tracking, and cached branch and git metadata.
+//! `SessionState`, the terminal's session state with its live worker handles,
+//! selection, and refresh tracking, and `SessionPage`, one project's loaded
+//! session list with its cached branch and git metadata.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -27,7 +28,7 @@ pub struct SessionGitStatus {
 ///
 /// Keeping synchronization handles behind this boundary distinguishes
 /// worker-owned mutable state from the persisted/render-friendly snapshots in
-/// [`SessionState::sessions`].
+/// [`SessionPage::sessions`].
 struct SessionRuntimeState {
     handles: HashMap<SessionId, SessionHandles>,
 }
@@ -50,40 +51,32 @@ impl SessionRuntimeState {
     }
 }
 
-/// Holds all in-memory state related to session listing and refresh tracking.
+/// Holds the terminal's session state: the active project's page, live
+/// worker handles for every session, the list selection, and refresh
+/// tracking.
+///
+/// Accessors that read or change session snapshots act on the active page.
 pub struct SessionState {
-    /// Archive window retained until the active project changes.
-    pub(crate) archive_limit: usize,
-    /// Full archive total for the active project, independent of pagination.
-    pub(crate) archived_session_count: usize,
     pub(super) clock: Arc<dyn Clock>,
     /// Selected follow-up-task positions keyed by session id for session-view
     /// affordances.
     pub(super) follow_up_task_positions: HashMap<SessionId, usize>,
-    /// Whether the archive window has older rows available.
-    pub(crate) has_more_archived_sessions: bool,
     pub(super) refresh_deadline: Instant,
-    pub(super) row_count: i64,
-    /// Cached detected branch names keyed by session id.
-    pub(super) session_branch_names: HashMap<SessionId, String>,
-    pub(super) session_git_statuses: HashMap<SessionId, SessionGitStatus>,
-    /// Cached session list positions keyed by stable session id.
-    pub(super) session_index_by_id: HashMap<SessionId, usize>,
-    /// Cached worktree-directory availability keyed by session id.
-    pub(super) session_worktree_availability: HashMap<SessionId, bool>,
-    pub(super) sessions: Vec<Session>,
     pub(super) table_state: SelectionState,
-    pub(super) updated_at_max: i64,
+    /// Session list of the project the terminal shows.
+    active: SessionPage,
     runtime: SessionRuntimeState,
 }
 
 impl SessionState {
-    /// Creates a new [`SessionState`] with initial refresh metadata.
+    /// Creates a new [`SessionState`] whose active page holds `sessions` of
+    /// `project_id`, with initial refresh metadata.
     ///
     /// Time values are provided by an injected clock so refresh scheduling can
     /// be deterministic in tests.
     pub(crate) fn new(
         handles: HashMap<SessionId, SessionHandles>,
+        project_id: i64,
         sessions: Vec<Session>,
         table_state: SelectionState,
         clock: Arc<dyn Clock>,
@@ -92,48 +85,42 @@ impl SessionState {
     ) -> Self {
         let _state_created_at = clock.now_system_time();
         let refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
-        let mut state = Self {
-            archive_limit: session_order::ARCHIVE_PAGE_SIZE,
-            archived_session_count: sessions
-                .iter()
-                .filter(|session| matches!(session.status, Status::Done | Status::Canceled))
-                .count(),
+
+        Self {
+            active: SessionPage::new(project_id, sessions, row_count, updated_at_max),
             clock,
             follow_up_task_positions: HashMap::new(),
-            has_more_archived_sessions: false,
             refresh_deadline,
-            row_count,
             runtime: SessionRuntimeState { handles },
-            session_branch_names: HashMap::new(),
-            session_git_statuses: HashMap::new(),
-            session_index_by_id: HashMap::new(),
-            session_worktree_availability: HashMap::new(),
-            sessions: Vec::new(),
             table_state,
-            updated_at_max,
-        };
-
-        for session in sessions {
-            state.push_session(session);
         }
+    }
 
-        state
+    /// Returns the session list of the project the terminal shows.
+    pub(crate) fn active_page(&self) -> &SessionPage {
+        &self.active
+    }
+
+    /// Returns mutable access to the session list of the project the
+    /// terminal shows.
+    pub(crate) fn active_page_mut(&mut self) -> &mut SessionPage {
+        &mut self.active
     }
 
     /// Returns the current list position for one stable session identifier.
     pub fn session_index_for_id(&self, session_id: &str) -> Option<usize> {
-        self.session_index_by_id.get(session_id).copied()
+        self.active.session_index_for_id(session_id)
     }
 
     /// Returns all loaded session snapshots in current list order.
     pub(crate) fn sessions(&self) -> &[Session] {
-        &self.sessions
+        self.active.sessions()
     }
 
     /// Returns mutable access to loaded session snapshots for reducers that
     /// update render-friendly projections.
     pub(crate) fn sessions_mut(&mut self) -> &mut [Session] {
-        &mut self.sessions
+        &mut self.active.sessions
     }
 
     /// Returns runtime handles keyed by stable session id.
@@ -182,49 +169,15 @@ impl SessionState {
 
     /// Returns one immutable session snapshot by identifier.
     pub fn session_for_id(&self, session_id: &str) -> Option<&Session> {
-        self.session_index_for_id(session_id)
-            .and_then(|session_index| self.sessions.get(session_index))
+        self.active.session_for_id(session_id)
     }
 
     /// Replaces persisted session snapshots while retaining in-process
     /// transient output for sessions that remain loaded.
     ///
-    /// Database refreshes can observe intermediate workflow persistence, such
-    /// as a published upstream branch before its review-request URL is ready.
-    /// Carrying transient output across that refresh keeps active loaders
-    /// visible until their owning reducer resolves them.
-    pub(crate) fn replace_sessions(&mut self, mut sessions: Vec<Session>) {
-        let transient_state_by_session_id: HashMap<SessionId, _> = self
-            .sessions
-            .iter()
-            .map(|session| {
-                (
-                    session.id.clone(),
-                    (session.status, session.transient_messages.clone()),
-                )
-            })
-            .collect();
-        for session in &mut sessions {
-            if let Some((previous_status, transient_messages)) =
-                transient_state_by_session_id.get(&session.id)
-            {
-                let preparation = session
-                    .transient_messages
-                    .get(TransientMessageSlot::WorkspacePreparation)
-                    .cloned();
-                session.transient_messages.clone_from(transient_messages);
-                session
-                    .transient_messages
-                    .retract(TransientMessageSlot::WorkspacePreparation);
-                if let Some(preparation) = preparation {
-                    session.transient_messages.upsert(preparation);
-                }
-                session.reconcile_status_transition(*previous_status);
-            }
-        }
-
-        self.session_index_by_id = Self::build_session_index_by_id(&sessions);
-        self.sessions = sessions;
+    /// See [`SessionPage::replace_sessions`].
+    pub(crate) fn replace_sessions(&mut self, sessions: Vec<Session>) {
+        self.active.replace_sessions(sessions);
     }
 
     /// Moves render transcripts out of the loaded snapshots, keyed by session
@@ -236,33 +189,26 @@ impl SessionState {
     pub(in crate::app::session) fn take_session_transcripts(
         &mut self,
     ) -> HashMap<SessionId, SessionTranscript> {
-        self.sessions
-            .iter_mut()
-            .filter_map(|session| Some((session.id.clone(), session.transcript.take()?)))
-            .collect()
+        self.active.take_session_transcripts()
     }
 
     /// Returns transcripts taken by [`Self::take_session_transcripts`] to the
     /// snapshots that are still loaded after a failed reload.
     pub(in crate::app::session) fn restore_session_transcripts(
         &mut self,
-        mut transcripts: HashMap<SessionId, SessionTranscript>,
+        transcripts: HashMap<SessionId, SessionTranscript>,
     ) {
-        for session in &mut self.sessions {
-            if let Some(transcript) = transcripts.remove(&session.id) {
-                session.transcript = Some(transcript);
-            }
-        }
+        self.active.restore_session_transcripts(transcripts);
     }
 
     /// Returns whether the archive window extends beyond its first page.
     pub(crate) fn is_archive_expanded(&self) -> bool {
-        self.archive_limit > session_order::ARCHIVE_PAGE_SIZE
+        self.active.is_archive_expanded()
     }
 
     /// Returns available archive pagination actions in display order.
     pub(crate) fn archive_actions(&self) -> Vec<ArchiveAction> {
-        session_order::archive_actions(self.has_more_archived_sessions, self.is_archive_expanded())
+        self.active.archive_actions()
     }
 
     /// Returns the archive pagination action under the current selection.
@@ -270,7 +216,7 @@ impl SessionState {
         let action_position = self
             .table_state
             .selected()?
-            .checked_sub(self.sessions.len())?;
+            .checked_sub(self.active.sessions.len())?;
 
         self.archive_actions().get(action_position).copied()
     }
@@ -287,7 +233,7 @@ impl SessionState {
             return false;
         };
         self.table_state
-            .select(Some(self.sessions.len() + action_position));
+            .select(Some(self.active.sessions.len() + action_position));
 
         true
     }
@@ -295,11 +241,8 @@ impl SessionState {
     /// Appends one session snapshot and records its new stable identifier
     /// lookup entry, preserving selection on archive pagination actions.
     pub(crate) fn push_session(&mut self, session: Session) {
-        let session_index = self.sessions.len();
         let selected_action = self.selected_archive_action();
-        self.session_index_by_id
-            .insert(session.id.clone(), session_index);
-        self.sessions.push(session);
+        self.active.push_session(session);
         if let Some(action) = selected_action {
             self.select_archive_action(action);
         }
@@ -308,14 +251,7 @@ impl SessionState {
     /// Removes one session snapshot by list index and rebuilds the cached
     /// identifier index when removal succeeds.
     pub(crate) fn remove_session_at(&mut self, session_index: usize) -> Option<Session> {
-        if session_index >= self.sessions.len() {
-            return None;
-        }
-
-        let session = self.sessions.remove(session_index);
-        self.rebuild_session_index_by_id();
-
-        Some(session)
+        self.active.remove_session_at(session_index)
     }
 
     /// Copies current values from one runtime handle into its `Session`
@@ -324,12 +260,7 @@ impl SessionState {
         let Some(session_handles) = self.runtime.handle(session_id) else {
             return;
         };
-        let Some(session) = self
-            .session_index_by_id
-            .get(session_id)
-            .copied()
-            .and_then(|session_index| self.sessions.get_mut(session_index))
-        else {
+        let Some(session) = self.active.session_mut_for_id(session_id) else {
             return;
         };
 
@@ -370,7 +301,7 @@ impl SessionState {
     pub fn sync_from_handles(&mut self) {
         let handles = self.runtime.handles();
 
-        for session in &mut self.sessions {
+        for session in &mut self.active.sessions {
             let Some(session_handles) = handles.get(&session.id) else {
                 continue;
             };
@@ -462,7 +393,7 @@ impl SessionState {
         &mut self,
         session_git_statuses: HashMap<SessionId, SessionGitStatus>,
     ) {
-        self.session_git_statuses = session_git_statuses;
+        self.active.session_git_statuses = session_git_statuses;
     }
 
     /// Replaces cached worktree-availability snapshots with one fresh reload
@@ -471,7 +402,7 @@ impl SessionState {
         &mut self,
         session_worktree_availability: HashMap<SessionId, bool>,
     ) {
-        self.session_worktree_availability = session_worktree_availability;
+        self.active.session_worktree_availability = session_worktree_availability;
     }
 
     /// Replaces cached detected session branch names with one fresh reload
@@ -480,32 +411,35 @@ impl SessionState {
         &mut self,
         session_branch_names: HashMap<SessionId, String>,
     ) {
-        self.session_branch_names = session_branch_names;
+        self.active.session_branch_names = session_branch_names;
     }
 
     /// Updates cached worktree availability for one session after a lifecycle
     /// transition materializes or removes its worktree.
     pub(crate) fn set_session_worktree_available(&mut self, session_id: &str, is_available: bool) {
-        self.session_worktree_availability
+        self.active
+            .session_worktree_availability
             .insert(SessionId::from(session_id), is_available);
     }
 
     /// Drops cached worktree availability for one removed session.
     pub(crate) fn remove_session_worktree_availability(&mut self, session_id: &str) {
-        self.session_worktree_availability.remove(session_id);
+        self.active.session_worktree_availability.remove(session_id);
     }
 
     /// Drops cached branch-name entries for sessions that are no longer active
     /// in memory.
     pub(crate) fn retain_session_branch_names(&mut self, active_session_ids: &HashSet<SessionId>) {
-        self.session_branch_names
+        self.active
+            .session_branch_names
             .retain(|session_id, _| active_session_ids.contains(session_id));
     }
 
     /// Drops cached git-status entries for sessions that are no longer active
     /// in memory.
     pub(crate) fn retain_session_git_statuses(&mut self, active_session_ids: &HashSet<SessionId>) {
-        self.session_git_statuses
+        self.active
+            .session_git_statuses
             .retain(|session_id, _| active_session_ids.contains(session_id));
     }
 
@@ -516,6 +450,7 @@ impl SessionState {
         active_session_ids: &HashSet<SessionId>,
     ) {
         let follow_up_task_counts = self
+            .active
             .sessions
             .iter()
             .map(|session| (session.id.as_str(), session.follow_up_tasks.len()))
@@ -604,15 +539,243 @@ impl SessionState {
 
     /// Returns one mutable session snapshot by identifier.
     pub(crate) fn session_mut_for_id(&mut self, session_id: &str) -> Option<&mut Session> {
-        let session_index = self.session_index_by_id.get(session_id).copied()?;
+        self.active.session_mut_for_id(session_id)
+    }
+}
+
+/// One project's loaded session list: its snapshots in list order, the
+/// archive window, the per-session caches derived for them, and the persisted
+/// metadata that tells a refresh whether the list changed.
+pub(crate) struct SessionPage {
+    /// Archive window retained until the active project changes.
+    pub(crate) archive_limit: usize,
+    /// Whether the archive window has older rows available.
+    pub(crate) has_more_archived_sessions: bool,
+    /// Session count across every project when the page was last checked.
+    pub(super) row_count: i64,
+    pub(super) sessions: Vec<Session>,
+    /// Latest session update in the project when the page was last checked.
+    pub(super) updated_at_max: i64,
+    /// Full archive total for the project, independent of pagination.
+    archived_session_count: usize,
+    /// Project whose sessions the page holds.
+    project_id: i64,
+    /// Cached detected branch names keyed by session id.
+    session_branch_names: HashMap<SessionId, String>,
+    session_git_statuses: HashMap<SessionId, SessionGitStatus>,
+    /// Cached session list positions keyed by stable session id.
+    session_index_by_id: HashMap<SessionId, usize>,
+    /// Cached worktree-directory availability keyed by session id.
+    session_worktree_availability: HashMap<SessionId, bool>,
+}
+
+impl SessionPage {
+    /// Returns all loaded session snapshots in current list order.
+    pub(crate) fn sessions(&self) -> &[Session] {
+        &self.sessions
+    }
+
+    /// Returns the project whose sessions the page holds.
+    pub(crate) fn project_id(&self) -> i64 {
+        self.project_id
+    }
+
+    /// Records the project whose rows a reload just placed in the page.
+    pub(crate) fn set_project_id(&mut self, project_id: i64) {
+        self.project_id = project_id;
+    }
+
+    /// Returns the persisted `(row_count, updated_at_max)` metadata the page
+    /// was last checked against.
+    pub(crate) fn sessions_metadata(&self) -> (i64, i64) {
+        (self.row_count, self.updated_at_max)
+    }
+
+    /// Records the persisted `(row_count, updated_at_max)` metadata the page
+    /// now reflects.
+    pub(crate) fn set_sessions_metadata(&mut self, sessions_metadata: (i64, i64)) {
+        (self.row_count, self.updated_at_max) = sessions_metadata;
+    }
+
+    /// Returns the project's archive total across every page.
+    pub(crate) fn archived_session_count(&self) -> usize {
+        self.archived_session_count
+    }
+
+    /// Records the archive total and whether older rows remain, as one load
+    /// reported them.
+    pub(crate) fn set_archive_page(
+        &mut self,
+        archived_session_count: usize,
+        has_more_archived_sessions: bool,
+    ) {
+        self.archived_session_count = archived_session_count;
+        self.has_more_archived_sessions = has_more_archived_sessions;
+    }
+
+    /// Collapses the archive window back to its first page.
+    pub(crate) fn reset_archive_page(&mut self) {
+        self.archive_limit = session_order::ARCHIVE_PAGE_SIZE;
+        self.has_more_archived_sessions = false;
+    }
+
+    /// Returns cached detected branch names keyed by session id.
+    pub(crate) fn session_branch_names(&self) -> &HashMap<SessionId, String> {
+        &self.session_branch_names
+    }
+
+    /// Returns cached ahead/behind snapshots keyed by session id.
+    pub(crate) fn session_git_statuses(&self) -> &HashMap<SessionId, SessionGitStatus> {
+        &self.session_git_statuses
+    }
+
+    /// Returns cached list positions keyed by session id.
+    pub(crate) fn session_index_by_id(&self) -> &HashMap<SessionId, usize> {
+        &self.session_index_by_id
+    }
+
+    /// Returns cached worktree availability keyed by session id.
+    pub(crate) fn session_worktree_availability(&self) -> &HashMap<SessionId, bool> {
+        &self.session_worktree_availability
+    }
+
+    /// Creates a page holding `sessions` of `project_id` on the first archive
+    /// page, counting the archived rows it holds.
+    fn new(project_id: i64, sessions: Vec<Session>, row_count: i64, updated_at_max: i64) -> Self {
+        let archived_session_count = sessions
+            .iter()
+            .filter(|session| matches!(session.status, Status::Done | Status::Canceled))
+            .count();
+        let mut page = Self {
+            archive_limit: session_order::ARCHIVE_PAGE_SIZE,
+            archived_session_count,
+            has_more_archived_sessions: false,
+            project_id,
+            row_count,
+            session_branch_names: HashMap::new(),
+            session_git_statuses: HashMap::new(),
+            session_index_by_id: HashMap::new(),
+            session_worktree_availability: HashMap::new(),
+            sessions: Vec::new(),
+            updated_at_max,
+        };
+
+        for session in sessions {
+            page.push_session(session);
+        }
+
+        page
+    }
+
+    /// Returns the current list position for one stable session identifier.
+    fn session_index_for_id(&self, session_id: &str) -> Option<usize> {
+        self.session_index_by_id.get(session_id).copied()
+    }
+
+    /// Returns one immutable session snapshot by identifier.
+    fn session_for_id(&self, session_id: &str) -> Option<&Session> {
+        self.session_index_for_id(session_id)
+            .and_then(|session_index| self.sessions.get(session_index))
+    }
+
+    /// Returns one mutable session snapshot by identifier.
+    fn session_mut_for_id(&mut self, session_id: &str) -> Option<&mut Session> {
+        let session_index = self.session_index_for_id(session_id)?;
 
         self.sessions.get_mut(session_index)
     }
 
-    /// Rebuilds the cached session-id lookup map from the current session
-    /// ordering.
-    fn rebuild_session_index_by_id(&mut self) {
+    /// Replaces persisted session snapshots while retaining in-process
+    /// transient output for sessions that remain loaded.
+    ///
+    /// Database refreshes can observe intermediate workflow persistence, such
+    /// as a published upstream branch before its review-request URL is ready.
+    /// Carrying transient output across that refresh keeps active loaders
+    /// visible until their owning reducer resolves them.
+    fn replace_sessions(&mut self, mut sessions: Vec<Session>) {
+        let transient_state_by_session_id: HashMap<SessionId, _> = self
+            .sessions
+            .iter()
+            .map(|session| {
+                (
+                    session.id.clone(),
+                    (session.status, session.transient_messages.clone()),
+                )
+            })
+            .collect();
+        for session in &mut sessions {
+            if let Some((previous_status, transient_messages)) =
+                transient_state_by_session_id.get(&session.id)
+            {
+                let preparation = session
+                    .transient_messages
+                    .get(TransientMessageSlot::WorkspacePreparation)
+                    .cloned();
+                session.transient_messages.clone_from(transient_messages);
+                session
+                    .transient_messages
+                    .retract(TransientMessageSlot::WorkspacePreparation);
+                if let Some(preparation) = preparation {
+                    session.transient_messages.upsert(preparation);
+                }
+                session.reconcile_status_transition(*previous_status);
+            }
+        }
+
+        self.session_index_by_id = Self::build_session_index_by_id(&sessions);
+        self.sessions = sessions;
+    }
+
+    /// Moves render transcripts out of the loaded snapshots, keyed by session
+    /// id.
+    fn take_session_transcripts(&mut self) -> HashMap<SessionId, SessionTranscript> {
+        self.sessions
+            .iter_mut()
+            .filter_map(|session| Some((session.id.clone(), session.transcript.take()?)))
+            .collect()
+    }
+
+    /// Returns taken transcripts to the snapshots that are still loaded.
+    fn restore_session_transcripts(
+        &mut self,
+        mut transcripts: HashMap<SessionId, SessionTranscript>,
+    ) {
+        for session in &mut self.sessions {
+            if let Some(transcript) = transcripts.remove(&session.id) {
+                session.transcript = Some(transcript);
+            }
+        }
+    }
+
+    /// Returns whether the archive window extends beyond its first page.
+    fn is_archive_expanded(&self) -> bool {
+        self.archive_limit > session_order::ARCHIVE_PAGE_SIZE
+    }
+
+    /// Returns available archive pagination actions in display order.
+    fn archive_actions(&self) -> Vec<ArchiveAction> {
+        session_order::archive_actions(self.has_more_archived_sessions, self.is_archive_expanded())
+    }
+
+    /// Appends one session snapshot and records its stable identifier lookup
+    /// entry.
+    fn push_session(&mut self, session: Session) {
+        self.session_index_by_id
+            .insert(session.id.clone(), self.sessions.len());
+        self.sessions.push(session);
+    }
+
+    /// Removes one session snapshot by list index and rebuilds the cached
+    /// identifier index when removal succeeds.
+    fn remove_session_at(&mut self, session_index: usize) -> Option<Session> {
+        if session_index >= self.sessions.len() {
+            return None;
+        }
+
+        let session = self.sessions.remove(session_index);
         self.session_index_by_id = Self::build_session_index_by_id(&self.sessions);
+
+        Some(session)
     }
 
     /// Builds a session-id lookup map from one ordered session slice.

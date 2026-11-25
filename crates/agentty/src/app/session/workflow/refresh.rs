@@ -44,10 +44,7 @@ impl SessionManager {
         else {
             return false;
         };
-        let (sessions_row_count, sessions_updated_at_max) = sessions_metadata;
-        if sessions_row_count == self.state.row_count
-            && sessions_updated_at_max == self.state.updated_at_max
-        {
+        if sessions_metadata == self.state.active_page().sessions_metadata() {
             return false;
         }
 
@@ -84,30 +81,33 @@ impl SessionManager {
     ) {
         let previous_ids: HashSet<_> = self
             .state
-            .sessions
+            .sessions()
             .iter()
             .map(|session| session.id.clone())
             .collect();
-        let previous_limit = self.state.archive_limit;
-        self.state.archive_limit = previous_limit.saturating_add(session_order::ARCHIVE_PAGE_SIZE);
+        let previous_limit = self.state.active_page().archive_limit;
+        self.state.active_page_mut().archive_limit =
+            previous_limit.saturating_add(session_order::ARCHIVE_PAGE_SIZE);
         if !self.reload_sessions(mode, projects, services, None).await {
-            self.state.archive_limit = previous_limit;
+            self.state.active_page_mut().archive_limit = previous_limit;
 
             return;
         }
-        let next_index = session_order::selectable_session_indexes(&self.state.sessions)
+        let sessions = self.state.sessions();
+        let next_index = session_order::selectable_session_indexes(sessions)
             .into_iter()
             .find(|index| {
-                let session = &self.state.sessions[*index];
+                let session = &sessions[*index];
 
                 matches!(session.status, Status::Done | Status::Canceled)
                     && !previous_ids.contains(&session.id)
+            })
+            .or_else(|| {
+                session_order::selectable_session_indexes(sessions)
+                    .last()
+                    .copied()
             });
-        self.state.table_state.select(next_index.or_else(|| {
-            session_order::selectable_session_indexes(&self.state.sessions)
-                .last()
-                .copied()
-        }));
+        self.state.table_state.select(next_index);
     }
 
     /// Collapses the archive back to its first page and focuses the
@@ -118,19 +118,18 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) {
-        let previous_limit = self.state.archive_limit;
-        self.state.archive_limit = session_order::ARCHIVE_PAGE_SIZE;
+        let previous_limit = self.state.active_page().archive_limit;
+        self.state.active_page_mut().archive_limit = session_order::ARCHIVE_PAGE_SIZE;
         if !self.reload_sessions(mode, projects, services, None).await {
-            self.state.archive_limit = previous_limit;
+            self.state.active_page_mut().archive_limit = previous_limit;
 
             return;
         }
         if !self.state.select_archive_action(ArchiveAction::LoadMore) {
-            self.state.table_state.select(
-                session_order::selectable_session_indexes(&self.state.sessions)
-                    .last()
-                    .copied(),
-            );
+            let last_index = session_order::selectable_session_indexes(self.state.sessions())
+                .last()
+                .copied();
+            self.state.table_state.select(last_index);
         }
     }
 
@@ -179,11 +178,12 @@ impl SessionManager {
         let selected_archive_action = self.selected_archive_action();
         let selected_index = self.state.table_state.selected();
         let selected_session_id = selected_index
-            .and_then(|index| self.state.sessions.get(index))
+            .and_then(|index| self.state.sessions().get(index))
             .map(|session| session.id.clone());
         let detail_session_id = Self::mode_session_id(mode).cloned();
 
-        let archive_limit = self.state.archive_limit;
+        let archive_limit = self.state.active_page().archive_limit;
+        let project_id = projects.active_project_id();
         let clock = services.clock();
         let fs_client = services.fs_client();
         let mut previous_transcripts = self.state.take_session_transcripts();
@@ -191,7 +191,7 @@ impl SessionManager {
             match Self::try_load_sessions_with_fs_client(
                 SessionLoadInput {
                     archive_limit,
-                    active_project_id: projects.active_project_id(),
+                    active_project_id: project_id,
                     active_session_id: detail_session_id.as_deref(),
                     base: services.base_path(),
                     clock: clock.as_ref(),
@@ -212,8 +212,12 @@ impl SessionManager {
                     return false;
                 }
             };
-        self.state.archived_session_count = archive_page.archived_session_count;
-        self.state.has_more_archived_sessions = archive_page.has_more_archived_sessions;
+        let page = self.state.active_page_mut();
+        page.set_project_id(project_id);
+        page.set_archive_page(
+            archive_page.archived_session_count,
+            archive_page.has_more_archived_sessions,
+        );
         self.state.replace_sessions(sessions);
         self.state
             .replace_session_worktree_availability(session_worktree_availability);
@@ -235,12 +239,12 @@ impl SessionManager {
         self.state.retain_session_branch_names(&active_session_ids);
         self.state.retain_session_git_statuses(&active_session_ids);
 
-        if let Some((sessions_row_count, sessions_updated_at_max)) = sessions_metadata {
-            self.state.row_count = sessions_row_count;
-            self.state.updated_at_max = sessions_updated_at_max;
+        if let Some(sessions_metadata) = sessions_metadata {
+            self.state
+                .active_page_mut()
+                .set_sessions_metadata(sessions_metadata);
         } else {
-            self.update_sessions_metadata_cache(services, projects.active_project_id())
-                .await;
+            self.update_sessions_metadata_cache(services).await;
         }
 
         true
@@ -346,7 +350,8 @@ impl SessionManager {
         selected_session_id: Option<&str>,
         selected_index: Option<usize>,
     ) {
-        if self.state.sessions.is_empty() {
+        let session_count = self.state.sessions().len();
+        if session_count == 0 {
             self.state.table_state.select(None);
 
             return;
@@ -363,7 +368,7 @@ impl SessionManager {
             return;
         }
 
-        let restored_index = selected_index.map(|index| index.min(self.state.sessions.len() - 1));
+        let restored_index = selected_index.map(|index| index.min(session_count - 1));
         self.state.table_state.select(restored_index);
     }
 
@@ -378,20 +383,19 @@ impl SessionManager {
         }
     }
 
-    /// Refreshes cached session metadata used by incremental list reloads.
-    pub(crate) async fn update_sessions_metadata_cache(
-        &mut self,
-        services: &AppServices,
-        active_project_id: i64,
-    ) {
-        if let Ok((sessions_row_count, sessions_updated_at_max)) = services
+    /// Refreshes the active page's cached session metadata, used by
+    /// incremental list reloads, for the project the page holds.
+    pub(crate) async fn update_sessions_metadata_cache(&mut self, services: &AppServices) {
+        let project_id = self.state.active_page().project_id();
+        if let Ok(sessions_metadata) = services
             .db()
             .sessions()
-            .load_sessions_metadata(active_project_id)
+            .load_sessions_metadata(project_id)
             .await
         {
-            self.state.row_count = sessions_row_count;
-            self.state.updated_at_max = sessions_updated_at_max;
+            self.state
+                .active_page_mut()
+                .set_sessions_metadata(sessions_metadata);
         }
     }
 }

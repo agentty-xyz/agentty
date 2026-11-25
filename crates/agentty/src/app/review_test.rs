@@ -32,6 +32,7 @@ use crate::test_support::SessionFixtureBuilder;
 fn empty_session_state() -> SessionState {
     SessionState::new(
         HashMap::new(),
+        1,
         Vec::new(),
         SelectionState::default(),
         Arc::new(RealClock),
@@ -205,6 +206,7 @@ fn session_state_with_stale_review(session_id: &SessionId) -> SessionState {
 
     SessionState::new(
         HashMap::new(),
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(RealClock),
@@ -526,6 +528,7 @@ fn hydrate_review_transients_retracts_terminal_session_review() {
     )]);
     let mut session_state = SessionState::new(
         HashMap::new(),
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(RealClock),
@@ -563,6 +566,7 @@ fn hydrate_review_transients_keeps_review_during_rebase() {
     )]);
     let mut session_state = SessionState::new(
         HashMap::new(),
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(RealClock),
@@ -837,6 +841,7 @@ fn apply_review_updates_preserves_loading_row_tail_position() {
     });
     let mut session_state = SessionState::new(
         HashMap::new(),
+        1,
         vec![session],
         SelectionState::default(),
         Arc::new(RealClock),

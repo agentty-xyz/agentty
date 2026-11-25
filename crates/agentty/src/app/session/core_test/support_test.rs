@@ -752,6 +752,7 @@ pub(super) fn test_session_manager_with_clock(
 
     let state = SessionState::new(
         handles,
+        1,
         vec![Session {
             base_branch: "main".to_string(),
             created_at: 0,

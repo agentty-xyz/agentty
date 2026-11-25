@@ -352,7 +352,7 @@ impl SessionManager {
     /// Group header rows are non-selectable and are skipped by design.
     pub fn next(&mut self) {
         let next = session_order::next_selectable_index(
-            &self.state.sessions,
+            self.state.sessions(),
             self.state.archive_actions().len(),
             self.state.table_state.selected(),
         );
@@ -362,7 +362,7 @@ impl SessionManager {
     /// Moves selection backward, including archive pagination actions.
     pub fn previous(&mut self) {
         let previous = session_order::previous_selectable_index(
-            &self.state.sessions,
+            self.state.sessions(),
             self.state.archive_actions().len(),
             self.state.table_state.selected(),
         );
@@ -1947,18 +1947,18 @@ impl SessionManager {
         self.state
             .table_state
             .selected()
-            .and_then(|index| self.state.sessions.get(index))
+            .and_then(|index| self.state.sessions().get(index))
     }
 
     /// Returns the session snapshot for one list index, if it still exists.
     pub fn session_at(&self, session_index: usize) -> Option<&Session> {
-        self.state.sessions.get(session_index)
+        self.state.sessions().get(session_index)
     }
 
     /// Returns the session identifier for the given list index.
     pub fn session_id_for_index(&self, session_index: usize) -> Option<SessionId> {
         self.state
-            .sessions
+            .sessions()
             .get(session_index)
             .map(|session| session.id.clone())
     }
@@ -2052,11 +2052,7 @@ impl SessionManager {
         services: &AppServices,
     ) -> Option<DeletedSessionCleanup> {
         let selected_index = self.state.table_state.selected()?;
-        if selected_index >= self.state.sessions.len() {
-            return None;
-        }
-
-        let session_id = self.state.sessions[selected_index].id.clone();
+        let session_id = self.state.sessions().get(selected_index)?.id.clone();
         if services
             .db()
             .sessions()
@@ -2198,7 +2194,7 @@ impl SessionManager {
     ) -> Result<ReviewRequest, SessionError> {
         let session_id = self
             .state
-            .sessions
+            .sessions()
             .get(session_index)
             .map(|session| session.id.clone())
             .ok_or(SessionError::NotFound)?;
@@ -2209,7 +2205,7 @@ impl SessionManager {
             .await?;
 
         self.state
-            .sessions
+            .sessions_mut()
             .get_mut(session_index)
             .ok_or(SessionError::NotFound)?
             .review_request = Some(review_request.clone());
@@ -2430,7 +2426,7 @@ impl SessionManager {
         reply_eligibility: ReplyEligibility,
     ) -> Result<ReplyContext, SessionError> {
         let session_index = self.session_index_or_err(session_id)?;
-        let session = &mut self.state.sessions[session_index];
+        let session = &mut self.state.sessions_mut()[session_index];
 
         let is_first_message = session.awaits_first_message();
         if !reply_eligibility.allows(session.status, is_first_message) {
@@ -2483,7 +2479,7 @@ impl SessionManager {
         let Ok(index) = self.session_index_or_err(session_id) else {
             return;
         };
-        let session = &mut self.state.sessions[index];
+        let session = &mut self.state.sessions_mut()[index];
         let folder = session.folder.clone();
         let session_agent = session.agent;
         if session.prompt.is_empty() && session.title.is_none() {

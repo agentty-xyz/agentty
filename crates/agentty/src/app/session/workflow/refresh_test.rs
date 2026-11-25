@@ -169,6 +169,7 @@ fn session_manager_with_session(clock: Arc<dyn Clock>, session: Session) -> Sess
         Arc::new(git::MockGitClient::new()),
         SessionState::new(
             handles,
+            1,
             vec![session],
             SelectionState::default(),
             clock,
@@ -252,7 +253,7 @@ async fn review_request_remote_uses_live_worktree_for_detected_remote() {
 
     // Act
     let remote = session_manager
-        .review_request_remote(&services, &session_manager.state.sessions[0], None)
+        .review_request_remote(&services, &session_manager.state.sessions()[0], None)
         .await
         .expect("remote should resolve");
 
@@ -318,7 +319,7 @@ async fn review_request_remote_reports_unresolvable_remotes() {
         let error = session_manager
             .review_request_remote(
                 &services,
-                &session_manager.state.sessions[0],
+                &session_manager.state.sessions()[0],
                 review_request.as_ref(),
             )
             .await
@@ -453,7 +454,7 @@ async fn refresh_review_request_reports_provider_refresh_failure() {
         "GitHub review-request operation failed: rate limited"
     );
     assert_eq!(
-        session_manager.state.sessions[0].review_request,
+        session_manager.state.sessions()[0].review_request,
         Some(linked_review_request)
     );
 }
@@ -486,7 +487,7 @@ async fn test_refresh_review_request_updates_done_session_from_stored_link_when_
     assert_eq!(review_request.last_refreshed_at, 77);
     assert_eq!(review_request.summary.state, ReviewRequestState::Merged);
     assert_eq!(
-        session_manager.state.sessions[0]
+        session_manager.state.sessions()[0]
             .review_request
             .as_ref()
             .map(|review_request| review_request.summary.state),
@@ -813,6 +814,7 @@ fn session_manager_fixture(clock: Arc<dyn Clock>) -> SessionManager {
         git_client,
         SessionState::new(
             HashMap::new(),
+            1,
             Vec::new(),
             SelectionState::default(),
             clock,
@@ -860,8 +862,8 @@ async fn refresh_sessions_if_needed_skips_db_call_before_deadline_and_preserves_
 
     // Assert
     assert_eq!(session_manager.state.refresh_deadline, original_deadline);
-    assert_eq!(session_manager.state.row_count, 0);
-    assert_eq!(session_manager.state.updated_at_max, 0);
+    assert_eq!(session_manager.state.active_page().row_count, 0);
+    assert_eq!(session_manager.state.active_page().updated_at_max, 0);
 }
 
 #[tokio::test]
@@ -890,8 +892,8 @@ async fn refresh_sessions_if_needed_advances_deadline_and_skips_reload_when_meta
 
     // Assert
     assert!(session_manager.state.refresh_deadline > original_deadline);
-    assert_eq!(session_manager.state.row_count, 0);
-    assert_eq!(session_manager.state.updated_at_max, 0);
+    assert_eq!(session_manager.state.active_page().row_count, 0);
+    assert_eq!(session_manager.state.active_page().updated_at_max, 0);
 }
 
 #[tokio::test]
@@ -904,8 +906,8 @@ async fn session_metadata_failures_keep_cached_counts() {
     let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
     let clock: Arc<dyn Clock> = fake_clock.clone();
     let mut session_manager = session_manager_fixture(clock);
-    session_manager.state.row_count = 5;
-    session_manager.state.updated_at_max = 7;
+    session_manager.state.active_page_mut().row_count = 5;
+    session_manager.state.active_page_mut().updated_at_max = 7;
     let services = test_services(
         &database,
         Arc::new(git::MockGitClient::new()),
@@ -923,14 +925,83 @@ async fn session_metadata_failures_keep_cached_counts() {
         .refresh_sessions_if_needed(&mut mode, &projects, &services)
         .await;
     session_manager
-        .update_sessions_metadata_cache(&services, projects.active_project_id())
+        .update_sessions_metadata_cache(&services)
         .await;
 
     // Assert
     assert!(!refreshed);
     assert!(session_manager.state.refresh_deadline > original_deadline);
-    assert_eq!(session_manager.state.row_count, 5);
-    assert_eq!(session_manager.state.updated_at_max, 7);
+    assert_eq!(session_manager.state.active_page().row_count, 5);
+    assert_eq!(session_manager.state.active_page().updated_at_max, 7);
+}
+
+/// Verifies a reload after the active project changes retargets the page at
+/// that project and caches that project's metadata, not the previous one's.
+#[tokio::test]
+async fn reload_after_project_change_retargets_page_and_its_metadata() {
+    // Arrange
+    let session = test_session(PathBuf::from("/tmp/session"), None, Status::Done);
+    let database = database_with_session(&session).await;
+    let other_project_id = database
+        .projects()
+        .upsert_project("/tmp/other-project", Some("main".to_string()))
+        .await
+        .expect("failed to upsert other project");
+    database
+        .sessions()
+        .insert_session(
+            "other-session",
+            session.agent.model().as_str(),
+            &session.base_branch,
+            &Status::Done.to_string(),
+            other_project_id,
+        )
+        .await
+        .expect("failed to insert other session");
+    for (session_id, updated_at) in [(session.id.as_str(), 10_000), ("other-session", 30_000)] {
+        database
+            .sessions()
+            .update_session_updated_at(session_id, updated_at)
+            .await
+            .expect("failed to seed updated_at");
+    }
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut session_manager = session_manager_fixture(clock);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("temp dir should be created");
+    let projects = ProjectManager::new(
+        other_project_id,
+        "other-project".to_string(),
+        Some("main".to_string()),
+        None,
+        Vec::new(),
+        temp_dir.path().to_path_buf(),
+    );
+    let mut mode = AppMode::List;
+    assert_eq!(session_manager.state.active_page().project_id(), 1);
+    assert_ne!(other_project_id, 1);
+
+    // Act
+    session_manager
+        .load_more_archived_sessions(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    let page = session_manager.state.active_page();
+    assert_eq!(page.project_id(), other_project_id);
+    assert_eq!(page.sessions_metadata(), (2, 30_000));
+    assert_eq!(
+        session_manager
+            .sessions()
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["other-session"]
+    );
 }
 
 #[tokio::test]
@@ -958,9 +1029,9 @@ async fn refresh_sessions_if_needed_reloads_sessions_when_metadata_row_count_cha
         .await;
 
     // Assert
-    assert_eq!(session_manager.state.row_count, 1);
-    assert_eq!(session_manager.state.sessions.len(), 1);
-    assert_eq!(session_manager.state.sessions[0].id, "session-id");
+    assert_eq!(session_manager.state.active_page().row_count, 1);
+    assert_eq!(session_manager.state.sessions().len(), 1);
+    assert_eq!(session_manager.state.sessions()[0].id, "session-id");
 }
 
 #[tokio::test]
@@ -1098,9 +1169,9 @@ async fn refresh_sessions_if_needed_ignores_updates_in_other_projects() {
     // Assert
     assert!(!refreshed_for_other_project);
     assert!(refreshed_for_active_project);
-    assert_eq!(session_manager.state.row_count, 2);
-    assert_eq!(session_manager.state.updated_at_max, 20_000);
-    assert_eq!(session_manager.state.sessions[0].updated_at, 20_000);
+    assert_eq!(session_manager.state.active_page().row_count, 2);
+    assert_eq!(session_manager.state.active_page().updated_at_max, 20_000);
+    assert_eq!(session_manager.state.sessions()[0].updated_at, 20_000);
 }
 
 #[tokio::test]
@@ -1134,9 +1205,9 @@ async fn refresh_failure_restores_loaded_session_transcripts() {
         .await;
 
     // Assert
-    assert_eq!(session_manager.state.sessions.len(), 1);
+    assert_eq!(session_manager.state.sessions().len(), 1);
     assert_eq!(
-        session_manager.state.sessions[0].transcript,
+        session_manager.state.sessions()[0].transcript,
         Some(transcript)
     );
 }
@@ -1261,7 +1332,7 @@ async fn archive_pages_survive_refresh_and_retry_failed_reads() {
     manager
         .state
         .table_state
-        .select(Some(manager.state.sessions.len()));
+        .select(Some(manager.state.sessions().len()));
     manager
         .refresh_sessions_now(&mut mode, &projects, &services)
         .await;
@@ -1287,7 +1358,7 @@ async fn archive_pages_survive_refresh_and_retry_failed_reads() {
         manager.selected_session().expect("first new row").id,
         "archive-10"
     );
-    assert_eq!(manager.state.archive_limit, 20);
+    assert_eq!(manager.state.active_page().archive_limit, 20);
 
     // Act: database failure preserves the page and action for retry.
     manager.state.table_state.select(Some(20));
@@ -1301,7 +1372,7 @@ async fn archive_pages_survive_refresh_and_retry_failed_reads() {
 
     // Assert
     assert_eq!(manager.sessions().len(), 20);
-    assert_eq!(manager.state.archive_limit, 20);
+    assert_eq!(manager.state.active_page().archive_limit, 20);
     assert_eq!(
         manager.selected_archive_action(),
         Some(ArchiveAction::LoadMore)
@@ -1346,7 +1417,7 @@ async fn archive_show_less_collapses_window_and_retries_failed_reads() {
     // Assert
     assert_eq!(show_less_survives_refresh, Some(ArchiveAction::ShowLess));
     assert_eq!(manager.sessions().len(), 10);
-    assert_eq!(manager.state.archive_limit, 10);
+    assert_eq!(manager.state.active_page().archive_limit, 10);
     assert!(!manager.is_archive_expanded());
     assert_eq!(
         manager.selected_archive_action(),
@@ -1367,7 +1438,7 @@ async fn archive_show_less_collapses_window_and_retries_failed_reads() {
 
     // Assert
     assert_eq!(manager.sessions().len(), 20);
-    assert_eq!(manager.state.archive_limit, 20);
+    assert_eq!(manager.state.active_page().archive_limit, 20);
     assert_eq!(
         manager.selected_archive_action(),
         Some(ArchiveAction::ShowLess)
@@ -1407,7 +1478,7 @@ async fn archive_load_more_reconciles_when_no_additional_rows_remain() {
     manager
         .refresh_sessions_now(&mut mode, &projects, &services)
         .await;
-    manager.state.has_more_archived_sessions = true;
+    manager.state.active_page_mut().has_more_archived_sessions = true;
     manager.state.table_state.select(Some(1));
 
     // Act
@@ -1449,7 +1520,7 @@ async fn archive_load_more_clears_selection_when_all_rows_were_deleted() {
     let database = database_with_session(&session).await;
     let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
     let mut manager = session_manager_with_session(clock, session);
-    manager.state.has_more_archived_sessions = true;
+    manager.state.active_page_mut().has_more_archived_sessions = true;
     manager.state.table_state.select(Some(1));
     let services = test_services(
         &database,

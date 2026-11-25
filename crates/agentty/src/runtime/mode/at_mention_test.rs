@@ -243,6 +243,7 @@ fn test_session_manager(session_id: &str) -> SessionManager {
 
     let state = SessionState::new(
         handles,
+        1,
         vec![Session {
             base_branch: "main".to_string(),
             created_at: 0,
