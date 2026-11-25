@@ -10,6 +10,7 @@ mod latency;
 pub mod mode;
 mod presentation;
 mod screen_selection;
+mod synchronized_writer;
 mod terminal;
 mod timing;
 

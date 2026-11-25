@@ -69,6 +69,9 @@ implemented" notice and exit non-zero until the behavior is wired up.
 - **Terminal replies.** Sessions answer primary device attributes (DA1) requests like a
   terminal without the Kitty keyboard protocol, so capability probes return immediately
   instead of waiting for their timeout.
+- **Whole frames.** Like a terminal, a session keeps showing its previous screen while a
+  synchronized update (`CSI ? 2026 h` … `CSI ? 2026 l`) is open, so an app that brackets
+  its redraws is never captured with a redraw only partly received.
 
 ### Proof you can share
 

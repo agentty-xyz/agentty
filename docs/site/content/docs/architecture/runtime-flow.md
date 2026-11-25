@@ -44,10 +44,12 @@ flowchart TD
 
 <a id="architecture-runtime-flow-notes"></a> The foreground loop drains bounded batches
 of application and terminal events, renders an immutable snapshot, and waits for more
-work. It owns presentation state and render caches. Event-driven refresh is primary;
-periodic polling recovers from missed updates. The poll reloads only when the total
-session count or the active project's latest session update changes, and a reload reads
-saved transcripts only into live handles that are not yet hydrated.
+work. Each frame reaches the terminal as one synchronized update, so terminals that
+support it never show a partly drawn frame. It owns presentation state and render
+caches. Event-driven refresh is primary; periodic polling recovers from missed updates.
+The poll reloads only when the total session count or the active project's latest
+session update changes, and a reload reads saved transcripts only into live handles that
+are not yet hydrated.
 
 Session creation reserves an identity and captures project settings before opening the
 composer; background setup prepares the worktree without blocking input. Saved prompts

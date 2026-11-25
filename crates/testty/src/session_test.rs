@@ -216,6 +216,47 @@ fn execute_steps_reuses_wait_frame_for_capture() {
     );
 }
 
+#[test]
+fn capture_frame_hides_output_of_an_unfinished_synchronized_update() {
+    // Arrange — the second line starts a synchronized update that never ends,
+    // as a redraw read in part would.
+    let mut session = PtySessionBuilder::new("/bin/sh")
+        .args([
+            "-c",
+            "printf 'presented\\n\\033[?2026hpending\\n'; sleep 60",
+        ])
+        .spawn()
+        .expect("failed to spawn shell script");
+
+    // Act
+    let frame = session.capture_frame();
+
+    // Assert
+    let text = frame.all_text();
+    assert!(text.contains("presented"), "got: '{text}'");
+    assert!(!text.contains("pending"), "got: '{text}'");
+}
+
+#[test]
+fn capture_frame_shows_output_of_a_finished_synchronized_update() {
+    // Arrange
+    let mut session = PtySessionBuilder::new("/bin/sh")
+        .args([
+            "-c",
+            "printf '\\033[?2026hfirst\\n\\033[?2026l\\033[?2026hsecond\\n\\033[?2026l'; sleep 60",
+        ])
+        .spawn()
+        .expect("failed to spawn shell script");
+
+    // Act
+    let frame = session.capture_frame();
+
+    // Assert
+    let text = frame.all_text();
+    assert!(text.contains("first"), "got: '{text}'");
+    assert!(text.contains("second"), "got: '{text}'");
+}
+
 /// Verifies that `wait_for_stable_frame` times out when the spawned
 /// binary produces no terminal output, instead of returning an empty
 /// frame immediately.
