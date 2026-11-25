@@ -3249,6 +3249,9 @@ impl SessionManager {
 
     /// Resolves project defaults unless the caller supplied a deterministic
     /// launch-settings snapshot.
+    ///
+    /// Only the active project's defaults replace the in-memory default model,
+    /// which belongs to the project the terminal shows.
     pub(crate) async fn resolve_session_creation_settings(
         &mut self,
         services: &AppServices,
@@ -3279,7 +3282,7 @@ impl SessionManager {
             .await?;
         let speed_mode = setting::normalized_speed_mode(agent, speed_mode);
         // Harness models never become CLI defaults for later sessions.
-        if agent.kind() != AgentKind::Harness {
+        if agent.kind() != AgentKind::Harness && self.is_active_project(project_id) {
             self.default_session_model = agent.model();
         }
 
@@ -3294,7 +3297,10 @@ impl SessionManager {
     /// Resolves the default agent/model selection for a new session.
     ///
     /// A launch without agent CLIs starts sessions on the harness model
-    /// [`AppServices::harness_availability`] names, when it offers one.
+    /// [`AppServices::harness_availability`] names, when it offers one. A
+    /// project without a stored default falls back to the in-memory default
+    /// model when it is the active project, and otherwise to the model a
+    /// project switch would start from.
     async fn resolve_default_session_agent(
         &self,
         services: &AppServices,
@@ -3311,8 +3317,13 @@ impl SessionManager {
             .first()
             .copied()
             .unwrap_or(AgentKind::Antigravity);
+        let fallback_model = if self.is_active_project(project_id) {
+            self.default_session_model
+        } else {
+            AgentKind::Antigravity.default_model()
+        };
         let fallback_selection = crate::domain::agent::resolve_agent_selection_for_model(
-            self.default_session_model,
+            fallback_model,
             fallback_agent_kind,
             &available_agent_kinds,
         );

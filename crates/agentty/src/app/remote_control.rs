@@ -15,13 +15,13 @@ use ag_remote::{
     DeviceStore, PublicKey, RelayStatus, RemoteConnection, RemoteHost, RemoteRelayConfig,
     RemoteServerStatus, StaticKeypair, pairing_link, pairing_link_on_page,
 };
-use ag_session::{HostProjectStatus, SessionListEntry};
+use ag_session::{HostProject, HostProjectStatus, SessionListEntry};
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::execution_graph::GraphDriverReport;
 use crate::app::link_copy::LinkCopy;
-use crate::app::session_api::{HostInputs, LiveSessionDetails};
+use crate::app::session_api::{HostInputs, LiveSessionDetails, api_session_entries};
 use crate::app::spawn::spawn_detached;
 use crate::app::{App, AppEvent, review};
 use crate::domain::setting::SettingName;
@@ -224,11 +224,23 @@ struct ReportedState {
     deciding_proposal_replies: Vec<String>,
     /// What live graph drivers add to persisted graph progress.
     graph_drivers: Vec<GraphDriverReport>,
-    /// In-memory inputs of the host context.
+    /// In-memory inputs of the host context that every project shares.
     host: HostInputs,
-    /// Active project status, as the session listing reports it.
+    /// Each loaded page, the active page first, then the viewed pages in
+    /// ascending project order.
+    pages: Vec<ReportedPage>,
+    /// The projects the host lists, as the project listing reports them.
+    projects: Vec<HostProject>,
+}
+
+/// What the session API reports about one loaded page from memory.
+#[derive(Debug, Eq, PartialEq)]
+struct ReportedPage {
+    /// The project's status, as its session listing reports it.
     project: HostProjectStatus,
-    /// Each loaded session, in list order.
+    /// Project whose sessions the page holds.
+    project_id: i64,
+    /// Each session on the page, in list order.
     sessions: Vec<ReportedSession>,
 }
 
@@ -283,8 +295,9 @@ impl App {
 
     /// Tells connected remote clients when anything the session API reports
     /// from host memory changed since the previous check: a session's list
-    /// entry or live details, the project status, the host's models, a
-    /// reply being decided, or a live graph driver. The foreground cycle
+    /// entry or live details on any loaded page, a loaded page's project
+    /// status, the project list, the host's models, a reply being decided,
+    /// or a live graph driver. The foreground cycle
     /// calls it once per pass, so a change reaches devices however it was
     /// made.
     ///
@@ -306,12 +319,33 @@ impl App {
 
     /// Captures what the session API reports from host memory now.
     fn reported_state(&self) -> ReportedState {
-        // The listing maps the loaded sessions in order, so each entry
-        // pairs with its own session.
-        let sessions = self
-            .list_api_session_entries()
+        let pages = self
+            .sessions
+            .state()
+            .loaded_project_ids()
             .into_iter()
-            .zip(self.sessions.sessions())
+            .filter_map(|project_id| self.reported_page(project_id))
+            .collect();
+
+        ReportedState {
+            deciding_proposal_replies: self.deciding_graph_proposal_replies(),
+            graph_drivers: self.live_graph_driver_reports(),
+            host: self.api_host_inputs(),
+            pages,
+            projects: self.api_projects(),
+        }
+    }
+
+    /// Captures what the session API reports about `project_id`'s loaded
+    /// page, or `None` when the host holds no page or context of it.
+    fn reported_page(&self, project_id: i64) -> Option<ReportedPage> {
+        let context = self.projects.context(project_id)?;
+        let page = self.sessions.state().page_for_project(project_id)?;
+        // The listing maps the page's sessions in order, so each entry pairs
+        // with its own session.
+        let sessions = api_session_entries(page)
+            .into_iter()
+            .zip(page.sessions())
             .map(|(entry, session)| ReportedSession {
                 details: self.live_session_details(session, review::shown_focused_review_id),
                 entry,
@@ -320,17 +354,16 @@ impl App {
             })
             .collect();
 
-        ReportedState {
-            deciding_proposal_replies: self.deciding_graph_proposal_replies(),
-            graph_drivers: self.live_graph_driver_reports(),
-            host: self.api_host_inputs(),
-            project: self.api_project_status(),
+        Some(ReportedPage {
+            project: self.api_project_status_for(context),
+            project_id,
             sessions,
-        }
+        })
     }
 
     /// Starts comparing what the session API reports once a device
-    /// connects, and stops once none is connected.
+    /// connects, and stops once none is connected, when the viewed pages are
+    /// dropped too.
     ///
     /// A device reads the state as soon as it authenticates, before the
     /// host hears of its connection, and nothing was compared meanwhile. The
@@ -339,6 +372,9 @@ impl App {
     fn follow_connected_devices(&mut self, was_connected: bool) {
         if self.remote_control.connections.is_empty() {
             self.remote_control.reported_state = None;
+            if was_connected {
+                self.clear_viewed_pages();
+            }
 
             return;
         }

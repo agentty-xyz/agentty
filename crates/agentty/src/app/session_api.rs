@@ -9,23 +9,26 @@ use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
 use ag_protocol::QuestionItem;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, HostContext, HostProjectStatus, HostProjectSync,
-    HostProjectSyncPhase, HostSessionMode, MessageImage, QuestionAnswer, ReviewRequest,
-    ReviewRequestState, SessionBackend, SessionError as ApiSessionError, SessionFileEntry,
-    SessionId, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
-    SessionSettings, SessionSettingsChange, SessionStatus, parse_persisted_session_agent_model,
+    DurableMessageVisibility, HostContext, HostProject, HostProjectStatus, HostProjectSync,
+    HostProjectSyncPhase, HostSessionMode, MessageImage, ProjectScope, ProjectSessions,
+    QuestionAnswer, ReviewRequest, ReviewRequestState, SessionBackend,
+    SessionError as ApiSessionError, SessionFileEntry, SessionId, SessionMessage,
+    SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
+    SessionStatus, parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
-use crate::app::command_gateway::RemoteScope;
+use crate::app::command_gateway::{CommandInitiator, RemoteScope};
 use crate::app::graph_node_reply::QUESTIONS_NOT_PENDING;
 use crate::app::graph_question::GraphAnswerOutcome;
 use crate::app::message_admission::MessagePlan;
+use crate::app::project::ProjectContext;
 use crate::app::prompt_intent::PromptModelChange;
 use crate::app::review::ReviewCacheEntry;
 use crate::app::session::{
-    SessionCreationSettings, SessionGitStatus, SessionManager, migrate_session_off_retired_model,
+    SessionCreationSettings, SessionGitStatus, SessionManager, SessionPage,
+    migrate_session_off_retired_model,
 };
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::task::TaskService;
@@ -52,7 +55,14 @@ const GRAPH_ANSWERS_NOT_TAKEN: &str =
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    /// Reports the operations the host serves. Naming another listed project
+    /// ([`SessionOperation::Projects`]) is served to every caller but paired
+    /// devices, whose handle reaches only the active project.
     fn supports(&self, operation: SessionOperation) -> bool {
+        if operation == SessionOperation::Projects {
+            return self.serves_other_projects();
+        }
+
         matches!(
             operation,
             SessionOperation::CreateSession
@@ -214,12 +224,27 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::complete_task(self, task_id).await
     }
 
+    async fn list_projects(&self) -> Result<Vec<HostProject>, ApiSessionError> {
+        SessionRuntimeHandle::list_projects(self).await
+    }
+
     async fn host_context(&self) -> Result<HostContext, ApiSessionError> {
-        SessionRuntimeHandle::host_context(self).await
+        SessionRuntimeHandle::host_context_for(self, ProjectScope::Active).await
+    }
+
+    async fn host_context_for(&self, scope: ProjectScope) -> Result<HostContext, ApiSessionError> {
+        SessionRuntimeHandle::host_context_for(self, scope).await
     }
 
     async fn project_status(&self) -> Result<HostProjectStatus, ApiSessionError> {
         SessionRuntimeHandle::project_status(self).await
+    }
+
+    async fn project_sessions(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<ProjectSessions, ApiSessionError> {
+        SessionRuntimeHandle::project_sessions(self, scope).await
     }
 
     async fn sync_project(&self) -> Result<(), ApiSessionError> {
@@ -257,7 +282,14 @@ impl SessionBackend for SessionRuntimeHandle {
     async fn list_project_files(
         &self,
     ) -> Result<Vec<ag_session::SessionFileEntry>, ApiSessionError> {
-        SessionRuntimeHandle::list_project_files(self).await
+        SessionRuntimeHandle::list_project_files_for(self, ProjectScope::Active).await
+    }
+
+    async fn list_project_files_for(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<Vec<ag_session::SessionFileEntry>, ApiSessionError> {
+        SessionRuntimeHandle::list_project_files_for(self, scope).await
     }
 
     async fn list_sessions(&self) -> Result<Vec<ag_session::SessionSummary>, ApiSessionError> {
@@ -268,6 +300,10 @@ impl SessionBackend for SessionRuntimeHandle {
         &self,
     ) -> Result<Vec<ag_session::SessionListEntry>, ApiSessionError> {
         SessionRuntimeHandle::list_session_entries(self).await
+    }
+
+    async fn is_session_listed(&self, session_id: &SessionId) -> Result<bool, ApiSessionError> {
+        SessionRuntimeHandle::is_session_listed(self, session_id).await
     }
 
     async fn send_message(
@@ -412,12 +448,19 @@ impl App {
 
     /// Routes mutations to shared admission and keeps reads on the query path.
     ///
-    /// Each read's variant decides its remote-control scope: project reads
-    /// serve every caller, a paired device's session read reaches only a
-    /// session the host lists, and its local reads are refused.
+    /// Each read's variant decides its remote-control scope: a paired
+    /// device's project read reaches only the active project, its session
+    /// read only a session the host lists for the active project, and its
+    /// local reads are refused. A session-API read renews the lease of the
+    /// page it reads.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
-            SessionRuntimeCommand::Project(query) => self.answer_project_query(query).await,
+            SessionRuntimeCommand::Project { initiator, query } => {
+                match self.remote_refusal(initiator, query.remote_scope()) {
+                    Some(refusal) => query.refuse(refusal),
+                    None => self.answer_project_query(initiator, query).await,
+                }
+            }
             SessionRuntimeCommand::Session {
                 initiator,
                 query,
@@ -427,6 +470,7 @@ impl App {
                 if self.remote_refusal(initiator, scope).is_some() {
                     query.answer_unlisted();
                 } else {
+                    self.renew_session_page_lease(initiator, &session_id);
                     self.answer_session_query(session_id, query).await;
                 }
             }
@@ -455,22 +499,139 @@ impl App {
         }
     }
 
-    /// Answers one read of the active project.
-    async fn answer_project_query(&mut self, query: ProjectQuery) {
+    /// Answers one project read that `initiator` may make.
+    async fn answer_project_query(&mut self, initiator: CommandInitiator, query: ProjectQuery) {
         match query {
-            ProjectQuery::HostContext { response_tx } => {
-                let _ = response_tx.send(self.api_host_context().await);
+            ProjectQuery::HostContext { response_tx, scope } => {
+                let _ = response_tx.send(self.api_host_context(initiator, scope).await);
             }
-            ProjectQuery::List { response_tx } => {
-                let _ = response_tx.send(Ok(self.list_api_session_entries()));
+            ProjectQuery::List { response_tx, scope } => {
+                let _ = response_tx.send(self.api_project_sessions(initiator, scope).await);
             }
-            ProjectQuery::ListProjectFiles { response_tx } => {
-                self.start_api_project_files(response_tx);
+            ProjectQuery::ListProjectFiles { response_tx, scope } => {
+                match self.api_project_root(initiator, scope).await {
+                    Ok((project_id, root)) => {
+                        self.start_api_project_files(project_id, root, response_tx);
+                    }
+                    Err(error) => {
+                        let _ = response_tx.send(Err(error));
+                    }
+                }
+            }
+            ProjectQuery::ListProjects { response_tx } => {
+                let _ = response_tx.send(Ok(self.api_projects()));
             }
             ProjectQuery::ProjectStatus { response_tx } => {
                 let _ = response_tx.send(Ok(self.api_project_status()));
             }
+            ProjectQuery::SessionListed {
+                response_tx,
+                session_id,
+            } => {
+                let _ = response_tx.send(self.api_session_listed(initiator, &session_id).await);
+            }
         }
+    }
+
+    /// Lists the projects the host lists, in its switcher's
+    /// most-recently-opened order, with the active project marked. An
+    /// active project the switcher does not offer comes first, with its
+    /// count taken from its loaded page.
+    pub(super) fn api_projects(&self) -> Vec<HostProject> {
+        let active_project_id = self.active_project_id();
+        let mut projects = self
+            .projects
+            .mru_project_items()
+            .into_iter()
+            .map(|project_item| HostProject {
+                active_session_count: project_item.active_session_count,
+                id: project_item.project.id,
+                is_active: project_item.project.id == active_project_id,
+                name: project_item.project.display_label(),
+            })
+            .collect::<Vec<_>>();
+        if !projects.iter().any(|project| project.is_active) {
+            let active_session_count = self
+                .sessions
+                .sessions()
+                .iter()
+                .filter(|session| {
+                    !matches!(
+                        session.status,
+                        SessionStatus::Done
+                            | SessionStatus::Canceled
+                            | SessionStatus::Queued
+                            | SessionStatus::Merging
+                    )
+                })
+                .count();
+            projects.insert(
+                0,
+                HostProject {
+                    active_session_count: u32::try_from(active_session_count).unwrap_or(u32::MAX),
+                    id: active_project_id,
+                    is_active: true,
+                    name: self.projects.project_name().to_string(),
+                },
+            );
+        }
+
+        projects
+    }
+
+    /// Lists `scope`'s sessions and reads its status in the same turn, so
+    /// both describe the project the answer names.
+    async fn api_project_sessions(
+        &mut self,
+        initiator: CommandInitiator,
+        scope: ProjectScope,
+    ) -> Result<ProjectSessions, ApiSessionError> {
+        let project_id = self.resolve_project_scope(initiator, scope).await?;
+        let context = self
+            .projects
+            .context(project_id)
+            .ok_or(ApiSessionError::NotFound)?;
+        let page = self
+            .sessions
+            .state()
+            .page_for_project(project_id)
+            .ok_or(ApiSessionError::NotFound)?;
+
+        Ok(ProjectSessions {
+            entries: api_session_entries(page),
+            project_id: Some(project_id),
+            status: Some(self.api_project_status_for(context)),
+        })
+    }
+
+    /// Reports whether the host lists `session_id`: whether it is on the
+    /// loaded page of a listed project. A session of a listed project whose
+    /// page is not loaded has that page loaded first. A paired device only
+    /// reaches this for a session on the active page.
+    async fn api_session_listed(
+        &mut self,
+        initiator: CommandInitiator,
+        session_id: &SessionId,
+    ) -> Result<bool, ApiSessionError> {
+        if self.sessions.session_for_id(session_id).is_none() {
+            let project_id = self
+                .services
+                .db()
+                .sessions()
+                .load_session_project_id(session_id)
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+            let Some(project_id) = project_id.filter(|project_id| {
+                *project_id != self.active_project_id() && self.projects.is_listed(*project_id)
+            }) else {
+                return Ok(false);
+            };
+            self.ensure_project_page(project_id).await?;
+        }
+        let is_listed = self.sessions.session_for_id(session_id).is_some();
+        self.renew_session_page_lease(initiator, session_id);
+
+        Ok(is_listed)
     }
 
     /// Answers one read of `session_id` that its caller may make.
@@ -554,31 +715,6 @@ impl App {
         }
     }
 
-    /// Summarizes the loaded sessions in their display order, with the diff
-    /// size, model, timer, branch, and review figures the session list and
-    /// the session footer show.
-    pub(super) fn list_api_session_entries(&self) -> Vec<ag_session::SessionListEntry> {
-        let git_statuses = self.sessions.render_parts().session_git_statuses;
-
-        self.sessions
-            .sessions()
-            .iter()
-            .map(|session| {
-                let git_status = git_statuses.get(&session.id).copied().unwrap_or_default();
-
-                ag_session::SessionListEntry {
-                    stats: Some(api_session_list_stats(session, git_status)),
-                    summary: ag_session::SessionSummary {
-                        id: session.id.clone(),
-                        status: session.status,
-                        title: session.title.clone(),
-                        updated_at: session.updated_at,
-                    },
-                }
-            })
-            .collect()
-    }
-
     /// Collects what a session snapshot reports from the loaded `session`
     /// rather than its stored row, with its shown focused review as
     /// `focused_review` reports it. Remote clients compare the same details,
@@ -632,22 +768,41 @@ impl App {
         });
     }
 
-    /// Answers one programmatic project file-listing query: lists the active
-    /// project's checkout, the root a new session's draft looks up `@`
-    /// mentions in, from the `@`-mention index when it already caches that
-    /// root and otherwise on a blocking worker.
+    /// Resolves `scope` for a project file listing from `initiator` into
+    /// the project and its checkout.
+    async fn api_project_root(
+        &mut self,
+        initiator: CommandInitiator,
+        scope: ProjectScope,
+    ) -> Result<(i64, PathBuf), ApiSessionError> {
+        let project_id = self.resolve_project_scope(initiator, scope).await?;
+        let root = self
+            .projects
+            .context(project_id)
+            .ok_or(ApiSessionError::NotFound)?
+            .working_dir()
+            .to_path_buf();
+
+        Ok((project_id, root))
+    }
+
+    /// Answers one programmatic project file-listing query: lists `root`,
+    /// the checkout of `project_id` and the root a new session's draft looks
+    /// up `@` mentions in, from the `@`-mention index when it already caches
+    /// that root and otherwise on a blocking worker.
     fn start_api_project_files(
         &mut self,
+        project_id: i64,
+        root: PathBuf,
         response_tx: oneshot::Sender<Result<Vec<SessionFileEntry>, ApiSessionError>>,
     ) {
-        let root = self.working_dir().to_path_buf();
         if let Some(entries) = self.sessions.at_mention_index_for_root(&root) {
             let _ = response_tx.send(Ok(api_file_entries(entries)));
 
             return;
         }
         // The loader names a session only in its failure log.
-        let log_id = SessionId::from(format!("project-{}", self.active_project_id()));
+        let log_id = SessionId::from(format!("project-{project_id}"));
         spawn::spawn_detached(async move {
             let entries = TaskService::load_at_mention_entries(root, &log_id).await;
             let _ = response_tx.send(Ok(api_file_entries(entries)));
@@ -753,18 +908,32 @@ impl App {
         })
     }
 
-    /// Describes the active project, its base branch and default model, and
-    /// the creation modes [`Self::validate_api_session_request`] accepts now.
-    async fn api_host_context(&mut self) -> Result<HostContext, ApiSessionError> {
+    /// Describes `scope`'s project for `initiator`, with its base branch
+    /// and default model, and the creation modes
+    /// [`Self::validate_api_session_request`] accepts now.
+    ///
+    /// Sessions are created only in the active project for now, so another
+    /// listed project offers no creation modes.
+    async fn api_host_context(
+        &mut self,
+        initiator: CommandInitiator,
+        scope: ProjectScope,
+    ) -> Result<HostContext, ApiSessionError> {
+        let project_id = self.resolve_project_scope(initiator, scope).await?;
+        let context = self
+            .projects
+            .context(project_id)
+            .ok_or(ApiSessionError::NotFound)?;
+        let base_branch = context
+            .git_branch()
+            .map(str::to_string)
+            .ok_or_else(git_branch_required)?;
+        let project_name = context.name().to_string();
         let HostInputs {
-            base_branch,
             harness_model,
             has_agent_cli,
             models,
-            project_id,
-            project_name,
         } = self.api_host_inputs();
-        let project = self.api_project_creation_context(base_branch)?;
         let settings = self
             .sessions
             .resolve_session_creation_settings(&self.services, project_id, None)
@@ -796,9 +965,12 @@ impl App {
             .first()
             .map_or(settings.agent, |session_mode| session_mode.agent)
             .model();
+        if project_id != self.active_project_id() {
+            session_modes.clear();
+        }
 
         Ok(HostContext {
-            base_branch: project.base_branch,
+            base_branch,
             default_model,
             models,
             project_id,
@@ -807,16 +979,14 @@ impl App {
         })
     }
 
-    /// Collects what [`Self::api_host_context`] reads from host memory.
+    /// Collects what [`Self::api_host_context`] reads from host memory for
+    /// every project; each project's branch and name are in its status.
     /// Remote clients compare the same inputs, so each is listed here once.
     pub(super) fn api_host_inputs(&self) -> HostInputs {
         HostInputs {
-            base_branch: self.projects.git_branch().map(str::to_string),
             harness_model: self.services.harness_availability().default_model(),
             has_agent_cli: self.services.has_agent_cli(),
             models: self.api_session_models(),
-            project_id: self.active_project_id(),
-            project_name: self.projects.project_name().to_string(),
         }
     }
 
@@ -824,13 +994,23 @@ impl App {
     /// the latest background fetch, and the explicit sync the status bar
     /// shows for it. A sync of another project is left out.
     pub(super) fn api_project_status(&self) -> HostProjectStatus {
-        let project = self.projects.render_parts();
+        self.api_project_status_for(self.projects.active_context())
+    }
 
+    /// Reports the status of the project `context` describes, the active
+    /// project or one whose page is loaded: its branch, its ahead and behind
+    /// counts, and its latest explicit sync. A viewed project reports the
+    /// branch detected when its page loaded and no counts, which only the
+    /// active project's background fetch reports.
+    pub(super) fn api_project_status_for(&self, context: &ProjectContext) -> HostProjectStatus {
         HostProjectStatus {
-            ahead_behind: project.git_status,
-            branch: project.git_branch.map(str::to_string),
-            project_name: self.projects.project_name().to_string(),
-            sync: self.active_project_sync_status().map(api_project_sync),
+            ahead_behind: context.git_status(),
+            branch: context.git_branch().map(str::to_string),
+            project_name: context.name().to_string(),
+            sync: self
+                .project_sync_statuses
+                .get(&context.id())
+                .map(api_project_sync),
         }
     }
 
@@ -1648,9 +1828,7 @@ impl App {
     ) -> Result<ApiProjectCreationContext, ApiSessionError> {
         let base_branch = base_branch_override
             .or_else(|| self.projects.git_branch().map(str::to_string))
-            .ok_or_else(|| {
-                ApiSessionError::Operation("Git branch is required to create a session".to_string())
-            })?;
+            .ok_or_else(git_branch_required)?;
 
         Ok(ApiProjectCreationContext { base_branch })
     }
@@ -1702,22 +1880,17 @@ impl<FocusedReview> Default for LiveSessionDetails<FocusedReview> {
     }
 }
 
-/// What the host context reads from host memory. Its creation defaults come
-/// from stored settings.
+/// What the host context reads from host memory for every project. Its
+/// creation defaults come from stored settings, and its project's branch and
+/// name are in the project's status.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct HostInputs {
-    /// Active project's branch, which new sessions start from.
-    base_branch: Option<String>,
     /// Model new Harness sessions start on, while one is available.
     harness_model: Option<AgentModel>,
     /// Whether any agent CLI can run regular sessions.
     has_agent_cli: bool,
     /// Agents and models a session can switch to.
     models: Vec<AgentSelection>,
-    /// Active project new sessions start in.
-    project_id: i64,
-    /// Active project's name.
-    project_name: String,
 }
 
 /// Worktree inputs resolved for one API-requested project.
@@ -1729,6 +1902,31 @@ struct ApiProjectCreationContext {
 struct InheritedCreationSettings {
     base_branch: String,
     settings: SessionCreationSettings,
+}
+
+/// Summarizes the sessions on one loaded page in their display order, with
+/// the diff size, model, timer, branch, and review figures the session list
+/// and the session footer show. A viewed page holds no git statuses, so its
+/// entries report no branch distances or merge conflicts.
+pub(super) fn api_session_entries(page: &SessionPage) -> Vec<ag_session::SessionListEntry> {
+    let git_statuses = page.session_git_statuses();
+
+    page.sessions()
+        .iter()
+        .map(|session| {
+            let git_status = git_statuses.get(&session.id).copied().unwrap_or_default();
+
+            ag_session::SessionListEntry {
+                stats: Some(api_session_list_stats(session, git_status)),
+                summary: ag_session::SessionSummary {
+                    id: session.id.clone(),
+                    status: session.status,
+                    title: session.title.clone(),
+                    updated_at: session.updated_at,
+                },
+            }
+        })
+        .collect()
 }
 
 /// Collects the list figures of one loaded session, with the branch
@@ -1754,6 +1952,11 @@ fn api_session_list_stats(
         size_label: session.size.label().to_string(),
         upstream_ahead_behind: git_status.remote_status,
     }
+}
+
+/// Refuses to describe or create in a project whose branch is not detected.
+fn git_branch_required() -> ApiSessionError {
+    ApiSessionError::Operation("Git branch is required to create a session".to_string())
 }
 
 /// Converts the status bar's project sync into its programmatic form.

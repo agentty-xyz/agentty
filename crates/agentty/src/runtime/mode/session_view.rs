@@ -134,10 +134,9 @@ impl ViewSessionSnapshot {
         let session_status = session.status;
         let can_open_worktree = is_tmux_session
             && session.allows_worktree_open_action()
-            && *sessions
-                .session_worktree_availability()
-                .get(view_context.session_id.as_str())
-                .unwrap_or(&false);
+            && sessions
+                .session_worktree_available(view_context.session_id.as_str())
+                .unwrap_or(false);
 
         Some(Self {
             continue_terminal_session: ViewActionState::from_bool(

@@ -1,12 +1,13 @@
 //! `SessionState` and `SessionPage` unit tests covering handle
 //! synchronization, session indexing, lookups by id versus the active page,
-//! archive selection and accounting, git statuses, and follow-up tasks.
+//! viewed pages with their leases, eviction, and promotion, archive
+//! selection and accounting, git statuses, and follow-up tasks.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use super::{SessionGitStatus, SessionState};
+use super::{MAX_VIEWED_PAGES, SessionGitStatus, SessionPage, SessionState, VIEWED_PAGE_IDLE};
 use crate::app::session::Clock;
 use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::selection::SelectionState;
@@ -915,4 +916,269 @@ fn all_sessions_visits_the_active_pages_sessions() {
             Some(format!("swept {}", session.id).as_str())
         );
     }
+}
+
+/// Builds the three-session active page of project 1 beside viewed pages of
+/// projects 9 and 4, holding `ninth` and `fourth` with live handles.
+fn viewed_page_state() -> SessionState {
+    let mut state = three_session_state();
+    for (project_id, session_id) in [(9, "ninth"), (4, "fourth")] {
+        state.handles_mut().insert(
+            SessionId::from(session_id),
+            SessionHandles::new(Status::InProgress),
+        );
+        state
+            .viewed_page_mut_or_insert(project_id)
+            .replace_sessions(vec![state_session_fixture(session_id, Status::Review)]);
+    }
+
+    state
+}
+
+#[test]
+/// Verifies lookups by id and sweeps reach sessions on viewed pages, while
+/// the active page's list, positions, and active-page checks hold only the
+/// terminal's project.
+fn viewed_pages_are_reached_by_id_but_stay_off_the_active_page() {
+    // Arrange
+    let mut state = viewed_page_state();
+
+    // Act
+    state.sync_session_from_handle("ninth");
+    state
+        .session_mut_for_id("fourth")
+        .expect("viewed session should be found by id")
+        .title = Some("changed by id".to_string());
+
+    // Assert
+    assert_eq!(state.loaded_project_ids(), vec![1, 4, 9]);
+    assert_eq!(state.viewed_project_ids(), vec![4, 9]);
+    assert_eq!(
+        state
+            .all_sessions()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second", "third", "fourth", "ninth"]
+    );
+    assert_eq!(
+        state.session_for_id("ninth").map(|session| session.status),
+        Some(Status::InProgress)
+    );
+    assert_eq!(
+        state
+            .viewed_page(4)
+            .map(|page| page.sessions()[0].title.clone()),
+        Some(Some("changed by id".to_string()))
+    );
+    assert_eq!(state.session_project_id("ninth"), Some(9));
+    assert_eq!(state.session_project_id("first"), Some(1));
+    assert_eq!(state.session_project_id("missing"), None);
+    assert_eq!(
+        state.page_for_project(1).map(SessionPage::project_id),
+        Some(1)
+    );
+    assert_eq!(
+        state.page_for_project(9).map(SessionPage::project_id),
+        Some(9)
+    );
+    assert!(state.page_for_project(5).is_none());
+    assert!(state.viewed_page(1).is_none());
+    assert!(!state.is_in_active_page("ninth"));
+    assert_eq!(state.session_index_for_id("ninth"), None);
+    assert_eq!(state.sessions().len(), 3);
+}
+
+#[test]
+/// Verifies each page keeps its own branch and worktree caches, which by-id
+/// accessors read and write on the page that holds the session.
+fn per_page_caches_are_read_and_written_on_the_sessions_page() {
+    // Arrange
+    let mut state = viewed_page_state();
+    state
+        .viewed_page_mut_or_insert(9)
+        .set_session_branch_names(HashMap::from([(
+            SessionId::from("ninth"),
+            "wt/ninth".to_string(),
+        )]));
+    state.replace_session_branch_names(HashMap::from([(
+        SessionId::from("first"),
+        "wt/first".to_string(),
+    )]));
+
+    // Act
+    state.set_session_worktree_available("ninth", true);
+    state.set_session_worktree_available("first", false);
+    state.set_session_worktree_available("unloaded", true);
+    state.remove_session_worktree_availability("first");
+
+    // Assert
+    assert_eq!(state.session_branch_name("ninth"), Some("wt/ninth"));
+    assert_eq!(state.session_branch_name("first"), Some("wt/first"));
+    assert_eq!(state.session_branch_name("fourth"), None);
+    assert_eq!(state.session_branch_name("missing"), None);
+    assert_eq!(state.session_worktree_available("ninth"), Some(true));
+    assert_eq!(state.session_worktree_available("first"), None);
+    assert_eq!(state.session_worktree_available("unloaded"), None);
+    assert_eq!(
+        state
+            .viewed_page(9)
+            .map(|page| page.session_worktree_availability.len()),
+        Some(1)
+    );
+    // A session no page holds yet is cached on the active page.
+    assert_eq!(
+        state
+            .active_page()
+            .session_worktree_availability
+            .get("unloaded"),
+        Some(&true)
+    );
+}
+
+#[test]
+/// Verifies leases renew for the page a project or session names, and that
+/// idle and excess viewed pages are dropped, the least recently requested
+/// first.
+fn viewed_pages_are_evicted_when_idle_or_past_the_bound() {
+    // Arrange
+    let start = Instant::now();
+    let mut state = three_session_state();
+    for project_id in 10..=10 + i64::try_from(MAX_VIEWED_PAGES).expect("bound fits") {
+        state.viewed_page_mut_or_insert(project_id);
+        let offset = u64::try_from(project_id - 10).expect("offset fits");
+        state.renew_project_page(project_id, start + Duration::from_secs(offset));
+    }
+    state.viewed_page_mut_or_insert(30);
+    state
+        .viewed_page_mut_or_insert(31)
+        .replace_sessions(vec![state_session_fixture("leased", Status::Review)]);
+
+    // Act
+    state.renew_session_page("leased", start + Duration::from_secs(60));
+    state.renew_session_page("missing", start);
+    state.renew_project_page(1, start);
+    state.renew_project_page(99, start);
+    state.evict_excess_viewed_pages();
+    let after_bound = state.viewed_project_ids();
+    state.evict_idle_viewed_pages(start + VIEWED_PAGE_IDLE + Duration::from_secs(2));
+    let after_idle = state.viewed_project_ids();
+
+    // Assert
+    // The page never requested goes first, then the oldest leases.
+    assert_eq!(after_bound, vec![12, 13, 14, 31]);
+    assert_eq!(after_idle, vec![13, 14, 31]);
+    assert_eq!(state.active_page().last_requested_at, Some(start));
+}
+
+#[test]
+/// Verifies a terminal switch promotes the target's viewed page and keeps
+/// the previous active page for its callers only while its lease is live
+/// and its archive window is on the first page.
+fn switch_active_page_promotes_the_target_and_demotes_a_leased_page() {
+    // Arrange
+    let start = Instant::now();
+    let live = start
+        + VIEWED_PAGE_IDLE
+            .checked_sub(Duration::from_secs(1))
+            .expect("the idle limit exceeds a second");
+    let idle = start + VIEWED_PAGE_IDLE;
+    let cases = [
+        ("leased", Some(start), false, live, true),
+        ("idle lease", Some(start), false, idle, false),
+        ("never requested", None, false, start, false),
+        ("expanded archive", Some(start), true, live, false),
+    ];
+
+    for (name, active_lease, is_expanded, now, expected_demotion) in cases {
+        let mut state = viewed_page_state();
+        state.replace_session_git_statuses(HashMap::from([(
+            SessionId::from("first"),
+            SessionGitStatus::default(),
+        )]));
+        if let Some(active_lease) = active_lease {
+            state.renew_project_page(1, active_lease);
+        }
+        if is_expanded {
+            state.active_page_mut().archive_limit = session_order::ARCHIVE_PAGE_SIZE * 2;
+        }
+        state.renew_project_page(9, start);
+
+        // Act
+        let is_demoted = state.switch_active_page(9, now);
+
+        // Assert
+        assert_eq!(is_demoted, expected_demotion, "{name}");
+        assert_eq!(state.active_page().project_id(), 9, "{name}");
+        assert_eq!(state.active_page().last_requested_at, Some(start), "{name}");
+        assert!(state.is_in_active_page("ninth"), "{name}");
+        let demoted = state.viewed_page(1);
+        assert_eq!(demoted.is_some(), expected_demotion, "{name}");
+        assert!(
+            demoted.is_none_or(|page| page.session_git_statuses().is_empty()
+                && page.session_index_by_id().contains_key("first")),
+            "{name}"
+        );
+        assert_eq!(state.viewed_page(9).map(SessionPage::project_id), None);
+    }
+}
+
+#[test]
+/// Verifies a switch to a project without a viewed page starts an empty
+/// active page, and a switch to the active project changes nothing.
+fn switch_active_page_starts_unviewed_projects_empty_and_ignores_the_active_one() {
+    // Arrange
+    let now = Instant::now();
+    let mut state = viewed_page_state();
+
+    // Act
+    let to_active = state.switch_active_page(1, now);
+    let active_sessions = state.sessions().len();
+    let to_unviewed = state.switch_active_page(7, now);
+
+    // Assert
+    assert!(!to_active);
+    assert_eq!(active_sessions, 3);
+    assert!(!to_unviewed);
+    assert_eq!(state.active_page().project_id(), 7);
+    assert!(state.sessions().is_empty());
+    assert_eq!(state.active_page().last_requested_at, None);
+    assert_eq!(state.viewed_project_ids(), vec![4, 9]);
+}
+
+#[test]
+/// Verifies viewed pages are dropped by the listing check or all at once,
+/// and that a viewed page's transcripts are moved out and restored only for
+/// a loaded page.
+fn viewed_pages_are_retained_cleared_and_keep_their_transcripts() {
+    // Arrange
+    let mut state = viewed_page_state();
+    state
+        .session_mut_for_id("ninth")
+        .expect("viewed session should be loaded")
+        .transcript = Some(crate::test_support::assistant_transcript("ninth reply"));
+
+    let has_transcript = |state: &SessionState| {
+        state
+            .session_for_id("ninth")
+            .is_some_and(|session| session.transcript.is_some())
+    };
+
+    // Act
+    let taken = state.take_viewed_page_transcripts(9);
+    let untranscribed = !has_transcript(&state);
+    state.restore_viewed_page_transcripts(9, taken);
+    let restored = has_transcript(&state);
+    state.restore_viewed_page_transcripts(5, HashMap::new());
+    let missing_page_transcripts = state.take_viewed_page_transcripts(5);
+    state.retain_viewed_pages(|project_id| project_id == 9);
+    let retained = state.viewed_project_ids();
+    state.clear_viewed_pages();
+
+    // Assert
+    assert!(untranscribed);
+    assert!(restored);
+    assert!(missing_page_transcripts.is_empty());
+    assert_eq!(retained, vec![9]);
+    assert_eq!(state.viewed_project_ids(), Vec::<i64>::new());
+    assert_eq!(state.sessions().len(), 3);
 }

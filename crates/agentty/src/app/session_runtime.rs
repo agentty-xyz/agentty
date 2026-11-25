@@ -14,17 +14,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext,
-    HostProjectStatus, MessageImage, ReviewRequest, Session, SessionDiffFile, SessionError,
-    SessionFileEntry, SessionId, SessionListEntry, SessionSummary,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext, HostProject,
+    HostProjectStatus, MessageImage, ProjectScope, ProjectSessions, ReviewRequest, Session,
+    SessionDiffFile, SessionError, SessionFileEntry, SessionId, SessionListEntry, SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::SessionManager;
 use crate::app::command_gateway::{
-    CommandDelivery, CommandInitiator, GraphProposalCommand, ReviewRequestCommand, SessionCommand,
-    SessionMutation,
+    CommandDelivery, CommandInitiator, GraphProposalCommand, RemoteScope, ReviewRequestCommand,
+    SessionCommand, SessionMutation,
 };
 
 /// Maximum number of accepted API commands waiting for foreground execution.
@@ -35,14 +35,17 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 /// A read query or an enveloped mutation awaiting foreground admission.
 ///
 /// Each read sits in the query type of its remote-control scope, which the
-/// foreground dispatch applies by variant: [`ProjectQuery`] reads the active
-/// project and is served to every caller, [`SessionQuery`] reads the session
-/// [`Self::Session`] names and reaches a paired device only while the host
-/// lists that session, and [`LocalQuery`] is not served to remote control.
+/// foreground dispatch applies by variant: [`ProjectQuery`] reads a listed
+/// project and reaches a paired device only for the active project,
+/// [`SessionQuery`] reads the session [`Self::Session`] names and reaches a
+/// paired device only while the host lists that session for the active
+/// project, and [`LocalQuery`] is not served to remote control.
 pub(crate) enum SessionRuntimeCommand {
-    /// A read of the active project, which carries no initiator because
-    /// every caller may make it.
-    Project(ProjectQuery),
+    /// A read of a listed project, or of the projects the host lists.
+    Project {
+        initiator: CommandInitiator,
+        query: ProjectQuery,
+    },
     /// A read of one session.
     Session {
         initiator: CommandInitiator,
@@ -66,21 +69,77 @@ pub(crate) enum SessionRuntimeCommand {
     Mutation(SessionCommand),
 }
 
-/// A read of the active project, served to every caller.
+/// A read of the project a [`ProjectScope`] names, or of the projects the
+/// host lists.
 pub(crate) enum ProjectQuery {
     HostContext {
         response_tx: oneshot::Sender<Result<HostContext, SessionError>>,
+        scope: ProjectScope,
     },
-    /// Lists the loaded sessions, the ones the host lists to every caller.
+    /// Lists the project's loaded sessions, the ones the host lists for it,
+    /// with its status read in the same turn.
     List {
-        response_tx: oneshot::Sender<Result<Vec<SessionListEntry>, SessionError>>,
+        response_tx: oneshot::Sender<Result<ProjectSessions, SessionError>>,
+        scope: ProjectScope,
     },
     ListProjectFiles {
         response_tx: oneshot::Sender<Result<Vec<SessionFileEntry>, SessionError>>,
+        scope: ProjectScope,
     },
+    /// Lists the projects the host lists, in its switcher's order.
+    ListProjects {
+        response_tx: oneshot::Sender<Result<Vec<HostProject>, SessionError>>,
+    },
+    /// Reports the active project's status.
     ProjectStatus {
         response_tx: oneshot::Sender<Result<HostProjectStatus, SessionError>>,
     },
+    /// Reports whether the host lists the session.
+    SessionListed {
+        response_tx: oneshot::Sender<Result<bool, SessionError>>,
+        session_id: SessionId,
+    },
+}
+
+impl ProjectQuery {
+    /// Classifies the read for a paired device: the project its scope
+    /// names, the session it asks about, or, for the project list, a read
+    /// remote control does not serve.
+    pub(crate) fn remote_scope(&self) -> RemoteScope<'_> {
+        match self {
+            Self::HostContext { scope, .. }
+            | Self::List { scope, .. }
+            | Self::ListProjectFiles { scope, .. } => RemoteScope::Project(*scope),
+            Self::ListProjects { .. } => RemoteScope::NotServed,
+            Self::ProjectStatus { .. } => RemoteScope::Project(ProjectScope::Active),
+            Self::SessionListed { session_id, .. } => RemoteScope::Session(session_id),
+        }
+    }
+
+    /// Answers the read with `refusal` instead of serving it. A session out
+    /// of the caller's reach is reported as not listed.
+    pub(crate) fn refuse(self, refusal: SessionError) {
+        match self {
+            Self::HostContext { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::List { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::ListProjectFiles { response_tx, .. } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::ListProjects { response_tx } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::ProjectStatus { response_tx } => {
+                let _ = response_tx.send(Err(refusal));
+            }
+            Self::SessionListed { response_tx, .. } => {
+                let _ = response_tx.send(Ok(false));
+            }
+        }
+    }
 }
 
 /// A read of the session its [`SessionRuntimeCommand::Session`] names.
@@ -518,32 +577,68 @@ impl SessionRuntimeHandle {
         .await
     }
 
-    /// Lists the files and directories in the active project's checkout
-    /// through the runtime actor, which walks the checkout off the
-    /// foreground loop.
-    pub(crate) async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
-        self.request(|response_tx| {
-            SessionRuntimeCommand::Project(ProjectQuery::ListProjectFiles { response_tx })
-        })
-        .await
+    /// Lists the files and directories in `scope`'s checkout through the
+    /// runtime actor, which walks the checkout off the foreground loop.
+    pub(crate) async fn list_project_files_for(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<Vec<SessionFileEntry>, SessionError> {
+        self.request_project(|response_tx| ProjectQuery::ListProjectFiles { response_tx, scope })
+            .await
     }
 
-    /// Describes the active project new sessions are created in through the
-    /// runtime actor.
-    pub(crate) async fn host_context(&self) -> Result<HostContext, SessionError> {
-        self.request(|response_tx| {
-            SessionRuntimeCommand::Project(ProjectQuery::HostContext { response_tx })
-        })
-        .await
+    /// Describes `scope`'s project, which new sessions requested for it are
+    /// created in, through the runtime actor.
+    pub(crate) async fn host_context_for(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<HostContext, SessionError> {
+        self.request_project(|response_tx| ProjectQuery::HostContext { response_tx, scope })
+            .await
     }
 
     /// Reports the active project's branch, its distance from upstream, and
     /// its latest explicit sync through the runtime actor.
     pub(crate) async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
-        self.request(|response_tx| {
-            SessionRuntimeCommand::Project(ProjectQuery::ProjectStatus { response_tx })
+        self.request_project(|response_tx| ProjectQuery::ProjectStatus { response_tx })
+            .await
+    }
+
+    /// Lists the projects the host lists, in its switcher's order, through
+    /// the runtime actor.
+    pub(crate) async fn list_projects(&self) -> Result<Vec<HostProject>, SessionError> {
+        self.request_project(|response_tx| ProjectQuery::ListProjects { response_tx })
+            .await
+    }
+
+    /// Lists `scope`'s sessions with the project's status, both read in one
+    /// foreground turn, through the runtime actor.
+    pub(crate) async fn project_sessions(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<ProjectSessions, SessionError> {
+        self.request_project(|response_tx| ProjectQuery::List { response_tx, scope })
+            .await
+    }
+
+    /// Reports whether the host lists `session_id` through the runtime
+    /// actor, which loads the page of the session's listed project when
+    /// needed.
+    pub(crate) async fn is_session_listed(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<bool, SessionError> {
+        self.request_project(|response_tx| ProjectQuery::SessionListed {
+            response_tx,
+            session_id: session_id.clone(),
         })
         .await
+    }
+
+    /// Returns whether this handle's caller may name projects other than
+    /// the active one, which paired devices may not yet.
+    pub(crate) fn serves_other_projects(&self) -> bool {
+        self.initiator != CommandInitiator::Remote
     }
 
     /// Starts or queues a sync of the active project's branch through the
@@ -559,13 +654,12 @@ impl SessionRuntimeHandle {
         Ok(entries.into_iter().map(|entry| entry.summary).collect())
     }
 
-    /// Lists the loaded sessions in display order, with their list stats,
-    /// through the runtime actor.
+    /// Lists the active project's loaded sessions in display order, with
+    /// their list stats, through the runtime actor.
     pub(crate) async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
-        self.request(|response_tx| {
-            SessionRuntimeCommand::Project(ProjectQuery::List { response_tx })
-        })
-        .await
+        let project_sessions = self.project_sessions(ProjectScope::Active).await?;
+
+        Ok(project_sessions.entries)
     }
 
     /// Sends one message through the runtime actor.
@@ -687,6 +781,18 @@ impl SessionRuntimeHandle {
         self.request_mutation(|response_tx| CommandDelivery::Review {
             request: ReviewRequestCommand::new(session_id, None),
             response_tx: Some(response_tx),
+        })
+        .await
+    }
+
+    /// Asks for one project read under this handle's initiator.
+    async fn request_project<ResultValue>(
+        &self,
+        query: impl FnOnce(oneshot::Sender<Result<ResultValue, SessionError>>) -> ProjectQuery,
+    ) -> Result<ResultValue, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::Project {
+            initiator: self.initiator,
+            query: query(response_tx),
         })
         .await
     }

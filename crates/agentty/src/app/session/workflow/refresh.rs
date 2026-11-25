@@ -1,13 +1,14 @@
 //! Session refresh scheduling and post-reload view state restoration.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::time::Instant;
 
 use ag_forge as forge;
 use tracing::warn;
 
 use super::SESSION_REFRESH_INTERVAL;
-use super::load::SessionLoadInput;
+use super::load::{LoadedProjectSessions, SessionLoadInput};
 use crate::app::session::SessionError;
 use crate::app::{AppServices, ProjectManager, SessionManager};
 use crate::domain::session::{ForgeKind, ReviewRequest, SessionId, Status};
@@ -70,6 +71,72 @@ impl SessionManager {
         self.reload_sessions(mode, projects, services, sessions_metadata)
             .await;
         self.state.refresh_deadline = self.next_refresh_deadline();
+    }
+
+    /// Loads or reloads the viewed page of `project_id`, a listed project the
+    /// terminal does not show, from its checkout at `working_dir`.
+    ///
+    /// The page holds the project's first archive page with worktree
+    /// availability and detected branch names, as the active page does, but
+    /// no activity history, selection, or git statuses. A reload keeps the
+    /// page's lease and its sessions' transient rows. Returns whether the
+    /// page loaded; a failed load keeps the previous page, or none.
+    pub(crate) async fn load_viewed_page(
+        &mut self,
+        services: &AppServices,
+        project_id: i64,
+        working_dir: &Path,
+    ) -> bool {
+        let sessions_metadata = services
+            .db()
+            .sessions()
+            .load_sessions_metadata(project_id)
+            .await;
+        let clock = services.clock();
+        let fs_client = services.fs_client();
+        let mut previous_transcripts = self.state.take_viewed_page_transcripts(project_id);
+        let loaded = Self::try_load_project_sessions(
+            SessionLoadInput {
+                active_project_id: project_id,
+                active_session_id: None,
+                archive_limit: session_order::ARCHIVE_PAGE_SIZE,
+                base: services.base_path(),
+                clock: clock.as_ref(),
+                db: services.db(),
+                fs_client: fs_client.as_ref(),
+                working_dir,
+            },
+            self.state.handles_mut(),
+            &mut previous_transcripts,
+        )
+        .await;
+        let LoadedProjectSessions {
+            archive_page,
+            session_worktree_availability,
+            sessions,
+        } = match loaded {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                warn!(%error, project_id, "keeping the viewed page after a load failure");
+                self.state
+                    .restore_viewed_page_transcripts(project_id, previous_transcripts);
+
+                return false;
+            }
+        };
+        let session_branch_names = self.detect_session_branch_names(&sessions).await;
+        let page = self.state.viewed_page_mut_or_insert(project_id);
+        page.set_archive_page(
+            archive_page.archived_session_count,
+            archive_page.has_more_archived_sessions,
+        );
+        page.replace_sessions(sessions);
+        page.set_session_worktree_availability(session_worktree_availability);
+        page.set_session_branch_names(session_branch_names);
+        // A failed read leaves a fingerprint the next refresh will not match.
+        page.set_sessions_metadata(sessions_metadata.unwrap_or_default());
+
+        true
     }
 
     /// Loads the next archive page and focuses its first newly loaded session.
@@ -287,7 +354,7 @@ impl SessionManager {
     }
 
     /// Returns `true` when periodic session refresh should run.
-    fn is_session_refresh_due(&self) -> bool {
+    pub(crate) fn is_session_refresh_due(&self) -> bool {
         self.state.clock.now_instant() >= self.state.refresh_deadline
     }
 

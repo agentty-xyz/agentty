@@ -1,5 +1,7 @@
-//! Active-project state, project discovery snapshots, and quick-select helpers.
+//! Active-project state, the contexts of viewed projects, project discovery
+//! snapshots, and quick-select helpers.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::domain::project::{ProjectListItem, mru_project_order, ordered_project_items};
@@ -26,6 +28,12 @@ pub(crate) struct ProjectRenderParts<'a> {
 }
 
 /// Project domain state and git status tracking for the active project.
+///
+/// The listed projects are the active project and every project the
+/// switcher offers; the active project can be missing from the switcher,
+/// such as one opened from a folder the catalog hides. Besides the active
+/// project, the manager describes each listed project whose session page
+/// session-API callers view, without making it active.
 pub struct ProjectManager {
     /// Context of the project the terminal shows.
     active: ProjectContext,
@@ -37,6 +45,9 @@ pub struct ProjectManager {
     /// worktrees and that the project catalog shows.
     project_items: Vec<ProjectListItem>,
     table_state: SelectionState,
+    /// Contexts of the listed projects other than the active one whose
+    /// session pages are loaded, keyed by project id.
+    viewed: HashMap<i64, ProjectContext>,
 }
 
 impl ProjectManager {
@@ -60,6 +71,7 @@ impl ProjectManager {
             mru_project_order: mru_project_order(&project_items),
             project_items,
             table_state: SelectionState::default(),
+            viewed: HashMap::new(),
         };
         manager.select_active_project_row();
 
@@ -122,6 +134,56 @@ impl ProjectManager {
         ordered_project_items(&self.project_items, &self.mru_project_order)
     }
 
+    /// Returns whether `project_id` is listed: the active project or one the
+    /// switcher offers.
+    pub(crate) fn is_listed(&self, project_id: i64) -> bool {
+        project_id == self.active.id || self.listed_project(project_id).is_some()
+    }
+
+    /// Returns the switcher row of `project_id`, when the switcher offers
+    /// it.
+    pub(crate) fn listed_project(&self, project_id: i64) -> Option<&ProjectListItem> {
+        self.project_items
+            .iter()
+            .find(|project_item| project_item.project.id == project_id)
+    }
+
+    /// Returns the context of the active project.
+    pub(crate) fn active_context(&self) -> &ProjectContext {
+        &self.active
+    }
+
+    /// Returns the context of `project_id`: the active project's, or that of
+    /// a listed project whose session page is loaded.
+    pub(crate) fn context(&self, project_id: i64) -> Option<&ProjectContext> {
+        if project_id == self.active.id {
+            return Some(&self.active);
+        }
+
+        self.viewed.get(&project_id)
+    }
+
+    /// Records the context of a viewed project other than the active one,
+    /// replacing an earlier one, with no ahead/behind counts or upstream
+    /// reference, which only the active project's status tracking keeps.
+    pub(crate) fn set_viewed_context(&mut self, context: ProjectContext) {
+        self.viewed.insert(
+            context.id,
+            ProjectContext {
+                git_status: None,
+                git_upstream_ref: None,
+                ..context
+            },
+        );
+    }
+
+    /// Keeps only the viewed contexts of `project_ids`, the projects whose
+    /// viewed pages stay loaded.
+    pub(crate) fn retain_viewed_contexts(&mut self, project_ids: &[i64]) {
+        self.viewed
+            .retain(|project_id, _| project_ids.contains(project_id));
+    }
+
     /// Returns the selected project in the project list, when present.
     pub(crate) fn selected_project(&self) -> Option<&ProjectListItem> {
         let selected_index = self.table_state.selected()?;
@@ -171,7 +233,9 @@ impl ProjectManager {
         self.table_state.select(Some(previous_index));
     }
 
-    /// Updates the active project context values.
+    /// Updates the active project context values and returns the previous
+    /// active project's context. A viewed context of the new active project
+    /// is dropped, since the active context replaces it.
     pub(crate) fn update_active_project_context(
         &mut self,
         active_project_id: i64,
@@ -179,15 +243,21 @@ impl ProjectManager {
         git_branch: Option<String>,
         git_upstream_ref: Option<String>,
         working_dir: PathBuf,
-    ) {
-        self.active = ProjectContext::new(
-            active_project_id,
-            active_project_name,
-            git_branch,
-            git_upstream_ref,
-            working_dir,
+    ) -> ProjectContext {
+        self.viewed.remove(&active_project_id);
+        let previous_context = std::mem::replace(
+            &mut self.active,
+            ProjectContext::new(
+                active_project_id,
+                active_project_name,
+                git_branch,
+                git_upstream_ref,
+                working_dir,
+            ),
         );
         self.select_active_project_row();
+
+        previous_context
     }
 
     /// Replaces loaded project list snapshots and keeps selection stable.
@@ -239,7 +309,10 @@ impl ProjectManager {
 }
 
 /// One project's identity, checkout, and Git state, as the host holds it.
-struct ProjectContext {
+///
+/// A viewed project's context holds its branch as detected when its page
+/// loaded, and no ahead/behind counts or upstream reference.
+pub(crate) struct ProjectContext {
     /// Current local branch name, when one is detected.
     git_branch: Option<String>,
     /// Latest ahead/behind counts of `git_branch` from the background fetch.
@@ -256,7 +329,7 @@ struct ProjectContext {
 
 impl ProjectContext {
     /// Creates a context with no ahead/behind counts until the next fetch.
-    fn new(
+    pub(crate) fn new(
         id: i64,
         name: String,
         git_branch: Option<String>,
@@ -271,6 +344,32 @@ impl ProjectContext {
             name,
             working_dir,
         }
+    }
+
+    /// Returns the detected local branch, when one is known.
+    pub(crate) fn git_branch(&self) -> Option<&str> {
+        self.git_branch.as_deref()
+    }
+
+    /// Returns the latest ahead/behind counts of the branch, which only the
+    /// active project's background fetch reports.
+    pub(crate) fn git_status(&self) -> Option<(u32, u32)> {
+        self.git_status
+    }
+
+    /// Returns the persisted project identifier.
+    pub(crate) fn id(&self) -> i64 {
+        self.id
+    }
+
+    /// Returns the display name.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the checkout directory the project's sessions start from.
+    pub(crate) fn working_dir(&self) -> &Path {
+        &self.working_dir
     }
 }
 

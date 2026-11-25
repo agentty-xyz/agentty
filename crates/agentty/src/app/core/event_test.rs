@@ -797,6 +797,65 @@ fn queue_unrelated_session_progress(app: &App) {
 
 #[tokio::test]
 async fn completed_turn_starts_auto_review_when_project_is_inactive() {
+    // A session of another project reviews with its own project's agent,
+    // whether no page holds it or a session-API caller views its page.
+    for is_viewed in [false, true] {
+        // Arrange, Act & Assert
+        Box::pin(completed_inactive_turn_starts_auto_review_with_its_projects_agent(is_viewed))
+            .await;
+    }
+}
+
+/// Stores review defaults for `project_id` that differ from the active
+/// project's: Claude Sonnet at low reasoning in fast mode.
+async fn persist_inactive_review_settings(app: &App, project_id: i64) {
+    app.services
+        .db()
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (
+                    crate::domain::setting::SettingName::DefaultReviewAgent,
+                    "claude".to_string(),
+                ),
+                (
+                    crate::domain::setting::SettingName::DefaultReviewModel,
+                    "claude-sonnet-5-5".to_string(),
+                ),
+                (
+                    crate::domain::setting::SettingName::DefaultReviewReasoningLevel,
+                    "low".to_string(),
+                ),
+                (
+                    crate::domain::setting::SettingName::DefaultReviewSpeedMode,
+                    "fast".to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("failed to persist inactive-project review settings");
+}
+
+/// Loads the page of the inactive project `project_id`, holding
+/// `session_id`, as a session-API caller views it.
+async fn view_inactive_project_page(app: &mut App, project_id: i64, session_id: &SessionId) {
+    std::fs::create_dir_all(crate::app::session::session_folder(
+        app.services.base_path(),
+        session_id.as_str(),
+    ))
+    .expect("session folder");
+    app.reload_projects().await;
+    app.ensure_project_page(project_id)
+        .await
+        .expect("listed page should load");
+    assert!(app.sessions.session_for_id(session_id).is_some());
+    assert!(!app.sessions.is_in_active_page(session_id));
+}
+
+/// Runs [`completed_turn_starts_auto_review_when_project_is_inactive`] for a
+/// session whose page is loaded as a viewed page when `is_viewed`.
+async fn completed_inactive_turn_starts_auto_review_with_its_projects_agent(is_viewed: bool) {
     // Arrange
     let diff_text = "diff --git a/file.rs b/file.rs\n+inactive change";
     let expected_hash = crate::app::test_support::diff_content_hash(diff_text);
@@ -805,6 +864,9 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
         .expect_diff()
         .once()
         .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+    git_client
+        .expect_detect_git_info()
+        .returning(|_| Box::pin(async { None }));
     let clients = crate::test_support::test_app_clients().with_git_client(Arc::new(git_client));
     let (mut app, base_dir) = crate::test_support::new_test_app_with_clients(clients).await;
     let session_id = SessionId::from("inactive-completed-session");
@@ -828,32 +890,10 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
         )
         .await
         .expect("failed to insert inactive session");
-    app.services
-        .db()
-        .settings()
-        .upsert_project_settings(
-            inactive_project_id,
-            vec![
-                (
-                    crate::domain::setting::SettingName::DefaultReviewAgent,
-                    "claude".to_string(),
-                ),
-                (
-                    crate::domain::setting::SettingName::DefaultReviewModel,
-                    "claude-sonnet-5-5".to_string(),
-                ),
-                (
-                    crate::domain::setting::SettingName::DefaultReviewReasoningLevel,
-                    "low".to_string(),
-                ),
-                (
-                    crate::domain::setting::SettingName::DefaultReviewSpeedMode,
-                    "fast".to_string(),
-                ),
-            ],
-        )
-        .await
-        .expect("failed to persist inactive-project review settings");
+    if is_viewed {
+        view_inactive_project_page(&mut app, inactive_project_id, &session_id).await;
+    }
+    persist_inactive_review_settings(&app, inactive_project_id).await;
     let turn_applied_state = TurnAppliedState {
         follow_up_tasks: Vec::new(),
         questions: Vec::new(),

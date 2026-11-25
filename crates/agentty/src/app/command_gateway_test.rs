@@ -443,7 +443,7 @@ async fn terminal_api_and_remote_mailbox_requests_retain_their_initiators() {
         let command = app.sessions.next_command().await;
         let envelope = match &command {
             SessionRuntimeCommand::Mutation(envelope) => Some(envelope),
-            SessionRuntimeCommand::Project(_)
+            SessionRuntimeCommand::Project { .. }
             | SessionRuntimeCommand::Session { .. }
             | SessionRuntimeCommand::Local { .. }
             | SessionRuntimeCommand::RunGraphNode { .. } => None,

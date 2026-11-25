@@ -1,8 +1,9 @@
-//! `ProjectManager` navigation and active project context unit tests.
+//! `ProjectManager` navigation, listed projects, and active and viewed
+//! project context unit tests.
 
 use std::path::{Path, PathBuf};
 
-use super::ProjectManager;
+use super::{ProjectContext, ProjectManager};
 use crate::domain::project::{Project, ProjectListItem};
 
 #[test]
@@ -157,4 +158,117 @@ fn update_active_project_context_drops_previous_project_git_status() {
     assert_eq!(manager.render_parts().git_status, None);
     assert_eq!(manager.render_parts().active_project_id, 2);
     assert_eq!(manager.selected_project_id(), Some(2));
+}
+
+#[test]
+fn listed_projects_are_the_active_one_and_the_switchers_rows() {
+    // Arrange
+    let mut manager = project_manager_fixture();
+    manager.update_active_project_context(
+        5,
+        "hidden".to_string(),
+        None,
+        None,
+        PathBuf::from("/tmp/hidden"),
+    );
+
+    // Act
+    let listed = [1, 2, 5, 9].map(|project_id| manager.is_listed(project_id));
+    let rows = [1, 5].map(|project_id| {
+        manager
+            .listed_project(project_id)
+            .map(|project_item| project_item.project.id)
+    });
+
+    // Assert
+    // An active project the switcher does not offer is listed too.
+    assert_eq!(listed, [true, true, true, false]);
+    assert_eq!(rows, [Some(1), None]);
+}
+
+#[test]
+fn viewed_contexts_describe_projects_without_making_them_active() {
+    // Arrange
+    let mut manager = project_manager_fixture();
+    manager.set_git_status(Some((3, 1)));
+    let mut viewed_context = ProjectContext::new(
+        2,
+        "service".to_string(),
+        Some("develop".to_string()),
+        None,
+        PathBuf::from("/tmp/service"),
+    );
+    viewed_context.git_status = Some((4, 4));
+
+    // Act
+    manager.set_viewed_context(viewed_context);
+    let viewed = manager.context(2).map(|context| {
+        (
+            context.id(),
+            context.name().to_string(),
+            context.git_branch().map(str::to_string),
+            context.git_status(),
+            context.working_dir().to_path_buf(),
+        )
+    });
+    let active = manager.context(1).map(ProjectContext::git_status);
+    let previous = manager.update_active_project_context(
+        2,
+        "service".to_string(),
+        Some("main".to_string()),
+        None,
+        PathBuf::from("/tmp/service"),
+    );
+    let promoted_branch = manager.context(2).and_then(ProjectContext::git_branch);
+
+    // Assert
+    // A viewed context reports no counts; only the active fetch does.
+    assert_eq!(
+        viewed,
+        Some((
+            2,
+            "service".to_string(),
+            Some("develop".to_string()),
+            None,
+            PathBuf::from("/tmp/service")
+        ))
+    );
+    assert_eq!(active, Some(Some((3, 1))));
+    assert_eq!(manager.active_project_id(), 2);
+    assert_eq!(previous.id(), 1);
+    assert_eq!(previous.git_status(), Some((3, 1)));
+    assert_eq!(promoted_branch, Some("main"));
+    assert!(manager.context(1).is_none());
+    assert!(manager.context(9).is_none());
+    // A demoted context keeps only what a viewed project reports.
+    manager.set_viewed_context(previous);
+    let demoted = manager.context(1).expect("demoted context");
+    assert_eq!(
+        (demoted.git_status(), demoted.git_upstream_ref.as_deref()),
+        (None, None)
+    );
+    assert_eq!(demoted.git_branch(), Some("main"));
+}
+
+#[test]
+fn retained_viewed_contexts_follow_the_loaded_pages() {
+    // Arrange
+    let mut manager = project_manager_fixture();
+    for (project_id, name) in [(2, "service"), (3, "docs")] {
+        manager.set_viewed_context(ProjectContext::new(
+            project_id,
+            name.to_string(),
+            None,
+            None,
+            PathBuf::from(format!("/tmp/{name}")),
+        ));
+    }
+
+    // Act
+    manager.retain_viewed_contexts(&[3]);
+
+    // Assert
+    assert!(manager.context(2).is_none());
+    assert_eq!(manager.context(3).map(ProjectContext::name), Some("docs"));
+    assert_eq!(manager.active_context().id(), 1);
 }

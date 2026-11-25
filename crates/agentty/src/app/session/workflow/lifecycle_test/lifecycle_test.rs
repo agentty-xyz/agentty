@@ -807,13 +807,7 @@ async fn draft_materialization_creates_the_session_worktree() {
 
     // Assert
     assert!(result.is_ok(), "{result:?}");
-    assert_eq!(
-        manager
-            .session_worktree_availability()
-            .get("session-id")
-            .copied(),
-        Some(true)
-    );
+    assert_eq!(manager.session_worktree_available("session-id"), Some(true));
 }
 
 #[tokio::test]

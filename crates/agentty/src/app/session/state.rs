@@ -2,9 +2,9 @@
 //! selection, and refresh tracking, and `SessionPage`, one project's loaded
 //! session list with its cached branch and git metadata.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
@@ -12,6 +12,13 @@ use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionI
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::session_order::{self, ArchiveAction};
 use crate::domain::transient_message::{TransientMessage, TransientMessageSlot};
+
+/// How long a viewed page stays loaded after the last request that named its
+/// project or one of its sessions.
+pub(crate) const VIEWED_PAGE_IDLE: Duration = Duration::from_mins(10);
+
+/// Most viewed pages held at once; the least recently requested goes first.
+pub(crate) const MAX_VIEWED_PAGES: usize = 4;
 
 /// Cached ahead/behind snapshots for one session branch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -51,14 +58,19 @@ impl SessionRuntimeState {
     }
 }
 
-/// Holds the terminal's session state: the active project's page, live
-/// worker handles for every session, the list selection, and refresh
-/// tracking.
+/// Holds the session state: the active project's page, the pages of other
+/// listed projects that session-API callers view, live worker handles for
+/// every session, the terminal's list selection, and refresh tracking.
 ///
 /// Lookups by session id, and the reducers built on them, search every loaded
-/// page. List positions, selection, archive pagination, and the per-page
-/// caches belong to the active page, the one the terminal shows. Only the
-/// active page is loaded today, so both reach the same sessions.
+/// page. List positions, selection, and the terminal's archive pagination
+/// belong to the active page, the one the terminal shows. Each page keeps
+/// its own branch, worktree, and git-status caches, which by-id accessors
+/// read on the page that holds the session.
+///
+/// A viewed page stays loaded while its lease, renewed by each request that
+/// names its project or one of its sessions, is younger than
+/// [`VIEWED_PAGE_IDLE`], and while at most [`MAX_VIEWED_PAGES`] are held.
 pub struct SessionState {
     pub(super) clock: Arc<dyn Clock>,
     /// Selected follow-up-task positions keyed by session id for session-view
@@ -69,6 +81,9 @@ pub struct SessionState {
     /// Session list of the project the terminal shows.
     active: SessionPage,
     runtime: SessionRuntimeState,
+    /// Session lists of other listed projects that session-API callers
+    /// view, keyed by project id.
+    viewed: BTreeMap<i64, SessionPage>,
 }
 
 impl SessionState {
@@ -96,6 +111,7 @@ impl SessionState {
             refresh_deadline,
             runtime: SessionRuntimeState { handles },
             table_state,
+            viewed: BTreeMap::new(),
         }
     }
 
@@ -108,6 +124,156 @@ impl SessionState {
     /// terminal shows.
     pub(crate) fn active_page_mut(&mut self) -> &mut SessionPage {
         &mut self.active
+    }
+
+    /// Returns the loaded page of `project_id`: the active page when it
+    /// holds that project, otherwise its viewed page, if loaded.
+    pub(crate) fn page_for_project(&self, project_id: i64) -> Option<&SessionPage> {
+        if self.active.project_id == project_id {
+            return Some(&self.active);
+        }
+
+        self.viewed.get(&project_id)
+    }
+
+    /// Returns the viewed page of `project_id`, never the active page.
+    pub(crate) fn viewed_page(&self, project_id: i64) -> Option<&SessionPage> {
+        self.viewed.get(&project_id)
+    }
+
+    /// Returns the projects of every loaded page: the active page's first,
+    /// then the viewed pages' in ascending order.
+    pub(crate) fn loaded_project_ids(&self) -> Vec<i64> {
+        self.pages().map(SessionPage::project_id).collect()
+    }
+
+    /// Returns the projects whose viewed pages are loaded, in ascending
+    /// order.
+    pub(crate) fn viewed_project_ids(&self) -> Vec<i64> {
+        self.viewed.keys().copied().collect()
+    }
+
+    /// Returns the project of the loaded page that holds `session_id`.
+    pub(crate) fn session_project_id(&self, session_id: &str) -> Option<i64> {
+        self.page_of_session(session_id)
+            .map(SessionPage::project_id)
+    }
+
+    /// Renews the lease of `project_id`'s loaded page at `now`.
+    pub(crate) fn renew_project_page(&mut self, project_id: i64, now: Instant) {
+        let page = if self.active.project_id == project_id {
+            Some(&mut self.active)
+        } else {
+            self.viewed.get_mut(&project_id)
+        };
+        if let Some(page) = page {
+            page.last_requested_at = Some(now);
+        }
+    }
+
+    /// Renews, at `now`, the lease of the loaded page that holds
+    /// `session_id`.
+    pub(crate) fn renew_session_page(&mut self, session_id: &str, now: Instant) {
+        if let Some(project_id) = self.session_project_id(session_id) {
+            self.renew_project_page(project_id, now);
+        }
+    }
+
+    /// Returns the viewed page of `project_id`, adding an empty one with no
+    /// lease when none is loaded, for a loader to fill.
+    pub(in crate::app::session) fn viewed_page_mut_or_insert(
+        &mut self,
+        project_id: i64,
+    ) -> &mut SessionPage {
+        self.viewed
+            .entry(project_id)
+            .or_insert_with(|| SessionPage::new(project_id, Vec::new(), 0, 0))
+    }
+
+    /// Moves the render transcripts out of `project_id`'s viewed page, as
+    /// [`Self::take_session_transcripts`] does for the active page.
+    pub(in crate::app::session) fn take_viewed_page_transcripts(
+        &mut self,
+        project_id: i64,
+    ) -> HashMap<SessionId, SessionTranscript> {
+        self.viewed
+            .get_mut(&project_id)
+            .map_or_default(SessionPage::take_session_transcripts)
+    }
+
+    /// Returns transcripts taken by [`Self::take_viewed_page_transcripts`]
+    /// to the viewed page of `project_id` after a failed reload.
+    pub(in crate::app::session) fn restore_viewed_page_transcripts(
+        &mut self,
+        project_id: i64,
+        transcripts: HashMap<SessionId, SessionTranscript>,
+    ) {
+        if let Some(page) = self.viewed.get_mut(&project_id) {
+            page.restore_session_transcripts(transcripts);
+        }
+    }
+
+    /// Drops every viewed page whose project `is_listed` rejects.
+    pub(crate) fn retain_viewed_pages(&mut self, is_listed: impl Fn(i64) -> bool) {
+        self.viewed.retain(|project_id, _| is_listed(*project_id));
+    }
+
+    /// Drops every viewed page whose lease is at least [`VIEWED_PAGE_IDLE`]
+    /// old at `now`.
+    pub(crate) fn evict_idle_viewed_pages(&mut self, now: Instant) {
+        self.viewed.retain(|_, page| page.is_leased_at(now));
+    }
+
+    /// Drops the least recently requested viewed pages until at most
+    /// [`MAX_VIEWED_PAGES`] remain.
+    pub(crate) fn evict_excess_viewed_pages(&mut self) {
+        let excess_count = self.viewed.len().saturating_sub(MAX_VIEWED_PAGES);
+        let mut pages_by_lease = self
+            .viewed
+            .iter()
+            .map(|(project_id, page)| (page.last_requested_at, *project_id))
+            .collect::<Vec<_>>();
+        pages_by_lease.sort_unstable();
+
+        for (_, project_id) in pages_by_lease.into_iter().take(excess_count) {
+            self.viewed.remove(&project_id);
+        }
+    }
+
+    /// Drops every viewed page.
+    pub(crate) fn clear_viewed_pages(&mut self) {
+        self.viewed.clear();
+    }
+
+    /// Makes `project_id`'s page the active one when the terminal switches
+    /// to that project, and returns whether the previous active page stayed
+    /// loaded as a viewed page.
+    ///
+    /// A viewed page of `project_id` is promoted with its sessions and
+    /// lease; otherwise the active page starts empty for the reload that
+    /// follows. The previous active page is demoted while its lease is live
+    /// at `now` and its archive window is on its first page, since a viewed
+    /// page keeps that window, and it drops its git statuses, which only the
+    /// active project's poll keeps current. Otherwise it is dropped.
+    /// Switching to the active project changes nothing.
+    pub(crate) fn switch_active_page(&mut self, project_id: i64, now: Instant) -> bool {
+        if self.active.project_id == project_id {
+            return false;
+        }
+
+        let next_page = self
+            .viewed
+            .remove(&project_id)
+            .unwrap_or_else(|| SessionPage::new(project_id, Vec::new(), 0, 0));
+        let mut previous_page = std::mem::replace(&mut self.active, next_page);
+        let is_demoted = previous_page.is_leased_at(now) && !previous_page.is_archive_expanded();
+        if is_demoted {
+            previous_page.session_git_statuses.clear();
+            self.viewed.insert(previous_page.project_id, previous_page);
+            self.evict_excess_viewed_pages();
+        }
+
+        is_demoted
     }
 
     /// Returns the active page's list position for one stable session
@@ -426,8 +592,8 @@ impl SessionState {
         follow_up_task.launched_session_id = launched_session_id;
     }
 
-    /// Replaces all cached session git-status snapshots with one fresh poll
-    /// result.
+    /// Replaces the active page's cached session git-status snapshots with
+    /// one fresh poll result of the active project.
     pub(crate) fn replace_session_git_statuses(
         &mut self,
         session_git_statuses: HashMap<SessionId, SessionGitStatus>,
@@ -435,8 +601,8 @@ impl SessionState {
         self.active.session_git_statuses = session_git_statuses;
     }
 
-    /// Replaces cached worktree-availability snapshots with one fresh reload
-    /// result.
+    /// Replaces the active page's cached worktree-availability snapshots
+    /// with one fresh reload result.
     pub(crate) fn replace_session_worktree_availability(
         &mut self,
         session_worktree_availability: HashMap<SessionId, bool>,
@@ -444,8 +610,8 @@ impl SessionState {
         self.active.session_worktree_availability = session_worktree_availability;
     }
 
-    /// Replaces cached detected session branch names with one fresh reload
-    /// result.
+    /// Replaces the active page's cached detected session branch names with
+    /// one fresh reload result.
     pub(crate) fn replace_session_branch_names(
         &mut self,
         session_branch_names: HashMap<SessionId, String>,
@@ -453,17 +619,45 @@ impl SessionState {
         self.active.session_branch_names = session_branch_names;
     }
 
-    /// Updates cached worktree availability for one session after a lifecycle
-    /// transition materializes or removes its worktree.
-    pub(crate) fn set_session_worktree_available(&mut self, session_id: &str, is_available: bool) {
-        self.active
+    /// Returns the cached detected branch name of one session, from the
+    /// loaded page that holds it.
+    pub(crate) fn session_branch_name(&self, session_id: &str) -> Option<&str> {
+        self.page_of_session(session_id)?
+            .session_branch_names
+            .get(session_id)
+            .map(String::as_str)
+    }
+
+    /// Returns whether one session's worktree is available, as the loaded
+    /// page that holds it caches it.
+    pub(crate) fn session_worktree_available(&self, session_id: &str) -> Option<bool> {
+        self.page_of_session(session_id)?
             .session_worktree_availability
+            .get(session_id)
+            .copied()
+    }
+
+    /// Updates cached worktree availability for one session after a lifecycle
+    /// transition materializes or removes its worktree, on the loaded page
+    /// that holds it, or on the active page for a session no page holds yet.
+    pub(crate) fn set_session_worktree_available(&mut self, session_id: &str, is_available: bool) {
+        // The active project never has a viewed page.
+        let page = self
+            .session_project_id(session_id)
+            .and_then(|project_id| self.viewed.get_mut(&project_id))
+            .unwrap_or(&mut self.active);
+        page.session_worktree_availability
             .insert(SessionId::from(session_id), is_available);
     }
 
-    /// Drops cached worktree availability for one removed session.
+    /// Drops cached worktree availability for one removed session from
+    /// every loaded page.
     pub(crate) fn remove_session_worktree_availability(&mut self, session_id: &str) {
-        self.active.session_worktree_availability.remove(session_id);
+        let (pages, _) = self.pages_and_runtime_mut();
+
+        for page in pages {
+            page.session_worktree_availability.remove(session_id);
+        }
     }
 
     /// Drops cached branch-name entries for sessions that are no longer active
@@ -584,18 +778,28 @@ impl SessionState {
         pages.find_map(|page| page.session_mut_for_id(session_id))
     }
 
-    /// Returns every loaded page, the active page first.
-    fn pages(&self) -> impl Iterator<Item = &SessionPage> {
-        std::iter::once(&self.active)
+    /// Returns the loaded page that holds `session_id`.
+    fn page_of_session(&self, session_id: &str) -> Option<&SessionPage> {
+        self.pages()
+            .find(|page| page.session_index_for_id(session_id).is_some())
     }
 
-    /// Returns mutable access to every loaded page, the active page first,
-    /// beside the live handles, so a snapshot can be synced from its handle
-    /// while both are borrowed.
+    /// Returns every loaded page, the active page first, then the viewed
+    /// pages in ascending project order.
+    fn pages(&self) -> impl Iterator<Item = &SessionPage> {
+        std::iter::once(&self.active).chain(self.viewed.values())
+    }
+
+    /// Returns mutable access to every loaded page, in the order of
+    /// [`Self::pages`], beside the live handles, so a snapshot can be synced
+    /// from its handle while both are borrowed.
     fn pages_and_runtime_mut(
         &mut self,
     ) -> (impl Iterator<Item = &mut SessionPage>, &SessionRuntimeState) {
-        (std::iter::once(&mut self.active), &self.runtime)
+        (
+            std::iter::once(&mut self.active).chain(self.viewed.values_mut()),
+            &self.runtime,
+        )
     }
 }
 
@@ -603,7 +807,8 @@ impl SessionState {
 /// archive window, the per-session caches derived for them, and the persisted
 /// metadata that tells a refresh whether the list changed.
 pub(crate) struct SessionPage {
-    /// Archive window retained until the active project changes.
+    /// Archive window retained until the active project changes. A viewed
+    /// page keeps the first archive page.
     pub(crate) archive_limit: usize,
     /// Whether the archive window has older rows available.
     pub(crate) has_more_archived_sessions: bool,
@@ -614,6 +819,9 @@ pub(crate) struct SessionPage {
     pub(super) updated_at_max: i64,
     /// Full archive total for the project, independent of pagination.
     archived_session_count: usize,
+    /// When a session-API request last named the project or one of its
+    /// sessions; `None` until one does.
+    last_requested_at: Option<Instant>,
     /// Project whose sessions the page holds.
     project_id: i64,
     /// Cached detected branch names keyed by session id.
@@ -690,13 +898,65 @@ impl SessionPage {
         &self.session_index_by_id
     }
 
-    /// Returns cached worktree availability keyed by session id.
-    pub(crate) fn session_worktree_availability(&self) -> &HashMap<SessionId, bool> {
-        &self.session_worktree_availability
+    /// Replaces cached worktree availability with one fresh load result.
+    pub(in crate::app::session) fn set_session_worktree_availability(
+        &mut self,
+        session_worktree_availability: HashMap<SessionId, bool>,
+    ) {
+        self.session_worktree_availability = session_worktree_availability;
+    }
+
+    /// Replaces cached detected branch names with one fresh load result.
+    pub(in crate::app::session) fn set_session_branch_names(
+        &mut self,
+        session_branch_names: HashMap<SessionId, String>,
+    ) {
+        self.session_branch_names = session_branch_names;
+    }
+
+    /// Replaces persisted session snapshots while retaining in-process
+    /// transient output for sessions that remain loaded.
+    ///
+    /// Database refreshes can observe intermediate workflow persistence, such
+    /// as a published upstream branch before its review-request URL is ready.
+    /// Carrying transient output across that refresh keeps active loaders
+    /// visible until their owning reducer resolves them.
+    pub(in crate::app::session) fn replace_sessions(&mut self, mut sessions: Vec<Session>) {
+        let transient_state_by_session_id: HashMap<SessionId, _> = self
+            .sessions
+            .iter()
+            .map(|session| {
+                (
+                    session.id.clone(),
+                    (session.status, session.transient_messages.clone()),
+                )
+            })
+            .collect();
+        for session in &mut sessions {
+            if let Some((previous_status, transient_messages)) =
+                transient_state_by_session_id.get(&session.id)
+            {
+                let preparation = session
+                    .transient_messages
+                    .get(TransientMessageSlot::WorkspacePreparation)
+                    .cloned();
+                session.transient_messages.clone_from(transient_messages);
+                session
+                    .transient_messages
+                    .retract(TransientMessageSlot::WorkspacePreparation);
+                if let Some(preparation) = preparation {
+                    session.transient_messages.upsert(preparation);
+                }
+                session.reconcile_status_transition(*previous_status);
+            }
+        }
+
+        self.session_index_by_id = Self::build_session_index_by_id(&sessions);
+        self.sessions = sessions;
     }
 
     /// Creates a page holding `sessions` of `project_id` on the first archive
-    /// page, counting the archived rows it holds.
+    /// page, counting the archived rows it holds, with no lease.
     fn new(project_id: i64, sessions: Vec<Session>, row_count: i64, updated_at_max: i64) -> Self {
         let archived_session_count = sessions
             .iter()
@@ -706,6 +966,7 @@ impl SessionPage {
             archive_limit: session_order::ARCHIVE_PAGE_SIZE,
             archived_session_count,
             has_more_archived_sessions: false,
+            last_requested_at: None,
             project_id,
             row_count,
             session_branch_names: HashMap::new(),
@@ -741,45 +1002,12 @@ impl SessionPage {
         self.sessions.get_mut(session_index)
     }
 
-    /// Replaces persisted session snapshots while retaining in-process
-    /// transient output for sessions that remain loaded.
-    ///
-    /// Database refreshes can observe intermediate workflow persistence, such
-    /// as a published upstream branch before its review-request URL is ready.
-    /// Carrying transient output across that refresh keeps active loaders
-    /// visible until their owning reducer resolves them.
-    fn replace_sessions(&mut self, mut sessions: Vec<Session>) {
-        let transient_state_by_session_id: HashMap<SessionId, _> = self
-            .sessions
-            .iter()
-            .map(|session| {
-                (
-                    session.id.clone(),
-                    (session.status, session.transient_messages.clone()),
-                )
-            })
-            .collect();
-        for session in &mut sessions {
-            if let Some((previous_status, transient_messages)) =
-                transient_state_by_session_id.get(&session.id)
-            {
-                let preparation = session
-                    .transient_messages
-                    .get(TransientMessageSlot::WorkspacePreparation)
-                    .cloned();
-                session.transient_messages.clone_from(transient_messages);
-                session
-                    .transient_messages
-                    .retract(TransientMessageSlot::WorkspacePreparation);
-                if let Some(preparation) = preparation {
-                    session.transient_messages.upsert(preparation);
-                }
-                session.reconcile_status_transition(*previous_status);
-            }
-        }
-
-        self.session_index_by_id = Self::build_session_index_by_id(&sessions);
-        self.sessions = sessions;
+    /// Returns whether the page's lease is younger than
+    /// [`VIEWED_PAGE_IDLE`] at `now`. A page never requested holds none.
+    fn is_leased_at(&self, now: Instant) -> bool {
+        self.last_requested_at.is_some_and(|requested_at| {
+            now.saturating_duration_since(requested_at) < VIEWED_PAGE_IDLE
+        })
     }
 
     /// Moves render transcripts out of the loaded snapshots, keyed by session

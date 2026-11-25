@@ -25,9 +25,10 @@ use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
 use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
 use crate::app::platform::PlatformUpdate;
+use crate::app::project::ProjectContext;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::{
-    SessionTaskService, StatusTransition, SyncSessionStartError, TurnAppliedState,
+    SessionPage, SessionTaskService, StatusTransition, SyncSessionStartError, TurnAppliedState,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::app::sync::{
@@ -1518,29 +1519,31 @@ impl App {
         }
     }
 
-    /// Applies one terminal sync result now or defers project-scoped
-    /// reconciliation until its project becomes active again.
+    /// Applies one terminal sync result now while a page of its project is
+    /// loaded, or defers project-scoped reconciliation until one loads.
     async fn apply_sync_main_completion(&mut self, mut completion: SyncMainCompletion) {
         if !self.is_latest_project_sync_operation(&completion.operation) {
             return;
         }
 
-        if self.projects.active_project_id() == completion.operation.project_id {
+        let project_id = completion.operation.project_id;
+        if self.sessions.state().page_for_project(project_id).is_some() {
             self.reconcile_project_sync_completion(&mut completion)
                 .await;
             self.set_project_sync_terminal_status(&completion);
         } else {
             self.set_project_sync_terminal_status(&completion);
             self.pending_project_sync_completions
-                .insert(completion.operation.project_id, completion);
+                .insert(project_id, completion);
         }
 
         self.resume_base_checkout_work().await;
     }
 
-    /// Reconciles a completed sync that was deferred across a project switch.
-    pub(super) async fn apply_pending_project_sync_completion(&mut self) {
-        let project_id = self.projects.active_project_id();
+    /// Reconciles a completed sync of `project_id` that was deferred while no
+    /// page of the project was loaded, once the project becomes active or a
+    /// session-API caller loads its page, then reloads the pages it changed.
+    pub(in crate::app) async fn apply_pending_project_sync_completion(&mut self, project_id: i64) {
         let Some(mut completion) = self.pending_project_sync_completions.remove(&project_id) else {
             return;
         };
@@ -1585,8 +1588,11 @@ impl App {
         }
 
         let default_branch = sync_main_outcome.default_branch.clone();
-        self.finalize_merged_sessions_after_main_sync(&default_branch)
-            .await;
+        self.finalize_merged_sessions_after_main_sync(
+            completion.operation.project_id,
+            &default_branch,
+        )
+        .await;
     }
 
     /// Replaces the matching running status with a compact terminal phase.
@@ -2242,7 +2248,8 @@ impl App {
     /// Returns the lookup root for one session's at-mention entries.
     ///
     /// Materialized sessions use their own worktree; unmaterialized drafts use
-    /// the project working directory.
+    /// the checkout of the project whose loaded page holds them, or the
+    /// active project's for a session no page holds.
     pub(crate) fn at_mention_lookup_root(&self, session_id: &str) -> PathBuf {
         let session_folder = self
             .sessions
@@ -2251,12 +2258,15 @@ impl App {
         let has_session_folder = session_folder
             .as_ref()
             .is_some_and(|folder| self.services.fs_client().is_dir(folder.clone()));
+        let project_root = self
+            .sessions
+            .state()
+            .session_project_id(session_id)
+            .and_then(|project_id| self.projects.context(project_id))
+            .map_or(self.working_dir(), ProjectContext::working_dir)
+            .to_path_buf();
 
-        at_mention_lookup_root(
-            self.working_dir().to_path_buf(),
-            session_folder,
-            has_session_folder,
-        )
+        at_mention_lookup_root(project_root, session_folder, has_session_folder)
     }
 
     /// Applies loaded entries to an active prompt, question, or diff-comment
@@ -2718,12 +2728,19 @@ impl App {
         (!warnings.is_empty()).then(|| warnings.join("\n"))
     }
 
-    /// Finalizes read-only merged sessions that reached the branch updated by
-    /// a successful user-triggered main sync.
-    async fn finalize_merged_sessions_after_main_sync(&mut self, default_branch: &str) {
+    /// Finalizes the read-only merged sessions on `project_id`'s loaded page
+    /// that reached the branch updated by a successful user-triggered sync of
+    /// that project.
+    async fn finalize_merged_sessions_after_main_sync(
+        &mut self,
+        project_id: i64,
+        default_branch: &str,
+    ) {
         let session_ids = self
             .sessions
-            .sessions()
+            .state()
+            .page_for_project(project_id)
+            .map_or_default(SessionPage::sessions)
             .iter()
             .filter(|session| {
                 self.sessions
