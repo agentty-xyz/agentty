@@ -223,6 +223,75 @@ pub enum SessionOperation {
     /// Sending a chat message with images through
     /// [`SessionBackend::send_message_with_images`].
     MessageImages,
+    /// Listing the host's projects through [`SessionBackend::list_projects`],
+    /// and serving a [`ProjectScope::Project`] to the methods that take a
+    /// [`ProjectScope`], such as [`SessionBackend::project_sessions`].
+    Projects,
+}
+
+/// Project that a request which takes a project is for.
+///
+/// The active project is the one the host's own frontend has open, read when
+/// the host serves the request, so a frontend that sends
+/// [`ProjectScope::Active`] follows the host when it switches projects. A
+/// host serves another project only when it supports
+/// [`SessionOperation::Projects`] and lists that project in
+/// [`SessionBackend::list_projects`].
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum ProjectScope {
+    /// The host's active project when it serves the request.
+    #[default]
+    Active,
+    /// The listed project with this identifier, whether or not it is
+    /// active.
+    Project(i64),
+}
+
+impl ProjectScope {
+    /// Refuses every scope but [`Self::Active`], for hosts that serve only
+    /// their active project.
+    fn require_active(self) -> Result<(), SessionError> {
+        match self {
+            Self::Active => Ok(()),
+            Self::Project(_) => Err(SessionError::Operation(
+                "Host serves only its active project".to_string(),
+            )),
+        }
+    }
+}
+
+/// One project a host lists, as its project switcher shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostProject {
+    /// Sessions of the project still in an active lifecycle state.
+    pub active_session_count: u32,
+    /// Identifier a [`ProjectScope::Project`] names the project by.
+    pub id: i64,
+    /// Whether the project is the host's active project.
+    pub is_active: bool,
+    /// Display name of the project.
+    pub name: String,
+}
+
+/// One project's session list and status.
+///
+/// A host that names the project in `project_id` read the list and the
+/// status together, so both describe that project even when the host
+/// switches projects meanwhile. Without `project_id`, they were read one
+/// after the other, and a switch between the two reads can pair one
+/// project's sessions with another project's status.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectSessions {
+    /// The project's listed sessions in the host's display order, with list
+    /// stats when the host provides them.
+    pub entries: Vec<SessionListEntry>,
+    /// Identifier of the project both the list and the status belong to;
+    /// `None` when the host does not say which project it is and did not
+    /// read them together.
+    pub project_id: Option<i64>,
+    /// The project's branch, distance from upstream, and latest sync;
+    /// `None` when the host does not report project status.
+    pub status: Option<HostProjectStatus>,
 }
 
 /// Settings to change on one session; `None` keeps a setting as it is.
@@ -295,10 +364,11 @@ pub struct HostContext {
     /// the terminal's `/model` offers them; each gives the model's id and
     /// name.
     pub models: Vec<AgentSelection>,
-    /// Identifier of the active project, the only one that accepts new
-    /// sessions.
+    /// Identifier of the project described, which new sessions requested
+    /// for it are created in: the active project unless the request named
+    /// another through [`ProjectScope::Project`].
     pub project_id: i64,
-    /// Display name of the active project.
+    /// Display name of the project described.
     pub project_name: String,
     /// Creation modes the host can serve now, in display order, each with
     /// the agent and model its new sessions start with.
@@ -320,7 +390,8 @@ pub struct HostSessionMode {
     pub speed_mode: SpeedMode,
 }
 
-/// The host's active project as a session list shows it.
+/// One of the host's projects, the active one unless a request named another,
+/// as a session list shows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostProjectStatus {
     /// Commits the branch is ahead of and behind its upstream, in that
@@ -330,13 +401,13 @@ pub struct HostProjectStatus {
     /// Branch the project's checkout is on, which new sessions start from;
     /// `None` when it has none, such as a detached `HEAD`.
     pub branch: Option<String>,
-    /// Display name of the active project.
+    /// Display name of the project.
     pub project_name: String,
     /// Latest explicit sync of this project, while the host still shows it.
     pub sync: Option<HostProjectSync>,
 }
 
-/// One explicit sync of the active project's branch with its upstream.
+/// One explicit sync of a project's branch with its upstream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostProjectSync {
     /// Branch the sync updates.
@@ -620,6 +691,16 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
+    /// Lists the projects the host serves frontends, in the order its
+    /// project switcher shows them: the active project and every project
+    /// the switcher offers. Hosts that serve only their active project
+    /// report it as an error.
+    async fn list_projects(&self) -> Result<Vec<HostProject>, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not list its projects".to_string(),
+        ))
+    }
+
     /// Describes the active project new sessions are created in. Older hosts
     /// may omit it.
     async fn host_context(&self) -> Result<HostContext, SessionError> {
@@ -628,12 +709,46 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
+    /// Describes `scope`'s project, which new sessions requested for it are
+    /// created in. Hosts that serve only their active project answer
+    /// [`ProjectScope::Active`] with [`Self::host_context`] and refuse every
+    /// other scope.
+    async fn host_context_for(&self, scope: ProjectScope) -> Result<HostContext, SessionError> {
+        scope.require_active()?;
+
+        self.host_context().await
+    }
+
     /// Reports the active project's branch, its distance from upstream, and
     /// its latest explicit sync. Older hosts may omit it.
     async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
         Err(SessionError::Operation(
             "Host does not report its project status".to_string(),
         ))
+    }
+
+    /// Lists `scope`'s sessions with the project's status in one call. A
+    /// host that reads both together names the project in
+    /// [`ProjectSessions::project_id`]. Hosts that serve only their active
+    /// project answer [`ProjectScope::Active`] with
+    /// [`Self::list_session_entries`] and then, when they support
+    /// [`SessionOperation::ProjectStatus`], [`Self::project_status`], without
+    /// naming the project, and refuse every other scope.
+    async fn project_sessions(&self, scope: ProjectScope) -> Result<ProjectSessions, SessionError> {
+        scope.require_active()?;
+
+        let entries = self.list_session_entries().await?;
+        let status = if self.supports(SessionOperation::ProjectStatus) {
+            Some(self.project_status().await?)
+        } else {
+            None
+        };
+
+        Ok(ProjectSessions {
+            entries,
+            project_id: None,
+            status,
+        })
     }
 
     /// Starts or queues a sync of the active project's branch with its
@@ -645,6 +760,16 @@ pub trait SessionBackend: Send + Sync {
         Err(SessionError::Operation(
             "Host does not support syncing its project".to_string(),
         ))
+    }
+
+    /// Starts or queues a sync of `scope`'s branch with its upstream, as
+    /// [`Self::sync_project`] does for the active project. Hosts that serve
+    /// only their active project answer [`ProjectScope::Active`] with
+    /// [`Self::sync_project`] and refuse every other scope.
+    async fn sync_project_for(&self, scope: ProjectScope) -> Result<(), SessionError> {
+        scope.require_active()?;
+
+        self.sync_project().await
     }
 
     /// Creates one session and returns its stable identifier.
@@ -693,6 +818,19 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
+    /// Lists the files and directories in `scope`'s checkout, directories
+    /// first. Hosts that serve only their active project answer
+    /// [`ProjectScope::Active`] with [`Self::list_project_files`] and refuse
+    /// every other scope.
+    async fn list_project_files_for(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<Vec<SessionFileEntry>, SessionError> {
+        scope.require_active()?;
+
+        self.list_project_files().await
+    }
+
     /// Lists the host's loaded sessions in its display order. Older hosts
     /// may omit listing support.
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
@@ -708,6 +846,17 @@ pub trait SessionBackend: Send + Sync {
         let summaries = self.list_sessions().await?;
 
         Ok(summaries.into_iter().map(SessionListEntry::from).collect())
+    }
+
+    /// Reports whether the host lists `session_id`: whether the session
+    /// appears in the session list of a project the host lists. Frontends
+    /// that may reach only listed sessions ask before acting on one. Hosts
+    /// that list only their active project answer whether
+    /// [`Self::list_sessions`] contains it.
+    async fn is_session_listed(&self, session_id: &SessionId) -> Result<bool, SessionError> {
+        let summaries = self.list_sessions().await?;
+
+        Ok(summaries.iter().any(|summary| &summary.id == session_id))
     }
 
     /// Sends one text message, starting, resuming, or queueing as appropriate.
@@ -1128,6 +1277,19 @@ impl SessionService {
         self.backend.supports(operation)
     }
 
+    /// Lists the projects the host serves frontends, in the order its
+    /// project switcher shows them. The listed projects are the host's
+    /// active project, the one its own frontend has open, and every other
+    /// project its switcher offers; a [`ProjectScope::Project`] reaches only
+    /// these.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not list its projects or cannot
+    /// load them.
+    pub async fn list_projects(&self) -> Result<Vec<HostProject>, SessionError> {
+        self.backend.list_projects().await
+    }
+
     /// Describes the active project new sessions are created in.
     ///
     /// # Errors
@@ -1135,6 +1297,18 @@ impl SessionService {
     /// cannot load its defaults.
     pub async fn host_context(&self) -> Result<HostContext, SessionError> {
         self.backend.host_context().await
+    }
+
+    /// Describes `scope`'s project, which new sessions requested for it are
+    /// created in. [`ProjectScope::Active`] means the host's active project
+    /// when the host serves the request.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not describe its project, does
+    /// not list the named project or serve other projects, or cannot load
+    /// the project's defaults.
+    pub async fn host_context_for(&self, scope: ProjectScope) -> Result<HostContext, SessionError> {
+        self.backend.host_context_for(scope).await
     }
 
     /// Reports the active project's branch, its distance from upstream, and
@@ -1146,6 +1320,23 @@ impl SessionService {
         self.backend.project_status().await
     }
 
+    /// Lists `scope`'s listed sessions in the host's display order, with
+    /// the project's status when the host reports it. Both describe the
+    /// same project when [`ProjectSessions::project_id`] names it.
+    /// [`ProjectScope::Active`] means the host's active project when the
+    /// host serves the request.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot list sessions or report the
+    /// project's status, or does not list the named project or serve other
+    /// projects.
+    pub async fn project_sessions(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<ProjectSessions, SessionError> {
+        self.backend.project_sessions(scope).await
+    }
+
     /// Starts or queues a sync of the active project's branch with its
     /// upstream. The host acknowledges admission; [`Self::project_status`]
     /// reports the progress and the outcome.
@@ -1155,6 +1346,19 @@ impl SessionService {
     /// while a merge runs, or does not support syncing its project.
     pub async fn sync_project(&self) -> Result<(), SessionError> {
         self.backend.sync_project().await
+    }
+
+    /// Starts or queues a sync of `scope`'s branch with its upstream. The
+    /// host acknowledges admission; [`Self::project_sessions`] reports the
+    /// progress and the outcome. [`ProjectScope::Active`] means the host's
+    /// active project when the host serves the request.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot start the sync now, does not
+    /// support syncing, or does not list the named project or serve other
+    /// projects.
+    pub async fn sync_project_for(&self, scope: ProjectScope) -> Result<(), SessionError> {
+        self.backend.sync_project_for(scope).await
     }
 
     /// Creates one session and returns its stable identifier.
@@ -1216,6 +1420,21 @@ impl SessionService {
         self.backend.list_project_files().await
     }
 
+    /// Lists the files and directories in `scope`'s checkout, directories
+    /// first. [`ProjectScope::Active`] means the host's active project when
+    /// the host serves the request.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not serve project file listings,
+    /// does not list the named project or serve other projects, or cannot
+    /// read the checkout.
+    pub async fn list_project_files_for(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<Vec<SessionFileEntry>, SessionError> {
+        self.backend.list_project_files_for(scope).await
+    }
+
     /// Lists the host's loaded sessions in its display order.
     ///
     /// # Errors
@@ -1231,6 +1450,18 @@ impl SessionService {
     /// Returns an error when the host cannot list sessions.
     pub async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
         self.backend.list_session_entries().await
+    }
+
+    /// Reports whether the host lists `session_id`. A session is listed
+    /// while it appears in the session list of a project the host lists, as
+    /// [`Self::project_sessions`] would return it; frontends that may reach
+    /// only listed sessions check this before acting on one.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot list sessions or resolve the
+    /// session's project.
+    pub async fn is_session_listed(&self, session_id: &SessionId) -> Result<bool, SessionError> {
+        self.backend.is_session_listed(session_id).await
     }
 
     /// Sends a text message to one session.
