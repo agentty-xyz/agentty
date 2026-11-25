@@ -191,7 +191,7 @@ async fn run_command_runs_one_command_as_a_turn_would_where_the_sandbox_is_unava
     let refused = run_command(&native, refusing, &repository, &command).await;
 
     // Assert
-    assert_eq!(run.outcome.exit_code, Some(3));
+    assert_eq!(run.outcome.exit.exit_code, Some(3));
     assert_eq!(run.outcome.stdout, "hook");
     assert_eq!(
         run.warning,

@@ -366,7 +366,7 @@ pub(crate) fn command_output(outcome: &CommandOutcome) -> String {
     .filter(|text| !text.trim().is_empty())
     .collect::<Vec<_>>()
     .join("\n");
-    if outcome.termination == CommandTermination::Deadline {
+    if outcome.exit.termination == CommandTermination::Deadline {
         output.push_str("\n[stopped at its deadline]");
     }
 

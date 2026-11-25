@@ -249,7 +249,7 @@ impl NativeHarnessConfig {
             .map_err(failure("Failed to run the session command"))?;
 
         Ok(SessionCommandOutput {
-            exit_code: run.outcome.exit_code,
+            exit_code: run.outcome.exit.exit_code,
             output: command_output(&run.outcome),
             sandbox: sandbox_state(run.warning.as_ref()),
         })

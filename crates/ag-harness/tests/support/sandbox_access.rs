@@ -669,7 +669,7 @@ async fn run_command_confines_one_host_command_like_a_turn_command() {
 
     // Assert
     let root = workspace.path();
-    assert_eq!(run.outcome.exit_code, Some(0), "{:?}", run.outcome);
+    assert_eq!(run.outcome.exit.exit_code, Some(0), "{:?}", run.outcome);
     assert_eq!(run.outcome.stdout, "confined");
     assert_eq!(run.warning, None);
     assert_eq!(
