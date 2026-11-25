@@ -2180,27 +2180,29 @@ impl App {
         self.drop_unlisted_viewed_pages();
     }
 
-    /// Publishes the current project/session sync context and requests an
-    /// immediate orchestrator refresh when the active project has a git
-    /// branch.
+    /// Publishes the current project/session sync contexts and requests an
+    /// immediate orchestrator refresh when the active project or a viewed
+    /// project has a git branch.
     pub(in crate::app) fn restart_git_status_task(&mut self) {
         self.publish_sync_context_for_refresh();
-        if self.projects.has_git_branch() {
+        if self.projects.has_polled_git_branch() {
             self.sync_handle.request_refresh();
         }
     }
 
-    /// Publishes a fresh sync context after reducer-applied session changes
-    /// that may affect polling targets.
+    /// Publishes fresh sync contexts, the active project's and the viewed
+    /// projects', after reducer-applied session changes that may affect
+    /// polling targets.
     pub(in crate::app) fn publish_sync_context(&self) {
         self.sync_handle.publish_context(Self::sync_context_for(
             &self.projects,
             &self.services,
             &self.sessions,
         ));
+        self.publish_viewed_sync_contexts();
     }
 
-    /// Publishes a fresh sync context and forces a new generation so in-flight
+    /// Publishes fresh sync contexts and forces new generations so in-flight
     /// status completions computed before the requested refresh are ignored.
     pub(in crate::app) fn publish_sync_context_for_refresh(&self) {
         self.sync_handle
@@ -2209,6 +2211,29 @@ impl App {
                 &self.services,
                 &self.sessions,
             ));
+        self.sync_handle
+            .publish_refresh_viewed_contexts(self.viewed_sync_contexts());
+    }
+
+    /// Publishes the git-status polling contexts of the viewed projects, so
+    /// polling follows exactly the viewed pages that are loaded.
+    pub(in crate::app) fn publish_viewed_sync_contexts(&self) {
+        self.sync_handle
+            .publish_viewed_contexts(self.viewed_sync_contexts());
+    }
+
+    /// Builds one git-status polling context per viewed page, in ascending
+    /// project order.
+    ///
+    /// Review requests stay polled for the active project only, so these
+    /// contexts carry no review-request targets.
+    pub(crate) fn viewed_sync_contexts(&self) -> Vec<sync::SyncContext> {
+        self.sessions
+            .state()
+            .viewed_project_ids()
+            .into_iter()
+            .filter_map(|project_id| self.viewed_polling_context(project_id))
+            .collect()
     }
 
     /// Builds the versioned sync context for the active project and session
@@ -2238,9 +2263,16 @@ impl App {
     pub(crate) fn session_git_status_targets(
         sessions: &SessionManager,
     ) -> Vec<sync::SessionGitStatusTarget> {
-        sessions
-            .state()
-            .sessions()
+        Self::page_git_status_targets(sessions, sessions.state().sessions())
+    }
+
+    /// Builds git-status polling targets for the active session branches
+    /// among `page_sessions`, one loaded page's sessions.
+    pub(in crate::app) fn page_git_status_targets(
+        sessions: &SessionManager,
+        page_sessions: &[crate::domain::session::Session],
+    ) -> Vec<sync::SessionGitStatusTarget> {
+        page_sessions
             .iter()
             .filter(|session| !matches!(session.status, Status::Canceled | Status::Done))
             .filter(|session| Self::session_has_git_status_target(sessions, session))

@@ -3,9 +3,10 @@
 //!
 //! A request that names a listed project loads that project's page in the
 //! turn that serves it, beside the active page, and renews its lease. Each
-//! page refreshes by its own fingerprint and is dropped once its lease goes
-//! idle, when more pages are held than the bound allows, when its project
-//! leaves the list, or when the last paired device disconnects. Automation
+//! page refreshes by its own fingerprint, its project's git status is polled
+//! while it is loaded, and it is dropped once its lease goes idle, when more
+//! pages are held than the bound allows, when its project leaves the list, or
+//! when the last paired device disconnects. Automation
 //! stays with the terminal's project: workflows that apply the active
 //! project's settings check the active page, and sessions on a viewed page
 //! take the paths that serve projects the terminal does not show. A
@@ -84,7 +85,7 @@ impl App {
             .state_mut()
             .renew_project_page(project_id, now);
         self.sessions.state_mut().evict_excess_viewed_pages();
-        self.forget_dropped_viewed_contexts();
+        self.follow_viewed_pages();
 
         Ok(())
     }
@@ -109,7 +110,8 @@ impl App {
 
     /// Reloads each viewed page whose stored fingerprint changed since it
     /// last loaded, detecting its project's branch again, and returns
-    /// whether any page reloaded.
+    /// whether any page reloaded. A reload hands the page's new polling
+    /// targets to the background poll.
     pub(crate) async fn refresh_viewed_pages(&mut self) -> bool {
         let mut is_refreshed = false;
         for project_id in self.sessions.state().viewed_project_ids() {
@@ -133,6 +135,9 @@ impl App {
 
             is_refreshed |= self.load_viewed_project_page(project_id).await.is_ok();
         }
+        if is_refreshed {
+            self.publish_viewed_sync_contexts();
+        }
 
         is_refreshed
     }
@@ -140,7 +145,7 @@ impl App {
     /// Drops the viewed pages whose lease is idle at `now`.
     pub(crate) fn evict_idle_viewed_pages(&mut self, now: std::time::Instant) {
         self.sessions.state_mut().evict_idle_viewed_pages(now);
-        self.forget_dropped_viewed_contexts();
+        self.follow_viewed_pages();
     }
 
     /// Drops the viewed pages of projects the host no longer lists.
@@ -149,13 +154,13 @@ impl App {
         self.sessions
             .state_mut()
             .retain_viewed_pages(|project_id| projects.is_listed(project_id));
-        self.forget_dropped_viewed_contexts();
+        self.follow_viewed_pages();
     }
 
     /// Drops every viewed page, as when the last paired device disconnects.
     pub(crate) fn clear_viewed_pages(&mut self) {
         self.sessions.state_mut().clear_viewed_pages();
-        self.forget_dropped_viewed_contexts();
+        self.follow_viewed_pages();
     }
 
     /// Starts a sync of the viewed project `project_id`, whose page the
@@ -204,6 +209,35 @@ impl App {
             .git_client()
             .detect_git_info(working_dir)
             .await
+    }
+
+    /// Builds the git-status polling context of the viewed project
+    /// `project_id` from its context and viewed page: its checkout, the
+    /// branch detected when the page loaded, and the page's sessions, with
+    /// no review-request targets.
+    pub(in crate::app) fn viewed_polling_context(
+        &self,
+        project_id: i64,
+    ) -> Option<sync::SyncContext> {
+        let context = self.projects.context(project_id)?;
+        let page = self.sessions.state().viewed_page(project_id)?;
+
+        Some(sync::SyncContext {
+            run_client: self.services.run_client(),
+            generation: 0,
+            fs_client: self.services.fs_client(),
+            git_client: self.services.git_client(),
+            project_branch_name: context.git_branch().map(str::to_string),
+            project_id,
+            project_name: context.name().to_string(),
+            review_request_client: self.services.review_request_client(),
+            review_request_sync_targets: Vec::new(),
+            session_git_status_targets: Self::page_git_status_targets(
+                &self.sessions,
+                page.sessions(),
+            ),
+            working_dir: context.working_dir().to_path_buf(),
+        })
     }
 
     /// Adds the stored focused reviews of `project_id`'s sessions to the
@@ -259,35 +293,27 @@ impl App {
         Ok(())
     }
 
-    /// Builds the context of one sync of the viewed project `project_id`
-    /// from its viewed page and context: its checkout, the branch checked
-    /// out there now, and its sessions' review requests. Unlike the active
-    /// project's context, it is never published for background polling, so
-    /// it holds no git-status targets.
+    /// Builds the context of one sync of the viewed project `project_id`:
+    /// its polling context with the branch checked out there now instead of
+    /// the branch detected when its page loaded, and its sessions' review
+    /// requests, which the background poll leaves to the active project.
     async fn viewed_project_sync_context(&self, project_id: i64) -> Option<sync::SyncContext> {
         let project_branch_name = self.detect_viewed_project_branch(project_id).await;
-        let context = self.projects.context(project_id)?;
         let page = self.sessions.state().viewed_page(project_id)?;
 
         Some(sync::SyncContext {
-            run_client: self.services.run_client(),
-            generation: 0,
-            fs_client: self.services.fs_client(),
-            git_client: self.services.git_client(),
             project_branch_name,
-            project_id,
-            project_name: context.name().to_string(),
-            review_request_client: self.services.review_request_client(),
             review_request_sync_targets: Self::page_review_request_sync_targets(page),
-            session_git_status_targets: Vec::new(),
-            working_dir: context.working_dir().to_path_buf(),
+            ..self.viewed_polling_context(project_id)?
         })
     }
 
-    /// Keeps the viewed project contexts in step with the viewed pages.
-    fn forget_dropped_viewed_contexts(&mut self) {
+    /// Keeps the viewed project contexts, and the background poll of viewed
+    /// projects' git status, in step with the viewed pages.
+    fn follow_viewed_pages(&mut self) {
         let viewed_project_ids = self.sessions.state().viewed_project_ids();
         self.projects.retain_viewed_contexts(&viewed_project_ids);
+        self.publish_viewed_sync_contexts();
     }
 }
 

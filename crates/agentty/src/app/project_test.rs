@@ -141,7 +141,7 @@ fn test_update_active_project_context_replaces_upstream_reference() {
 fn update_active_project_context_drops_previous_project_git_status() {
     // Arrange
     let mut manager = project_manager_fixture();
-    manager.set_git_status(Some((2, 1)));
+    manager.set_git_status(1, Some((2, 1)));
     let reported_status = manager.render_parts().git_status;
 
     // Act
@@ -190,7 +190,7 @@ fn listed_projects_are_the_active_one_and_the_switchers_rows() {
 fn viewed_contexts_describe_projects_without_making_them_active() {
     // Arrange
     let mut manager = project_manager_fixture();
-    manager.set_git_status(Some((3, 1)));
+    manager.set_git_status(1, Some((3, 1)));
     let mut viewed_context = ProjectContext::new(
         2,
         "service".to_string(),
@@ -222,7 +222,7 @@ fn viewed_contexts_describe_projects_without_making_them_active() {
     let promoted_branch = manager.context(2).and_then(ProjectContext::git_branch);
 
     // Assert
-    // A viewed context reports no counts; only the active fetch does.
+    // A new viewed context reports no counts until its project's poll does.
     assert_eq!(
         viewed,
         Some((
@@ -240,7 +240,8 @@ fn viewed_contexts_describe_projects_without_making_them_active() {
     assert_eq!(promoted_branch, Some("main"));
     assert!(manager.context(1).is_none());
     assert!(manager.context(9).is_none());
-    // A demoted context keeps only what a viewed project reports.
+    // A demoted context drops the counts of its active role until its
+    // viewed poll reports.
     manager.set_viewed_context(previous);
     let demoted = manager.context(1).expect("demoted context");
     assert_eq!(
@@ -248,6 +249,70 @@ fn viewed_contexts_describe_projects_without_making_them_active() {
         (None, None)
     );
     assert_eq!(demoted.git_branch(), Some("main"));
+}
+
+#[test]
+fn viewed_counts_follow_their_poll_and_survive_a_reload_on_the_same_branch() {
+    // Arrange
+    let mut manager = project_manager_fixture();
+    let viewed_context = |git_branch: &str| {
+        ProjectContext::new(
+            2,
+            "service".to_string(),
+            Some(git_branch.to_string()),
+            None,
+            PathBuf::from("/tmp/service"),
+        )
+    };
+    manager.set_viewed_context(viewed_context("main"));
+    let viewed_status =
+        |manager: &ProjectManager| manager.context(2).and_then(ProjectContext::git_status);
+
+    // Act
+    manager.set_git_status(2, Some((1, 4)));
+    manager.set_git_status(9, Some((7, 7)));
+    let polled = viewed_status(&manager);
+    manager.set_viewed_context(viewed_context("main"));
+    let reloaded = viewed_status(&manager);
+    manager.set_viewed_context(viewed_context("develop"));
+    let switched_branch = viewed_status(&manager);
+
+    // Assert
+    assert_eq!(polled, Some((1, 4)));
+    assert_eq!(reloaded, Some((1, 4)));
+    // Counts of another branch would describe the wrong branch.
+    assert_eq!(switched_branch, None);
+    // A project with no context gains none.
+    assert!(manager.context(9).is_none());
+    assert_eq!(manager.render_parts().git_status, None);
+}
+
+#[test]
+fn the_poll_has_a_branch_to_follow_while_any_held_project_has_one() {
+    // Arrange
+    let mut manager = project_manager_fixture();
+    manager.update_active_project_context(
+        5,
+        "detached".to_string(),
+        None,
+        None,
+        PathBuf::from("/tmp/detached"),
+    );
+    let without_viewed = manager.has_polled_git_branch();
+
+    // Act
+    manager.set_viewed_context(ProjectContext::new(
+        2,
+        "service".to_string(),
+        Some("main".to_string()),
+        None,
+        PathBuf::from("/tmp/service"),
+    ));
+    let with_viewed = manager.has_polled_git_branch();
+
+    // Assert
+    assert!(!without_viewed);
+    assert!(with_viewed);
 }
 
 #[test]

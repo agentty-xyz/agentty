@@ -13,14 +13,14 @@ use mockall::Sequence;
 use opentelemetry::global;
 use opentelemetry::trace::SpanId;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 use super::{
     BaseComparisonCache, CommitPair, FETCH_MAX_BACKOFF_PASSES, FailureBackoff, ProjectSyncContext,
     ProjectSyncPhase, ProjectSyncStatus, REVIEW_SYNC_MAX_BACKOFF_PASSES, ReviewPass,
     ReviewRequestPassUpdate, ReviewRequestSyncTarget, SessionGitStatusTarget, SyncContext,
-    SyncHandle, SyncMainCompletion, SyncMainFinished, SyncMainRequest, SyncMainTasks,
-    SyncOrchestrator, review_request_repo_url, sync_review_request_status,
+    SyncHandle, SyncMainCompletion, SyncMainFinished, SyncMainRequest, SyncOrchestrator,
+    polling_versions, review_request_repo_url, sync_review_request_status,
     sync_task_result_from_summary,
 };
 use crate::app::core::SyncReviewRequestTaskResult;
@@ -28,7 +28,7 @@ use crate::app::review_watch_config::ReviewWatchConfig;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppEvent, session};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::ReviewRequestState;
+use crate::domain::session::{ReviewRequestState, SessionId};
 use crate::infra::fs::MockFsClient;
 use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
 
@@ -186,26 +186,27 @@ fn assert_phase(span: &SpanData, parent: &SpanData, outcome: &str, expected: &[K
     }
 }
 
-/// Builds an orchestrator polling contexts from `context_rx`, returning it
-/// with the app event receiver.
+/// Builds an orchestrator polling the active context from `context_rx` and
+/// no viewed project, returning it with the app event receiver.
 fn orchestrator_for(
     context_rx: watch::Receiver<SyncContext>,
 ) -> (SyncOrchestrator, mpsc::UnboundedReceiver<AppEvent>) {
+    let (_viewed_context_tx, viewed_context_rx) = watch::channel(Vec::new());
+
+    orchestrator_with_viewed(context_rx, viewed_context_rx)
+}
+
+/// Builds an orchestrator polling the active context from `context_rx` and
+/// the viewed contexts from `viewed_context_rx`, returning it with the app
+/// event receiver.
+fn orchestrator_with_viewed(
+    context_rx: watch::Receiver<SyncContext>,
+    viewed_context_rx: watch::Receiver<Vec<SyncContext>>,
+) -> (SyncOrchestrator, mpsc::UnboundedReceiver<AppEvent>) {
     let (app_event_tx, app_event_rx) = mpsc::unbounded_channel();
     let (_command_tx, command_rx) = mpsc::unbounded_channel();
-    let orchestrator = SyncOrchestrator {
-        app_event_tx,
-        base_comparison_cache: BaseComparisonCache::default(),
-        command_rx,
-        context_rx,
-        fetch_failures: HashMap::new(),
-        fetch_pass_index: 0,
-        review_pass_index: 0,
-        review_sync_cadences: HashMap::new(),
-        review_sync_failures: HashMap::new(),
-        sync_main_tasks: SyncMainTasks::default(),
-        tick_index: 0,
-    };
+    let orchestrator =
+        SyncOrchestrator::new(app_event_tx, command_rx, context_rx, viewed_context_rx);
 
     (orchestrator, app_event_rx)
 }
@@ -739,22 +740,8 @@ async fn run_sync_main_traces_its_phases_beneath_one_failed_root() {
 fn emit_review_request_pass_updates_preserves_batch_routing() {
     // Arrange
     let context = sync_context_fixture(7, Vec::new());
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let (_context_tx, context_rx) = watch::channel(context.clone());
-    let (_command_tx, command_rx) = mpsc::unbounded_channel();
-    let orchestrator = SyncOrchestrator {
-        app_event_tx,
-        base_comparison_cache: BaseComparisonCache::default(),
-        command_rx,
-        context_rx,
-        fetch_failures: HashMap::new(),
-        fetch_pass_index: 0,
-        review_pass_index: 0,
-        review_sync_cadences: HashMap::new(),
-        review_sync_failures: HashMap::new(),
-        sync_main_tasks: SyncMainTasks::default(),
-        tick_index: 0,
-    };
+    let (orchestrator, mut app_event_rx) = orchestrator_for(context_rx);
     let updates = vec![
         ReviewRequestPassUpdate {
             result: Ok(SyncReviewRequestTaskResult {
@@ -806,7 +793,7 @@ fn publish_context_bumps_generation_only_on_changed_inputs() {
     let (command_tx, _command_rx) = mpsc::unbounded_channel();
     let initial_context = sync_context_fixture(0, Vec::new());
     let (context_tx, context_rx) = watch::channel(initial_context);
-    let sync_handle = SyncHandle::new(command_tx, context_tx);
+    let (sync_handle, _viewed_context_rx) = SyncHandle::new(command_tx, context_tx);
 
     // Act
     sync_handle.publish_context(sync_context_fixture(0, Vec::new()));
@@ -950,22 +937,8 @@ fn failure_backoff_skipped_passes_grows_exponentially_and_caps() {
 /// at the threshold instead of retrying silently at full rate.
 async fn record_review_sync_outcome_backs_off_and_notifies_after_threshold() {
     // Arrange
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
-    let (_command_tx, command_rx) = mpsc::unbounded_channel();
-    let mut orchestrator = SyncOrchestrator {
-        app_event_tx,
-        base_comparison_cache: BaseComparisonCache::default(),
-        command_rx,
-        context_rx,
-        fetch_failures: HashMap::new(),
-        fetch_pass_index: 0,
-        review_pass_index: 0,
-        review_sync_cadences: HashMap::new(),
-        review_sync_failures: HashMap::new(),
-        sync_main_tasks: SyncMainTasks::default(),
-        tick_index: 0,
-    };
+    let (mut orchestrator, mut app_event_rx) = orchestrator_for(context_rx);
     let target = review_request_sync_target("session-1", None);
     let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
 
@@ -1000,22 +973,8 @@ async fn record_review_sync_outcome_backs_off_and_notifies_after_threshold() {
 /// normal cadence again.
 async fn record_review_sync_outcome_success_resets_backoff() {
     // Arrange
-    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
-    let (_command_tx, command_rx) = mpsc::unbounded_channel();
-    let mut orchestrator = SyncOrchestrator {
-        app_event_tx,
-        base_comparison_cache: BaseComparisonCache::default(),
-        command_rx,
-        context_rx,
-        fetch_failures: HashMap::new(),
-        fetch_pass_index: 0,
-        review_pass_index: 0,
-        review_sync_cadences: HashMap::new(),
-        review_sync_failures: HashMap::new(),
-        sync_main_tasks: SyncMainTasks::default(),
-        tick_index: 0,
-    };
+    let (mut orchestrator, _app_event_rx) = orchestrator_for(context_rx);
     let target = review_request_sync_target("session-1", None);
     let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
     let success = Ok(SyncReviewRequestTaskResult {
@@ -1934,21 +1893,7 @@ async fn collect_review_request_pass_updates_skips_backed_off_and_stale_targets(
     let targets = vec![review_request_sync_target("session-1", None)];
     let (context_tx, context_rx) = watch::channel(sync_context_fixture(0, targets.clone()));
     let context_tx = Arc::new(context_tx);
-    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-    let (_command_tx, command_rx) = mpsc::unbounded_channel();
-    let mut orchestrator = SyncOrchestrator {
-        app_event_tx,
-        base_comparison_cache: BaseComparisonCache::default(),
-        command_rx,
-        context_rx,
-        fetch_failures: HashMap::new(),
-        fetch_pass_index: 0,
-        review_pass_index: 0,
-        review_sync_cadences: HashMap::new(),
-        review_sync_failures: HashMap::new(),
-        sync_main_tasks: SyncMainTasks::default(),
-        tick_index: 0,
-    };
+    let (mut orchestrator, _app_event_rx) = orchestrator_for(context_rx);
     let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
     orchestrator.record_review_sync_outcome(&targets[0], &failure, 0);
     orchestrator.record_review_sync_outcome(&targets[0], &failure, 1);
@@ -2310,22 +2255,8 @@ async fn collect_review_request_pass_updates_loads_configuration_only_for_watche
         ..sync_context_fixture(0, vec![watched_target])
     };
     let unwatched_context = sync_context_fixture(0, Vec::new());
-    let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-    let (_command_tx, command_rx) = mpsc::unbounded_channel();
     let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
-    let mut orchestrator = SyncOrchestrator {
-        app_event_tx,
-        base_comparison_cache: BaseComparisonCache::default(),
-        command_rx,
-        context_rx,
-        fetch_failures: HashMap::new(),
-        fetch_pass_index: 0,
-        review_pass_index: 0,
-        review_sync_cadences: HashMap::new(),
-        review_sync_failures: HashMap::new(),
-        sync_main_tasks: SyncMainTasks::default(),
-        tick_index: 0,
-    };
+    let (mut orchestrator, _app_event_rx) = orchestrator_for(context_rx);
 
     // Act
     let unwatched_updates = orchestrator
@@ -2374,4 +2305,674 @@ fn same_polling_inputs_detects_watch_change() {
 
     // Assert
     assert!(!same_inputs);
+}
+
+/// Polled status of each fixture session of a polled project: two commits
+/// ahead of `main` and one ahead of its remote branch.
+const POLLED_SESSION_STATUS: SessionGitStatus = SessionGitStatus {
+    base_status: Some((2, 0)),
+    has_merge_conflict: Some(false),
+    remote_status: Some((1, 0)),
+};
+
+/// One git status event as its project, generation, project-branch counts,
+/// and session statuses.
+type ReceivedGitStatus = (
+    i64,
+    u64,
+    Option<(u32, u32)>,
+    HashMap<SessionId, SessionGitStatus>,
+);
+
+/// Builds the git-status polling context of viewed project `project_id` at
+/// `generation`, which polls session `viewed<project_id>` through
+/// `git_client`.
+fn viewed_sync_context(project_id: i64, generation: u64, git_client: MockGitClient) -> SyncContext {
+    SyncContext {
+        git_client: Arc::new(git_client),
+        project_id,
+        project_name: format!("project{project_id}"),
+        session_git_status_targets: vec![session_git_status_target(&format!("viewed{project_id}"))],
+        working_dir: PathBuf::from(format!("/tmp/project{project_id}")),
+        ..sync_context_fixture(generation, Vec::new())
+    }
+}
+
+/// Builds a Git client for one pass of project `project_id` that fetches,
+/// reports `upstream_status` for `main`, and finds the project's session at
+/// [`POLLED_SESSION_STATUS`].
+fn polled_git_client(project_id: i64, upstream_status: (u32, u32)) -> MockGitClient {
+    let mut mock_git_client = repo_root_git_client(1);
+    mock_git_client
+        .expect_fetch_remote()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let session_branch = format!("wt/viewed{project_id}");
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .once()
+        .returning(move |_| {
+            let branch_tracking_statuses = HashMap::from([
+                tracked_branch("main", "main-tip", Some(upstream_status)),
+                tracked_branch(&session_branch, "session-tip", Some((1, 0))),
+            ]);
+
+            Box::pin(async move { Ok(branch_tracking_statuses) })
+        });
+    mock_git_client
+        .expect_get_ref_ahead_behind()
+        .once()
+        .returning(|_, _, _| Box::pin(async { Ok((2, 0)) }));
+
+    mock_git_client
+}
+
+/// Builds a Git client for `passes` passes, `fetches` of which fetch
+/// successfully, that finds no branches. With no fetches it expects none,
+/// so a test can add its own.
+fn quiet_git_client(passes: usize, fetches: usize) -> MockGitClient {
+    let mut mock_git_client = repo_root_git_client(passes);
+    if fetches > 0 {
+        mock_git_client
+            .expect_fetch_remote()
+            .times(fetches)
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .times(passes)
+        .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+
+    mock_git_client
+}
+
+/// Builds a Git client for `passes` passes that finds no repository root
+/// above the working directory, for a test to add the rest.
+fn repo_root_git_client(passes: usize) -> MockGitClient {
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .times(passes)
+        .returning(|_| Box::pin(async { None }));
+
+    mock_git_client
+}
+
+/// Waits for the next git status event of `polled_project_id`, returning
+/// its generation and project-branch counts.
+async fn next_git_status_of(
+    app_event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
+    polled_project_id: i64,
+) -> (u64, Option<(u32, u32)>) {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), app_event_rx.recv())
+            .await
+            .expect("a git status should arrive")
+            .expect("the orchestrator holds the event sender");
+        if let AppEvent::GitStatusUpdated {
+            generation,
+            project_id,
+            status,
+            ..
+        } = event
+            && project_id == polled_project_id
+        {
+            return (generation, status);
+        }
+    }
+}
+
+/// Drains every git status event `app_event_rx` holds, ordered by project
+/// and generation.
+fn received_git_statuses(
+    app_event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
+) -> Vec<ReceivedGitStatus> {
+    let mut statuses = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::GitStatusUpdated {
+            generation,
+            project_id,
+            session_statuses,
+            status,
+        } = event
+        {
+            statuses.push((project_id, generation, status, session_statuses));
+        }
+    }
+    statuses.sort_by_key(|(project_id, generation, ..)| (*project_id, *generation));
+
+    statuses
+}
+
+/// Waits for the next viewed pass to finish and hands it back to
+/// `orchestrator`.
+async fn finish_next_viewed_pass(orchestrator: &mut SyncOrchestrator) {
+    let finished = tokio::time::timeout(
+        Duration::from_secs(5),
+        orchestrator.viewed_passes.finished_rx.recv(),
+    )
+    .await
+    .expect("a viewed pass should finish")
+    .expect("the orchestrator holds the finished sender");
+
+    orchestrator.finish_viewed_pass(finished).await;
+}
+
+#[tokio::test]
+/// Each refresh pass polls every viewed project with a git branch in its
+/// own task beside the active project, and each snapshot carries its
+/// project and its own context's generation; the active project is polled
+/// by its own pass only.
+async fn refresh_pass_polls_viewed_projects_beside_the_active_one_with_their_own_generations() {
+    // Arrange
+    let active_context = SyncContext {
+        git_client: Arc::new(polled_git_client(1, (0, 1))),
+        session_git_status_targets: vec![session_git_status_target("viewed1")],
+        ..sync_context_fixture(1, Vec::new())
+    };
+    let (_context_tx, context_rx) = watch::channel(active_context);
+    let branchless_context = SyncContext {
+        project_branch_name: None,
+        ..viewed_sync_context(4, 7, MockGitClient::new())
+    };
+    let (viewed_context_tx, viewed_context_rx) = watch::channel(vec![
+        viewed_sync_context(1, 9, MockGitClient::new()),
+        viewed_sync_context(2, 5, polled_git_client(2, (3, 0))),
+        viewed_sync_context(3, 6, polled_git_client(3, (0, 4))),
+        branchless_context,
+    ]);
+    let (mut orchestrator, mut app_event_rx) =
+        orchestrator_with_viewed(context_rx, viewed_context_rx);
+
+    // Act
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+    for _ in 0..2 {
+        finish_next_viewed_pass(&mut orchestrator).await;
+    }
+    let statuses = received_git_statuses(&mut app_event_rx);
+    viewed_context_tx.send_replace(vec![viewed_sync_context(2, 5, MockGitClient::new())]);
+    orchestrator.start_new_viewed_passes();
+
+    // Assert
+    let session_statuses = |project_id: i64| {
+        HashMap::from([(
+            SessionId::from(format!("viewed{project_id}")),
+            POLLED_SESSION_STATUS,
+        )])
+    };
+    assert_eq!(
+        statuses,
+        vec![
+            (1, 1, Some((0, 1)), session_statuses(1)),
+            (2, 5, Some((3, 0)), session_statuses(2)),
+            (3, 6, Some((0, 4)), session_statuses(3)),
+        ]
+    );
+    // A project polled before waits for the next pass, and one no longer
+    // viewed is forgotten.
+    assert_eq!(
+        orchestrator
+            .viewed_passes
+            .projects
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert!(!orchestrator.viewed_passes.is_running(2));
+}
+
+#[tokio::test]
+/// A viewed pass whose inputs change after it emitted, but before the
+/// orchestrator hears it finished, still runs again from the new inputs.
+async fn viewed_pass_superseded_after_it_emitted_reruns_once_it_reports_back() {
+    // Arrange
+    let (_context_tx, context_rx) = watch::channel(SyncContext {
+        project_branch_name: None,
+        ..sync_context_fixture(0, Vec::new())
+    });
+    let mut mock_git_client = quiet_git_client(2, 0);
+    mock_git_client
+        .expect_fetch_remote()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let (viewed_context_tx, viewed_context_rx) = watch::channel(vec![SyncContext {
+        session_git_status_targets: Vec::new(),
+        ..viewed_sync_context(2, 5, mock_git_client)
+    }]);
+    let (mut orchestrator, mut app_event_rx) =
+        orchestrator_with_viewed(context_rx, viewed_context_rx);
+
+    // Act
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+    let finished = tokio::time::timeout(
+        Duration::from_secs(5),
+        orchestrator.viewed_passes.finished_rx.recv(),
+    )
+    .await
+    .expect("a viewed pass should finish")
+    .expect("the orchestrator holds the finished sender");
+    viewed_context_tx.send_modify(|contexts| contexts[0].generation = 6);
+    orchestrator.finish_viewed_pass(finished).await;
+    finish_next_viewed_pass(&mut orchestrator).await;
+
+    // Assert
+    assert_eq!(
+        received_git_statuses(&mut app_event_rx),
+        vec![(2, 5, None, HashMap::new()), (2, 6, None, HashMap::new())]
+    );
+}
+
+#[tokio::test]
+/// A requested refresh rereads each viewed project's branches without
+/// fetching its remote, so viewed projects are fetched once per tick only.
+async fn requested_refresh_reads_viewed_projects_without_fetching_them() {
+    // Arrange
+    let (_context_tx, context_rx) = watch::channel(SyncContext {
+        project_branch_name: None,
+        ..sync_context_fixture(0, Vec::new())
+    });
+    let (_viewed_context_tx, viewed_context_rx) = watch::channel(vec![SyncContext {
+        session_git_status_targets: Vec::new(),
+        ..viewed_sync_context(2, 5, quiet_git_client(1, 0))
+    }]);
+    let (mut orchestrator, mut app_event_rx) =
+        orchestrator_with_viewed(context_rx, viewed_context_rx);
+
+    // Act
+    orchestrator.run_refresh_pass(ReviewPass::Forced).await;
+    finish_next_viewed_pass(&mut orchestrator).await;
+
+    // Assert
+    assert_eq!(
+        received_git_statuses(&mut app_event_rx),
+        vec![(2, 5, None, HashMap::new())]
+    );
+}
+
+#[tokio::test]
+/// A viewed pass that newer polling inputs superseded emits nothing and
+/// runs again at once from them, comparing against the refs it just
+/// fetched.
+async fn superseded_viewed_pass_reruns_from_the_new_inputs_without_fetching_again() {
+    // Arrange
+    let (_context_tx, context_rx) = watch::channel(SyncContext {
+        project_branch_name: None,
+        ..sync_context_fixture(0, Vec::new())
+    });
+    let (viewed_context_tx, viewed_context_rx) = watch::channel(Vec::<SyncContext>::new());
+    let viewed_context_tx = Arc::new(viewed_context_tx);
+    let mut mock_git_client = repo_root_git_client(2);
+    mock_git_client
+        .expect_fetch_remote()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let mut branch_reads = 0_u8;
+    mock_git_client
+        .expect_branch_tracking_statuses()
+        .times(2)
+        .returning({
+            let viewed_context_tx = Arc::clone(&viewed_context_tx);
+            move |_| {
+                branch_reads = branch_reads.saturating_add(1);
+                let upstream_status = if branch_reads == 1 {
+                    viewed_context_tx.send_modify(|contexts| contexts[0].generation = 6);
+
+                    (9, 9)
+                } else {
+                    (1, 1)
+                };
+
+                Box::pin(async move {
+                    Ok(HashMap::from([tracked_branch(
+                        "main",
+                        "main-tip",
+                        Some(upstream_status),
+                    )]))
+                })
+            }
+        });
+    viewed_context_tx.send_replace(vec![SyncContext {
+        session_git_status_targets: Vec::new(),
+        ..viewed_sync_context(2, 5, mock_git_client)
+    }]);
+    let (mut orchestrator, mut app_event_rx) =
+        orchestrator_with_viewed(context_rx, viewed_context_rx);
+
+    // Act
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+    finish_next_viewed_pass(&mut orchestrator).await;
+    finish_next_viewed_pass(&mut orchestrator).await;
+
+    // Assert
+    assert_eq!(
+        received_git_statuses(&mut app_event_rx),
+        vec![(2, 6, Some((1, 1)), HashMap::new())]
+    );
+    assert!(!orchestrator.viewed_passes.is_running(2));
+}
+
+#[tokio::test]
+/// A viewed project's fetch that hangs and then fails neither holds up the
+/// active project's passes nor touches the active project's backoff, and
+/// backs off its own project's later fetches.
+async fn a_slow_failing_viewed_fetch_neither_delays_the_active_pass_nor_shares_its_backoff() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = install_span_exporter();
+    let (_context_tx, context_rx) = watch::channel(SyncContext {
+        git_client: Arc::new(quiet_git_client(3, 3)),
+        ..sync_context_fixture(1, Vec::new())
+    });
+    let fetch_released = Arc::new(Notify::new());
+    let mut viewed_git_client = quiet_git_client(3, 0);
+    let mut fetch_attempts = 0_u8;
+    viewed_git_client.expect_fetch_remote().times(2).returning({
+        let fetch_released = Arc::clone(&fetch_released);
+        move |_| {
+            fetch_attempts = fetch_attempts.saturating_add(1);
+            let fetch_released = (fetch_attempts == 1).then(|| Arc::clone(&fetch_released));
+
+            Box::pin(async move {
+                if let Some(fetch_released) = fetch_released {
+                    fetch_released.notified().await;
+                }
+
+                Err(GitError::CommandFailed {
+                    command: "git fetch".to_string(),
+                    stderr: "ssh: Could not resolve hostname private.example".to_string(),
+                })
+            })
+        }
+    });
+    let (_viewed_context_tx, viewed_context_rx) = watch::channel(vec![SyncContext {
+        session_git_status_targets: Vec::new(),
+        ..viewed_sync_context(2, 5, viewed_git_client)
+    }]);
+    let (mut orchestrator, mut app_event_rx) =
+        orchestrator_with_viewed(context_rx, viewed_context_rx);
+
+    // Act
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        orchestrator.run_refresh_pass(ReviewPass::Skip),
+    )
+    .await
+    .expect("the active pass should not wait for the viewed fetch");
+    let while_viewed_fetch_hangs = received_git_statuses(&mut app_event_rx);
+    fetch_released.notify_one();
+    finish_next_viewed_pass(&mut orchestrator).await;
+    for _ in 0..2 {
+        orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+        finish_next_viewed_pass(&mut orchestrator).await;
+    }
+
+    // Assert
+    assert_eq!(while_viewed_fetch_hangs, vec![(1, 1, None, HashMap::new())]);
+    assert_eq!(
+        received_git_statuses(&mut app_event_rx)
+            .iter()
+            .map(|(project_id, ..)| *project_id)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 2, 2, 2]
+    );
+    // Two failed fetches back off the third pass of the viewed project only.
+    assert_eq!(
+        orchestrator
+            .fetch_failures
+            .iter()
+            .map(|(project_id, backoff)| (*project_id, backoff.consecutive_failures))
+            .collect::<Vec<_>>(),
+        vec![(2, 2)]
+    );
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    let viewed_refreshes = spans
+        .iter()
+        .filter(|span| {
+            span.name == "sync.refresh"
+                && span
+                    .attributes
+                    .contains(&KeyValue::new("agentty.sync.viewed_project", true))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(viewed_refreshes.len(), 3);
+    assert!(
+        viewed_refreshes[0]
+            .attributes
+            .contains(&KeyValue::new("agentty.outcome", "failed"))
+    );
+    assert!(
+        viewed_refreshes[2]
+            .attributes
+            .contains(&KeyValue::new("agentty.sync.fetch_backed_off", true))
+    );
+    assert!(!format!("{spans:?}").contains("private"));
+}
+
+#[tokio::test]
+/// Fetches of one project never overlap: once a switch makes a project
+/// whose viewed pass still runs the active one, its active pass skips the
+/// fetch, and an explicit sync of it waits for that pass to finish.
+async fn a_running_viewed_pass_defers_its_projects_active_fetch_and_explicit_sync() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = install_span_exporter();
+    let (context_tx, context_rx) = watch::channel(SyncContext {
+        project_branch_name: None,
+        ..sync_context_fixture(0, Vec::new())
+    });
+    let fetch_released = Arc::new(Notify::new());
+    let mut viewed_git_client = quiet_git_client(1, 0);
+    viewed_git_client.expect_fetch_remote().once().returning({
+        let fetch_released = Arc::clone(&fetch_released);
+        move |_| {
+            let fetch_released = Arc::clone(&fetch_released);
+
+            Box::pin(async move {
+                fetch_released.notified().await;
+
+                Ok(())
+            })
+        }
+    });
+    let (viewed_context_tx, viewed_context_rx) = watch::channel(vec![SyncContext {
+        session_git_status_targets: Vec::new(),
+        ..viewed_sync_context(2, 5, viewed_git_client)
+    }]);
+    let (mut orchestrator, mut app_event_rx) =
+        orchestrator_with_viewed(context_rx, viewed_context_rx);
+    // A pass while the project's pass still runs starts no second one.
+    for _ in 0..2 {
+        orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+    }
+    // The terminal switches to the viewed project.
+    context_tx.send_replace(SyncContext {
+        git_client: Arc::new(quiet_git_client(1, 0)),
+        project_id: 2,
+        ..sync_context_fixture(6, Vec::new())
+    });
+    viewed_context_tx.send_replace(Vec::new());
+    let (sync_event_tx, _sync_event_rx) = mpsc::unbounded_channel();
+    let sync_request = SyncMainRequest {
+        app_event_tx: sync_event_tx,
+        operation: ProjectSyncContext {
+            project_id: 2,
+            ..project_sync_context()
+        },
+        session_model: AgentModel::Gemini38Flash,
+        sync_context: SyncContext {
+            project_branch_name: None,
+            project_id: 2,
+            ..sync_context_fixture(6, Vec::new())
+        },
+    };
+
+    // Act
+    orchestrator.run_refresh_pass(ReviewPass::Skip).await;
+    orchestrator.run_sync_main(sync_request).await;
+    let is_sync_waiting = orchestrator.sync_main_tasks.running_project_ids.is_empty()
+        && orchestrator.viewed_passes.waiting_sync_mains.len() == 1;
+    fetch_released.notify_one();
+    finish_next_viewed_pass(&mut orchestrator).await;
+
+    // Assert
+    assert!(is_sync_waiting);
+    assert!(orchestrator.viewed_passes.waiting_sync_mains.is_empty());
+    assert!(
+        orchestrator
+            .sync_main_tasks
+            .running_project_ids
+            .contains(&2)
+    );
+    assert!(orchestrator.viewed_passes.projects.is_empty());
+    // The viewed pass lost its project's role, so only the active one
+    // reported.
+    assert_eq!(
+        received_git_statuses(&mut app_event_rx),
+        vec![(2, 6, None, HashMap::new())]
+    );
+    let deferred_refreshes = exporter
+        .get_finished_spans()
+        .expect("finished spans")
+        .into_iter()
+        .filter(|span| {
+            span.name == "sync.refresh"
+                && span
+                    .attributes
+                    .contains(&KeyValue::new("agentty.sync.fetch_deferred_for_pass", true))
+        })
+        .count();
+    assert_eq!(deferred_refreshes, 1);
+}
+
+#[test]
+/// Viewed contexts keep their generation while their inputs hold, and every
+/// changed, forced, or re-added context takes one no context had before;
+/// the active context answers for its own project.
+fn viewed_contexts_take_generations_no_other_context_had() {
+    // Arrange
+    let (command_tx, _command_rx) = mpsc::unbounded_channel();
+    let (context_tx, _context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
+    let (sync_handle, mut viewed_context_rx) = SyncHandle::new(command_tx, context_tx);
+    let viewed = |project_ids: &[i64]| {
+        project_ids
+            .iter()
+            .map(|project_id| viewed_sync_context(*project_id, 0, MockGitClient::new()))
+            .collect::<Vec<_>>()
+    };
+    let versions = |viewed_context_rx: &mut watch::Receiver<Vec<SyncContext>>| {
+        let has_changed = viewed_context_rx
+            .has_changed()
+            .expect("the handle holds the sender");
+
+        (
+            has_changed,
+            polling_versions(&viewed_context_rx.borrow_and_update()),
+        )
+    };
+
+    // Act
+    sync_handle.publish_viewed_contexts(viewed(&[2, 3]));
+    let loaded = versions(&mut viewed_context_rx);
+    sync_handle.publish_viewed_contexts(viewed(&[2, 3]));
+    let unchanged = versions(&mut viewed_context_rx);
+    sync_handle.publish_refresh_viewed_contexts(viewed(&[2, 3]));
+    let forced = versions(&mut viewed_context_rx);
+    sync_handle.publish_viewed_contexts(viewed(&[3]));
+    let evicted = versions(&mut viewed_context_rx);
+    let evicted_generation = sync_handle.generation_for(2);
+    sync_handle.publish_viewed_contexts(viewed(&[1, 2, 3]));
+    let reloaded = versions(&mut viewed_context_rx);
+    sync_handle.publish_context(sync_context_fixture(
+        0,
+        vec![review_request_sync_target("session-1", None)],
+    ));
+
+    // Assert
+    assert_eq!(loaded, (true, vec![(2, 1), (3, 2)]));
+    // The orchestrator hears nothing when no generation changed.
+    assert_eq!(unchanged, (false, vec![(2, 1), (3, 2)]));
+    assert_eq!(forced, (true, vec![(2, 3), (3, 4)]));
+    assert_eq!(evicted, (true, vec![(3, 4)]));
+    assert_eq!(evicted_generation, None);
+    // A re-added project never reuses a generation any context had.
+    assert_eq!(reloaded, (true, vec![(1, 5), (2, 6), (3, 4)]));
+    // The active context answers for its own project, so a viewed context
+    // of it never matches.
+    assert_eq!(sync_handle.current_generation(), 7);
+    assert_eq!(sync_handle.generation_for(1), Some(7));
+    assert_eq!(sync_handle.generation_for(3), Some(4));
+    assert_eq!(sync_handle.generation_for(9), None);
+}
+
+#[tokio::test]
+/// The running orchestrator polls a project as soon as it becomes viewed,
+/// without waiting for the next tick, and once a pass that a refresh
+/// superseded reports back, runs it again from the refreshed inputs.
+async fn running_orchestrator_polls_a_newly_viewed_project_at_once_and_reruns_superseded_passes() {
+    // Arrange
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let (sync_handle, orchestrator) = SyncHandle::unstarted(
+        app_event_tx,
+        SyncContext {
+            git_client: Arc::new(quiet_git_client(1, 1)),
+            ..sync_context_fixture(0, Vec::new())
+        },
+    );
+    let sync_handle = Arc::new(sync_handle);
+    let mut rerun_git_client = repo_root_git_client(1);
+    rerun_git_client
+        .expect_branch_tracking_statuses()
+        .once()
+        .returning(|_| {
+            Box::pin(async {
+                Ok(HashMap::from([tracked_branch(
+                    "main",
+                    "main-tip",
+                    Some((1, 1)),
+                )]))
+            })
+        });
+    let rerun_context = SyncContext {
+        session_git_status_targets: Vec::new(),
+        ..viewed_sync_context(2, 0, rerun_git_client)
+    };
+    let mut first_git_client = repo_root_git_client(1);
+    first_git_client
+        .expect_fetch_remote()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    first_git_client
+        .expect_branch_tracking_statuses()
+        .once()
+        .returning({
+            let sync_handle = Arc::clone(&sync_handle);
+            move |_| {
+                sync_handle.publish_refresh_viewed_contexts(vec![rerun_context.clone()]);
+
+                Box::pin(async { Ok(HashMap::new()) })
+            }
+        });
+    let first_context = SyncContext {
+        session_git_status_targets: Vec::new(),
+        ..viewed_sync_context(2, 0, first_git_client)
+    };
+    orchestrator.spawn();
+    // The first tick polls the active project before any project is viewed.
+    next_git_status_of(&mut app_event_rx, 1).await;
+
+    // Act
+    sync_handle.publish_viewed_contexts(vec![first_context]);
+    let viewed_status = next_git_status_of(&mut app_event_rx, 2).await;
+
+    // Assert
+    assert_eq!(
+        viewed_status,
+        (
+            sync_handle
+                .generation_for(2)
+                .expect("the viewed project is published"),
+            Some((1, 1))
+        )
+    );
 }

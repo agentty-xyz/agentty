@@ -882,6 +882,7 @@ fn background_event_labels_preserve_variant_identity() {
         },
         AppEvent::GitStatusUpdated {
             generation: 1,
+            project_id: 1,
             session_statuses: HashMap::default(),
             status: None,
         },

@@ -499,24 +499,27 @@ fn retain_session_git_statuses_drops_removed_sessions() {
         0,
         0,
     );
-    state.replace_session_git_statuses(HashMap::from([
-        (
-            "session-1".into(),
-            SessionGitStatus {
-                base_status: Some((1, 0)),
-                has_merge_conflict: Some(false),
-                remote_status: Some((0, 1)),
-            },
-        ),
-        (
-            "session-2".into(),
-            SessionGitStatus {
-                base_status: Some((0, 2)),
-                has_merge_conflict: Some(false),
-                remote_status: None,
-            },
-        ),
-    ]));
+    state.replace_session_git_statuses(
+        1,
+        HashMap::from([
+            (
+                "session-1".into(),
+                SessionGitStatus {
+                    base_status: Some((1, 0)),
+                    has_merge_conflict: Some(false),
+                    remote_status: Some((0, 1)),
+                },
+            ),
+            (
+                "session-2".into(),
+                SessionGitStatus {
+                    base_status: Some((0, 2)),
+                    has_merge_conflict: Some(false),
+                    remote_status: None,
+                },
+            ),
+        ]),
+    );
     let active_session_ids = HashSet::from(["session-2".into()]);
 
     // Act
@@ -1114,10 +1117,12 @@ fn switch_active_page_promotes_the_target_and_demotes_a_leased_page() {
 
     for (name, active_lease, is_expanded, now, expected_demotion) in cases {
         let mut state = viewed_page_state();
-        state.replace_session_git_statuses(HashMap::from([(
-            SessionId::from("first"),
-            SessionGitStatus::default(),
-        )]));
+        for (project_id, session_id) in [(1, "first"), (9, "ninth")] {
+            state.replace_session_git_statuses(
+                project_id,
+                HashMap::from([(SessionId::from(session_id), SessionGitStatus::default())]),
+            );
+        }
         if let Some(active_lease) = active_lease {
             state.renew_project_page(1, active_lease);
         }
@@ -1134,6 +1139,11 @@ fn switch_active_page_promotes_the_target_and_demotes_a_leased_page() {
         assert_eq!(state.active_page().project_id(), 9, "{name}");
         assert_eq!(state.active_page().last_requested_at, Some(start), "{name}");
         assert!(state.is_in_active_page("ninth"), "{name}");
+        // Neither page keeps statuses its earlier role's poll reported.
+        assert!(
+            state.active_page().session_git_statuses().is_empty(),
+            "{name}"
+        );
         let demoted = state.viewed_page(1);
         assert_eq!(demoted.is_some(), expected_demotion, "{name}");
         assert!(
@@ -1166,6 +1176,39 @@ fn switch_active_page_starts_unviewed_projects_empty_and_ignores_the_active_one(
     assert!(state.sessions().is_empty());
     assert_eq!(state.active_page().last_requested_at, None);
     assert_eq!(state.viewed_project_ids(), vec![4, 9]);
+}
+
+#[test]
+/// Verifies one project's poll result replaces only that project's page
+/// statuses, on the active or a viewed page, and none for an unloaded
+/// project.
+fn session_git_statuses_are_replaced_on_the_polled_projects_page_only() {
+    // Arrange
+    let mut state = viewed_page_state();
+    let conflict = SessionGitStatus {
+        has_merge_conflict: Some(true),
+        ..SessionGitStatus::default()
+    };
+    let statuses = |session_id: &str| HashMap::from([(SessionId::from(session_id), conflict)]);
+
+    // Act
+    state.replace_session_git_statuses(1, statuses("first"));
+    state.replace_session_git_statuses(9, statuses("ninth"));
+    state.replace_session_git_statuses(7, statuses("unloaded"));
+
+    // Assert
+    let page_statuses = |project_id: i64| {
+        state.page_for_project(project_id).map(|page| {
+            page.session_git_statuses()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(page_statuses(1), Some(vec![SessionId::from("first")]));
+    assert_eq!(page_statuses(9), Some(vec![SessionId::from("ninth")]));
+    assert_eq!(page_statuses(4), Some(Vec::new()));
+    assert_eq!(page_statuses(7), None);
 }
 
 #[test]

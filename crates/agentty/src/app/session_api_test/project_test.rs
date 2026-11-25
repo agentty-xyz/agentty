@@ -22,7 +22,8 @@ use super::support::{
 use crate::app::session::{SessionGitStatus, session_branch};
 use crate::app::test_support::{
     MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
-    SyncSessionStartError, add_listed_project, insert_loadable_session, start_fake_listener,
+    SyncSessionStartError, add_listed_project, git_status_updated, hold_background_polls,
+    insert_loadable_session, start_fake_listener,
 };
 use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
 use crate::domain::session::Status;
@@ -64,7 +65,8 @@ async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
     accept_project_syncs(&mut app, 1);
-    app.projects.set_git_status(Some((1, 2)));
+    app.projects
+        .set_git_status(app.active_project_id(), Some((1, 2)));
     let branch = app.projects.git_branch().map(str::to_string);
     let sync_branch = branch.clone().expect("test project should have a branch");
     let idle_project = HostProjectStatus {
@@ -249,13 +251,16 @@ async fn git_status_updates_advance_the_remote_revision_only_when_they_change() 
             crate::domain::session::Status::Review,
         ));
     let generation = app.sync_handle.current_generation();
+    let project_id = app.active_project_id();
     let update = |status| AppEvent::GitStatusUpdated {
         generation,
+        project_id,
         session_statuses: HashMap::new(),
         status,
     };
     let conflict_update = AppEvent::GitStatusUpdated {
         generation,
+        project_id,
         session_statuses: HashMap::from([(
             SessionId::from("session-1"),
             SessionGitStatus {
@@ -271,6 +276,7 @@ async fn git_status_updates_advance_the_remote_revision_only_when_they_change() 
     };
     let unlisted_conflict_update = AppEvent::GitStatusUpdated {
         generation,
+        project_id,
         session_statuses: HashMap::from([
             (SessionId::from("session-1"), conflict),
             (SessionId::from("unlisted-session"), conflict),
@@ -806,7 +812,7 @@ async fn runtime_backend_reads_a_viewed_project_with_its_branch_and_no_counts() 
     // Arrange
     let (mut app, directory) = crate::test_support::new_test_app().await;
     let active_project_id = app.active_project_id();
-    app.projects.set_git_status(Some((1, 2)));
+    app.projects.set_git_status(active_project_id, Some((1, 2)));
     let other_project_id = add_listed_project(&mut app, &directory, "other").await;
     insert_loadable_session(&app, "viewed1", Status::Review, other_project_id).await;
     std::fs::write(directory.path().join("other/marker.txt"), "marker").expect("marker file");
@@ -884,6 +890,105 @@ async fn runtime_backend_reads_a_viewed_project_with_its_branch_and_no_counts() 
         !app.remote_session_service()
             .supports(SessionOperation::Projects)
     );
+}
+
+#[tokio::test]
+async fn runtime_backend_reports_a_viewed_projects_counts_from_its_own_current_poll_only() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let _held_orchestrator = hold_background_polls(&mut app);
+    let active_project_id = app.active_project_id();
+    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    let unloaded_project_id = add_listed_project(&mut app, &directory, "unloaded").await;
+    insert_loadable_session(&app, "viewed1", Status::Review, other_project_id).await;
+    let service = app.session_service();
+    let other = ProjectScope::Project(other_project_id);
+    app.drive_session_request(service.project_sessions(other))
+        .await
+        .expect("viewed project should list");
+    let session_status = SessionGitStatus {
+        base_status: Some((1, 0)),
+        has_merge_conflict: Some(true),
+        remote_status: Some((0, 1)),
+    };
+    let mut revisions = start_fake_listener(&mut app).await;
+    // Each step ends with the check the foreground cycle makes.
+    let mut revision_after = |app: &mut App| {
+        app.publish_reported_state_changes();
+
+        *revisions.borrow_and_update()
+    };
+    let initial_revision = revision_after(&mut app);
+    let viewed_generation = app
+        .sync_handle
+        .generation_for(other_project_id)
+        .expect("a loaded page is polled");
+
+    // Act
+    // A result from inputs the project's poll no longer uses, and one for a
+    // project with no loaded page, are dropped.
+    app.apply_single_app_event(git_status_updated(
+        other_project_id,
+        viewed_generation + 1,
+        Some((9, 9)),
+        "viewed1",
+        session_status,
+    ))
+    .await;
+    app.apply_single_app_event(git_status_updated(
+        unloaded_project_id,
+        app.sync_handle.current_generation(),
+        Some((8, 8)),
+        "viewed1",
+        session_status,
+    ))
+    .await;
+    let after_dropped = revision_after(&mut app);
+    app.apply_single_app_event(git_status_updated(
+        other_project_id,
+        viewed_generation,
+        Some((2, 3)),
+        "viewed1",
+        session_status,
+    ))
+    .await;
+    let after_polled = revision_after(&mut app);
+    let viewed = app
+        .drive_session_request(service.project_sessions(other))
+        .await
+        .expect("viewed project should list");
+    let active = app
+        .drive_session_request(service.project_sessions(ProjectScope::Active))
+        .await
+        .expect("active project should list");
+
+    // Assert
+    assert_eq!(after_dropped, initial_revision);
+    // Devices hear of the viewed project's new status.
+    assert_eq!(after_polled, initial_revision + 1);
+    assert_eq!(
+        viewed.status.and_then(|status| status.ahead_behind),
+        Some((2, 3))
+    );
+    assert_eq!(entry_ids(&viewed.entries), vec!["viewed1"]);
+    let stats = viewed.entries[0]
+        .stats
+        .as_ref()
+        .expect("viewed entries have stats");
+    assert_eq!(stats.base_ahead_behind, Some((1, 0)));
+    assert_eq!(stats.upstream_ahead_behind, Some((0, 1)));
+    assert!(stats.has_merge_conflict);
+    // The status reaches that project's context and page only.
+    assert_eq!(active.project_id, Some(active_project_id));
+    assert_eq!(active.status.and_then(|status| status.ahead_behind), None);
+    assert!(
+        app.sessions
+            .state()
+            .active_page()
+            .session_git_statuses()
+            .is_empty()
+    );
+    assert!(app.projects.context(unloaded_project_id).is_none());
 }
 
 #[tokio::test]

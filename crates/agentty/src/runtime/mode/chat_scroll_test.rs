@@ -331,14 +331,18 @@ async fn test_metrics_reserve_header_row_for_merge_conflict_alert() {
         0,
         terminal_size,
     );
-    app.sessions.replace_session_git_statuses(HashMap::from([(
-        session_id.clone(),
-        SessionGitStatus {
-            base_status: Some((1, 1)),
-            has_merge_conflict: Some(true),
-            remote_status: None,
-        },
-    )]));
+    let project_id = app.active_project_id();
+    app.sessions.replace_session_git_statuses(
+        project_id,
+        HashMap::from([(
+            session_id.clone(),
+            SessionGitStatus {
+                base_status: Some((1, 1)),
+                has_merge_conflict: Some(true),
+                remote_status: None,
+            },
+        )]),
+    );
 
     // Act
     let conflict_metrics = ChatScrollMetrics::new(

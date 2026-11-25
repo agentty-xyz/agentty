@@ -1,22 +1,30 @@
 //! Background sync orchestration for remote git and forge status.
 //!
 //! One [`SyncOrchestrator`] task per app owns all recurring remote
-//! interaction for the active project: the periodic read-only status pass
-//! (`git fetch`, branch tracking statuses, review-request refreshes) and the
-//! user-triggered mutating main-branch sync. Commands arrive through one
-//! queue. Each main-branch sync runs its Git work in its own task, so syncs
-//! of different projects proceed independently, and the background fetch of
-//! a syncing project pauses until its sync finishes.
+//! interaction: the periodic read-only status pass of the active project
+//! (`git fetch`, branch tracking statuses, review-request refreshes), the
+//! git-status pass of each project whose session page session-API callers
+//! view, and the user-triggered mutating main-branch sync. Commands arrive
+//! through one queue. Each main-branch sync and each viewed project's pass
+//! runs its Git work in its own task, so syncs of different projects proceed
+//! independently and a slow viewed project never holds up the active one.
+//! Fetches of one project never overlap: the background fetch of a syncing
+//! project pauses until its sync finishes, and a sync waits for its project's
+//! running viewed pass.
 //!
-//! The app publishes versioned [`SyncContext`] snapshots through a
-//! `tokio::sync::watch` channel, so target changes (new sessions, linked
-//! review requests, project switches) take effect on the next pass without
-//! restarting the task. Emitted status events carry the context generation so
-//! the reducer can discard completions computed from stale targets.
+//! The app publishes versioned [`SyncContext`] snapshots, one for the active
+//! project and one per viewed project, through `tokio::sync::watch` channels,
+//! so target changes (new sessions, linked review requests, project switches,
+//! pages loaded or dropped) take effect on the next pass without restarting
+//! the task. Emitted status events carry their project and the context
+//! generation, which no other published context shares, so the reducer can
+//! discard completions computed from stale targets or for another role of the
+//! project.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
@@ -113,11 +121,16 @@ impl SyncMainRunner for OrchestratorSyncMainRunner {
 
 /// App-side handle for the background sync orchestrator.
 ///
-/// Owns the command queue sender plus the versioned context publisher used to
-/// hand fresh polling targets to the running task.
+/// Owns the command queue sender plus the versioned context publishers used
+/// to hand fresh polling targets, of the active project and of each viewed
+/// project, to the running task.
 pub(crate) struct SyncHandle {
     command_tx: mpsc::UnboundedSender<SyncCommand>,
     context_tx: watch::Sender<SyncContext>,
+    /// Latest generation handed to a published context, active or viewed,
+    /// so no two publications with different polling inputs share one.
+    last_generation: AtomicU64,
+    viewed_context_tx: watch::Sender<Vec<SyncContext>>,
 }
 
 impl SyncHandle {
@@ -134,32 +147,30 @@ impl SyncHandle {
     ) -> (Self, SyncOrchestrator) {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (context_tx, context_rx) = watch::channel(initial_context);
-        let orchestrator = SyncOrchestrator {
-            app_event_tx,
-            base_comparison_cache: BaseComparisonCache::default(),
-            command_rx,
-            context_rx,
-            fetch_failures: HashMap::new(),
-            fetch_pass_index: 0,
-            review_pass_index: 0,
-            review_sync_cadences: HashMap::new(),
-            review_sync_failures: HashMap::new(),
-            sync_main_tasks: SyncMainTasks::default(),
-            tick_index: 0,
-        };
+        let (sync_handle, viewed_context_rx) = Self::new(command_tx, context_tx);
+        let orchestrator =
+            SyncOrchestrator::new(app_event_tx, command_rx, context_rx, viewed_context_rx);
 
-        (Self::new(command_tx, context_tx), orchestrator)
+        (sync_handle, orchestrator)
     }
 
-    /// Creates a handle around the orchestrator command and context channels.
+    /// Creates a handle around the orchestrator command channel and the
+    /// active context channel, with a viewed context channel that holds no
+    /// viewed project yet, and returns it with that channel's receiver.
     pub(crate) fn new(
         command_tx: mpsc::UnboundedSender<SyncCommand>,
         context_tx: watch::Sender<SyncContext>,
-    ) -> Self {
-        Self {
+    ) -> (Self, watch::Receiver<Vec<SyncContext>>) {
+        let last_generation = context_tx.borrow().generation;
+        let (viewed_context_tx, viewed_context_rx) = watch::channel(Vec::new());
+        let sync_handle = Self {
             command_tx,
             context_tx,
-        }
+            last_generation: AtomicU64::new(last_generation),
+            viewed_context_tx,
+        };
+
+        (sync_handle, viewed_context_rx)
     }
 
     /// Returns the generation of the currently published sync context.
@@ -168,6 +179,30 @@ impl SyncHandle {
     /// events to discard completions computed from stale targets.
     pub(crate) fn current_generation(&self) -> u64 {
         self.context_tx.borrow().generation
+    }
+
+    /// Returns the generation of the published context that polls the git
+    /// status of `project_id`: the active context when it polls that
+    /// project, otherwise the project's viewed context, or `None` when no
+    /// published context polls it.
+    ///
+    /// Each publication that changes polling inputs takes a generation no
+    /// other context had, so a status computed for a project's earlier role
+    /// or targets, such as before its page reloaded, was dropped, or was
+    /// promoted to the active page, never matches.
+    pub(crate) fn generation_for(&self, project_id: i64) -> Option<u64> {
+        {
+            let active_context = self.context_tx.borrow();
+            if active_context.project_id == project_id {
+                return Some(active_context.generation);
+            }
+        }
+
+        self.viewed_context_tx
+            .borrow()
+            .iter()
+            .find(|context| context.project_id == project_id)
+            .map(|context| context.generation)
     }
 
     /// Returns one immutable snapshot for an explicitly requested sync.
@@ -202,6 +237,25 @@ impl SyncHandle {
         self.publish_context_with_policy(&mut context, true);
     }
 
+    /// Publishes the git-status polling contexts of the viewed projects, one
+    /// per project, replacing the previous set.
+    ///
+    /// A project keeps its generation while its polling inputs are
+    /// unchanged; a changed, added, or re-added project takes a new one.
+    /// The orchestrator hears of the set only when a project or a
+    /// generation changed, and then polls each project not polled yet at
+    /// once.
+    pub(crate) fn publish_viewed_contexts(&self, contexts: Vec<SyncContext>) {
+        self.publish_viewed_contexts_with_policy(contexts, false);
+    }
+
+    /// Publishes the viewed projects' polling contexts while forcing a new
+    /// generation for each, as [`Self::publish_refresh_context`] does for
+    /// the active one.
+    pub(crate) fn publish_refresh_viewed_contexts(&self, contexts: Vec<SyncContext>) {
+        self.publish_viewed_contexts_with_policy(contexts, true);
+    }
+
     /// Publishes `context`, optionally forcing a generation bump even when
     /// the comparable polling inputs are unchanged.
     fn publish_context_with_policy(&self, context: &mut SyncContext, force_generation_bump: bool) {
@@ -216,11 +270,53 @@ impl SyncHandle {
         context.generation = if same_inputs && !force_generation_bump {
             previous_generation
         } else {
-            previous_generation.saturating_add(1)
+            self.next_generation()
         };
 
         // Fire-and-forget: the orchestrator only stops at app shutdown.
         let _ = self.context_tx.send(context.clone());
+    }
+
+    /// Publishes the viewed `contexts`, optionally forcing a new generation
+    /// for each even when its polling inputs are unchanged.
+    fn publish_viewed_contexts_with_policy(
+        &self,
+        mut contexts: Vec<SyncContext>,
+        force_generation_bump: bool,
+    ) {
+        {
+            let published_contexts = self.viewed_context_tx.borrow();
+            for context in &mut contexts {
+                let previous_context = published_contexts
+                    .iter()
+                    .find(|published| published.project_id == context.project_id);
+                context.generation = match previous_context {
+                    Some(previous_context)
+                        if !force_generation_bump
+                            && previous_context.same_polling_inputs(context) =>
+                    {
+                        previous_context.generation
+                    }
+                    _ => self.next_generation(),
+                };
+            }
+        }
+
+        self.viewed_context_tx
+            .send_if_modified(|published_contexts| {
+                let is_modified =
+                    polling_versions(published_contexts) != polling_versions(&contexts);
+                *published_contexts = contexts;
+
+                is_modified
+            });
+    }
+
+    /// Takes the next generation, one no published context had before.
+    fn next_generation(&self) -> u64 {
+        self.last_generation
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
     }
 
     /// Requests one immediate read-only refresh pass outside the periodic
@@ -231,11 +327,13 @@ impl SyncHandle {
     }
 }
 
-/// Versioned polling inputs published by the app to the orchestrator.
+/// Versioned polling inputs of one project published by the app to the
+/// orchestrator.
 ///
 /// The cache key for emitted status events is `generation`; the app bumps it
 /// whenever the comparable polling inputs change and the reducer discards
-/// events carrying an older generation.
+/// events carrying an older generation. A viewed project's context polls
+/// only its git status, so it carries no review-request targets.
 #[derive(Clone)]
 pub(crate) struct SyncContext {
     /// Worker submission handle captured with this project snapshot.
@@ -247,8 +345,8 @@ pub(crate) struct SyncContext {
     pub(crate) fs_client: Arc<dyn FsClient>,
     /// Git boundary used for fetch, ahead/behind, and merge-conflict queries.
     pub(crate) git_client: Arc<dyn GitClient>,
-    /// Active project branch, or `None` when the project has no git branch
-    /// and polling should be skipped.
+    /// Project branch, or `None` when the project has no git branch and
+    /// polling should be skipped.
     pub(crate) project_branch_name: Option<String>,
     /// Stable identifier of the project that owns this context.
     pub(crate) project_id: i64,
@@ -260,7 +358,7 @@ pub(crate) struct SyncContext {
     pub(crate) review_request_sync_targets: Vec<ReviewRequestSyncTarget>,
     /// Ahead/behind polling targets for active session branches.
     pub(crate) session_git_status_targets: Vec<SessionGitStatusTarget>,
-    /// Active project working directory used to resolve the repository root.
+    /// Project working directory used to resolve the repository root.
     pub(crate) working_dir: PathBuf,
 }
 
@@ -446,6 +544,15 @@ fn review_target_polling_keys(
         .collect()
 }
 
+/// Returns each context's project and generation, which change exactly when
+/// a viewed project is added, dropped, or polled from new inputs.
+fn polling_versions(contexts: &[SyncContext]) -> Vec<(i64, u64)> {
+    contexts
+        .iter()
+        .map(|context| (context.project_id, context.generation))
+        .collect()
+}
+
 /// Single background task owning all recurring remote sync work.
 ///
 /// Driven by a command queue plus one tick interval. Periodic passes stay
@@ -454,21 +561,56 @@ fn review_target_polling_keys(
 /// its Git phases in a detached task, so later commands and periodic passes
 /// keep running alongside it. Only the syncing project's background fetch is
 /// skipped until the task reports back on the finished channel.
+///
+/// Each pass also starts a git-status pass for every viewed project in its
+/// own task, at most one per project at a time, beside the active project's
+/// pass in this loop. Viewed passes share the active pass's fetch-pass
+/// count and per-project fetch backoff.
 pub(crate) struct SyncOrchestrator {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_comparison_cache: BaseComparisonCache,
     command_rx: mpsc::UnboundedReceiver<SyncCommand>,
     context_rx: watch::Receiver<SyncContext>,
     fetch_failures: HashMap<i64, FailureBackoff>,
+    /// Index of the next refresh pass, counted once per pass for the fetch
+    /// backoff of every project.
     fetch_pass_index: u64,
     review_pass_index: u64,
     review_sync_cadences: HashMap<SessionId, ReviewSyncCadenceState>,
     review_sync_failures: HashMap<SessionId, FailureBackoff>,
     sync_main_tasks: SyncMainTasks,
     tick_index: u64,
+    viewed_context_rx: watch::Receiver<Vec<SyncContext>>,
+    viewed_passes: ViewedPasses,
 }
 
 impl SyncOrchestrator {
+    /// Creates an orchestrator that reads commands from `command_rx`, the
+    /// active project's polling context from `context_rx`, and the viewed
+    /// projects' from `viewed_context_rx`, and reports to `app_event_tx`.
+    fn new(
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        command_rx: mpsc::UnboundedReceiver<SyncCommand>,
+        context_rx: watch::Receiver<SyncContext>,
+        viewed_context_rx: watch::Receiver<Vec<SyncContext>>,
+    ) -> Self {
+        Self {
+            app_event_tx,
+            base_comparison_cache: BaseComparisonCache::default(),
+            command_rx,
+            context_rx,
+            fetch_failures: HashMap::new(),
+            fetch_pass_index: 0,
+            review_pass_index: 0,
+            review_sync_cadences: HashMap::new(),
+            review_sync_failures: HashMap::new(),
+            sync_main_tasks: SyncMainTasks::default(),
+            tick_index: 0,
+            viewed_context_rx,
+            viewed_passes: ViewedPasses::default(),
+        }
+    }
+
     /// Spawns the orchestrator loop on the runtime.
     ///
     /// The first pass starts at once and reads the latest published context.
@@ -482,9 +624,11 @@ impl SyncOrchestrator {
     /// Runs the command/tick loop until the command channel closes.
     ///
     /// Reports from finished syncs come first, so a sync requested in
-    /// reaction to one finishing stays marked running. Commands take priority
-    /// over ticks, and every command-triggered pass resets the tick timer so
-    /// one refresh is never immediately duplicated by the periodic cadence.
+    /// reaction to one finishing stays marked running, then reports from
+    /// finished viewed passes and changes of the viewed projects. Commands
+    /// take priority over ticks, and every command-triggered pass resets the
+    /// tick timer so one refresh is never immediately duplicated by the
+    /// periodic cadence.
     async fn run(mut self) {
         let mut tick = tokio::time::interval(Duration::from_secs(SYNC_TICK_INTERVAL_SECONDS));
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -494,6 +638,12 @@ impl SyncOrchestrator {
                 biased;
                 Some(finished) = self.sync_main_tasks.finished_rx.recv() => {
                     self.finish_sync_main(&finished);
+                }
+                Some(finished) = self.viewed_passes.finished_rx.recv() => {
+                    self.finish_viewed_pass(finished).await;
+                }
+                Ok(()) = self.viewed_context_rx.changed() => {
+                    self.start_new_viewed_passes();
                 }
                 command = self.command_rx.recv() => {
                     let Some(command) = command else {
@@ -516,13 +666,20 @@ impl SyncOrchestrator {
     }
 
     /// Runs one read-only status pass over the current context snapshot as
-    /// one independent `sync.refresh` trace.
+    /// one independent `sync.refresh` trace, after starting each viewed
+    /// project's git-status pass beside it.
     ///
-    /// Skips entirely, without a trace, when the active project has no git
-    /// branch. The trace fails when any phase failed and is canceled when
-    /// newer polling targets superseded the pass.
+    /// Only periodic passes fetch viewed projects' remotes, once per tick;
+    /// a requested refresh follows local changes, so their passes compare
+    /// against the refs fetched last. The active project's pass skips
+    /// entirely, without a trace, when the project has no git branch. The
+    /// trace fails when any phase failed and is canceled when newer polling
+    /// targets superseded the pass.
     async fn run_refresh_pass(&mut self, review_pass: ReviewPass) {
+        let fetch_pass_index = self.fetch_pass_index;
+        self.fetch_pass_index = self.fetch_pass_index.wrapping_add(1);
         let context = self.context_rx.borrow().clone();
+        self.start_viewed_passes((review_pass != ReviewPass::Forced).then_some(fetch_pass_index));
         if context.project_branch_name.is_none() {
             return;
         }
@@ -536,7 +693,7 @@ impl SyncOrchestrator {
         );
         let trace = refresh.context();
         let mut outcome = self
-            .run_git_status_pass(&context)
+            .run_git_status_pass(&context, fetch_pass_index)
             .with_context(trace.clone())
             .await;
         if review_pass != ReviewPass::Skip {
@@ -558,54 +715,24 @@ impl SyncOrchestrator {
     /// by failure backoff does not fail the pass. Session base comparisons
     /// whose commits did not move since the previous pass are reused without
     /// spawning Git.
-    async fn run_git_status_pass(&mut self, context: &SyncContext) -> Outcome {
-        let working_dir = context.working_dir.clone();
-        let repo_root = context
-            .git_client
-            .find_git_repo_root(working_dir.clone())
-            .await
-            .unwrap_or(working_dir);
+    async fn run_git_status_pass(
+        &mut self,
+        context: &SyncContext,
+        fetch_pass_index: u64,
+    ) -> Outcome {
+        let repo_root = repo_root(context).await;
 
         // Background fetch failure is non-critical: tracking statuses still
         // compare against the last fetched remote refs.
-        let fetch_outcome = self
-            .fetch_remote_unless_backed_off(context, &repo_root)
-            .await;
-
-        let branch_status = Span::child("sync.branch_status");
-        branch_status.attribute(
-            "agentty.sync.targets",
-            attribute_count(context.session_git_status_targets.len()),
-        );
-        let (branch_tracking_statuses, session_statuses, status_outcome) = async {
-            let (branch_tracking_statuses, status_outcome) = match context
-                .git_client
-                .branch_tracking_statuses(repo_root.clone())
-                .await
-            {
-                Ok(branch_tracking_statuses) => (branch_tracking_statuses, Outcome::Completed),
-                Err(_) => (HashMap::new(), Outcome::Failed),
-            };
-            let session_statuses = self
-                .base_comparison_cache
-                .session_git_statuses(
-                    &branch_tracking_statuses,
-                    &repo_root,
-                    &context.session_git_status_targets,
-                    context.git_client.as_ref(),
-                )
-                .await;
-
-            (branch_tracking_statuses, session_statuses, status_outcome)
+        let fetch_plan = self.fetch_plan(context.project_id, fetch_pass_index);
+        let (fetch_outcome, fetch_succeeded) =
+            run_fetch_plan(context, &repo_root, fetch_plan).await;
+        if let Some(fetch_succeeded) = fetch_succeeded {
+            self.record_fetch_result(context.project_id, fetch_pass_index, fetch_succeeded);
         }
-        .with_context(branch_status.context())
-        .await;
-        branch_status.finish(status_outcome);
-        let project_branch_name = context.project_branch_name.as_deref().unwrap_or_default();
-        let status = branch_tracking_statuses
-            .get(project_branch_name)
-            .and_then(|branch_status| branch_status.upstream_status);
 
+        let (status, session_statuses, status_outcome) =
+            branch_status_snapshot(context, &repo_root, &mut self.base_comparison_cache).await;
         let outcome = combined_outcome(fetch_outcome, status_outcome);
         if self.context_is_stale(context) {
             return combined_outcome(outcome, Outcome::Canceled);
@@ -614,6 +741,7 @@ impl SyncOrchestrator {
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = self.app_event_tx.send(AppEvent::GitStatusUpdated {
             generation: context.generation,
+            project_id: context.project_id,
             session_statuses,
             status,
         });
@@ -621,72 +749,164 @@ impl SyncOrchestrator {
         outcome
     }
 
-    /// Fetches the project remote in one `git.fetch` phase unless the
-    /// project's explicit sync is running or repeated failures put the
-    /// project in backoff.
-    ///
-    /// Every call counts as one fetch pass, whether periodic or requested.
-    /// A skipped fetch starts no phase, marks the enclosing trace with
-    /// `agentty.sync.fetch_deferred_for_sync` or
-    /// `agentty.sync.fetch_backed_off`, and completes. A failed fetch extends
-    /// the project's backoff window exponentially and ends its phase with
-    /// the bounded [`ag_git::GitError::failure_class`] as `error.type` plus
-    /// the consecutive failure count. A success clears the backoff.
-    async fn fetch_remote_unless_backed_off(
-        &mut self,
-        context: &SyncContext,
-        repo_root: &Path,
-    ) -> Outcome {
-        let fetch_pass_index = self.fetch_pass_index;
-        self.fetch_pass_index = self.fetch_pass_index.wrapping_add(1);
+    /// Decides whether fetch pass `fetch_pass_index` fetches `project_id`'s
+    /// remote: not while the project's explicit sync or another pass of the
+    /// project runs, so two Git transfers of one project never overlap, and
+    /// not while repeated failures keep the project in backoff.
+    fn fetch_plan(&self, project_id: i64, fetch_pass_index: u64) -> FetchPlan {
         if self
             .sync_main_tasks
             .running_project_ids
-            .contains(&context.project_id)
+            .contains(&project_id)
         {
-            ag_telemetry::current_attribute("agentty.sync.fetch_deferred_for_sync", true);
-
-            return Outcome::Completed;
+            return FetchPlan::DeferredForSync;
         }
-        if self
-            .fetch_failures
-            .get(&context.project_id)
-            .is_some_and(|backoff| backoff.is_backed_off(fetch_pass_index))
-        {
-            ag_telemetry::current_attribute("agentty.sync.fetch_backed_off", true);
-
-            return Outcome::Completed;
+        if self.viewed_passes.is_running(project_id) {
+            return FetchPlan::DeferredForPass;
         }
 
-        let fetch = Span::child("git.fetch");
-        let result = context
-            .git_client
-            .fetch_remote(repo_root.to_path_buf())
-            .with_context(fetch.context())
-            .await;
-        let Err(error) = result else {
-            self.fetch_failures.remove(&context.project_id);
-            fetch.finish(Outcome::Completed);
+        let backoff = self.fetch_failures.get(&project_id);
+        if backoff.is_some_and(|backoff| backoff.is_backed_off(fetch_pass_index)) {
+            return FetchPlan::BackedOff;
+        }
 
-            return Outcome::Completed;
+        FetchPlan::Fetch {
+            consecutive_failures: backoff.map_or(0, |backoff| backoff.consecutive_failures),
+        }
+    }
+
+    /// Records the result of `project_id`'s fetch during fetch pass
+    /// `fetch_pass_index`: a success clears the project's backoff, and a
+    /// failure extends its window exponentially.
+    fn record_fetch_result(&mut self, project_id: i64, fetch_pass_index: u64, succeeded: bool) {
+        if succeeded {
+            self.fetch_failures.remove(&project_id);
+
+            return;
+        }
+
+        self.fetch_failures
+            .entry(project_id)
+            .or_default()
+            .record_failure(fetch_pass_index, FETCH_MAX_BACKOFF_PASSES);
+    }
+
+    /// Starts a git-status pass for each published viewed project, counted
+    /// as fetch pass `fetch_pass_index` or fetching nothing when it is
+    /// `None`, and forgets the polling state of projects no longer viewed.
+    fn start_viewed_passes(&mut self, fetch_pass_index: Option<u64>) {
+        let viewed_contexts = self.viewed_context_rx.borrow_and_update().clone();
+        self.viewed_passes.retain_viewed(&viewed_contexts);
+
+        for context in viewed_contexts {
+            self.start_viewed_pass(context, fetch_pass_index);
+        }
+    }
+
+    /// Starts a pass at once for each viewed project not polled yet, such as
+    /// one whose page just loaded, so its counts do not wait for the next
+    /// tick, and forgets the polling state of projects no longer viewed.
+    ///
+    /// The pass counts as the next fetch pass.
+    fn start_new_viewed_passes(&mut self) {
+        let viewed_contexts = self.viewed_context_rx.borrow_and_update().clone();
+        self.viewed_passes.retain_viewed(&viewed_contexts);
+
+        for context in viewed_contexts {
+            if !self
+                .viewed_passes
+                .projects
+                .contains_key(&context.project_id)
+            {
+                self.start_viewed_pass(context, Some(self.fetch_pass_index));
+            }
+        }
+    }
+
+    /// Starts one git-status pass of a viewed project in its own task,
+    /// counted as fetch pass `fetch_pass_index`, or comparing against the
+    /// refs fetched last without fetching when it is `None`.
+    ///
+    /// Does nothing while the project's previous pass runs, when it has no
+    /// git branch, or when it is the active project, whose own pass polls
+    /// it.
+    fn start_viewed_pass(&mut self, context: SyncContext, fetch_pass_index: Option<u64>) {
+        if context.project_branch_name.is_none()
+            || context.project_id == self.context_rx.borrow().project_id
+            || self.viewed_passes.is_running(context.project_id)
+        {
+            return;
+        }
+
+        let fetch_plan = fetch_pass_index.map_or(FetchPlan::Reuse, |fetch_pass_index| {
+            self.fetch_plan(context.project_id, fetch_pass_index)
+        });
+        let project_poll = self
+            .viewed_passes
+            .projects
+            .entry(context.project_id)
+            .or_default();
+        project_poll.is_running = true;
+        let viewed_pass = ViewedPass {
+            app_event_tx: self.app_event_tx.clone(),
+            base_comparison_cache: std::mem::take(&mut project_poll.base_comparison_cache),
+            context,
+            fetch_pass_index: fetch_pass_index.unwrap_or(self.fetch_pass_index),
+            fetch_plan,
+            finished_tx: self.viewed_passes.finished_tx.clone(),
+            viewed_context_rx: self.viewed_context_rx.clone(),
         };
 
-        let backoff = self.fetch_failures.entry(context.project_id).or_default();
-        backoff.record_failure(fetch_pass_index, FETCH_MAX_BACKOFF_PASSES);
-        let failure_class = error.failure_class();
-        tracing::warn!(
-            project_id = context.project_id,
-            consecutive_failures = backoff.consecutive_failures,
-            failure_class,
-            "background git fetch failed: {error}",
-        );
-        fetch.attribute(
-            "agentty.sync.consecutive_failures",
-            i64::from(backoff.consecutive_failures),
-        );
-        fetch.fail(failure_class);
+        spawn::spawn_detached(viewed_pass.run());
+    }
 
-        Outcome::Failed
+    /// Takes back the state of one finished viewed pass and records its
+    /// fetch result.
+    ///
+    /// An explicit sync that waited for the pass starts now. Otherwise a
+    /// pass whose inputs the project's published context no longer has,
+    /// even if they changed only after it emitted, runs again at once from
+    /// the new ones, comparing against the refs it just fetched, so a forced
+    /// refresh or a reloaded page is reflected without waiting for the next
+    /// tick.
+    async fn finish_viewed_pass(&mut self, finished: ViewedPassFinished) {
+        let ViewedPassFinished {
+            base_comparison_cache,
+            fetch_pass_index,
+            fetch_succeeded,
+            generation,
+            project_id,
+        } = finished;
+        if let Some(fetch_succeeded) = fetch_succeeded {
+            self.record_fetch_result(project_id, fetch_pass_index, fetch_succeeded);
+        }
+        let viewed_context = self
+            .viewed_context_rx
+            .borrow()
+            .iter()
+            .find(|context| context.project_id == project_id)
+            .cloned();
+        if viewed_context.is_some() {
+            let project_poll = self.viewed_passes.projects.entry(project_id).or_default();
+            project_poll.base_comparison_cache = base_comparison_cache;
+            project_poll.is_running = false;
+        } else {
+            self.viewed_passes.projects.remove(&project_id);
+        }
+
+        let waiting_sync_mains = self.viewed_passes.take_waiting_sync_mains(project_id);
+        if !waiting_sync_mains.is_empty() {
+            for request in waiting_sync_mains {
+                self.run_sync_main(request).await;
+            }
+
+            return;
+        }
+        if let Some(viewed_context) = viewed_context
+            && viewed_context.generation != generation
+        {
+            self.start_viewed_pass(viewed_context, None);
+        }
     }
 
     /// Refreshes linked or published review-request state for all targets in
@@ -871,7 +1091,20 @@ impl SyncOrchestrator {
     ///
     /// Both phases and any conflict-assistance utilities nest beneath one
     /// independent `project.sync_main` trace, which fails with the sync.
+    ///
+    /// A sync of a project whose viewed pass is running, such as one the
+    /// terminal just switched to, waits for that pass, so the pass's fetch
+    /// cannot race the sync's pull and push.
     async fn run_sync_main(&mut self, request: SyncMainRequest) {
+        if self
+            .viewed_passes
+            .is_running(request.sync_context.project_id)
+        {
+            self.viewed_passes.waiting_sync_mains.push(request);
+
+            return;
+        }
+
         let SyncMainRequest {
             app_event_tx,
             operation,
@@ -1147,6 +1380,191 @@ struct SyncMainFinished {
     succeeded: bool,
 }
 
+/// Git-status passes of viewed projects, which run beside the orchestrator
+/// loop so a slow or failing project never holds up the active project's
+/// pass or the command queue.
+struct ViewedPasses {
+    /// Reports from finished passes, read by the orchestrator loop.
+    finished_rx: mpsc::UnboundedReceiver<ViewedPassFinished>,
+    /// Sender cloned into each spawned pass.
+    finished_tx: mpsc::UnboundedSender<ViewedPassFinished>,
+    /// Polling state of each viewed project polled since it became viewed,
+    /// kept while it stays viewed or its pass runs.
+    projects: HashMap<i64, ViewedProjectPoll>,
+    /// Explicit syncs waiting for their project's running pass.
+    waiting_sync_mains: Vec<SyncMainRequest>,
+}
+
+impl ViewedPasses {
+    /// Returns whether a pass of `project_id` is running.
+    fn is_running(&self, project_id: i64) -> bool {
+        self.projects
+            .get(&project_id)
+            .is_some_and(|project_poll| project_poll.is_running)
+    }
+
+    /// Forgets the polling state of every project that `viewed_contexts`
+    /// no longer holds, unless its pass still runs.
+    fn retain_viewed(&mut self, viewed_contexts: &[SyncContext]) {
+        self.projects.retain(|project_id, project_poll| {
+            project_poll.is_running
+                || viewed_contexts
+                    .iter()
+                    .any(|context| context.project_id == *project_id)
+        });
+    }
+
+    /// Removes and returns the explicit syncs of `project_id` that wait for
+    /// its pass, in request order.
+    fn take_waiting_sync_mains(&mut self, project_id: i64) -> Vec<SyncMainRequest> {
+        let (ready, waiting) = std::mem::take(&mut self.waiting_sync_mains)
+            .into_iter()
+            .partition(|request| request.sync_context.project_id == project_id);
+        self.waiting_sync_mains = waiting;
+
+        ready
+    }
+}
+
+impl Default for ViewedPasses {
+    fn default() -> Self {
+        let (finished_tx, finished_rx) = mpsc::unbounded_channel();
+
+        Self {
+            finished_rx,
+            finished_tx,
+            projects: HashMap::new(),
+            waiting_sync_mains: Vec::new(),
+        }
+    }
+}
+
+/// Polling state of one viewed project between its passes.
+#[derive(Default)]
+struct ViewedProjectPoll {
+    /// Base comparisons memoized for the project's repository, moved into
+    /// its pass while one runs.
+    base_comparison_cache: BaseComparisonCache,
+    /// Whether a pass of the project is running.
+    is_running: bool,
+}
+
+/// One viewed project's git-status pass, run in its own task.
+struct ViewedPass {
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    base_comparison_cache: BaseComparisonCache,
+    /// Polling context the pass reads.
+    context: SyncContext,
+    /// Fetch pass the pass counts as for the project's fetch backoff, read
+    /// only when it fetches.
+    fetch_pass_index: u64,
+    fetch_plan: FetchPlan,
+    finished_tx: mpsc::UnboundedSender<ViewedPassFinished>,
+    /// Published viewed contexts, read to tell whether newer inputs
+    /// superseded the pass.
+    viewed_context_rx: watch::Receiver<Vec<SyncContext>>,
+}
+
+impl ViewedPass {
+    /// Runs the pass as one independent `sync.refresh` trace marked with
+    /// `agentty.sync.viewed_project`, emits the project's snapshot unless
+    /// newer polling inputs superseded the pass, and reports back to the
+    /// orchestrator.
+    ///
+    /// Phases, failures, and cancellation follow the active project's pass;
+    /// review requests are not refreshed.
+    async fn run(self) {
+        let Self {
+            app_event_tx,
+            mut base_comparison_cache,
+            context,
+            fetch_pass_index,
+            fetch_plan,
+            finished_tx,
+            viewed_context_rx,
+        } = self;
+        let refresh = Span::root(
+            "sync.refresh",
+            vec![
+                KeyValue::new("agentty.sync.review_pass", false),
+                KeyValue::new("agentty.sync.viewed_project", true),
+            ],
+        );
+        let (outcome, fetch_succeeded) = async {
+            let repo_root = repo_root(&context).await;
+            let (fetch_outcome, fetch_succeeded) =
+                run_fetch_plan(&context, &repo_root, fetch_plan).await;
+            let (status, session_statuses, status_outcome) =
+                branch_status_snapshot(&context, &repo_root, &mut base_comparison_cache).await;
+            let outcome = combined_outcome(fetch_outcome, status_outcome);
+            let is_superseded = viewed_context_rx
+                .borrow()
+                .iter()
+                .find(|published| published.project_id == context.project_id)
+                .is_none_or(|published| published.generation != context.generation);
+            if is_superseded {
+                return (
+                    combined_outcome(outcome, Outcome::Canceled),
+                    fetch_succeeded,
+                );
+            }
+
+            // Fire-and-forget: receiver may be dropped during shutdown.
+            let _ = app_event_tx.send(AppEvent::GitStatusUpdated {
+                generation: context.generation,
+                project_id: context.project_id,
+                session_statuses,
+                status,
+            });
+
+            (outcome, fetch_succeeded)
+        }
+        .with_context(refresh.context())
+        .await;
+        refresh.finish(outcome);
+
+        // Fire-and-forget: the orchestrator only stops at app shutdown.
+        let _ = finished_tx.send(ViewedPassFinished {
+            base_comparison_cache,
+            fetch_pass_index,
+            fetch_succeeded,
+            generation: context.generation,
+            project_id: context.project_id,
+        });
+    }
+}
+
+/// Report one viewed project's pass sends back to the orchestrator.
+struct ViewedPassFinished {
+    /// Base comparisons the pass memoized, kept for the project's next pass.
+    base_comparison_cache: BaseComparisonCache,
+    /// Fetch pass the pass counted as.
+    fetch_pass_index: u64,
+    /// Whether the pass's fetch succeeded, or `None` when it did not fetch.
+    fetch_succeeded: Option<bool>,
+    /// Generation of the context the pass read, which tells the
+    /// orchestrator whether newer polling inputs superseded it.
+    generation: u64,
+    project_id: i64,
+}
+
+/// What one pass does about its project's remote before reading branch
+/// statuses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FetchPlan {
+    /// Fetches after `consecutive_failures` failed fetches in a row.
+    Fetch { consecutive_failures: u32 },
+    /// Skips the fetch while the project's explicit sync runs.
+    DeferredForSync,
+    /// Skips the fetch while another pass of the project runs.
+    DeferredForPass,
+    /// Skips the fetch while repeated failures keep the project in backoff.
+    BackedOff,
+    /// Skips the fetch because the pass follows a requested refresh or
+    /// reruns a superseded pass, comparing against the refs fetched last.
+    Reuse,
+}
+
 /// Review-request work included in one read-only refresh pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReviewPass {
@@ -1232,6 +1650,136 @@ struct ReviewRequestPassUpdate {
     result: Result<SyncReviewRequestTaskResult, String>,
     /// Polling target that produced this result.
     target: ReviewRequestSyncTarget,
+}
+
+/// Returns the repository root of the context's project, or its working
+/// directory when Git finds none.
+async fn repo_root(context: &SyncContext) -> PathBuf {
+    let working_dir = context.working_dir.clone();
+
+    context
+        .git_client
+        .find_git_repo_root(working_dir.clone())
+        .await
+        .unwrap_or(working_dir)
+}
+
+/// Carries out `fetch_plan` for the project at `repo_root` and returns the
+/// fetch outcome with whether a fetch ran and succeeded.
+///
+/// A skipped fetch starts no phase and completes; one skipped for the
+/// project's sync, another pass of the project, or backoff marks the
+/// enclosing trace with `agentty.sync.fetch_deferred_for_sync`,
+/// `agentty.sync.fetch_deferred_for_pass`, or
+/// `agentty.sync.fetch_backed_off`. A failed fetch ends its `git.fetch`
+/// phase with the bounded [`ag_git::GitError::failure_class`] as
+/// `error.type` plus the consecutive failure count it reaches.
+async fn run_fetch_plan(
+    context: &SyncContext,
+    repo_root: &Path,
+    fetch_plan: FetchPlan,
+) -> (Outcome, Option<bool>) {
+    let consecutive_failures = match fetch_plan {
+        FetchPlan::Fetch {
+            consecutive_failures,
+        } => consecutive_failures,
+        FetchPlan::DeferredForSync => {
+            ag_telemetry::current_attribute("agentty.sync.fetch_deferred_for_sync", true);
+
+            return (Outcome::Completed, None);
+        }
+        FetchPlan::DeferredForPass => {
+            ag_telemetry::current_attribute("agentty.sync.fetch_deferred_for_pass", true);
+
+            return (Outcome::Completed, None);
+        }
+        FetchPlan::BackedOff => {
+            ag_telemetry::current_attribute("agentty.sync.fetch_backed_off", true);
+
+            return (Outcome::Completed, None);
+        }
+        FetchPlan::Reuse => return (Outcome::Completed, None),
+    };
+
+    let fetch = Span::child("git.fetch");
+    let result = context
+        .git_client
+        .fetch_remote(repo_root.to_path_buf())
+        .with_context(fetch.context())
+        .await;
+    let Err(error) = result else {
+        fetch.finish(Outcome::Completed);
+
+        return (Outcome::Completed, Some(true));
+    };
+
+    let consecutive_failures = consecutive_failures.saturating_add(1);
+    let failure_class = error.failure_class();
+    tracing::warn!(
+        project_id = context.project_id,
+        consecutive_failures,
+        failure_class,
+        "background git fetch failed: {error}",
+    );
+    fetch.attribute(
+        "agentty.sync.consecutive_failures",
+        i64::from(consecutive_failures),
+    );
+    fetch.fail(failure_class);
+
+    (Outcome::Failed, Some(false))
+}
+
+/// Reads the project branch's ahead/behind counts against its upstream and
+/// each target session's git status in one `sync.branch_status` phase.
+///
+/// A failed tracking-status query fails the returned outcome but still
+/// compares sessions by branch name. Session base comparisons whose commits
+/// did not move since `base_comparison_cache` recorded them are reused
+/// without spawning Git.
+async fn branch_status_snapshot(
+    context: &SyncContext,
+    repo_root: &Path,
+    base_comparison_cache: &mut BaseComparisonCache,
+) -> (
+    Option<(u32, u32)>,
+    HashMap<SessionId, SessionGitStatus>,
+    Outcome,
+) {
+    let branch_status = Span::child("sync.branch_status");
+    branch_status.attribute(
+        "agentty.sync.targets",
+        attribute_count(context.session_git_status_targets.len()),
+    );
+    let (branch_tracking_statuses, session_statuses, status_outcome) = async {
+        let (branch_tracking_statuses, status_outcome) = match context
+            .git_client
+            .branch_tracking_statuses(repo_root.to_path_buf())
+            .await
+        {
+            Ok(branch_tracking_statuses) => (branch_tracking_statuses, Outcome::Completed),
+            Err(_) => (HashMap::new(), Outcome::Failed),
+        };
+        let session_statuses = base_comparison_cache
+            .session_git_statuses(
+                &branch_tracking_statuses,
+                repo_root,
+                &context.session_git_status_targets,
+                context.git_client.as_ref(),
+            )
+            .await;
+
+        (branch_tracking_statuses, session_statuses, status_outcome)
+    }
+    .with_context(branch_status.context())
+    .await;
+    branch_status.finish(status_outcome);
+    let project_branch_name = context.project_branch_name.as_deref().unwrap_or_default();
+    let status = branch_tracking_statuses
+        .get(project_branch_name)
+        .and_then(|branch_status| branch_status.upstream_status);
+
+    (status, session_statuses, status_outcome)
 }
 
 /// Returns the more severe of two phase outcomes: any failure fails the
