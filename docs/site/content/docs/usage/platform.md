@@ -10,10 +10,10 @@ your own. Pairing works as in [Remote Control](@/docs/usage/remote-control.md): 
 needs the one-time code, you approve it in the terminal, and its traffic is encrypted
 end to end. Signing in grants no device any access.
 
-The platform is a preview feature. Start Agentty with `--experimental-platform` to add
-the `Platform` tab after the other tabs. The flag works with or without
-`--experimental-remote`, but not with `--remote-relay`; see
-[Relay Precedence](#usage-platform-relay-precedence).
+The `Platform` tab follows the other tabs. Every launch offers it, with or without
+`--experimental-remote`, except one with `--remote-relay`; see
+[Relay Precedence](#usage-platform-relay-precedence). Agentty contacts the platform only
+after you sign in.
 
 <!-- more -->
 
@@ -21,7 +21,6 @@ the `Platform` tab after the other tabs. The flag works with or without
 
 <a id="usage-platform-sign-in"></a>
 
-1. Start Agentty with `agentty --experimental-platform`.
 1. Press `Tab` or `Shift+Tab` in a list until the `Platform` tab opens, then press
    `Enter`.
 1. The tab shows a code and a sign-in page. Press `o` to open the page here, or `c` to
@@ -79,9 +78,9 @@ the change lasts only until Agentty quits.
 
 <a id="usage-platform-relay-precedence"></a> A relay named with `--remote-relay` always
 wins. A launch with it does not offer the `Platform` tab and does not contact the
-platform, even with `--experimental-platform`: Agentty neither checks the account nor
-registers with the platform, and leaves the saved sign-in for a later launch. Neither
-relay ever receives the platform's access token.
+platform: Agentty neither checks the account nor registers with the platform, and leaves
+the saved sign-in for a later launch. Neither relay ever receives the platform's access
+token.
 
 Use `--platform-url <URL>` to sign in to another platform; it defaults to
 `https://platform.agentty.xyz`. Plain `http://` is accepted only for this computer. A

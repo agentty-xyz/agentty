@@ -101,8 +101,7 @@ pub(crate) enum Access {
 /// Platform client, sign-in state, and the token while signed in.
 pub(crate) struct Platform {
     browser: Arc<dyn BrowserClient>,
-    /// Client for the configured platform, once `--experimental-platform`
-    /// enabled the tab.
+    /// Client for the configured platform, once the launch enabled the tab.
     client: Option<Arc<dyn PlatformClient>>,
     /// Whether the next account check `Enter` asks for connects, because it
     /// is the first check of a sign-in that could not be saved.
@@ -153,7 +152,8 @@ impl Platform {
         }
     }
 
-    /// Returns whether `--experimental-platform` enabled the tab.
+    /// Returns whether the launch enabled the tab, which a launch with
+    /// `--remote-relay` does not.
     pub(crate) fn is_enabled(&self) -> bool {
         self.client.is_some()
     }
@@ -237,7 +237,7 @@ pub fn platform_instance_name(host_name: &str) -> String {
 }
 
 impl App {
-    /// Offers the experimental Platform tab for the platform at
+    /// Offers the Platform tab for the platform at
     /// `platform_url`, reached through `client`, naming this Agentty
     /// `instance_name` there. A sign-in saved for the same platform is
     /// checked right away, and with keep on, remote control starts once the

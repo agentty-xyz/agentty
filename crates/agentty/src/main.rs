@@ -56,7 +56,6 @@ struct Cli {
         long,
         value_name = "URL",
         default_value = DEFAULT_PLATFORM_URL,
-        requires = "platform",
         value_parser = parse_platform_url
     )]
     platform_url: String,
@@ -76,8 +75,8 @@ struct Cli {
     /// Relay that remote control registers with, such as
     /// `wss://relay.example`, so devices can pair and connect without a
     /// tunnel. Traffic through it is encrypted end to end. It offers the
-    /// Remote tab on its own, and the launch then contacts no platform, even
-    /// with `--experimental-platform`.
+    /// Remote tab on its own, and replaces the Platform tab: the launch then
+    /// contacts no platform.
     #[arg(long, value_name = "URL", value_parser = parse_relay_url)]
     remote_relay: Option<String>,
 }
@@ -89,22 +88,17 @@ impl Cli {
         self.experimental.remote || self.remote_relay.is_some()
     }
 
-    /// Returns whether this launch offers the Platform tab: with
-    /// `--experimental-platform` unless `--remote-relay` names a relay, which
-    /// keeps the platform out of the launch and its saved sign-in untouched.
+    /// Returns whether this launch offers the Platform tab: always, unless
+    /// `--remote-relay` names a relay, which keeps the platform out of the
+    /// launch and its saved sign-in untouched.
     fn offers_platform(&self) -> bool {
-        self.experimental.platform && self.remote_relay.is_none()
+        self.remote_relay.is_none()
     }
 }
 
 /// Opt-in preview features, disabled unless their launch flags are present.
 #[derive(Debug, Default, clap::Args)]
 struct ExperimentalFeatures {
-    /// Offers the Platform tab, which signs in to an Agentty Platform so
-    /// paired devices can reach this Agentty through its relay. Ignored with
-    /// `--remote-relay`.
-    #[arg(long = "experimental-platform")]
-    platform: bool,
     /// Offers the Remote tab, which lets a paired phone or browser follow
     /// and reply to sessions through a loopback listener.
     #[arg(long = "experimental-remote")]

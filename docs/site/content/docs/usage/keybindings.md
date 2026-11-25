@@ -102,7 +102,7 @@ Appears only with `agentty --experimental-remote` or `--remote-relay <URL>`. See
 
 ## Platform
 
-Appears only with `agentty --experimental-platform`, and not with `--remote-relay`. See
+Appears unless Agentty starts with `--remote-relay`. See
 [Agentty Platform](@/docs/usage/platform.md).
 
 | Key                 | Action                                                            |

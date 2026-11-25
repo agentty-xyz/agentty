@@ -140,8 +140,8 @@ async fn remote_control_tab_relay() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Verify `--remote-relay` keeps the platform out of the launch even with
-/// `--experimental-platform` and a saved sign-in: no Platform tab and no
-/// request to the platform.
+/// `--platform-url` and a saved sign-in: no Platform tab and no request to
+/// the platform.
 #[tokio::test]
 async fn remote_control_tab_relay_skips_the_platform() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange: a platform that answers nothing it is asked.
@@ -157,7 +157,6 @@ async fn remote_control_tab_relay_skips_the_platform() -> Result<(), Box<dyn std
         .with_git()
         .with_terminal_size(140, 36)
         .args([
-            "--experimental-platform".to_string(),
             "--platform-url".to_string(),
             platform.uri(),
             "--remote-relay".to_string(),

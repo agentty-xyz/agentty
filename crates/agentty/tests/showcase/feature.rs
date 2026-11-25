@@ -52,7 +52,7 @@ Sleep 1800ms
 
 /// Re-records `tab_tour.gif`: a cycle through every tab.
 ///
-/// Shows each major view — Projects, Sessions, and Settings — to
+/// Shows each major view — Projects, Sessions, Settings, and Platform — to
 /// give a complete overview of the agentty interface.
 pub(crate) async fn generate_tab_tour() -> ShowcaseResult<PathBuf> {
     let steps = "\

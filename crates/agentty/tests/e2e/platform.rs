@@ -78,15 +78,11 @@ fn account_with_relay(uri: &str) -> ResponseTemplate {
 }
 
 /// Launch arguments offering only the Platform tab, signed in to `server`.
-fn platform_args(server: &MockServer) -> [String; 3] {
-    [
-        "--experimental-platform".to_string(),
-        "--platform-url".to_string(),
-        server.uri(),
-    ]
+fn platform_args(server: &MockServer) -> [String; 2] {
+    ["--platform-url".to_string(), server.uri()]
 }
 
-/// Verify `--experimental-platform` alone adds the Platform tab, where
+/// Verify a launch without remote flags offers the Platform tab, where
 /// `Enter` signs in with a device code and the approved sign-in ends with
 /// remote control running through the platform's relay, with a pairing
 /// link on the platform's page; `Enter` stops it, and `l` signs out and

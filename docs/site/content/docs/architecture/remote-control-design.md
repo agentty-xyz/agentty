@@ -300,11 +300,11 @@ another. Limits on what a client can hold replace accounts.
 ### No relay is used unless the user chooses one
 
 Agentty uses a relay only when started with `--remote-relay`, or when the user connects
-through a platform that offers one with `--experimental-platform`: by signing in, by
-starting remote control in the `Platform` tab, or, at launch, only after turning on keep
-on, which is saved with the sign-in and cleared with it. The two never combine: a launch
-with `--remote-relay` does not contact the platform at all. Nothing leaves the computer
-unless the user chooses a relay or a platform.
+through a platform that offers one: by signing in, by starting remote control in the
+`Platform` tab, or, at launch, only after turning on keep on, which is saved with the
+sign-in and cleared with it. The two never combine: a launch with `--remote-relay` does
+not contact the platform at all. Nothing leaves the computer unless the user chooses a
+relay or a platform.
 
 ### A connection runs up to eight requests at once
 
