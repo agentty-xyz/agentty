@@ -405,7 +405,8 @@ fn test_prompt_slash_commands_lists_all_commands() {
             "/model",
             "/reasoning",
             "/style",
-            "/fast"
+            "/fast",
+            "/usage"
         ]
     );
 }
@@ -1203,6 +1204,27 @@ async fn test_submit_current_text_prompt_ignores_missing_context_and_demotes_sla
     // Assert
     assert!(matches!(app.mode, AppMode::View { .. }));
     assert_eq!(app.sessions.sessions()[0].prompt, "/model");
+}
+
+#[tokio::test]
+async fn test_usage_slash_submit_opens_the_panel_above_the_cleared_composer() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("/usage", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+    // Act
+    run_prompt_slash_submit(&mut app, &prompt_context).await;
+
+    // Assert
+    let restored = match std::mem::replace(&mut app.mode, AppMode::List) {
+        AppMode::Usage(panel) => Some(panel.restore.into_mode()),
+        _ => None,
+    };
+    assert!(matches!(
+        restored,
+        Some(AppMode::Prompt { input, slash_state, .. })
+            if input.is_empty() && slash_state == PromptSlashState::default()
+    ));
 }
 
 #[tokio::test]

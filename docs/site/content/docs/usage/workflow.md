@@ -156,10 +156,10 @@ accept stays queued with a notice. Stopping the turn discards them like the rest
 queue. Other harnesses keep queued chat for the next turn, and so do task and graph
 runs, which work in their own conversations.
 
-While work runs, `/` offers only `/model`, `/reasoning`, `/style`, and `/fast`. `/model`
-and `/fast` changes wait until the active work and queue finish and appear as the last
-queued action; choosing the current value cancels the change. Pending changes are lost
-on restart.
+While work runs, `/` offers only `/model`, `/reasoning`, `/style`, `/fast`, and
+`/usage`. `/model` and `/fast` changes wait until the active work and queue finish and
+appear as the last queued action; choosing the current value cancels the change. Pending
+changes are lost on restart.
 
 While composing, `Tab` focuses chat for scrolling; from there, `d` previews changes and
 `q` returns to the list with the draft kept.
@@ -504,6 +504,7 @@ draft.
 | `/reasoning` | Set reasoning effort for this session.                     |
 | `/style`     | Choose concise, balanced, or detailed answers.             |
 | `/fast`      | Toggle normal or fast responses for Claude or Codex.       |
+| `/usage`     | Show this session's token usage and estimated cost.        |
 
 `/apply` requires a completed focused review. Chat turns always run with editing
 permissions; see [Permissions](@/docs/agents/backends.md#permissions).
@@ -520,6 +521,34 @@ Settings to disable it.
 verification; **Balanced** adds useful context; **Detailed** explains decisions and
 trade-offs. Explicit prompt instructions take precedence, and style never changes
 permissions or required output.
+
+### Session Usage
+
+<a id="usage-session-usage"></a> `/usage`, or `u` in session view, opens the session's
+token usage; `Esc` closes it, and `j` / `k` or `PgUp` / `PgDn` scroll it when it is
+taller than the terminal. It reads only what Agentty recorded, plus each running turn's
+usage after every completed model request, refreshes when new usage is saved, and never
+calls a model.
+
+The panel sums the estimated cost, tokens, turns, and requests, shows the latest and
+largest context fill, and lists one row per model and purpose. Utility work such as
+titles, commit messages, reviews, and rebases appears dimmed after the model. `Input`
+includes cached tokens and `Output` includes reasoning. Narrow terminals drop the
+cache-write, reasoning, context, and cached columns first; the cost column stays.
+
+Figures carry a mark when they are not exact, and a note under the table names the
+cause:
+
+| Mark      | Meaning                                                                                            |
+| --------- | -------------------------------------------------------------------------------------------------- |
+| `≥`       | Lower bound: some requests reported no tokens or had no price, or the run predates detailed usage. |
+| `?`       | Unreported: no request of that model reported token counts.                                        |
+| `unknown` | Unpriced: no price for that model; a total over other priced models leaves it out.                 |
+| `—`       | Not recorded: the backend does not report it, or the run predates detailed usage.                  |
+
+A lower-bound cost below half a cent reads `≥$0.00`. Costs are estimates from built-in
+list prices, configured prices, or the agent's own report; the provider's bill is
+authoritative.
 
 ## Agent Definitions
 

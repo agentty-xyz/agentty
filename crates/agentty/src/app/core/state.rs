@@ -352,6 +352,10 @@ pub struct App {
     pub(super) screen_clipboard: Arc<dyn TerminalClipboard>,
     /// Shares application-wide services and external clients across workflows.
     pub(crate) services: AppServices,
+    /// Cumulative usage of each running turn, reported live and dropped once
+    /// the store records it or the turn stops.
+    pub(crate) session_live_usage:
+        HashMap<crate::domain::session_usage::LiveUsageKey, ag_contracts::TurnUsage>,
     /// Tracks per-session thinking text rendered while background work is
     /// active.
     pub(crate) session_progress_messages: HashMap<SessionId, String>,

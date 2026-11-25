@@ -205,6 +205,19 @@ pub(crate) enum AppEvent {
         progress_message: Option<String>,
         session_id: SessionId,
     },
+    /// Replaces the cumulative usage of one running turn, reported after
+    /// each completed model request.
+    SessionUsageUpdated {
+        key: crate::domain::session_usage::LiveUsageKey,
+        usage: ag_contracts::TurnUsage,
+    },
+    /// Indicates the store recorded usage for a session, or that the live
+    /// usage of `run`, when given, ended because its usage is now stored or
+    /// its turn stopped.
+    SessionUsageRecorded {
+        run: Option<crate::domain::session_usage::LiveUsageRun>,
+        session_id: SessionId,
+    },
     /// Indicates completion of a list-mode sync workflow.
     SyncMainCompleted { completion: SyncMainCompletion },
     /// Indicates list-mode sync is resolving rebase conflicts.
@@ -458,6 +471,8 @@ pub(super) struct AppEventBatch {
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
+    /// Live usage changes in arrival order.
+    pub(super) session_live_usage_ops: Vec<crate::app::session_usage::LiveUsageOp>,
     pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
     pub(super) session_rebase_review_invalidated_ids: HashSet<SessionId>,
     pub(super) session_reasoning_level_updates:
@@ -545,6 +560,7 @@ impl AppEventBatch {
             || !self.review_progress_updates.is_empty()
             || !self.session_model_updates.is_empty()
             || !self.session_progress_updates.is_empty()
+            || !self.session_live_usage_ops.is_empty()
             || !self.session_turn_updates.is_empty()
             || !self.session_generated_turn_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
@@ -715,7 +731,9 @@ impl AppEventBatch {
             } => self.collect_session_diff_loaded(request_id, result, session_id),
             event @ (AppEvent::SessionTurnReady { .. }
             | AppEvent::SessionTurnCleared { .. }
-            | AppEvent::SessionProgressUpdated { .. }) => self.collect_activity_event(event),
+            | AppEvent::SessionProgressUpdated { .. }
+            | AppEvent::SessionUsageUpdated { .. }
+            | AppEvent::SessionUsageRecorded { .. }) => self.collect_activity_event(event),
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
                 self.collect_session_workflow_notice_updated(session_id, notice);
             }
@@ -788,10 +806,11 @@ impl AppEventBatch {
         }
     }
 
-    /// Collects a session turn's live timeline and progress.
+    /// Collects a session turn's live timeline, progress, and live usage.
     ///
     /// The timeline keeps its handle, which the foreground groups when it
-    /// applies the batch and again on later frames; a later clear wins.
+    /// applies the batch and again on later frames; a later clear wins. Live
+    /// usage changes keep their arrival order.
     fn collect_activity_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::SessionTurnReady { session_id, turn } => {
@@ -806,6 +825,14 @@ impl AppEventBatch {
             } => {
                 self.session_progress_updates
                     .insert(session_id, progress_message);
+            }
+            AppEvent::SessionUsageUpdated { key, usage } => {
+                self.session_live_usage_ops
+                    .push(crate::app::session_usage::LiveUsageOp::Update { key, usage });
+            }
+            AppEvent::SessionUsageRecorded { run, session_id } => {
+                self.session_live_usage_ops
+                    .push(crate::app::session_usage::LiveUsageOp::Recorded { run, session_id });
             }
             _ => unreachable!("only activity events are routed here"),
         }
@@ -1128,13 +1155,19 @@ impl AppEventBatch {
     /// even when the matching `SessionUpdated` event lands in a later tick.
     /// Latest reducer-facing fields replace the older projection, while token
     /// deltas accumulate to preserve usage across multiple queued completions
-    /// for the same session.
+    /// for the same session. The turn's usage is stored before its response
+    /// is sent, so its live usage ends here, in arrival order.
     fn collect_agent_response_received(
         &mut self,
         session_id: SessionId,
         turn_applied_state: TurnAppliedState,
     ) {
         self.session_ids.insert(session_id.clone());
+        self.session_live_usage_ops
+            .push(crate::app::session_usage::LiveUsageOp::Recorded {
+                run: Some(crate::domain::session_usage::LiveUsageRun::SessionTurn),
+                session_id: session_id.clone(),
+            });
 
         match self.applied_turns.entry(session_id) {
             Entry::Occupied(mut occupied_entry) => {
@@ -1751,6 +1784,8 @@ impl App {
         for diff_preview_update in std::mem::take(&mut event_batch.diff_preview_updates) {
             self.apply_diff_preview_update(&diff_preview_update);
         }
+        self.apply_live_usage_ops(std::mem::take(&mut event_batch.session_live_usage_ops))
+            .await;
         for (session_id, diff_hash, request_id, progress) in
             std::mem::take(&mut event_batch.review_progress_updates)
         {
@@ -2137,7 +2172,8 @@ impl App {
             | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
-            | AppMode::Help { .. } => false,
+            | AppMode::Help { .. }
+            | AppMode::Usage(_) => false,
         }
     }
 

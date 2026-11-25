@@ -25,6 +25,7 @@ use crate::app::spawn;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::session_usage::LiveUsageRun;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::infra::db::TaskAgentTurnMetadata;
 
@@ -191,13 +192,9 @@ async fn execute(
         .map_err(turn::session_error_from_agent_error)?;
     let (event_tx, relayed_rx) = mpsc::unbounded_channel();
     let (relay_tx, event_rx) = mpsc::unbounded_channel();
-    let consumer = spawn::spawn_detached(turn::consume_turn_events(
-        event_rx,
-        context.app_event_tx.clone(),
-        context.session_id.clone(),
-        context.child_pid.clone(),
-        context.clock.clone(),
-    ));
+    let (live_usage, consume_events) =
+        turn::turn_event_consumer(context, event_rx, LiveUsageRun::Attempt(attempt_id.clone()));
+    let consumer = spawn::spawn_detached(consume_events);
     let base_branch_scope = turn::base_branch_scope(context);
     let base_branch =
         BaseBranchSnapshot::capture(&base_branch_scope, dispatch.node.agent.kind()).await?;
@@ -236,6 +233,8 @@ async fn execute(
             },
         )
         .await?;
+    // The turn's usage is stored now; any earlier return drops it unstored.
+    drop(live_usage);
     if recorded {
         mirror_node_questions(context, &dispatch.node.id, &result.assistant_message);
     }

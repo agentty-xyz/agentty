@@ -1320,6 +1320,59 @@ async fn planner_success_never_signals_implementer_review() {
     );
 }
 
+#[tokio::test]
+async fn task_turn_ends_its_live_usage_once_its_usage_is_stored() {
+    // Arrange
+    let (mut context, _pool) = execution_context().await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = event_tx;
+    let planner = request("plan");
+    context
+        .db
+        .tasks()
+        .claim_agent_attempt("sess", &planner, "agent_task")
+        .await
+        .expect("planner claim");
+    context
+        .db
+        .operations()
+        .mark_session_operation_running("task-attempt:plan")
+        .await
+        .expect("planner running");
+    let (request_tx, _request_rx) = mpsc::unbounded_channel();
+    let cancellation = CancellationToken::new();
+    let factory = implementation_factory("planner", request_tx, &cancellation);
+
+    // Act
+    let result = task_turn::run(
+        &context,
+        Arc::new(MockRunClient::new()),
+        &planner,
+        &factory,
+        cancellation,
+    )
+    .await;
+
+    // Assert: the task turn's own attempt key ends, so concurrent attempts
+    // and the session's ordinary turn keep their live usage.
+    assert!(result.is_ok(), "{result:?}");
+    let ended_runs = std::iter::from_fn(|| event_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::SessionUsageRecorded { run, session_id } => Some((run, session_id)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ended_runs,
+        [(
+            Some(crate::domain::session_usage::LiveUsageRun::Attempt(
+                "plan".to_string()
+            )),
+            SessionId::from("sess")
+        )]
+    );
+}
+
 /// Drains worker events and returns attempts that signaled Implementer
 /// success for the fixture session.
 fn implementer_review_signals(event_rx: &mut mpsc::UnboundedReceiver<AppEvent>) -> Vec<String> {

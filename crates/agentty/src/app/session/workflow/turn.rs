@@ -29,6 +29,7 @@ use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseSt
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
+use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
@@ -244,13 +245,9 @@ pub(super) async fn run_channel_turn(
     .await;
     let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
     let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-    let consumer = spawn::spawn_traced(consume_turn_events(
-        event_rx,
-        context.app_event_tx.clone(),
-        context.session_id.clone(),
-        Arc::clone(&context.child_pid),
-        Arc::clone(&context.clock),
-    ));
+    let (live_usage, consume_events) =
+        turn_event_consumer(context, event_rx, LiveUsageRun::SessionTurn);
+    let consumer = spawn::spawn_traced(consume_events);
 
     spawn_request_title_generation(
         RequestTitleInput::from_worker(
@@ -298,6 +295,8 @@ pub(super) async fn run_channel_turn(
             },
         )
         .await;
+    // The result's usage is stored now, or the turn ended without it.
+    drop(live_usage);
     activity.clear_live(&context.app_event_tx, &context.session_id);
     Span::child("session.finalize")
         .scope(post_turn::finalize_channel_turn(&finalizer, &result))
@@ -617,6 +616,69 @@ pub(super) async fn load_session_speed_mode(
         .unwrap_or_default()
 }
 
+/// Live usage of one running turn.
+///
+/// Publishes the turn's cumulative usage as it runs. Dropping the last
+/// handle reports that the live usage ended, so the owner drops it right
+/// after the turn's usage is stored, or on any early return without it.
+pub(super) struct LiveUsage {
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    key: LiveUsageKey,
+}
+
+impl LiveUsage {
+    /// Starts live usage of `run` in `session_id`.
+    pub(super) fn new(
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        session_id: SessionId,
+        run: LiveUsageRun,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            app_event_tx,
+            key: LiveUsageKey { run, session_id },
+        })
+    }
+
+    /// Publishes the turn's cumulative usage so far.
+    fn publish(&self, usage: ag_contracts::TurnUsage) {
+        SessionTaskService::set_session_live_usage(&self.app_event_tx, &self.key, usage);
+    }
+}
+
+impl Drop for LiveUsage {
+    fn drop(&mut self) {
+        SessionTaskService::end_session_live_usage(&self.app_event_tx, &self.key);
+    }
+}
+
+/// Returns the live usage of `run` in the worker's session and the
+/// [`consume_turn_events`] future that publishes it from `event_rx`, for
+/// the caller to spawn.
+pub(super) fn turn_event_consumer(
+    context: &SessionWorkerContext,
+    event_rx: mpsc::UnboundedReceiver<TurnEvent>,
+    run: LiveUsageRun,
+) -> (
+    Arc<LiveUsage>,
+    impl Future<Output = super::activity::TurnActivity> + Send + 'static,
+) {
+    let live_usage = LiveUsage::new(
+        context.app_event_tx.clone(),
+        context.session_id.clone(),
+        run,
+    );
+    let consume_events = consume_turn_events(
+        event_rx,
+        context.app_event_tx.clone(),
+        context.session_id.clone(),
+        Arc::clone(&context.child_pid),
+        Arc::clone(&live_usage),
+        Arc::clone(&context.clock),
+    );
+
+    (live_usage, consume_events)
+}
+
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects,
 /// stamping them with `clock` so pinned clocks keep live times
 /// deterministic.
@@ -631,8 +693,8 @@ pub(super) async fn load_session_speed_mode(
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and keeps the latest message as the turn's fallback progress.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
-/// - [`TurnEvent::UsageUpdated`]: ignored; the turn's final usage is persisted
-///   from `run_turn`'s result.
+/// - [`TurnEvent::UsageUpdated`]: publishes the turn's cumulative live usage
+///   through `live_usage`; the final usage is persisted from the turn's result.
 /// - [`TurnEvent::Failed`]: reserved; ignored here because completion is
 ///   signalled by `run_turn`'s return value.
 ///
@@ -644,6 +706,7 @@ pub(super) async fn consume_turn_events(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     session_id: SessionId,
     child_pid: Arc<Mutex<Option<u32>>>,
+    live_usage: Arc<LiveUsage>,
     clock: Arc<dyn Clock>,
 ) -> super::activity::TurnActivity {
     let mut activity = super::activity::TurnActivity::default();
@@ -653,6 +716,7 @@ pub(super) async fn consume_turn_events(
         app_event_tx: &app_event_tx,
         child_pid: child_pid.as_ref(),
         clock: clock.as_ref(),
+        live_usage: live_usage.as_ref(),
         session_id: &session_id,
     };
     activity.start(consumer.now());
@@ -695,6 +759,7 @@ struct TurnEventConsumer<'a> {
     app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
     child_pid: &'a Mutex<Option<u32>>,
     clock: &'a dyn Clock,
+    live_usage: &'a LiveUsage,
     session_id: &'a SessionId,
 }
 
@@ -710,9 +775,9 @@ impl TurnEventConsumer<'_> {
             }
             TurnEvent::Notice(notice) => activity.observe_notice(&notice),
             TurnEvent::PidUpdate(pid) => set_child_pid(self.child_pid, pid),
-            TurnEvent::ThoughtDelta(_) | TurnEvent::UsageUpdated(_) | TurnEvent::Failed(_) => {
-                // Completion and final usage arrive with run_turn's return
-                // value.
+            TurnEvent::UsageUpdated(usage) => self.live_usage.publish(usage),
+            TurnEvent::ThoughtDelta(_) | TurnEvent::Failed(_) => {
+                // Completion arrives with run_turn's return value.
             }
         }
     }

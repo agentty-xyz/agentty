@@ -138,6 +138,7 @@ The full set in **Review**, subject to session and forge availability:
 | `c`                 | Show linked review-request comments                 |
 | `d`                 | Show diff in any state, including live edits        |
 | `w`                 | Inspect saved execution graphs                      |
+| `u`                 | Show token usage and estimated cost                 |
 | `f`                 | Show, generate, or regenerate focused review        |
 | `F`                 | Fork session with copied transcript history         |
 | `W`                 | Watch an open review request, or stop watching      |
@@ -157,7 +158,7 @@ State-specific differences:
   retracts the newest queued message, then stops the turn. `Ctrl+s` sends queued chat
   into the running turn when the harness supports it; see
   [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
-- **InProgress / Rebasing**: Slash commands offer only settings; see
+- **InProgress / Rebasing**: Slash commands offer only settings and `/usage`; see
   [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 - **Rebasing**: `Enter` and `p` queue work; cancellation is unavailable.
 - **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer.
@@ -167,6 +168,18 @@ State-specific differences:
 - **Done / Canceled**: `c` confirms a continuation draft and linked comments are hidden;
   `d` shows the archived diff.
 - **Queued / Merging**: Navigation, scrolling, diff, and help only.
+
+## Usage Panel
+
+Press `u` from session view or run `/usage` in the composer; see
+[Session Usage](@/docs/usage/workflow.md#usage-session-usage).
+
+| Key             | Action                                        |
+| --------------- | --------------------------------------------- |
+| `j` / `↓`       | Scroll down one line when the panel overflows |
+| `k` / `↑`       | Scroll up one line                            |
+| `PgDn` / `PgUp` | Scroll down / up one page                     |
+| `Esc`           | Close and return to the view or composer      |
 
 ## Execution Graph Inspector
 

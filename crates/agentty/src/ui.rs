@@ -33,6 +33,8 @@ pub(crate) mod session_output_assembly;
 pub(crate) mod session_output_line;
 /// Shared theme-aware UI styling helpers and status-display helpers.
 pub mod style;
+/// Usage figures, honesty marks, and the usage panel's content.
+pub(crate) mod usage_format;
 
 pub(crate) use app_render::render_app;
 /// A trait for UI components that enforces a standard rendering interface.

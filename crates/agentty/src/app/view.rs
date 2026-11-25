@@ -67,6 +67,8 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
+    pub(crate) session_live_usage:
+        &'a HashMap<crate::domain::session_usage::LiveUsageKey, ag_contracts::TurnUsage>,
     pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
     pub(crate) session_review: Option<SessionReviewView<'a>>,
     pub(crate) session_selected_index: Option<usize>,
@@ -129,6 +131,7 @@ impl App {
             session_branch_names: sessions.session_branch_names,
             session_git_statuses: sessions.session_git_statuses,
             session_index_by_id: sessions.session_index_by_id,
+            session_live_usage: &self.session_live_usage,
             session_progress_messages: &self.session_progress_messages,
             session_review,
             session_selected_index: sessions.selected_index,
@@ -165,6 +168,7 @@ pub(super) fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::ViewInfoPopup { restore_view, .. } => Some(&restore_view.session_id),
         AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
         AppMode::ApiKeyInput { dialog } => Some(dialog.session_id()),
+        AppMode::Usage(panel) => Some(panel.restore.session_id()),
         AppMode::ExecutionGraph(_)
         | AppMode::List
         | AppMode::SessionCreation { .. }

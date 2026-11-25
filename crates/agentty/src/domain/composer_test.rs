@@ -1108,7 +1108,14 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
     // Assert
     assert_eq!(
         labels,
-        vec!["/graph", "/model", "/reasoning", "/style", "/fast"]
+        vec![
+            "/graph",
+            "/model",
+            "/reasoning",
+            "/style",
+            "/fast",
+            "/usage"
+        ]
     );
     assert_eq!(suggestion_list.selected_index, 0);
 }
@@ -1167,7 +1174,7 @@ fn test_prompt_slash_command_list_omits_fast_for_unsupported_agent() {
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        vec!["/graph", "/model", "/reasoning", "/style"]
+        vec!["/graph", "/model", "/reasoning", "/style", "/usage"]
     );
 }
 

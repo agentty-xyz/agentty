@@ -59,7 +59,7 @@ pub use task::TaskRepository;
 pub use task_agent::TaskAgentContextRow;
 pub use task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnRow};
 pub use timestamp::TimestampSource;
-pub use usage::{SessionUsageRow, UsageRepository};
+pub use usage::{SessionUsageContextRow, SessionUsageRow, UsageRepository};
 
 #[cfg(test)]
 #[path = "test_support_test.rs"]

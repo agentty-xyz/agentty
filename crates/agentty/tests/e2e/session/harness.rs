@@ -21,14 +21,14 @@ use crate::common;
 use crate::common::{FeatureTest, ReleaseGate, SettingsRow};
 
 /// Answer the scripted provider returns after the write tool succeeds.
-const HARNESS_ANSWER: &str = "Created notes.txt through the harness.";
+pub(super) const HARNESS_ANSWER: &str = "Created notes.txt through the harness.";
 /// Answer the scripted provider returns to the resumed follow-up turn.
 const FOLLOW_UP_ANSWER: &str = "The notes say harness.";
 /// Project impact the scripted provider returns for focused review.
 const REVIEW_IMPACT: &str = "Harness reviewed the notes.";
 /// Local server endpoint nothing listens on, so a host's own Ollama never
 /// joins a scenario's harness models.
-const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
+pub(super) const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
 
 /// Returns one terminal session answer.
 fn answer(text: &str) -> ResponseTemplate {
@@ -44,7 +44,7 @@ fn answer(text: &str) -> ResponseTemplate {
 /// Scripts a provider that writes `notes.txt`, answers, then answers a
 /// follow-up turn. The commit-message and focused-review utilities, whose
 /// prompts repeat the session requests, get their own answers.
-async fn scripted_provider() -> MockServer {
+pub(super) async fn scripted_provider() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -1358,7 +1358,7 @@ fn open_model_picker() -> Journey {
 
 /// Switches a new session from its agent CLI to the harness Muse model, the
 /// second row after the no-local-models hint.
-fn switch_to_harness_muse_model() -> Journey {
+pub(super) fn switch_to_harness_muse_model() -> Journey {
     let mut journey = open_model_picker();
     journey.name = "switch_to_harness_muse_model".to_string();
 

@@ -1737,6 +1737,40 @@ impl SessionTaskService {
         }
     }
 
+    /// Emits one running turn's cumulative live usage.
+    pub(crate) fn set_session_live_usage(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        key: &crate::domain::session_usage::LiveUsageKey,
+        usage: ag_contracts::TurnUsage,
+    ) {
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionUsageUpdated {
+                key: key.clone(),
+                usage,
+            },
+            Some(key.session_id.as_str()),
+            "SessionUsageUpdated",
+        );
+    }
+
+    /// Reports that one running turn's live usage ended: the store now
+    /// records its usage, or the turn stopped without it.
+    pub(crate) fn end_session_live_usage(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        key: &crate::domain::session_usage::LiveUsageKey,
+    ) {
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionUsageRecorded {
+                run: Some(key.run.clone()),
+                session_id: key.session_id.clone(),
+            },
+            Some(key.session_id.as_str()),
+            "SessionUsageRecorded",
+        );
+    }
+
     /// Clears the transient thinking message for one session.
     pub(crate) fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
         Self::set_session_progress(app_event_tx, id, None);

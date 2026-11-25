@@ -24,6 +24,7 @@ pub mod session;
 /// Canonical persisted session transcript messages.
 pub mod session_message;
 pub mod session_order;
+pub mod session_usage;
 pub mod setting;
 /// User-selectable cap on concurrent provider-native subagents.
 pub mod subagent;

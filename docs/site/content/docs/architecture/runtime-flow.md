@@ -179,7 +179,13 @@ it only when it ran in that same folder. Utility runs record their usage through
 Worker: a `RunScope` names the session and the purpose (title, commit assistance,
 review, rebase assistance, or other), and the worker's run repository records each
 successful run under it. No model call is added: usage is a consequence of the turns
-that run.
+that run. The turn-event consumer forwards each update as
+`AppEvent::SessionUsageUpdated`, keyed by the running turn: the session turn, a rebase
+assist, or a task or graph attempt, so concurrent attempts stay separate. Each turn
+sends `AppEvent::SessionUsageRecorded` once its usage is stored, or when it ends without
+it, and the reducer drops that turn's live usage. Utility runs report their stored usage
+the same way through the Run Worker's run repository. The usage panel folds live usage
+into the recorded rows and reloads them on every `SessionUsageRecorded` for its session.
 
 Sandbox notices travel the same path as `TurnEvent::Notice`. Session turns, sync
 assistance turns, and execution-graph and task turns relay the turn's events before the

@@ -1831,3 +1831,78 @@ fn live_turn_events_change_observable_state() {
     // Assert
     assert!(plan.changes_observable_state);
 }
+
+#[tokio::test]
+async fn live_usage_events_keep_a_running_turn_until_its_usage_is_recorded() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let attempt = crate::domain::session_usage::LiveUsageKey {
+        run: crate::domain::session_usage::LiveUsageRun::Attempt("attempt".to_string()),
+        session_id: "live".into(),
+    };
+    let usage = ag_contracts::test_support::token_usage("model", 40, 2);
+    let event = AppEvent::SessionUsageUpdated {
+        key: attempt.clone(),
+        usage: usage.clone(),
+    };
+    let mut batch = AppEventBatch::default();
+    batch.collect_event(event.clone());
+
+    // Act
+    let plan = batch.drain_reduction_plan();
+    app.apply_app_events(event).await;
+
+    // Assert
+    assert!(plan.changes_observable_state);
+    assert_eq!(app.session_live_usage.get(&attempt), Some(&usage));
+
+    // Act: a task or graph turn reports its usage stored, with no response
+    // event and while its session keeps running.
+    app.apply_app_events(AppEvent::SessionUsageRecorded {
+        run: Some(attempt.run.clone()),
+        session_id: "live".into(),
+    })
+    .await;
+
+    // Assert
+    assert_eq!(app.session_live_usage.get(&attempt), None);
+}
+
+#[test]
+fn agent_response_ends_the_session_turns_live_usage_in_arrival_order() {
+    // Arrange
+    let mut batch = AppEventBatch::default();
+    let session_turn = crate::domain::session_usage::LiveUsageKey {
+        run: crate::domain::session_usage::LiveUsageRun::SessionTurn,
+        session_id: "live".into(),
+    };
+    let usage = ag_contracts::test_support::token_usage("model", 40, 2);
+
+    // Act
+    batch.collect_event(AppEvent::SessionUsageUpdated {
+        key: session_turn.clone(),
+        usage: usage.clone(),
+    });
+    batch.collect_event(AppEvent::AgentResponseReceived {
+        session_id: "live".into(),
+        turn_applied_state: TurnAppliedState {
+            follow_up_tasks: Vec::new(),
+            questions: Vec::new(),
+        },
+    });
+
+    // Assert
+    assert_eq!(
+        batch.session_live_usage_ops,
+        [
+            crate::app::session_usage::LiveUsageOp::Update {
+                key: session_turn.clone(),
+                usage,
+            },
+            crate::app::session_usage::LiveUsageOp::Recorded {
+                run: Some(session_turn.run),
+                session_id: "live".into(),
+            },
+        ]
+    );
+}

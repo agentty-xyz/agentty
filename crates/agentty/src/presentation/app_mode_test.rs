@@ -8,7 +8,7 @@ use super::{
     AppMode, ChatFocus, ConfirmationViewMode, DiffCommentTarget, DiffFocus, DiffLineCommentAnchor,
     DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview,
     DiffPreviewUnavailableReason, DiffRestoreTarget, DiffReviewComments, DiffSidebarFocus,
-    HelpContext, PromptModeSnapshot, QuestionModeSnapshot,
+    HelpContext, PromptModeSnapshot, QuestionModeSnapshot, UsageRestore,
 };
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionAttachmentState;
@@ -17,6 +17,7 @@ use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachment, PromptAttachmentState, PromptHistoryState,
     PromptSlashState,
 };
+use crate::test_support::prompt_mode_snapshot;
 
 #[test]
 fn test_diff_line_comments_edit_and_build_compact_prompt() {
@@ -259,6 +260,33 @@ fn test_confirmation_view_mode_into_view_mode_restores_view_identity() {
             scroll_offset: Some(70_000),
         } if session_id == "session-id"
     ));
+}
+
+#[test]
+fn test_usage_restore_reports_its_session_and_scroll() {
+    // Arrange
+    let view = UsageRestore::View(ConfirmationViewMode {
+        scroll_offset: Some(3),
+        session_id: "viewed".into(),
+    });
+    let prompt = UsageRestore::Prompt(Box::new(prompt_mode_snapshot("prompted", "draft")));
+
+    // Act
+    let identities = [&view, &prompt].map(|restore| {
+        (
+            restore.session_id().as_str().to_string(),
+            restore.scroll_offset(),
+        )
+    });
+
+    // Assert
+    assert_eq!(
+        identities,
+        [
+            ("viewed".to_string(), Some(3)),
+            ("prompted".to_string(), None)
+        ]
+    );
 }
 
 #[test]

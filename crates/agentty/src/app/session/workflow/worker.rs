@@ -43,6 +43,7 @@ use crate::domain::session::{
     PublishBranchAction, QueuedMessage, ReviewRequest, SessionHandles, SessionId, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
+use crate::domain::session_usage::LiveUsageRun;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{GeneratedTurnLabels, GeneratedTurnUpdate};
 use crate::domain::turn_prompt::TurnPrompt;
@@ -836,11 +837,17 @@ impl SessionWorkerRebaseAssistClient {
         };
         let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+        let live_usage = turn::LiveUsage::new(
+            self.app_event_tx.clone(),
+            self.session_id.clone(),
+            LiveUsageRun::Rebase,
+        );
         let consumer = spawn::spawn_detached(turn::consume_turn_events(
             event_rx,
             self.app_event_tx.clone(),
             self.session_id.clone(),
             Arc::clone(&self.child_pid),
+            Arc::clone(&live_usage),
             Arc::clone(&self.clock),
         ));
         let sandbox_notices = SandboxNoticeTarget {
@@ -873,6 +880,8 @@ impl SessionWorkerRebaseAssistClient {
 
         self.append_assist_answer(&turn_result.assistant_message)
             .await;
+        // `live_usage` ends when this returns: after the assist's usage is
+        // stored, or earlier without it.
         self.persist_assist_turn_metadata(&turn_result).await?;
 
         Ok(())

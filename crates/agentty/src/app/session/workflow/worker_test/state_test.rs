@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::super::super::post_turn::status_update_after_turn_result;
-use super::super::super::turn::{consume_turn_events, run_channel_turn};
+use super::super::super::turn::{LiveUsage, consume_turn_events, run_channel_turn};
 use super::super::{SessionWorkerContext, SessionWorkerService};
 use super::support::{
     auto_commit_run_client, default_turn_metadata, empty_transcript,
@@ -33,6 +33,7 @@ use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
+use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
 use crate::domain::turn_timeline::{RowState, TimelineRow};
 use crate::infra::cargo_cache::MockCargoCacheClient;
 use crate::infra::clock::Clock;
@@ -63,6 +64,7 @@ async fn test_consume_turn_events_ignores_pid_only_events_for_transcript_message
         app_event_tx,
         "session-1".into(),
         Arc::clone(&child_pid),
+        unobserved_live_usage(),
         fixed_clock(),
     )
     .await;
@@ -92,6 +94,7 @@ async fn test_consume_turn_events_routes_thought_delta_to_progress_state_only() 
         app_event_tx,
         "session-1".into(),
         child_pid,
+        unobserved_live_usage(),
         fixed_clock(),
     )
     .await;
@@ -136,6 +139,7 @@ async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
         app_event_tx,
         "session-1".into(),
         child_pid,
+        unobserved_live_usage(),
         fixed_clock(),
     )
     .await;
@@ -159,20 +163,22 @@ async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
 }
 
 #[tokio::test]
-/// Verifies blank thoughts, usage updates, reserved terminal events, and a
-/// repeated thought after an exhausted coalescing budget publish no extra
-/// progress updates.
+/// Verifies blank thoughts, reserved terminal events, and a repeated thought
+/// after an exhausted coalescing budget publish no extra progress updates,
+/// while usage updates, coalesced or not, publish the turn's live usage in
+/// order.
 async fn test_consume_turn_events_skips_blank_terminal_and_repeated_progress_events() {
     // Arrange
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let usage_updated = || TurnEvent::UsageUpdated(ag_contracts::TurnUsage::default());
+    let first_usage = ag_contracts::test_support::token_usage("model", 10, 1);
+    let second_usage = ag_contracts::test_support::token_usage("model", 30, 4);
     let mut events = vec![
         TurnEvent::ThoughtDelta("   ".to_string()),
-        usage_updated(),
+        TurnEvent::UsageUpdated(first_usage.clone()),
         TurnEvent::Failed("reserved".to_string()),
         TurnEvent::ThoughtDelta("same".to_string()),
-        usage_updated(),
+        TurnEvent::UsageUpdated(second_usage.clone()),
         TurnEvent::Failed("reserved".to_string()),
         TurnEvent::ThoughtDelta(" ".to_string()),
         TurnEvent::PidUpdate(Some(4242)),
@@ -187,12 +193,23 @@ async fn test_consume_turn_events_skips_blank_terminal_and_repeated_progress_eve
     let child_pid = Arc::new(Mutex::new(None));
     enable_tracing_log_fallback();
 
-    // Act
+    let key = LiveUsageKey {
+        run: LiveUsageRun::Attempt("attempt".to_string()),
+        session_id: "session-1".into(),
+    };
+    let live_usage = LiveUsage::new(
+        app_event_tx.clone(),
+        key.session_id.clone(),
+        key.run.clone(),
+    );
+
+    // Act: the consumer drops the last live-usage handle when it ends.
     consume_turn_events(
         event_rx,
         app_event_tx,
         "session-1".into(),
         Arc::clone(&child_pid),
+        live_usage,
         fixed_clock(),
     )
     .await;
@@ -203,6 +220,14 @@ async fn test_consume_turn_events_skips_blank_terminal_and_repeated_progress_eve
     assert_eq!(
         events,
         vec![
+            AppEvent::SessionUsageUpdated {
+                key: key.clone(),
+                usage: first_usage,
+            },
+            AppEvent::SessionUsageUpdated {
+                key: key.clone(),
+                usage: second_usage,
+            },
             AppEvent::SessionProgressUpdated {
                 progress_message: Some("same".to_string()),
                 session_id: "session-1".into(),
@@ -211,8 +236,21 @@ async fn test_consume_turn_events_skips_blank_terminal_and_repeated_progress_eve
                 progress_message: None,
                 session_id: "session-1".into(),
             },
+            AppEvent::SessionUsageRecorded {
+                run: Some(key.run),
+                session_id: key.session_id,
+            },
         ]
     );
+}
+
+/// Returns live usage reporting to a channel nobody reads.
+fn unobserved_live_usage() -> Arc<LiveUsage> {
+    LiveUsage::new(
+        mpsc::unbounded_channel().0,
+        "session-1".into(),
+        LiveUsageRun::SessionTurn,
+    )
 }
 
 #[tokio::test]
@@ -234,6 +272,7 @@ async fn test_consume_turn_events_skips_pid_updates_for_a_poisoned_pid_slot() {
         mpsc::unbounded_channel().0,
         "session-1".into(),
         Arc::clone(&child_pid),
+        unobserved_live_usage(),
         fixed_clock(),
     )
     .await;
@@ -458,6 +497,7 @@ async fn test_consume_activity_survives_progress_coalescing() {
         mpsc::unbounded_channel().0,
         "session".into(),
         Arc::new(Mutex::new(None)),
+        unobserved_live_usage(),
         fixed_clock(),
     )
     .await;
@@ -509,6 +549,7 @@ async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
         app_event_tx.clone(),
         "session".into(),
         Arc::new(Mutex::new(None)),
+        unobserved_live_usage(),
         fixed_clock(),
     )
     .await;
@@ -755,6 +796,7 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
         app_sender,
         "session".into(),
         Arc::new(Mutex::new(None)),
+        unobserved_live_usage(),
         fixed_clock(),
     ));
 

@@ -1,11 +1,13 @@
-//! Session usage tests: per-model and per-purpose accumulation and cleanup on
-//! session delete.
+//! Session usage tests: per-model and per-purpose accumulation, the detailed
+//! read with session context, and cleanup on session delete.
 
 use ag_contracts::test_support::token_usage;
-use ag_contracts::{ModelUsage, TurnUsage, UsagePurpose};
+use ag_contracts::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsagePurpose};
+use ag_session::SessionMessageKind;
 
 use super::support::insert_session_fixture;
 use crate::connection::Database;
+use crate::usage::{SessionUsageContextRow, SessionUsageRow};
 
 /// Verifies `delete_session()` removes the session row and nulls
 /// `session_usage.session_id`.
@@ -136,6 +138,100 @@ async fn test_upsert_session_usage_accumulates_counts_per_model_and_purpose() {
             .collect::<Vec<_>>(),
         [(Some("session-a"), "title"), (Some("session-a"), "turn")]
     );
+}
+
+/// Verifies `load_session_usage()` returns every detail column with its
+/// purpose and `load_session_usage_context()` returns the latest context and
+/// the prompts that started turns, reading an unknown session as empty.
+#[tokio::test]
+async fn test_load_session_usage_returns_details_context_and_turns() {
+    // Arrange
+    let database = session_database().await;
+    let model_usage = ModelUsage {
+        cache_read_tokens: Some(40),
+        cache_write_tokens: None,
+        context: Some(ContextFill::of_request(100, Some(1_000))),
+        cost: Some(CostEstimate {
+            basis: CostBasis::ListPrice,
+            micro_usd: 12,
+        }),
+        input_tokens: 100,
+        output_tokens: 9,
+        reasoning_tokens: Some(3),
+        requests: 2,
+        unreported_requests: 1,
+        ..ModelUsage::new("model")
+    };
+    database
+        .usage()
+        .upsert_session_usage(
+            "session-a",
+            UsagePurpose::Turn,
+            &TurnUsage::single(model_usage),
+        )
+        .await
+        .expect("failed to record usage");
+    let sessions = database.sessions();
+    for (kind, content) in [
+        (SessionMessageKind::UserPrompt, "first"),
+        (SessionMessageKind::AssistantAnswer, "answer"),
+        (SessionMessageKind::AgentPrompt, "generated"),
+    ] {
+        sessions
+            .append_session_message("session-a", kind, content)
+            .await
+            .expect("failed to append message");
+    }
+
+    // Act
+    let rows = database
+        .usage()
+        .load_session_usage("session-a")
+        .await
+        .expect("failed to load usage");
+    let context = database
+        .usage()
+        .load_session_usage_context("session-a")
+        .await
+        .expect("failed to load context");
+    let missing = database
+        .usage()
+        .load_session_usage_context("missing")
+        .await
+        .expect("failed to load missing context");
+
+    // Assert
+    assert_eq!(
+        rows,
+        [SessionUsageRow {
+            cache_read_tokens: Some(40),
+            context_peak_tokens: Some(100),
+            context_window_tokens: Some(1_000),
+            cost_basis: Some("list".to_string()),
+            cost_micro_usd: Some(12),
+            created_at: rows[0].created_at,
+            detailed_invocation_count: 1,
+            input_tokens: 100,
+            invocation_count: 1,
+            model: "model".to_string(),
+            output_tokens: 9,
+            purpose: "turn".to_string(),
+            reasoning_tokens: Some(3),
+            request_count: 2,
+            session_id: Some("session-a".to_string()),
+            unreported_request_count: 1,
+            ..SessionUsageRow::default()
+        }]
+    );
+    assert_eq!(
+        context,
+        SessionUsageContextRow {
+            context_tokens: Some(100),
+            context_window_tokens: Some(1_000),
+            turn_count: 2,
+        }
+    );
+    assert_eq!(missing, SessionUsageContextRow::default());
 }
 
 /// Opens a migrated database holding the `session-a` session.

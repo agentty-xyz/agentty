@@ -19,9 +19,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
-    MainCheckoutSnapshot, add_main_checkout_warning, consume_turn_events, fresh_turn_cancel_token,
-    live_transcript_source, load_session_response_style, load_title_reasoning_level,
-    prepare_turn_request, relay_turn_events,
+    LiveUsage, MainCheckoutSnapshot, add_main_checkout_warning, consume_turn_events,
+    fresh_turn_cancel_token, live_transcript_source, load_session_response_style,
+    load_title_reasoning_level, prepare_turn_request, relay_turn_events,
 };
 use crate::app::AppEvent;
 use crate::app::cargo_cache::CargoCacheWarmer;
@@ -33,6 +33,7 @@ use crate::domain::agent::{
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::session_usage::LiveUsageRun;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, LEGACY_SESSION_AGENT_CLEAR_MARKER, SessionTurnMetadata};
 use crate::test_support::poison_lock;
@@ -421,6 +422,11 @@ async fn sandbox_notices_reach_the_transcript_as_they_arrive_and_other_events_pa
         context.app_event_tx.clone(),
         context.session_id.clone(),
         Arc::clone(&context.child_pid),
+        LiveUsage::new(
+            context.app_event_tx.clone(),
+            context.session_id.clone(),
+            LiveUsageRun::SessionTurn,
+        ),
         Arc::clone(&context.clock),
     )
     .await;

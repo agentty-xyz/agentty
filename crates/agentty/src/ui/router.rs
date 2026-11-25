@@ -4,6 +4,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 
+use ag_contracts::TurnUsage;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
@@ -15,10 +16,11 @@ use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{DailyActivity, Session, SessionId, activity_day_key_with_offset};
+use crate::domain::session_usage::LiveUsageKey;
 use crate::presentation::api_key::{API_KEY_TITLE, ApiKeyDialog};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, DiffFocus, DiffLineComments, DiffPreview, DiffRestoreTarget,
-    DiffReviewComments, DiffSidebarFocus, HelpContext, PromptModeSnapshot,
+    DiffReviewComments, DiffSidebarFocus, HelpContext, PromptModeSnapshot, UsagePanel,
     allows_diff_line_comment_reply,
 };
 use crate::presentation::chatgpt_sign_in::{
@@ -35,7 +37,7 @@ use crate::ui::component::info_overlay::InfoOverlay;
 use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
 use crate::ui::{
     Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
-    style,
+    style, usage_format,
 };
 
 /// Shared mutable routing data reused across app modes in `route_frame`.
@@ -67,6 +69,9 @@ struct RouteSharedContext<'a> {
     /// when this launch offers it.
     remote_control: Option<&'a RemoteControlView>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
+    /// Cumulative usage of each session's running turn, folded into the
+    /// usage panel.
+    session_live_usage: &'a HashMap<LiveUsageKey, TurnUsage>,
     sessions: &'a [Session],
     settings_screen: Option<&'a SettingsScreenSnapshot>,
     stats_activity: &'a [DailyActivity],
@@ -238,6 +243,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         projects,
         session_review_snapshot,
         session_git_statuses,
+        session_live_usage,
         session_progress_messages,
         session_update_versions,
         settings_screen,
@@ -265,6 +271,7 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         projects,
         remote_control,
         session_git_statuses,
+        session_live_usage,
         sessions,
         settings_screen,
         stats_activity,
@@ -343,6 +350,11 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Confirmation { .. } => Surface::List,
         AppMode::Help { context, .. } => surface_for_help_context(context),
+        AppMode::Usage(panel) => Surface::Session {
+            mode: SessionSurfaceMode::View,
+            scroll_offset: panel.restore.scroll_offset(),
+            session_id: panel.restore.session_id(),
+        },
         AppMode::View {
             session_id,
             scroll_offset,
@@ -625,6 +637,7 @@ fn render_mode_overlay(
         } => component::help_overlay::HelpOverlay::new(help_context)
             .scroll_offset(*scroll_offset)
             .render(frame, area),
+        AppMode::Usage(panel) => render_usage_overlay(frame, area, shared, panel),
         AppMode::LaunchConfigurationSelector {
             commands,
             selected_command_index,
@@ -644,6 +657,28 @@ fn render_mode_overlay(
         )
         .render(frame, area),
     }
+}
+
+/// Renders the usage panel: the recorded usage with the session's running
+/// turns folded in, titled with the session's display title.
+fn render_usage_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    shared: &RouteSharedContext<'_>,
+    panel: &UsagePanel,
+) {
+    let session_id = panel.restore.session_id();
+    let content =
+        usage_format::session_panel_content(&panel.usage, session_id, shared.session_live_usage);
+    let session_title = shared
+        .sessions
+        .iter()
+        .find(|session| session.id == *session_id)
+        .map_or("", Session::display_title);
+
+    component::usage_overlay::UsageOverlay::new(&content, session_title)
+        .scroll_offset(panel.scroll_offset)
+        .render(frame, area);
 }
 
 /// Previews pending diff comments while the leave-diff confirmation is open.
