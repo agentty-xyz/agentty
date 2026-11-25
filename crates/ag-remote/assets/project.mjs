@@ -78,6 +78,8 @@ export function projectPicks(storage, instanceId) {
 
       return picks && typeof picks === "object" && !Array.isArray(picks) ? picks : {};
     } catch (_error) {
+      // Unreadable storage or a damaged value holds no picks; the next
+      // pick writes the map anew.
       return {};
     }
   }
