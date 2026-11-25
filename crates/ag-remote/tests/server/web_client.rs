@@ -370,10 +370,10 @@ async fn web_client_app_creates_sends_and_opens_a_session_from_home_through_the_
     Ok(())
 }
 
-#[tokio::test]
-async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> TestResult {
-    // Arrange: the host lists `agentty`, which the terminal has open, and
-    // `website`.
+/// Starts a server whose host lists `agentty`, which the terminal has open,
+/// and `website`, pairs a device, and starts the app script in `mode` with
+/// its token.
+async fn start_projects_app(mode: &str) -> TestResult<(TestServer, WebDevice)> {
     let server = TestServer::start_with(
         MemoryDeviceStore::default(),
         RecordingBackend::with_projects(),
@@ -381,28 +381,57 @@ async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> 
     .await?;
     let (_paired, _device_id, token) = server.pair("Node browser").await?;
     let address = server.handle.local_addr().to_string();
+    let app = WebDevice::run(APP_SCRIPT, &[&address, mode, &token])?;
+
+    Ok((server, app))
+}
+
+/// Asserts that `server`'s host recorded each of `expected`.
+fn assert_called(server: &TestServer, expected: &[&str]) {
+    let calls = server.backend.calls();
+    for call in expected {
+        assert!(calls.iter().any(|made| made == call), "{call} in {calls:?}");
+    }
+}
+
+#[tokio::test]
+async fn web_client_app_keeps_its_project_as_the_terminal_switches_then_picks_another_through_the_listener()
+-> TestResult {
+    // Arrange
+    let (server, mut app) = start_projects_app("pin").await?;
 
     // Act
-    let mut app = WebDevice::run(APP_SCRIPT, &[&address, "projects", &token])?;
     let listed = app.next_step().await?;
     server.backend.switch_to(2);
     server.revisions_tx.send(2)?;
     let pinned = app.next_step().await?;
     let picked = app.next_step().await?;
-    server.backend.name_listed_projects(false);
-    server.revisions_tx.send(3)?;
-    let unnamed = app.next_step().await?;
-    server.backend.name_listed_projects(true);
-    server.revisions_tx.send(4)?;
-    let created = app.next_step().await?;
-    server.backend.switch_to(1);
-    server.backend.hide(2);
-    server.revisions_tx.send(5)?;
-    let fell_back = app.next_step().await?;
     let succeeded = app.succeeded().await?;
 
     // Assert
     assert_kept_then_picked(&listed, &pinned, &picked);
+    assert!(succeeded);
+    assert_called(&server, &["host:2"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_hides_a_listing_without_its_picked_project_and_creates_there_through_the_listener()
+-> TestResult {
+    // Arrange
+    let (server, mut app) = start_projects_app("unnamed").await?;
+
+    // Act
+    let picked = app.next_step().await?;
+    server.backend.leave_the_project_out_of_the_next_listing();
+    server.revisions_tx.send(2)?;
+    let unnamed = app.next_step().await?;
+    let created = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(picked, json!({"step": "picked", "rows": ["session-3"]}));
     // A listing that does not say it is `website`'s is not shown as one.
     assert_eq!(
         unnamed,
@@ -412,15 +441,41 @@ async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> 
             "rows": ["session-3"],
         })
     );
+    // The listing that names `website` again shows, error cleared.
     assert_eq!(
         created,
         json!({
             "step": "created",
             "error": "",
             "hash": "#s=session-3",
+            "rows": ["session-3"],
             "view": "session-view",
         })
     );
+    assert!(succeeded);
+    assert_called(
+        &server,
+        &["host:2", "create:Regular:2", "send:session-3:Fix the docs"],
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_falls_back_once_its_picked_project_is_no_longer_listed_through_the_listener()
+-> TestResult {
+    // Arrange
+    let (server, mut app) = start_projects_app("fallback").await?;
+
+    // Act
+    let picked = app.next_step().await?;
+    server.backend.hide(2);
+    server.revisions_tx.send(2)?;
+    let fell_back = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(picked, json!({"step": "picked", "rows": ["session-3"]}));
     assert_eq!(
         fell_back,
         json!({
@@ -439,13 +494,6 @@ async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> 
         })
     );
     assert!(succeeded);
-    let calls = server.backend.calls();
-    for expected in ["host:2", "create:Regular:2", "send:session-3:Fix the docs"] {
-        assert!(
-            calls.iter().any(|call| call == expected),
-            "{expected} in {calls:?}"
-        );
-    }
 
     Ok(())
 }
@@ -587,19 +635,16 @@ async fn web_client_app_reopens_the_routed_session_with_its_draft_through_the_li
     assert_eq!(sent, json!({"step": "sent", "draft": null, "error": ""}));
     assert_graphs_shown(&graphs);
     assert!(succeeded);
-    let calls = server.backend.calls();
-    for expected in [
-        "graphs:session-2:-:-",
-        "send:session-2:Resume the plan",
-        "settings:session-2:low",
-        "sync:session-2",
-        "sync_project",
-    ] {
-        assert!(
-            calls.iter().any(|call| call == expected),
-            "{expected} in {calls:?}"
-        );
-    }
+    assert_called(
+        &server,
+        &[
+            "graphs:session-2:-:-",
+            "send:session-2:Resume the plan",
+            "settings:session-2:low",
+            "sync:session-2",
+            "sync_project",
+        ],
+    );
 
     Ok(())
 }

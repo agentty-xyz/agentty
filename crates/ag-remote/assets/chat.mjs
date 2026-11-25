@@ -276,7 +276,9 @@ export function publishBranch(session) {
 // Runs `run` at most once per `intervalMs`, one run at a time, and never
 // while the page is hidden. Requests that arrive meanwhile collapse into
 // one later run; a hidden page runs it once it shows again. `run` handles
-// its own errors. `request(true)` skips the wait, as when a session opens.
+// its own errors. `request(true)` skips the wait, as when a session opens;
+// made while a run is in progress or the page is hidden, it runs as soon
+// as that run ends or the page shows.
 export function createRefreshGate({
   document,
   window,
@@ -284,11 +286,12 @@ export function createRefreshGate({
   intervalMs = REFRESH_INTERVAL_MS,
   now = () => Date.now(),
 }) {
-  const gate = { isPending: false, isRunning: false, lastStart: -Infinity, timer: null };
+  const gate = { isPending: false, isRunning: false, isUrgent: false, lastStart: -Infinity, timer: null };
 
   function start() {
     gate.isPending = false;
     gate.isRunning = true;
+    gate.isUrgent = false;
     gate.lastStart = now();
     void Promise.resolve()
       .then(run)
@@ -302,14 +305,17 @@ export function createRefreshGate({
 
   function request(force = false) {
     gate.isPending = true;
-    if (force && gate.timer !== null) {
-      window.clearTimeout(gate.timer);
-      gate.timer = null;
+    if (force) {
+      gate.isUrgent = true;
+      if (gate.timer !== null) {
+        window.clearTimeout(gate.timer);
+        gate.timer = null;
+      }
     }
     if (gate.isRunning || gate.timer !== null || document.visibilityState === "hidden") {
       return;
     }
-    const wait = force ? 0 : gate.lastStart + intervalMs - now();
+    const wait = gate.isUrgent ? 0 : gate.lastStart + intervalMs - now();
     if (wait <= 0) {
       start();
 
