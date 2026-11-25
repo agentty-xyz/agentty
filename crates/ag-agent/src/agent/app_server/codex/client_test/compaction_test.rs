@@ -17,14 +17,38 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::support::{
-    build_runtime_state, expect_context_overflow_turn, expect_proactive_compaction_turn,
-    expect_reactive_compaction, expect_retried_turn_after_compaction, remember_request_id,
+    build_runtime_state, expect_compaction_acknowledgment, expect_context_overflow_turn,
+    expect_proactive_compaction_turn, expect_reactive_compaction,
+    expect_retried_turn_after_compaction, remember_request_id,
 };
-use crate::agent::app_server::codex::{lifecycle, policy};
+use crate::agent::app_server::codex::{lifecycle, policy, usage};
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
+use crate::agent::usage::Billing;
 use crate::app_server::AppServerStreamEvent;
 use crate::app_server_transport::AppServerTransportError;
 use crate::telemetry::TRACER_PROVIDER_LOCK;
+
+/// Expects one compaction request on `transport` and its acknowledgment.
+fn expect_acknowledged_compaction_request(
+    transport: &mut MockCodexRuntimeTransport,
+    sequence: &mut Sequence,
+) {
+    let compact_id = Arc::new(Mutex::new(None));
+    transport
+        .expect_write_json_line()
+        .times(1)
+        .in_sequence(sequence)
+        .returning({
+            let compact_id = Arc::clone(&compact_id);
+
+            move |payload| {
+                remember_request_id(&compact_id, &payload);
+
+                Box::pin(async { Ok(()) })
+            }
+        });
+    expect_compaction_acknowledgment(transport, sequence, compact_id);
+}
 
 #[test]
 fn compaction_timeout_error_includes_timeout_seconds() {
@@ -85,6 +109,12 @@ async fn send_compact_request_resets_latest_input_tokens_on_success() {
     let exporter = install_provider();
     let compact_id = Arc::new(Mutex::new(None));
     let mut latest_input_tokens = 450_000;
+    let mut usage = usage::UsageTracker::default();
+    let account_answer = serde_json::json!({
+        "id": usage.account_request()["id"],
+        "result": {"account": {"type": "chatgpt"}}
+    })
+    .to_string();
     let mut transport = MockCodexRuntimeTransport::new();
     let mut sequence = Sequence::new();
 
@@ -104,21 +134,18 @@ async fn send_compact_request_resets_latest_input_tokens_on_success() {
                 Box::pin(async { Ok(()) })
             }
         });
+    // The account answer arrives before the acknowledgment and after it.
+    let early_account_answer = account_answer.clone();
     transport
-        .expect_wait_for_response_line()
+        .expect_next_stdout()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(move |_| {
-            let response_id = compact_id
-                .lock()
-                .expect("compact mutex should lock")
-                .clone()
-                .expect("compact id should be recorded");
+        .returning(move || {
+            let line = early_account_answer.clone();
 
-            Box::pin(
-                async move { Ok(serde_json::json!({"id": response_id, "result": {}}).to_string()) },
-            )
+            Box::pin(async move { Ok(Some(line)) })
         });
+    expect_compaction_acknowledgment(&mut transport, &mut sequence, compact_id);
     for line in [
         "\n",
         "private malformed notification",
@@ -130,6 +157,15 @@ async fn send_compact_request_resets_latest_input_tokens_on_success() {
             .in_sequence(&mut sequence)
             .returning(move || Box::pin(async move { Ok(Some(line.to_string())) }));
     }
+    transport
+        .expect_next_stdout()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(move || {
+            let account_answer = account_answer.clone();
+
+            Box::pin(async move { Ok(Some(account_answer)) })
+        });
     transport
         .expect_next_stdout()
         .times(1)
@@ -152,12 +188,18 @@ async fn send_compact_request_resets_latest_input_tokens_on_success() {
             &mut transport,
             "thread-1",
             &mut latest_input_tokens,
+            &mut usage,
         ))
         .await;
 
     // Assert
     result.expect("compaction should succeed");
     assert_eq!(latest_input_tokens, 0);
+    assert_eq!(
+        usage.billing(),
+        Billing::Plan(ag_contracts::PlanLogin::ChatGpt),
+        "an account answer arriving during compaction is read"
+    );
     assert_compaction_span(&exporter, "completed");
 }
 
@@ -278,10 +320,14 @@ async fn send_compact_request_traces_request_acknowledgment_and_completion_failu
         let exporter = install_provider();
         let mut latest_input_tokens = 450_000;
         let mut transport = MockCodexRuntimeTransport::new();
-        transport
-            .expect_write_json_line()
-            .times(1)
-            .returning(move |_| {
+        let mut sequence = Sequence::new();
+        let compact_id = Arc::new(Mutex::new(None));
+        transport.expect_write_json_line().times(1).returning({
+            let compact_id = Arc::clone(&compact_id);
+
+            move |payload| {
+                remember_request_id(&compact_id, &payload);
+
                 Box::pin(async move {
                     if stage == "request" {
                         Err(AppServerTransportError::ProcessTerminated)
@@ -289,34 +335,32 @@ async fn send_compact_request_traces_request_acknowledgment_and_completion_failu
                         Ok(())
                     }
                 })
-            });
-        if stage != "request" {
+            }
+        });
+        if stage == "acknowledgment" {
             transport
-                .expect_wait_for_response_line()
+                .expect_next_stdout()
                 .times(1)
-                .returning(move |_| {
-                    Box::pin(async move {
-                        if stage == "acknowledgment" {
-                            Err(AppServerTransportError::ProcessTerminated)
-                        } else {
-                            Ok("{}".to_string())
-                        }
-                    })
-                });
+                .returning(|| Box::pin(async { Err(AppServerTransportError::ProcessTerminated) }));
         }
         if matches!(stage, "completion" | "completion_without_error") {
-            transport.expect_next_stdout().times(1).returning(move || {
-                Box::pin(async move {
-                    Ok(Some(
-                        serde_json::json!({"method": "turn/completed", "params": {"turn": {
-                            "status": "failed", "error": if stage == "completion" {
-                                serde_json::json!({"message": "private provider failure"})
-                            } else { Value::Null },
-                        }}})
-                        .to_string(),
-                    ))
-                })
-            });
+            expect_compaction_acknowledgment(&mut transport, &mut sequence, compact_id);
+            transport
+                .expect_next_stdout()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(move || {
+                    Box::pin(async move {
+                        Ok(Some(
+                            serde_json::json!({"method": "turn/completed", "params": {"turn": {
+                                "status": "failed", "error": if stage == "completion" {
+                                    serde_json::json!({"message": "private provider failure"})
+                                } else { Value::Null },
+                            }}})
+                            .to_string(),
+                        ))
+                    })
+                });
         }
 
         // Act
@@ -325,6 +369,7 @@ async fn send_compact_request_traces_request_acknowledgment_and_completion_failu
                 &mut transport,
                 "private-thread",
                 &mut latest_input_tokens,
+                &mut usage::UsageTracker::default(),
             ))
             .await;
 
@@ -348,25 +393,23 @@ async fn explicit_compaction_span_repeats_the_inherited_run_identity() {
     ];
     let mut latest_input_tokens = 450_000;
     let mut transport = MockCodexRuntimeTransport::new();
+    let mut sequence = Sequence::new();
+    expect_acknowledged_compaction_request(&mut transport, &mut sequence);
     transport
-        .expect_write_json_line()
+        .expect_next_stdout()
         .times(1)
-        .returning(|_| Box::pin(async { Ok(()) }));
-    transport
-        .expect_wait_for_response_line()
-        .times(1)
-        .returning(|_| Box::pin(async { Ok("{}".to_string()) }));
-    transport.expect_next_stdout().times(1).returning(|| {
-        Box::pin(async {
-            Ok(Some(
-                serde_json::json!({
-                    "method": "turn/completed",
-                    "params": {"turn": {"status": "completed"}}
-                })
-                .to_string(),
-            ))
-        })
-    });
+        .in_sequence(&mut sequence)
+        .returning(|| {
+            Box::pin(async {
+                Ok(Some(
+                    serde_json::json!({
+                        "method": "turn/completed",
+                        "params": {"turn": {"status": "completed"}}
+                    })
+                    .to_string(),
+                ))
+            })
+        });
 
     // Act
     let result = Span::root("agent.attempt", Vec::new())
@@ -376,6 +419,7 @@ async fn explicit_compaction_span_repeats_the_inherited_run_identity() {
                 &mut transport,
                 "thread-1",
                 &mut latest_input_tokens,
+                &mut usage::UsageTracker::default(),
                 Duration::from_secs(5),
             ),
         ))
@@ -401,17 +445,12 @@ async fn send_compact_request_traces_completion_timeout_as_failed() {
     let exporter = install_provider();
     let mut latest_input_tokens = 450_000;
     let mut transport = MockCodexRuntimeTransport::new();
-    transport
-        .expect_write_json_line()
-        .times(1)
-        .returning(|_| Box::pin(async { Ok(()) }));
-    transport
-        .expect_wait_for_response_line()
-        .times(1)
-        .returning(|_| Box::pin(async { Ok("{}".to_string()) }));
+    let mut sequence = Sequence::new();
+    expect_acknowledged_compaction_request(&mut transport, &mut sequence);
     transport
         .expect_next_stdout()
         .times(1)
+        .in_sequence(&mut sequence)
         .returning(|| Box::pin(future::pending()));
 
     // Act
@@ -420,6 +459,7 @@ async fn send_compact_request_traces_completion_timeout_as_failed() {
             &mut transport,
             "private-thread",
             &mut latest_input_tokens,
+            &mut usage::UsageTracker::default(),
             Duration::from_millis(1),
         ))
         .await;
@@ -442,37 +482,31 @@ async fn dropping_compaction_while_request_acknowledgment_or_completion_waits_cl
     for stage in ["request", "acknowledgment", "completion"] {
         let exporter = install_provider();
         let mut latest_input_tokens = 450_000;
+        let mut usage = usage::UsageTracker::default();
         let mut transport = MockCodexRuntimeTransport::new();
-        transport
-            .expect_write_json_line()
-            .times(1)
-            .returning(move |_| {
-                Box::pin(async move {
-                    if stage == "request" {
-                        future::pending().await
-                    } else {
-                        Ok(())
-                    }
-                })
-            });
-        if stage != "request" {
+        let mut sequence = Sequence::new();
+        if stage == "request" {
             transport
-                .expect_wait_for_response_line()
+                .expect_write_json_line()
                 .times(1)
-                .returning(move |_| {
-                    Box::pin(async move {
-                        if stage == "acknowledgment" {
-                            future::pending().await
-                        } else {
-                            Ok("{}".to_string())
-                        }
-                    })
-                });
+                .returning(|_| Box::pin(future::pending()));
         }
-        if stage == "completion" {
+        if stage == "acknowledgment" {
+            transport
+                .expect_write_json_line()
+                .times(1)
+                .returning(|_| Box::pin(async { Ok(()) }));
             transport
                 .expect_next_stdout()
                 .times(1)
+                .returning(|| Box::pin(future::pending()));
+        }
+        if stage == "completion" {
+            expect_acknowledged_compaction_request(&mut transport, &mut sequence);
+            transport
+                .expect_next_stdout()
+                .times(1)
+                .in_sequence(&mut sequence)
                 .returning(|| Box::pin(future::pending()));
         }
         let mut request = Box::pin(Span::root("agent.attempt", Vec::new()).scope(
@@ -480,6 +514,7 @@ async fn dropping_compaction_while_request_acknowledgment_or_completion_waits_cl
                 &mut transport,
                 "private-thread",
                 &mut latest_input_tokens,
+                &mut usage,
             ),
         ));
 

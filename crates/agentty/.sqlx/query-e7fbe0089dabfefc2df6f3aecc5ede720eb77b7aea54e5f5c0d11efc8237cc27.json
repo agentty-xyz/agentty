@@ -1,11 +1,33 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT cache_read_tokens, cache_write_tokens, context_peak_tokens, context_window_tokens,\n       cost_basis, cost_micro_usd, created_at, detailed_invocation_count, input_tokens,\n       invocation_count, model, output_tokens, purpose, reasoning_tokens, request_count,\n       session_id, unpriced_invocation_count, unreported_request_count\nFROM session_usage\nWHERE session_id = ?\nORDER BY model, purpose\n            ",
+  "query": "\nSELECT api_equivalent_login, api_equivalent_micro_usd, cache_read_tokens, cache_write_tokens,\n       context_peak_tokens, context_window_tokens, cost_basis, cost_micro_usd, created_at,\n       detailed_invocation_count, input_tokens, invocation_count,\n       is_api_equivalent_upper_bound AS \"is_api_equivalent_upper_bound: bool\",\n       is_cost_upper_bound AS \"is_cost_upper_bound: bool\", model, output_tokens, purpose,\n       reasoning_tokens, request_count, session_id, unpriced_invocation_count,\n       unreported_request_count\nFROM session_usage\nWHERE session_id = ?\nORDER BY model, purpose\n            ",
   "describe": {
     "columns": [
       {
-        "name": "cache_read_tokens",
+        "name": "api_equivalent_login",
         "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "api_equivalent_login"
+          }
+        }
+      },
+      {
+        "name": "api_equivalent_micro_usd",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "api_equivalent_micro_usd"
+          }
+        }
+      },
+      {
+        "name": "cache_read_tokens",
+        "ordinal": 2,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -16,7 +38,7 @@
       },
       {
         "name": "cache_write_tokens",
-        "ordinal": 1,
+        "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -27,7 +49,7 @@
       },
       {
         "name": "context_peak_tokens",
-        "ordinal": 2,
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -38,7 +60,7 @@
       },
       {
         "name": "context_window_tokens",
-        "ordinal": 3,
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -49,7 +71,7 @@
       },
       {
         "name": "cost_basis",
-        "ordinal": 4,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +82,7 @@
       },
       {
         "name": "cost_micro_usd",
-        "ordinal": 5,
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -71,7 +93,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 6,
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -82,7 +104,7 @@
       },
       {
         "name": "detailed_invocation_count",
-        "ordinal": 7,
+        "ordinal": 9,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -93,7 +115,7 @@
       },
       {
         "name": "input_tokens",
-        "ordinal": 8,
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -104,7 +126,7 @@
       },
       {
         "name": "invocation_count",
-        "ordinal": 9,
+        "ordinal": 11,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -114,8 +136,30 @@
         }
       },
       {
+        "name": "is_api_equivalent_upper_bound: bool",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "is_api_equivalent_upper_bound"
+          }
+        }
+      },
+      {
+        "name": "is_cost_upper_bound: bool",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "is_cost_upper_bound"
+          }
+        }
+      },
+      {
         "name": "model",
-        "ordinal": 10,
+        "ordinal": 14,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -126,7 +170,7 @@
       },
       {
         "name": "output_tokens",
-        "ordinal": 11,
+        "ordinal": 15,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -137,7 +181,7 @@
       },
       {
         "name": "purpose",
-        "ordinal": 12,
+        "ordinal": 16,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -148,7 +192,7 @@
       },
       {
         "name": "reasoning_tokens",
-        "ordinal": 13,
+        "ordinal": 17,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -159,7 +203,7 @@
       },
       {
         "name": "request_count",
-        "ordinal": 14,
+        "ordinal": 18,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -170,7 +214,7 @@
       },
       {
         "name": "session_id",
-        "ordinal": 15,
+        "ordinal": 19,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -181,7 +225,7 @@
       },
       {
         "name": "unpriced_invocation_count",
-        "ordinal": 16,
+        "ordinal": 20,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -192,7 +236,7 @@
       },
       {
         "name": "unreported_request_count",
-        "ordinal": 17,
+        "ordinal": 21,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -212,6 +256,10 @@
       true,
       true,
       true,
+      true,
+      true,
+      false,
+      false,
       false,
       false,
       false,
@@ -226,5 +274,5 @@
       false
     ]
   },
-  "hash": "04df21583d5af07e3187d7c644d6aaf8fc419bdc3826f98e65c4394dd7fe7c99"
+  "hash": "e7fbe0089dabfefc2df6f3aecc5ede720eb77b7aea54e5f5c0d11efc8237cc27"
 }

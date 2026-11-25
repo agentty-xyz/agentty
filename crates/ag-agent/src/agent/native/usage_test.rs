@@ -3,7 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use ag_contracts::{ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage};
+use ag_contracts::{
+    ApiEquivalentCost, ContextFill, CostBasis, CostEstimate, ModelUsage, PlanLogin, PricedCost,
+    TurnUsage,
+};
 use ag_harness::RunEventKind;
 use ag_harness::provider::ModelProvider;
 use serde_json::{Value, json};
@@ -69,10 +72,7 @@ fn run_model_requests_are_list_priced_and_fill_the_run_window() {
                 peak_input_tokens: 1_000_000,
                 window_tokens: anthropic_window("claude-opus-5-5"),
             }),
-            cost: Some(CostEstimate {
-                basis: CostBasis::ListPrice,
-                micro_usd: 2_944_000,
-            }),
+            cost: Some(CostEstimate::new(CostBasis::ListPrice, 2_944_000)),
             input_tokens: 1_400_000,
             output_tokens: 200,
             reasoning_tokens: Some(20),
@@ -103,10 +103,7 @@ fn summary_requests_keep_their_model_price_and_window() {
     assert_eq!(summary.model, "claude-haiku-5-5");
     assert_eq!(
         summary.cost,
-        Some(CostEstimate {
-            basis: CostBasis::HostPrice,
-            micro_usd: 42,
-        })
+        Some(CostEstimate::new(CostBasis::HostPrice, 42))
     );
     assert_eq!(
         summary.context.and_then(|context| context.window_tokens),
@@ -155,6 +152,41 @@ fn unreported_requests_keep_only_reported_counts_and_stay_unpriced() {
             "{key}"
         );
     }
+}
+
+#[test]
+fn chatgpt_plan_requests_carry_the_api_equivalent_of_their_openai_twin() {
+    // Arrange
+    let mut twinned = meter("chatgpt/gpt-6.1-sol");
+    let mut untwinned = meter("chatgpt/gpt-6.1-terra");
+
+    // Act
+    let twinned_cost = twinned
+        .observe(&request(&Value::Null, &Value::Null, 10_000, 0))
+        .and_then(|usage| usage.models[0].cost);
+    let untwinned_usage = untwinned
+        .observe(&request(&Value::Null, &Value::Null, 10_000, 0))
+        .cloned()
+        .expect("request folded");
+
+    // Assert
+    // 10,000 input tokens, half of them cached, and 100 output tokens at
+    // GPT-6.1 Sol's list prices: 5,000 uncached at $2, 5,000 cached at
+    // $0.10, and 100 output at $10 per million tokens. The cached half has a
+    // declared price, so the figure is not an upper bound.
+    assert_eq!(
+        twinned_cost,
+        Some(CostEstimate::plan_billed(ApiEquivalentCost {
+            cost: PricedCost {
+                basis: CostBasis::ListPrice,
+                micro_usd: 10_000 + 500 + 1_000,
+                upper_bound: false,
+            },
+            login: Some(PlanLogin::ChatGpt),
+        }))
+    );
+    assert_eq!(untwinned_usage.models[0].model, "chatgpt/gpt-6.1-terra");
+    assert_eq!(untwinned_usage.models[0].cost, None);
 }
 
 #[test]

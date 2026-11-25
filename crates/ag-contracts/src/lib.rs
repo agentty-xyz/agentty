@@ -43,5 +43,6 @@ pub use provider_call_budget::{ProviderCallBudget, ProviderCallLedger};
 pub use reasoning::ReasoningLevel;
 pub use session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
 pub use usage::{
-    ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsageCheckpoint, UsagePurpose,
+    ApiEquivalentCost, ContextFill, CostBasis, CostEstimate, ModelUsage, PlanLogin, PricedCost,
+    TurnUsage, UsageCheckpoint, UsagePurpose,
 };

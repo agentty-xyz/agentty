@@ -210,6 +210,7 @@ fn test_session_usage_from_rows_converts_and_sorts_records() {
             cache_read_tokens: Some(4),
             cost_basis: Some("list".to_string()),
             cost_micro_usd: Some(9),
+            is_cost_upper_bound: true,
             model: "model".to_string(),
             purpose: "turn".to_string(),
             input_tokens: 10,
@@ -229,6 +230,7 @@ fn test_session_usage_from_rows_converts_and_sorts_records() {
     assert_eq!(usage.records[0].purpose, UsagePurpose::Turn);
     assert_eq!(usage.records[0].cache_read_tokens, Some(4));
     assert_eq!(usage.records[0].cost_basis, Some(CostBasis::ListPrice));
+    assert!(usage.records[0].cost_upper_bound);
     assert_eq!(usage.records[1].purpose, UsagePurpose::Title);
     assert_eq!(usage.records[1].input_tokens, 0);
     assert_eq!(

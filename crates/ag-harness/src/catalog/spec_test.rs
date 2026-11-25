@@ -151,6 +151,9 @@ fn host_pricing_falls_back_to_the_input_price_for_cache_tokens() {
     assert_eq!(pricing.cache_write_per_mtok_micro_usd(), 2_000_000);
     assert_eq!(cached.cache_read_per_mtok_micro_usd(), 500_000);
     assert_eq!(cached.cache_write_per_mtok_micro_usd(), 2_500_000);
+    assert!(!pricing.declares_cache_read());
+    assert!(!pricing.with_cache_write(2_500_000).declares_cache_read());
+    assert!(cached.declares_cache_read());
     assert_eq!(Pricing::built_in(1, 2).source(), PricingSource::BuiltIn);
 }
 

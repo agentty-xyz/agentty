@@ -7,9 +7,13 @@ use serde::Deserialize;
 
 use crate::agent::app_server::AntigravityTokenUsage;
 use crate::agent::claude_usage::{AgentTotals, ClaudeUsageMeter};
+use crate::agent::usage::Billing;
 
 /// Parsed agent response including content text and usage statistics.
 pub(crate) struct ParsedResponse {
+    /// How the agent's provider bills the run, as its login reveals;
+    /// metered unless the agent reported a plan login.
+    pub billing: Billing,
     /// Final response text from the agent.
     pub content: String,
     /// Final response texts of later turns the same run answered, in order,
@@ -60,6 +64,7 @@ struct CodexItem {
 /// Parses Claude output and falls back to raw output when parsing fails.
 pub(super) fn parse_claude_response_with_fallback(stdout: &str, stderr: &str) -> ParsedResponse {
     parse_claude_response(stdout).unwrap_or_else(|| ParsedResponse {
+        billing: Billing::Metered,
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
         totals: None,
@@ -70,6 +75,7 @@ pub(super) fn parse_claude_response_with_fallback(stdout: &str, stderr: &str) ->
 /// Parses Codex output and falls back to raw output when parsing fails.
 pub(super) fn parse_codex_response_with_fallback(stdout: &str, stderr: &str) -> ParsedResponse {
     parse_codex_response(stdout).unwrap_or_else(|| ParsedResponse {
+        billing: Billing::Metered,
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
         totals: None,
@@ -84,6 +90,7 @@ pub(super) fn parse_antigravity_response_with_fallback(
     stderr: &str,
 ) -> ParsedResponse {
     parse_antigravity_response(stdout).unwrap_or_else(|| ParsedResponse {
+        billing: Billing::Metered,
         content: fallback_response(stdout, stderr),
         follow_up_contents: Vec::new(),
         totals: None,
@@ -164,6 +171,7 @@ fn parse_antigravity_response(stdout: &str) -> Option<ParsedResponse> {
     );
 
     Some(ParsedResponse {
+        billing: Billing::Metered,
         content,
         follow_up_contents: Vec::new(),
         totals: None,
@@ -328,11 +336,13 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
         }
     }
 
+    let billing = usage.billing();
     let totals = usage.totals();
     let usage = usage.usage();
     let mut turn_contents = turn_contents.into_iter();
     if let Some(content) = turn_contents.next() {
         return Some(ParsedResponse {
+            billing,
             content,
             follow_up_contents: turn_contents.collect(),
             totals,
@@ -346,6 +356,7 @@ fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     }
 
     Some(ParsedResponse {
+        billing,
         content,
         follow_up_contents: Vec::new(),
         totals,
@@ -426,6 +437,7 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
     last_agent_message
         .or(last_reasoning_message)
         .map(|content| ParsedResponse {
+            billing: Billing::Metered,
             content,
             follow_up_contents: Vec::new(),
             totals: None,
@@ -544,6 +556,7 @@ fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
     usage.observe(&payload);
 
     Some(ParsedResponse {
+        billing: usage.billing(),
         content,
         follow_up_contents: Vec::new(),
         totals: usage.totals(),
@@ -591,6 +604,7 @@ fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
         .or(latest_assistant_content)?;
 
     Some(ParsedResponse {
+        billing: usage.billing(),
         content,
         follow_up_contents: Vec::new(),
         totals: usage.totals(),

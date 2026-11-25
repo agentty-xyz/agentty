@@ -1,7 +1,10 @@
-//! Codex app-server usage extraction helpers.
+//! Codex app-server usage extraction helpers, and detection of a `ChatGPT`
+//! plan login through `account/read`.
 
-use ag_contracts::{ContextFill, ModelUsage};
+use ag_contracts::{ContextFill, ModelUsage, PlanLogin};
 use serde_json::Value;
+
+use crate::agent::usage::Billing;
 
 /// Retained thread counters, separated from the latest request's context size.
 ///
@@ -11,7 +14,12 @@ use serde_json::Value;
 #[derive(Clone)]
 pub(super) struct UsageTracker {
     pub(super) latest_input: Option<u64>,
+    /// Id of the `account/read` request whose answer is pending.
+    account_request: Option<String>,
     baseline_observed: bool,
+    /// How the app server's login bills usage, metered until its account
+    /// is known to be a `ChatGPT` plan.
+    billing: Billing,
     cache_write: DetailCounter,
     cached: DetailCounter,
     /// Context window Codex reports for the thread's model.
@@ -187,6 +195,50 @@ impl UsageTracker {
         }
     }
 
+    /// Returns an `account/read` request asking how the app server is
+    /// signed in, and remembers its id so [`Self::observe_account`] reads
+    /// the answer whenever it arrives.
+    pub(super) fn account_request(&mut self) -> Value {
+        let request_id = format!("account-read-{}", uuid::Uuid::new_v4());
+        let payload = serde_json::json!({
+            "method": "account/read",
+            "id": request_id,
+            "params": {}
+        });
+        self.account_request = Some(request_id);
+
+        payload
+    }
+
+    /// Reads the answer to the pending `account/read` request and returns
+    /// whether `response` was it. A `chatgpt` account bills usage to a
+    /// `ChatGPT` plan; an API key, a cloud account, or an error response
+    /// leaves usage metered.
+    pub(super) fn observe_account(&mut self, response: &Value) -> bool {
+        if self.account_request.is_none()
+            || response.get("id").and_then(Value::as_str) != self.account_request.as_deref()
+        {
+            return false;
+        }
+        self.account_request = None;
+        self.billing = if response
+            .pointer("/result/account/type")
+            .and_then(Value::as_str)
+            == Some("chatgpt")
+        {
+            Billing::Plan(PlanLogin::ChatGpt)
+        } else {
+            Billing::Metered
+        };
+
+        true
+    }
+
+    /// Returns how the app server's login bills usage.
+    pub(super) fn billing(&self) -> Billing {
+        self.billing
+    }
+
     pub(super) fn record(&self) {
         ag_telemetry::current_attribute("agentty.usage.aggregate_known", self.totals().is_some());
         if let Some(input) = self.latest_input {
@@ -212,7 +264,9 @@ impl UsageTracker {
 impl Default for UsageTracker {
     fn default() -> Self {
         Self {
+            account_request: None,
             baseline_observed: false,
+            billing: Billing::Metered,
             cache_write: DetailCounter::new("cacheWriteInputTokens", "cache_write_input_tokens"),
             cached: DetailCounter::new("cachedInputTokens", "cached_input_tokens"),
             context_window: None,

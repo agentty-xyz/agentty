@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ag_contracts::{ModelUsage, TurnUsage, UsagePurpose};
+use ag_contracts::{CostEstimate, ModelUsage, PlanLogin, TurnUsage, UsagePurpose};
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, FocusedReviewStatus,
     ReasoningLevel, ResponseStyle, SessionMessageKind, SettingName, SpeedMode,
@@ -2932,6 +2932,9 @@ WHERE id = ?
     Ok(())
 }
 
+/// Persisted login label of an API equivalent summed over several logins.
+const MIXED_PLAN_LOGIN: &str = "mixed";
+
 /// Accumulates one invocation's usage of one model into its row for
 /// `purpose`.
 async fn upsert_model_usage(
@@ -2945,8 +2948,7 @@ async fn upsert_model_usage(
     let cache_read_tokens = model.cache_read_tokens.map(u64::cast_signed);
     let cache_write_tokens = model.cache_write_tokens.map(u64::cast_signed);
     let reasoning_tokens = model.reasoning_tokens.map(u64::cast_signed);
-    let cost_micro_usd = model.cost.map(|cost| cost.micro_usd.cast_signed());
-    let cost_basis = model.cost.map(|cost| cost.basis.as_str());
+    let cost = CostColumns::of(model.cost);
     let unpriced_invocation_count = i64::from(model.cost.is_none());
     let context_peak_tokens = model
         .context
@@ -2961,9 +2963,11 @@ INSERT INTO session_usage (
     session_id, model, purpose, created_at, input_tokens, output_tokens, invocation_count,
     cache_read_tokens, cache_write_tokens, reasoning_tokens, request_count,
     unreported_request_count, detailed_invocation_count, cost_micro_usd, cost_basis,
-    unpriced_invocation_count, context_peak_tokens, context_window_tokens
+    is_cost_upper_bound, api_equivalent_micro_usd, api_equivalent_login,
+    is_api_equivalent_upper_bound, unpriced_invocation_count, context_peak_tokens,
+    context_window_tokens
 )
-VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id, model, purpose) DO UPDATE SET
     input_tokens = input_tokens + excluded.input_tokens,
     output_tokens = output_tokens + excluded.output_tokens,
@@ -2983,6 +2987,21 @@ ON CONFLICT(session_id, model, purpose) DO UPDATE SET
         WHEN cost_basis IS NULL OR cost_basis = excluded.cost_basis THEN excluded.cost_basis
         ELSE 'mixed'
     END,
+    is_cost_upper_bound = MAX(is_cost_upper_bound, excluded.is_cost_upper_bound),
+    api_equivalent_micro_usd = CASE
+        WHEN excluded.api_equivalent_micro_usd IS NULL THEN api_equivalent_micro_usd
+        ELSE COALESCE(api_equivalent_micro_usd, 0) + excluded.api_equivalent_micro_usd
+    END,
+    api_equivalent_login = CASE
+        WHEN excluded.api_equivalent_login IS NULL THEN api_equivalent_login
+        WHEN api_equivalent_login IS NULL OR api_equivalent_login = excluded.api_equivalent_login
+            THEN excluded.api_equivalent_login
+        ELSE 'mixed'
+    END,
+    is_api_equivalent_upper_bound = MAX(
+        is_api_equivalent_upper_bound,
+        excluded.is_api_equivalent_upper_bound
+    ),
     unpriced_invocation_count = unpriced_invocation_count + excluded.unpriced_invocation_count,
     context_peak_tokens = MAX(
         COALESCE(context_peak_tokens, excluded.context_peak_tokens),
@@ -3001,8 +3020,12 @@ ON CONFLICT(session_id, model, purpose) DO UPDATE SET
         reasoning_tokens,
         model.requests,
         model.unreported_requests,
-        cost_micro_usd,
-        cost_basis,
+        cost.charge_micro_usd,
+        cost.charge_basis,
+        cost.is_charge_upper_bound,
+        cost.api_equivalent_micro_usd,
+        cost.api_equivalent_login,
+        cost.is_api_equivalent_upper_bound,
         unpriced_invocation_count,
         context_peak_tokens,
         context_window_tokens
@@ -3011,6 +3034,38 @@ ON CONFLICT(session_id, model, purpose) DO UPDATE SET
     .await?;
 
     Ok(())
+}
+
+/// Stored columns of one invocation's estimated cost: its charge and its
+/// API equivalent, each `None` when the invocation had none.
+struct CostColumns {
+    api_equivalent_login: Option<&'static str>,
+    api_equivalent_micro_usd: Option<i64>,
+    charge_basis: Option<&'static str>,
+    charge_micro_usd: Option<i64>,
+    is_api_equivalent_upper_bound: bool,
+    is_charge_upper_bound: bool,
+}
+
+impl CostColumns {
+    /// Returns the columns of `cost`; an API equivalent of several logins
+    /// stores the login label [`MIXED_PLAN_LOGIN`].
+    fn of(cost: Option<CostEstimate>) -> Self {
+        let charge = cost.and_then(CostEstimate::charge);
+        let api_equivalent = cost.and_then(CostEstimate::api_equivalent);
+
+        Self {
+            api_equivalent_login: api_equivalent
+                .map(|equivalent| equivalent.login.map_or(MIXED_PLAN_LOGIN, PlanLogin::as_str)),
+            api_equivalent_micro_usd: api_equivalent
+                .map(|equivalent| equivalent.cost.micro_usd.cast_signed()),
+            charge_basis: charge.map(|charge| charge.basis.as_str()),
+            charge_micro_usd: charge.map(|charge| charge.micro_usd.cast_signed()),
+            is_api_equivalent_upper_bound: api_equivalent
+                .is_some_and(|equivalent| equivalent.cost.upper_bound),
+            is_charge_upper_bound: charge.is_some_and(|charge| charge.upper_bound),
+        }
+    }
 }
 
 /// Records the content-free report of one in-process harness turn under the

@@ -542,13 +542,21 @@ cause:
 | Mark      | Meaning                                                                                            |
 | --------- | -------------------------------------------------------------------------------------------------- |
 | `≥`       | Lower bound: some requests reported no tokens or had no price, or the run predates detailed usage. |
+| `≤`       | Upper bound: cached input priced at the input price, with no cache price.                          |
+| `~`       | Both a lower and an upper bound.                                                                   |
+| `≈`       | API-equivalent: plan-billed usage priced at API list prices; no per-token charge.                  |
 | `?`       | Unreported: no request of that model reported token counts.                                        |
 | `unknown` | Unpriced: no price for that model; a total over other priced models leaves it out.                 |
 | `—`       | Not recorded: the backend does not report it, or the run predates detailed usage.                  |
 
 A lower-bound cost below half a cent reads `≥$0.00`. Costs are estimates from built-in
 list prices, configured prices, or the agent's own report; the provider's bill is
-authoritative.
+authoritative. On a subscription login, the panel title names the login, and costs are
+API equivalents: what the same tokens would cost at the provider's API list prices. They
+are never added to charged estimates; a total with both shows them side by side, such as
+`$1.20 + ≈$5.03`. A plan model without an API twin reads `unknown`. See
+[subscription logins](@/docs/agents/backends.md#backends-subscription-logins) for how
+each backend is detected.
 
 ## Agent Definitions
 

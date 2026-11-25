@@ -325,6 +325,13 @@ impl Pricing {
         }
     }
 
+    /// Returns whether a separate cached-input price is declared. Without
+    /// one, [`crate::Cost::of`] bills cache reads at the input price, so the
+    /// cost of usage with cache reads is an upper bound.
+    pub const fn declares_cache_read(self) -> bool {
+        self.cache_read.is_some()
+    }
+
     /// Returns the cache-write price in micro-USD per million tokens, the
     /// input price unless a separate price is declared.
     pub const fn cache_write_per_mtok_micro_usd(self) -> u64 {

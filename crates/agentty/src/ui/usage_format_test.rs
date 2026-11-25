@@ -1,10 +1,10 @@
 //! Usage formatting tests: money edges, column dropping, row cells and
 //! marks, totals, summary figures, and notes.
 
-use ag_contracts::{CostBasis, UsagePurpose};
+use ag_contracts::{CostBasis, PlanLogin, UsagePurpose};
 
 use super::{
-    UsageColumn, UsageFigure, UsageNote, UsageTableRow, format_money, format_percent,
+    UsageColumn, UsageFigure, UsageNote, UsageTableRow, format_money, format_percent, login_label,
     purpose_label, usage_panel_content, visible_usage_columns,
 };
 use crate::domain::session_usage::{ContextNow, SessionUsage, UsageRecord};
@@ -12,12 +12,16 @@ use crate::domain::session_usage::{ContextNow, SessionUsage, UsageRecord};
 /// Returns a fully detailed, priced record of `model` under `purpose`.
 fn priced_record(model: &str, purpose: UsagePurpose) -> UsageRecord {
     UsageRecord {
+        api_equivalent_login: None,
+        api_equivalent_micro_usd: None,
+        api_equivalent_upper_bound: false,
         cache_read_tokens: Some(3_790_000),
         cache_write_tokens: Some(212_000),
         context_peak_tokens: Some(612_400),
         context_window_tokens: Some(1_000_000),
         cost_basis: Some(CostBasis::ListPrice),
         cost_micro_usd: Some(3_270_000),
+        cost_upper_bound: false,
         detailed_invocation_count: 7,
         input_tokens: 4_120_000,
         invocation_count: 7,
@@ -34,12 +38,16 @@ fn priced_record(model: &str, purpose: UsagePurpose) -> UsageRecord {
 /// Returns a record whose requests all reported nothing and had no price.
 fn unreported_record(model: &str) -> UsageRecord {
     UsageRecord {
+        api_equivalent_login: None,
+        api_equivalent_micro_usd: None,
+        api_equivalent_upper_bound: false,
         cache_read_tokens: None,
         cache_write_tokens: None,
         context_peak_tokens: None,
         context_window_tokens: None,
         cost_basis: None,
         cost_micro_usd: None,
+        cost_upper_bound: false,
         detailed_invocation_count: 1,
         input_tokens: 0,
         invocation_count: 1,
@@ -56,12 +64,16 @@ fn unreported_record(model: &str) -> UsageRecord {
 /// Returns a record written before detailed usage existed.
 fn legacy_record(model: &str) -> UsageRecord {
     UsageRecord {
+        api_equivalent_login: None,
+        api_equivalent_micro_usd: None,
+        api_equivalent_upper_bound: false,
         cache_read_tokens: None,
         cache_write_tokens: None,
         context_peak_tokens: None,
         context_window_tokens: None,
         cost_basis: None,
         cost_micro_usd: None,
+        cost_upper_bound: false,
         detailed_invocation_count: 0,
         input_tokens: 1_000,
         invocation_count: 3,
@@ -565,4 +577,181 @@ fn test_single_unreported_request_and_run_use_singular_nouns() {
         content.rows[0].cell(UsageColumn::Cached).panel_text(),
         "≥3.8M"
     );
+}
+
+/// Returns a record of `model` whose usage `login` billed, priced only as
+/// an API equivalent.
+fn api_equivalent_record(model: &str, login: PlanLogin) -> UsageRecord {
+    UsageRecord {
+        api_equivalent_login: Some(login),
+        api_equivalent_micro_usd: Some(3_270_000),
+        cost_basis: None,
+        cost_micro_usd: None,
+        ..priced_record(model, UsagePurpose::Turn)
+    }
+}
+
+#[test]
+fn test_plan_login_costs_read_as_api_equivalents_named_in_the_title() {
+    // Arrange
+    let plan = UsageRecord {
+        api_equivalent_upper_bound: true,
+        ..api_equivalent_record("chatgpt/gpt-6.1-sol", PlanLogin::ChatGpt)
+    };
+
+    // Act
+    let content = usage_panel_content(&session_usage(vec![plan]));
+
+    // Assert
+    assert_eq!(
+        content.rows[0].cell(UsageColumn::Cost).panel_text(),
+        "≈$3.27"
+    );
+    assert_eq!(content.total.cell(UsageColumn::Cost).panel_text(), "≈$3.27");
+    assert_eq!(content.summary.cost.panel_text(), "≈$3.27");
+    assert_eq!(
+        content.summary.cost_explanation,
+        "API-equivalent, plan-billed"
+    );
+    assert_eq!(content.logins, [PlanLogin::ChatGpt]);
+    assert_eq!(
+        [PlanLogin::ChatGpt, PlanLogin::Claude].map(login_label),
+        ["ChatGPT subscription", "Claude subscription"]
+    );
+    assert_eq!(
+        content.notes,
+        [
+            UsageNote {
+                is_estimate: false,
+                mark: "≈",
+                text: "API-equivalent: ChatGPT plan login; priced at OpenAI API list prices; 92% \
+                       cached input priced as uncached, with no cache price; a subscription bills \
+                       no per-token charge."
+                    .to_string(),
+            },
+            UsageNote {
+                is_estimate: true,
+                mark: "$",
+                text: "Costs are estimated at API list prices for plan-billed usage; the provider \
+                       bill is authoritative."
+                    .to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_cached_input_without_a_cache_price_marks_upper_and_both_bounds() {
+    // Arrange
+    let overpriced = UsageRecord {
+        cost_upper_bound: true,
+        ..priced_record("muse-spark-1.3", UsagePurpose::Turn)
+    };
+
+    // Act
+    let upper = usage_panel_content(&session_usage(vec![overpriced.clone()]));
+    let both = usage_panel_content(&session_usage(vec![
+        overpriced,
+        unreported_record("qwen3-coder"),
+    ]));
+
+    // Assert
+    assert_eq!(upper.rows[0].cell(UsageColumn::Cost).panel_text(), "≤$3.27");
+    assert_eq!(upper.summary.cost.panel_text(), "≤$3.27");
+    assert_eq!(upper.summary.cost_explanation, "upper bound");
+    assert_eq!(upper.logins, []);
+    assert_eq!(note_marks(&upper.notes), ["≤", "$"]);
+    assert_eq!(
+        upper.notes[0].text,
+        "Upper bound: 92% cached, no cache price for muse-spark-1.3."
+    );
+    assert_eq!(both.summary.cost.panel_text(), "~$3.27");
+    assert_eq!(both.summary.cost_explanation, "lower and upper bound");
+    assert_eq!(note_marks(&both.notes), ["≥", "≤", "?", "unknown", "$"]);
+}
+
+#[test]
+fn test_api_equivalents_of_several_logins_name_no_single_login() {
+    // Arrange
+    let several_logins = UsageRecord {
+        api_equivalent_login: None,
+        ..api_equivalent_record("gpt-5.3-codex", PlanLogin::ChatGpt)
+    };
+
+    // Act
+    let content = usage_panel_content(&session_usage(vec![several_logins]));
+
+    // Assert
+    assert_eq!(content.logins, []);
+    assert_eq!(content.summary.cost.panel_text(), "≈$3.27");
+    assert_eq!(
+        content.notes[0].text,
+        "API-equivalent: usage of several subscription logins, priced at their API list prices; a \
+         subscription bills no per-token charge."
+    );
+}
+
+#[test]
+fn test_api_equivalents_are_never_summed_into_charged_estimates() {
+    // Arrange
+    let claude_plan = api_equivalent_record("claude-opus-5-5", PlanLogin::Claude);
+    let charged = priced_record("kimi-k3", UsagePurpose::Turn);
+    let partly_priced = UsageRecord {
+        unpriced_invocation_count: 1,
+        ..api_equivalent_record("claude-sonnet-5-5", PlanLogin::Claude)
+    };
+    // One model both charged through an API key and plan-billed.
+    let both_in_one_row = UsageRecord {
+        api_equivalent_login: Some(PlanLogin::Claude),
+        api_equivalent_micro_usd: Some(1_000_000),
+        ..priced_record("claude-haiku-5-5", UsagePurpose::Turn)
+    };
+
+    // Act
+    let side_by_side =
+        usage_panel_content(&session_usage(vec![claude_plan.clone(), charged.clone()]));
+    let lower_side_by_side = usage_panel_content(&session_usage(vec![
+        claude_plan,
+        charged,
+        unreported_record("qwen3-coder"),
+    ]));
+    let lower_equivalent = usage_panel_content(&session_usage(vec![partly_priced]));
+    let one_row = usage_panel_content(&session_usage(vec![both_in_one_row]));
+
+    // Assert
+    assert_eq!(side_by_side.summary.cost.panel_text(), "$3.27 + ≈$3.27");
+    assert_eq!(
+        side_by_side.summary.cost_explanation,
+        "estimated, plus API-equivalent, plan-billed"
+    );
+    assert_eq!(side_by_side.logins, [PlanLogin::Claude]);
+    assert_eq!(
+        side_by_side.notes[0].text,
+        "API-equivalent: Claude subscription login; priced from Claude Code's estimate or \
+         Anthropic API list prices; a subscription bills no per-token charge."
+    );
+    assert!(
+        side_by_side.notes[1]
+            .text
+            .contains("from built-in list prices")
+    );
+    assert_eq!(
+        one_row.rows[0].cell(UsageColumn::Cost).panel_text(),
+        "$3.27 + ≈$1.00"
+    );
+    assert_eq!(one_row.summary.cost.panel_text(), "$3.27 + ≈$1.00");
+    assert_eq!(one_row.logins, [PlanLogin::Claude]);
+    assert_eq!(
+        lower_side_by_side.summary.cost.panel_text(),
+        "≥$3.27 + ≥≈$3.27",
+        "unpriced usage could be either, so neither sum is complete"
+    );
+    assert_eq!(
+        lower_equivalent.rows[0]
+            .cell(UsageColumn::Cost)
+            .panel_text(),
+        "≥≈$3.27"
+    );
+    assert_eq!(lower_equivalent.summary.cost.panel_text(), "≥≈$3.27");
+    assert_eq!(note_marks(&lower_equivalent.notes), ["≥", "≈", "$"]);
 }

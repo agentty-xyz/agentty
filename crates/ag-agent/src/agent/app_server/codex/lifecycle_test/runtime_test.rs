@@ -974,6 +974,48 @@ async fn turn_event_loop_times_out_when_completion_never_arrives() {
     ));
 }
 
+#[tokio::test]
+async fn a_chatgpt_account_answer_prices_the_turn_as_an_api_equivalent() {
+    // Arrange
+    let folder = tempdir().expect("runtime folder");
+    let mut transport = MockCodexRuntimeTransport::new();
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+    let mut state =
+        CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+    state.model = model_fixture::CODEX_MODEL.as_str().to_string();
+    let account_request_id = state.usage.account_request()["id"].clone();
+    state.usage.begin_turn();
+    state
+        .process_turn_start_response(&serde_json::json!({"result":{"turn":{"id":"turn-1"}}}))
+        .expect("start");
+
+    // Act
+    let account_answer = state
+        .process_response(
+            &mut transport,
+            PermissionMode::AutoEdit,
+            folder.path(),
+            "turn-start",
+            serde_json::json!({"id": account_request_id, "result": {"account": {"type": "chatgpt", "email": null, "planType": "pro", "workspaceName": null}, "requiresOpenaiAuth": true}}),
+        )
+        .await;
+    state.process_stream_response(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"inputTokens":100,"outputTokens":10,"cachedInputTokens":40},"last":{"inputTokens":100,"outputTokens":10}}}})).expect("usage event");
+    let (_, turn_usage) = state
+        .process_stream_response(&serde_json::json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}))
+        .expect("completion")
+        .expect("completed turn");
+
+    // Assert
+    assert!(matches!(account_answer, Ok(None)));
+    let cost = turn_usage.models[0].cost.expect("the turn is priced");
+    assert_eq!(cost.charge(), None);
+    assert_eq!(
+        cost.api_equivalent()
+            .and_then(|equivalent| equivalent.login),
+        Some(ag_contracts::PlanLogin::ChatGpt)
+    );
+}
+
 /// Builds one auto-edit session-turn event-loop input for transport tests.
 fn turn_event_loop_input<'a>(
     folder: &'a Path,

@@ -17,7 +17,7 @@ use super::{App, AppEvent};
 use crate::domain::session::SessionId;
 use crate::domain::session_usage::{
     ContextNow, LiveUsageKey, LiveUsageRun, SessionUsage, UsageRecord, parse_cost_basis,
-    parse_usage_purpose,
+    parse_plan_login, parse_usage_purpose,
 };
 use crate::infra::db::{SessionUsageContextRow, SessionUsageRow, UsageRepository};
 use crate::presentation::app_mode::{AppMode, UsagePanel, UsageRestore};
@@ -201,12 +201,19 @@ fn session_usage_from_rows(
 /// Converts one stored usage row.
 fn usage_record_from_row(row: SessionUsageRow) -> UsageRecord {
     UsageRecord {
+        api_equivalent_login: row
+            .api_equivalent_login
+            .as_deref()
+            .and_then(parse_plan_login),
+        api_equivalent_micro_usd: row.api_equivalent_micro_usd.map(stored_count),
+        api_equivalent_upper_bound: row.is_api_equivalent_upper_bound,
         cache_read_tokens: row.cache_read_tokens.map(stored_count),
         cache_write_tokens: row.cache_write_tokens.map(stored_count),
         context_peak_tokens: row.context_peak_tokens.map(stored_count),
         context_window_tokens: row.context_window_tokens.map(stored_count),
         cost_basis: row.cost_basis.as_deref().map(parse_cost_basis),
         cost_micro_usd: row.cost_micro_usd.map(stored_count),
+        cost_upper_bound: row.is_cost_upper_bound,
         detailed_invocation_count: stored_count(row.detailed_invocation_count),
         input_tokens: stored_count(row.input_tokens),
         invocation_count: stored_count(row.invocation_count),

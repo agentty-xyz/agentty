@@ -688,6 +688,16 @@ impl ModelSelection {
         self.provider.model_spec(&self.model)
     }
 
+    /// Returns the catalog entry of the API model a plan-billed model
+    /// mirrors: for a `ChatGPT` plan model, the same-named `OpenAI` API
+    /// model, whose list prices give the plan usage's API equivalent. Other
+    /// models, and plan models without an API twin, return `None`.
+    pub(crate) fn api_twin_spec(&self) -> Option<ModelSpec> {
+        (self.provider == ModelProvider::ChatGpt)
+            .then(|| ModelProvider::OpenAi.model_spec(&self.model))
+            .flatten()
+    }
+
     /// Returns the context window turns on this model are fitted to, as
     /// [`Self::profile`] resolves it, or `None` for an invalid
     /// environment-declared profile.

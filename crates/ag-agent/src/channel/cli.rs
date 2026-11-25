@@ -107,8 +107,9 @@ struct CliTurnObserver {
     show_progress: bool,
     /// Model and usage of a turn whose live usage is forwarded as
     /// [`TurnEvent::UsageUpdated`]; only Claude Code reports usage while a
-    /// turn runs. Live updates carry the main-loop usage at list price; the
-    /// turn result replaces it with Claude Code's own per-model figures.
+    /// turn runs. Live updates carry the main-loop usage at list price, or
+    /// no price while the run's billing is undetermined; the turn result
+    /// replaces it with Claude Code's own per-model figures.
     usage: Option<(String, Mutex<ClaudeUsageMeter>)>,
 }
 
@@ -146,7 +147,21 @@ impl CliTurnObserver {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if meter.observe(event) {
-            let usage = priced_turn_usage(meter.usage(), model, self.kind);
+            let mut usage = priced_turn_usage(
+                meter.usage(),
+                model,
+                self.kind,
+                meter.known_billing().unwrap_or_default(),
+            );
+            // A run without an API key may still turn out plan-billed once
+            // its result names the provider, so until then its live usage
+            // carries tokens without a figure that could flip from a charge
+            // to an API equivalent.
+            if meter.known_billing().is_none() {
+                for model_usage in &mut usage.models {
+                    model_usage.cost = None;
+                }
+            }
             let _ = self.events.send(TurnEvent::UsageUpdated(usage));
         }
     }
@@ -155,6 +170,15 @@ impl CliTurnObserver {
 impl CliExecutionObserver for CliTurnObserver {
     fn pid_updated(&self, child_pid: Option<u32>) {
         let _ = self.events.send(TurnEvent::PidUpdate(child_pid));
+    }
+
+    fn credentials_resolved(&self, uses_alternate_credentials: bool) {
+        if let Some((_, meter)) = &self.usage {
+            meter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .set_alternate_credentials(uses_alternate_credentials);
+        }
     }
 
     fn stdout_line(&self, _line: &str, payload: &CliStdoutPayload) {
@@ -306,7 +330,7 @@ impl AgentChannel for CliAgentChannel {
                     CliExitStatus::Success => {}
                 }
 
-                let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
+                let parsed = agent::parse_execution_output(kind, &output);
 
                 complete_cli_turn(kind, parsed, &req, &backend, &events).await
             };
@@ -579,7 +603,7 @@ async fn execute_cli_repair_command(
         CliExitStatus::Success => {}
     }
 
-    Ok(agent::parse_response(kind, &output.stdout, &output.stderr))
+    Ok(agent::parse_execution_output(kind, &output))
 }
 
 /// Maps shared execution failures into the existing channel error categories.

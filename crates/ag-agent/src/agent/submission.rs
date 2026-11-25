@@ -30,7 +30,7 @@ use super::cli::execution::{
 use super::native::NativeHarnessConfig;
 use super::submission_pool::{SubmissionLease, SubmissionPool};
 use super::usage::cli_turn_usage;
-use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
+use super::{ParsedResponse, create_app_server_client, create_backend, parse_execution_output};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
 
 /// Production [`OneShotClient`] that routes through the selected provider.
@@ -547,7 +547,7 @@ async fn execute_one_shot_command(
         CliExitStatus::Success => {}
     }
 
-    let parsed_response = parse_response(agent_kind, &output.stdout, &output.stderr);
+    let parsed_response = parse_execution_output(agent_kind, &output);
 
     Ok(parsed_response)
 }

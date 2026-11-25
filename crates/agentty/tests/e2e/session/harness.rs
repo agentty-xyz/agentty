@@ -30,14 +30,20 @@ const REVIEW_IMPACT: &str = "Harness reviewed the notes.";
 /// joins a scenario's harness models.
 pub(super) const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
 
-/// Returns one terminal session answer.
+/// Returns one terminal session answer, two thirds of whose prompt the
+/// provider served from its cache.
 fn answer(text: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({
         "choices": [{
             "finish_reason": "stop",
             "message": {"content": json!({"answer": text, "questions": []}).to_string()}
         }],
-        "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+        "usage": {
+            "prompt_tokens": 30,
+            "completion_tokens": 7,
+            "total_tokens": 37,
+            "prompt_tokens_details": {"cached_tokens": 20}
+        }
     }))
 }
 
