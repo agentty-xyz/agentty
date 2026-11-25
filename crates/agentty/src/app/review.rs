@@ -351,7 +351,7 @@ pub(crate) fn hydrate_review_transients(
         }
     }
 
-    for session in session_state.sessions_mut() {
+    for session in session_state.all_sessions_mut() {
         hydrate_session_review_transient(review_cache, session);
     }
 }
@@ -377,24 +377,25 @@ pub(crate) fn hydrate_review_transient(
     hydrate_session_review_transient(review_cache, session);
 }
 
-/// Evicts inactive completed review entries while retaining in-flight work.
+/// Evicts completed review entries of sessions no loaded page holds while
+/// retaining in-flight work.
 ///
 /// A `Loading` entry must survive project switches so its eventual result can
 /// still be validated and persisted. Completed entries also remain while
-/// their durable write is pending; settled inactive entries are removed.
+/// their durable write is pending; settled entries of unloaded sessions are
+/// removed.
 pub(crate) fn prune_review_cache(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     pending_persistence: &HashMap<SessionId, FocusedReviewPersistence>,
     session_state: &SessionState,
 ) {
-    let active_session_ids = session_state
-        .sessions()
-        .iter()
+    let loaded_session_ids = session_state
+        .all_sessions()
         .map(|session| session.id.as_str())
         .collect::<HashSet<_>>();
 
     review_cache.retain(|session_id, cache_entry| {
-        active_session_ids.contains(session_id.as_str())
+        loaded_session_ids.contains(session_id.as_str())
             || matches!(cache_entry, ReviewCacheEntry::Loading { .. })
             || pending_persistence.contains_key(session_id)
     });
@@ -719,11 +720,7 @@ fn apply_review_update(
         SessionId::from(session_id),
         ReviewCacheEntry::from_result(diff_hash, request_id, &result),
     );
-    if let Some(session) = session_state
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == session_id)
-    {
+    if let Some(session) = session_state.session_mut_for_id(session_id) {
         let anchor = focused_review_result_anchor(session);
         let body = match &result {
             Ok(review_text) => TransientMessageBody::Markdown(review_text.clone()),

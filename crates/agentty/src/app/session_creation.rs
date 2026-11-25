@@ -102,11 +102,7 @@ impl App {
 
     /// Selects the newly reserved conversation once, before accepting input.
     fn open_created_session_composer(&mut self, session_id: &str) {
-        let index = self
-            .sessions
-            .sessions()
-            .iter()
-            .position(|session| session.id == session_id);
+        let index = self.session_index_for_id(session_id);
         self.sessions.select_session_index(index);
         self.mode = AppMode::Prompt {
             at_mention_state: None,
@@ -327,7 +323,8 @@ impl App {
         Ok(())
     }
 
-    /// Resumes ready prompts when their owning project becomes active again.
+    /// Resumes ready prompts when their owning project becomes active again,
+    /// for the sessions it placed on the active page.
     pub(crate) async fn resume_ready_workspace_prompts(&mut self) {
         let Ok(preparations) = self
             .services
@@ -341,10 +338,7 @@ impl App {
         for preparation in preparations {
             if preparation.state == SessionPreparationState::Ready
                 && preparation.prompt.is_some()
-                && self
-                    .sessions
-                    .session_for_id(&preparation.session_id)
-                    .is_some()
+                && self.sessions.is_in_active_page(&preparation.session_id)
             {
                 self.dispatch_prepared_prompt(&preparation.session_id).await;
             }

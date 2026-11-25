@@ -150,7 +150,7 @@ async fn runtime_backend_preserves_workflow_validation_errors() {
         .await
         .expect_err("missing cancellation should fail");
     app.sessions
-        .session_at_mut(0)
+        .session_mut_or_err(&session_id)
         .expect("draft session should be loaded")
         .status = SessionStatus::InProgress;
     if let Some(handles) = app.sessions.session_handles().get(&session_id)

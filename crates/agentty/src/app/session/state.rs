@@ -55,7 +55,10 @@ impl SessionRuntimeState {
 /// worker handles for every session, the list selection, and refresh
 /// tracking.
 ///
-/// Accessors that read or change session snapshots act on the active page.
+/// Lookups by session id, and the reducers built on them, search every loaded
+/// page. List positions, selection, archive pagination, and the per-page
+/// caches belong to the active page, the one the terminal shows. Only the
+/// active page is loaded today, so both reach the same sessions.
 pub struct SessionState {
     pub(super) clock: Arc<dyn Clock>,
     /// Selected follow-up-task positions keyed by session id for session-view
@@ -107,20 +110,53 @@ impl SessionState {
         &mut self.active
     }
 
-    /// Returns the current list position for one stable session identifier.
+    /// Returns the active page's list position for one stable session
+    /// identifier.
     pub fn session_index_for_id(&self, session_id: &str) -> Option<usize> {
         self.active.session_index_for_id(session_id)
     }
 
-    /// Returns all loaded session snapshots in current list order.
+    /// Returns whether `session_id` is on the active page, the one the
+    /// terminal shows.
+    ///
+    /// Automation that applies the active project's settings, or that is
+    /// scoped to the terminal's project, checks this rather than whether
+    /// the session is loaded at all.
+    pub(crate) fn is_in_active_page(&self, session_id: &str) -> bool {
+        self.active.session_index_for_id(session_id).is_some()
+    }
+
+    /// Returns one session snapshot by identifier only when it is on the
+    /// active page, for the gates that [`Self::is_in_active_page`] describes
+    /// and that also read the session.
+    pub(crate) fn active_page_session(&self, session_id: &str) -> Option<&Session> {
+        self.active.session_for_id(session_id)
+    }
+
+    /// Returns the active page's session snapshots in current list order.
     pub(crate) fn sessions(&self) -> &[Session] {
         self.active.sessions()
     }
 
-    /// Returns mutable access to loaded session snapshots for reducers that
-    /// update render-friendly projections.
+    /// Returns mutable access to the active page's session snapshots for
+    /// reducers that update render-friendly projections.
     pub(crate) fn sessions_mut(&mut self) -> &mut [Session] {
         &mut self.active.sessions
+    }
+
+    /// Returns the session snapshots of every loaded page, the active page's
+    /// first, for sweeps that do not depend on the terminal's project.
+    pub(crate) fn all_sessions(&self) -> impl Iterator<Item = &Session> {
+        self.pages().flat_map(|page| page.sessions.iter())
+    }
+
+    /// Returns mutable access to the session snapshots of every loaded page,
+    /// the active page's first, for sweeps that do not depend on the
+    /// terminal's project.
+    pub(crate) fn all_sessions_mut(&mut self) -> impl Iterator<Item = &mut Session> {
+        let (pages, _) = self.pages_and_runtime_mut();
+
+        pages.flat_map(|page| page.sessions.iter_mut())
     }
 
     /// Returns runtime handles keyed by stable session id.
@@ -167,9 +203,11 @@ impl SessionState {
         }
     }
 
-    /// Returns one immutable session snapshot by identifier.
+    /// Returns one immutable session snapshot by identifier from any loaded
+    /// page.
     pub fn session_for_id(&self, session_id: &str) -> Option<&Session> {
-        self.active.session_for_id(session_id)
+        self.pages()
+            .find_map(|page| page.session_for_id(session_id))
     }
 
     /// Replaces persisted session snapshots while retaining in-process
@@ -255,12 +293,13 @@ impl SessionState {
     }
 
     /// Copies current values from one runtime handle into its `Session`
-    /// snapshot.
+    /// snapshot on whichever loaded page holds it.
     pub fn sync_session_from_handle(&mut self, session_id: &str) {
-        let Some(session_handles) = self.runtime.handle(session_id) else {
+        let (mut pages, runtime) = self.pages_and_runtime_mut();
+        let Some(session_handles) = runtime.handle(session_id) else {
             return;
         };
-        let Some(session) = self.active.session_mut_for_id(session_id) else {
+        let Some(session) = pages.find_map(|page| page.session_mut_for_id(session_id)) else {
             return;
         };
 
@@ -269,8 +308,8 @@ impl SessionState {
         session.reconcile_status_transition(previous_status);
     }
 
-    /// Mirrors one queued workflow row into live handles and the active render
-    /// snapshot when that project is currently loaded.
+    /// Mirrors one queued workflow row into live handles and the session's
+    /// render snapshot when its page is loaded.
     pub(crate) fn upsert_queued_action(&mut self, session_id: &str, message: TransientMessage) {
         if let Some(session_handles) = self.runtime.handle(session_id) {
             session_handles.upsert_queued_action(message.clone());
@@ -281,8 +320,8 @@ impl SessionState {
         }
     }
 
-    /// Removes one queued workflow row from live handles and the active
-    /// render snapshot when that project is currently loaded.
+    /// Removes one queued workflow row from live handles and the session's
+    /// render snapshot when its page is loaded.
     pub(crate) fn resolve_queued_action(&mut self, session_id: &str, slot: TransientMessageSlot) {
         if let Some(session_handles) = self.runtime.handle(session_id) {
             session_handles.resolve_queued_action(slot);
@@ -296,13 +335,13 @@ impl SessionState {
     /// Copies current values from runtime handles into plain `Session` fields.
     ///
     /// The runtime uses targeted `sync_session_from_handle()` calls for
-    /// queued `SessionUpdated` events. This full sweep remains for explicit
-    /// catch-up paths and focused tests.
+    /// queued `SessionUpdated` events. This full sweep of every loaded page
+    /// remains for explicit catch-up paths and focused tests.
     pub fn sync_from_handles(&mut self) {
-        let handles = self.runtime.handles();
+        let (pages, runtime) = self.pages_and_runtime_mut();
 
-        for session in &mut self.active.sessions {
-            let Some(session_handles) = handles.get(&session.id) else {
+        for session in pages.flat_map(|page| page.sessions.iter_mut()) {
+            let Some(session_handles) = runtime.handle(&session.id) else {
                 continue;
             };
 
@@ -537,9 +576,26 @@ impl SessionState {
             .insert(SessionId::from(session_id), next_position);
     }
 
-    /// Returns one mutable session snapshot by identifier.
+    /// Returns one mutable session snapshot by identifier from any loaded
+    /// page.
     pub(crate) fn session_mut_for_id(&mut self, session_id: &str) -> Option<&mut Session> {
-        self.active.session_mut_for_id(session_id)
+        let (mut pages, _) = self.pages_and_runtime_mut();
+
+        pages.find_map(|page| page.session_mut_for_id(session_id))
+    }
+
+    /// Returns every loaded page, the active page first.
+    fn pages(&self) -> impl Iterator<Item = &SessionPage> {
+        std::iter::once(&self.active)
+    }
+
+    /// Returns mutable access to every loaded page, the active page first,
+    /// beside the live handles, so a snapshot can be synced from its handle
+    /// while both are borrowed.
+    fn pages_and_runtime_mut(
+        &mut self,
+    ) -> (impl Iterator<Item = &mut SessionPage>, &SessionRuntimeState) {
+        (std::iter::once(&mut self.active), &self.runtime)
     }
 }
 

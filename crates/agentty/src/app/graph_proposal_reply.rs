@@ -154,9 +154,10 @@ impl App {
         )
     }
 
-    /// Decides or applies the unsettled replies of loaded sessions after a
-    /// restart or a project switch, at most one per proposal. A decided reply
-    /// reapplies its recorded decision instead of deciding again.
+    /// Decides or applies the unsettled replies of the active page's sessions
+    /// after a restart or a project switch, at most one per proposal. A
+    /// decided reply reapplies its recorded decision instead of deciding
+    /// again.
     pub(crate) async fn recover_graph_proposal_replies(&mut self) {
         let session_ids: Vec<SessionId> = self
             .sessions

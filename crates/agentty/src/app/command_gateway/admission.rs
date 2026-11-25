@@ -100,11 +100,9 @@ impl App {
         match scope {
             RemoteScope::NotServed => Some(SessionError::Operation(REMOTE_NOT_SERVED.to_string())),
             RemoteScope::Project => None,
-            RemoteScope::Session(session_id) => self
-                .sessions
-                .session_for_id(session_id)
-                .is_none()
-                .then_some(SessionError::NotFound),
+            RemoteScope::Session(session_id) => {
+                (!self.sessions.is_in_active_page(session_id)).then_some(SessionError::NotFound)
+            }
         }
     }
 

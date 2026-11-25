@@ -1909,9 +1909,7 @@ impl App {
             .iter()
             .filter_map(|session_id| {
                 self.sessions
-                    .sessions()
-                    .iter()
-                    .find(|session| session.id == *session_id)
+                    .session_for_id(session_id)
                     .map(|session| (session_id.clone(), session.status))
             })
             .collect()
@@ -2073,12 +2071,7 @@ impl App {
         session_id: &str,
         turn_applied_state: &TurnAppliedState,
     ) {
-        if !self
-            .sessions
-            .sessions()
-            .iter()
-            .any(|session| session.id == session_id)
-        {
+        if self.sessions.session_for_id(session_id).is_none() {
             return;
         }
 
@@ -2468,8 +2461,13 @@ impl App {
         self.start_auto_review_diff_loads(session_ids);
     }
 
-    /// Starts automatic reviews for loaded and inactive-project sessions,
-    /// retaining durable triggers when preparation cannot start yet.
+    /// Starts automatic reviews for active-page and inactive-project
+    /// sessions, retaining durable triggers when preparation cannot start
+    /// yet.
+    ///
+    /// Only a session on the active page reviews with the active project's
+    /// review agent; any other session takes the inactive path, which loads
+    /// its own project's agent.
     ///
     /// A session whose graph is still working keeps its trigger until the
     /// graph finishes, fails, or stops, so the review covers the whole graph
@@ -2488,7 +2486,7 @@ impl App {
             }
             let loaded_status = self
                 .sessions
-                .session_for_id(session_id)
+                .active_page_session(session_id)
                 .map(|session| session.status);
             if loaded_status == Some(Status::InProgress) {
                 self.defer_auto_review_session(session_id).await;
@@ -2510,10 +2508,10 @@ impl App {
         self.start_auto_review_diff_loads(&loaded_session_ids);
     }
 
-    /// Consumes deferred automatic-review triggers whose sessions were
-    /// restored by the latest project switch. A session whose graph is still
-    /// working keeps its trigger for the update that graph emits when it
-    /// settles or stops.
+    /// Consumes deferred automatic-review triggers whose sessions the latest
+    /// project switch placed on the active page. A session whose graph is
+    /// still working keeps its trigger for the update that graph emits when
+    /// it settles or stops.
     pub(super) async fn resume_deferred_auto_reviews(
         &mut self,
         persisted_session_ids: Vec<String>,
@@ -2522,7 +2520,7 @@ impl App {
             .extend(persisted_session_ids.into_iter().map(SessionId::from));
         let mut loaded_session_ids = HashSet::new();
         for session_id in &self.deferred_auto_review_session_ids {
-            if self.sessions.session_for_id(session_id).is_some()
+            if self.sessions.is_in_active_page(session_id)
                 && !self.graph_holds_automatic_review(session_id).await
             {
                 loaded_session_ids.insert(session_id.clone());

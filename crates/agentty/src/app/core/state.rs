@@ -502,11 +502,7 @@ impl App {
         &mut self,
         session_id: &SessionId,
     ) -> Option<DiffReviewComments> {
-        let session = self
-            .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == *session_id)?;
+        let session = self.sessions.session_for_id(session_id)?;
         let review_request = session.review_request.as_ref()?;
         let display_id = review_request.summary.display_id.clone();
         let fallback_repo_url = SessionManager::review_request_repo_url(review_request);
@@ -798,12 +794,7 @@ impl App {
     async fn finish_session_creation(&mut self, session_id: &str) {
         self.finish_api_session_creation(session_id).await;
 
-        let index = self
-            .sessions
-            .sessions()
-            .iter()
-            .position(|session| session.id == session_id)
-            .unwrap_or(0);
+        let index = self.session_index_for_id(session_id).unwrap_or(0);
         self.sessions.select_session_index(Some(index));
     }
 
@@ -820,9 +811,7 @@ impl App {
     ) -> Result<TerminalContinuationDraft, AppError> {
         let source_session = self
             .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == source_session_id)
+            .session_for_id(source_session_id)
             .ok_or_else(|| AppError::Workflow("Session not found".to_string()))?;
         if !source_session.allows_terminal_continuation() {
             return Err(AppError::Workflow(
@@ -1565,9 +1554,9 @@ impl App {
 
         // The status check above found the session, so this updates it.
         self.sessions
-            .sessions_mut()
-            .iter_mut()
-            .filter(|session| session.id == session_id)
+            .state_mut()
+            .session_mut_for_id(session_id)
+            .into_iter()
             .for_each(|session| {
                 let previous_status = session.status;
                 session.status = Status::Review;
@@ -2260,11 +2249,7 @@ impl App {
         session_id: &str,
     ) -> Option<(usize, String, Option<SessionId>)> {
         let position = self.sessions.selected_follow_up_task_position(session_id)?;
-        let session = self
-            .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == session_id)?;
+        let session = self.sessions.session_for_id(session_id)?;
         let follow_up_task = session.follow_up_task(position)?;
 
         Some((
@@ -2289,11 +2274,11 @@ impl App {
         );
     }
 
-    /// Opens one session by id and preserves question mode for clarification
-    /// sessions. Graph questions dismissed earlier open again once the view
-    /// reconciles.
+    /// Opens one session of the active page by id and preserves question mode
+    /// for clarification sessions. Graph questions dismissed earlier open
+    /// again once the view reconciles.
     fn open_session(&mut self, target_session_id: &str) {
-        let Some(session) = self.sessions.session_for_id(target_session_id) else {
+        let Some(session) = self.sessions.active_page_session(target_session_id) else {
             return;
         };
         self.graph_questions.forget_dismissal(target_session_id);
@@ -2725,13 +2710,12 @@ impl App {
         }
     }
 
-    /// Drops thinking text for sessions that are no longer actively running.
+    /// Drops thinking text for sessions that are no longer loaded on any page
+    /// or no longer actively running.
     pub(super) fn retain_valid_session_progress_messages(&mut self) {
         self.session_progress_messages.retain(|session_id, _| {
             self.sessions
-                .sessions()
-                .iter()
-                .find(|session| session.id == *session_id)
+                .session_for_id(session_id)
                 .is_some_and(|session| matches!(session.status, Status::InProgress))
         });
     }

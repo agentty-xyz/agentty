@@ -1,6 +1,6 @@
 //! `SessionState` and `SessionPage` unit tests covering handle
-//! synchronization, session indexing, archive selection and accounting, git
-//! statuses, and follow-up tasks.
+//! synchronization, session indexing, lookups by id versus the active page,
+//! archive selection and accounting, git statuses, and follow-up tasks.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -802,4 +802,117 @@ fn reset_archive_page_returns_to_first_window_and_keeps_archive_total() {
     assert!(!page.has_more_archived_sessions);
     assert_eq!(page.archived_session_count(), 23);
     assert!(!state.is_archive_expanded());
+}
+
+/// Builds a one-page state holding three sessions in list order.
+fn three_session_state() -> SessionState {
+    SessionState::new(
+        HashMap::new(),
+        1,
+        vec![
+            state_session_fixture("first", Status::Review),
+            state_session_fixture("second", Status::Draft),
+            state_session_fixture("third", Status::Done),
+        ],
+        SelectionState::default(),
+        Arc::new(FixedClock::new()),
+        0,
+        0,
+    )
+}
+
+#[test]
+/// Verifies id lookups reach the same snapshot as the active page's list
+/// index, both for reading and for changing it, while only one page is
+/// loaded.
+fn id_lookups_agree_with_active_page_indexes() {
+    // Arrange
+    let mut state = three_session_state();
+    let session_ids = state
+        .sessions()
+        .iter()
+        .map(|session| session.id.clone())
+        .collect::<Vec<_>>();
+
+    // Act
+    state
+        .session_mut_for_id("second")
+        .expect("second session should be loaded")
+        .title = Some("changed by id".to_string());
+
+    // Assert
+    for (expected_index, session_id) in session_ids.iter().enumerate() {
+        let session_index = state
+            .session_index_for_id(session_id)
+            .expect("loaded session should have an index");
+        let session = state
+            .session_for_id(session_id)
+            .expect("loaded session should be found by id");
+        assert_eq!(session_index, expected_index);
+        assert_eq!(session.id, state.sessions()[session_index].id);
+    }
+    assert_eq!(state.sessions()[1].title.as_deref(), Some("changed by id"));
+    assert_eq!(state.session_index_for_id("missing"), None);
+    assert!(state.session_for_id("missing").is_none());
+    assert!(state.session_mut_for_id("missing").is_none());
+}
+
+#[test]
+/// Verifies only sessions on the active page count as on it.
+fn is_in_active_page_matches_the_active_pages_sessions() {
+    // Arrange
+    let mut state = three_session_state();
+
+    // Act
+    state.replace_sessions(vec![
+        state_session_fixture("second", Status::Draft),
+        state_session_fixture("fourth", Status::Review),
+    ]);
+
+    // Assert
+    for session in state.sessions() {
+        assert!(state.is_in_active_page(&session.id));
+        assert_eq!(
+            state
+                .active_page_session(&session.id)
+                .map(|active_session| active_session.id.as_str()),
+            Some(session.id.as_str())
+        );
+    }
+    for session_id in ["first", "third", "missing"] {
+        assert!(!state.is_in_active_page(session_id));
+        assert!(state.active_page_session(session_id).is_none());
+    }
+}
+
+#[test]
+/// Verifies the sweep over every loaded page visits exactly the active
+/// page's sessions, in list order, while only one page is loaded.
+fn all_sessions_visits_the_active_pages_sessions() {
+    // Arrange
+    let mut state = three_session_state();
+
+    // Act
+    for session in state.all_sessions_mut() {
+        session.title = Some(format!("swept {}", session.id));
+    }
+
+    // Assert
+    let all_session_ids = state
+        .all_sessions()
+        .map(|session| session.id.as_str())
+        .collect::<Vec<_>>();
+    let active_session_ids = state
+        .sessions()
+        .iter()
+        .map(|session| session.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(all_session_ids, active_session_ids);
+    assert_eq!(all_session_ids, vec!["first", "second", "third"]);
+    for session in state.sessions() {
+        assert_eq!(
+            session.title.as_deref(),
+            Some(format!("swept {}", session.id).as_str())
+        );
+    }
 }

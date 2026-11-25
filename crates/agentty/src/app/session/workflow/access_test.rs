@@ -7,52 +7,6 @@ use crate::app::session::SessionError;
 use crate::domain::session::{SessionHandles, Status};
 use crate::test_support;
 
-// --- session_index_or_err ---
-
-#[test]
-fn test_session_index_or_err_returns_index_for_existing_session() {
-    // Arrange
-    let session = test_support::session_fixture("sess-1", Status::Review);
-    let manager = test_support::session_manager_with_handles(vec![session], HashMap::new());
-
-    // Act
-    let index = manager
-        .session_index_or_err("sess-1")
-        .expect("session should be found");
-
-    // Assert
-    assert_eq!(index, 0);
-}
-
-#[test]
-fn test_session_index_or_err_returns_correct_index_for_second_session() {
-    // Arrange
-    let session_a = test_support::session_fixture("sess-a", Status::Review);
-    let session_b = test_support::session_fixture("sess-b", Status::Draft);
-    let manager =
-        test_support::session_manager_with_handles(vec![session_a, session_b], HashMap::new());
-
-    // Act
-    let index = manager
-        .session_index_or_err("sess-b")
-        .expect("session should be found");
-
-    // Assert
-    assert_eq!(index, 1);
-}
-
-#[test]
-fn test_session_index_or_err_returns_not_found_for_missing_session() {
-    // Arrange
-    let manager = test_support::session_manager_with_handles(Vec::new(), HashMap::new());
-
-    // Act
-    let result = manager.session_index_or_err("nonexistent");
-
-    // Assert
-    assert!(matches!(result, Err(SessionError::NotFound)));
-}
-
 // --- session_or_err ---
 
 #[test]
@@ -72,12 +26,63 @@ fn test_session_or_err_returns_session_reference() {
 }
 
 #[test]
+fn test_session_or_err_finds_later_session_by_id() {
+    // Arrange
+    let session_a = test_support::session_fixture("sess-a", Status::Review);
+    let session_b = test_support::session_fixture("sess-b", Status::Draft);
+    let manager =
+        test_support::session_manager_with_handles(vec![session_a, session_b], HashMap::new());
+
+    // Act
+    let found = manager
+        .session_or_err("sess-b")
+        .expect("session should be found");
+
+    // Assert
+    assert_eq!(found.id, "sess-b");
+    assert_eq!(found.status, Status::Draft);
+}
+
+#[test]
 fn test_session_or_err_returns_not_found_for_missing_session() {
     // Arrange
     let manager = test_support::session_manager_with_handles(Vec::new(), HashMap::new());
 
     // Act
     let result = manager.session_or_err("missing");
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::NotFound)));
+}
+
+// --- session_mut_or_err ---
+
+#[test]
+fn test_session_mut_or_err_changes_the_session_with_that_id() {
+    // Arrange
+    let session_a = test_support::session_fixture("sess-a", Status::Review);
+    let session_b = test_support::session_fixture("sess-b", Status::Draft);
+    let mut manager =
+        test_support::session_manager_with_handles(vec![session_a, session_b], HashMap::new());
+
+    // Act
+    manager
+        .session_mut_or_err("sess-b")
+        .expect("session should be found")
+        .title = Some("renamed".to_string());
+
+    // Assert
+    assert_eq!(manager.sessions()[0].title, None);
+    assert_eq!(manager.sessions()[1].title.as_deref(), Some("renamed"));
+}
+
+#[test]
+fn test_session_mut_or_err_returns_not_found_for_missing_session() {
+    // Arrange
+    let mut manager = test_support::session_manager_with_handles(Vec::new(), HashMap::new());
+
+    // Act
+    let result = manager.session_mut_or_err("missing");
 
     // Assert
     assert!(matches!(result, Err(SessionError::NotFound)));

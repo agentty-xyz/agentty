@@ -232,19 +232,14 @@ impl App {
         prompt: TurnPrompt,
         thread_ids: Vec<String>,
     ) -> ReviewCommentResolutionOutcome {
-        let Some(session_index) = self
-            .sessions
-            .sessions()
-            .iter()
-            .position(|session| session.id == *session_id)
-        else {
+        let Some(session) = self.sessions.session_for_id(session_id) else {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         };
-        if !self.sessions.sessions()[session_index].allows_review_comment_reply() {
+        if !session.allows_review_comment_reply() {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         }
 
-        let is_queued = self.sessions.sessions()[session_index].queues_review_comment_reply();
+        let is_queued = session.queues_review_comment_reply();
         let enqueued = self
             .sessions
             .reply_to_review_comments(&self.services, session_id, prompt, thread_ids)
@@ -878,13 +873,16 @@ impl App {
 
     /// Starts bounded `/apply`-equivalent turns for newly ready focused
     /// reviews when the project enables automatic remediation.
+    ///
+    /// The setting is the active project's, so only sessions on the active
+    /// page are addressed.
     pub(crate) fn auto_address_focused_reviews(&mut self, ready_session_ids: Vec<SessionId>) {
         if !self.settings.auto_address_review_comments() {
             return;
         }
 
         for session_id in ready_session_ids {
-            if self.sessions.session_for_id(&session_id).is_none() {
+            if !self.sessions.is_in_active_page(&session_id) {
                 continue;
             }
 
