@@ -23,7 +23,5 @@ boundaries, orchestration, and change paths.
   model loop, durable sessions, tools, and provider transports.
 - [Execution Graphs](@/docs/architecture/execution-graphs.md) documents static graph
   snapshots, dispatch, exact result handoffs, and recovery.
-- [Harness Graph Integration](@/docs/architecture/harness-graph-integration.md) proposes
-  how execution graph nodes run on the `ag-harness` run API.
 - [Remote Control Design](@/docs/architecture/remote-control-design.md) documents the
   remote-control transports, keys, relay trust model, and design decisions.
