@@ -10,9 +10,10 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{PermissionMode, ProviderCallBudget};
 use ag_protocol::ProtocolRequestProfile;
-use ag_session::{GraphContext, GraphResultState, GraphWorkspaceAccess};
+use ag_session::{AgentModel, GraphContext, GraphResultState, GraphWorkspaceAccess};
 use ag_store::{Database, GraphEvidence, TaskAgentTurnMetadata};
 use ag_worker::{
     GraphAdmission, GraphExecutor, GraphResources, GraphUtilityRunner, HeartbeatClock, RunScope,
@@ -159,9 +160,9 @@ async fn task_history_fixture() -> Result<TaskHistoryFixture, Box<dyn Error>> {
             .to_string(),
         harness_turn_report: None,
         instruction_conversation_id: Some("task-instructions".into()),
-        input_tokens: 3,
-        output_tokens: 7,
         provider_conversation_id: Some("task-provider".into()),
+        // The node's model, under which a reloaded receipt reports its totals.
+        usage: token_usage(AgentModel::Gpt61Sol.as_str(), 3, 7),
     };
 
     Ok(TaskHistoryFixture {

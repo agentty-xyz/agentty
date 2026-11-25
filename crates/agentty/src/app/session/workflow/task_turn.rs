@@ -131,9 +131,8 @@ async fn execute(
                 assistant_message: serde_json::json!(result.assistant_message).to_string(),
                 harness_turn_report: result.harness_report,
                 instruction_conversation_id,
-                input_tokens: result.input_tokens,
-                output_tokens: result.output_tokens,
                 provider_conversation_id: result.provider_conversation_id,
+                usage: result.usage,
             },
         )
         .await?;
@@ -245,6 +244,15 @@ async fn prepare(
         history.instruction_conversation_id.clone(),
         history.provider_conversation_id.clone(),
         if persistent { None } else { replay },
+    )
+    // Task and chat turns share the worktree's most recent conversation, so
+    // they share the session's usage checkpoint.
+    .with_usage_checkpoint(
+        context
+            .db
+            .sessions()
+            .get_session_usage_checkpoint(&context.session_id)
+            .await?,
     );
     let prepared = TurnRequest {
         // Task agents run bounded assignments, and no transcript shows their

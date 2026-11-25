@@ -10,6 +10,7 @@ pub(crate) mod app_server;
 mod availability;
 mod backend;
 mod claude;
+pub(crate) mod claude_usage;
 pub(crate) mod cli;
 mod codex;
 pub(crate) mod execution_policy;
@@ -25,6 +26,7 @@ mod submission;
 mod submission_pool;
 mod tool_trace;
 pub(crate) mod trace;
+pub(crate) mod usage;
 
 pub use availability::{
     AgentAvailabilityProbe, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,

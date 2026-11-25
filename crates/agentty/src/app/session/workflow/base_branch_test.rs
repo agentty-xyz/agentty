@@ -230,8 +230,7 @@ fn completed_turn() -> TurnResult {
         assistant_message: AgentResponse::plain("done"),
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: ag_contracts::TurnUsage::default(),
     }
 }

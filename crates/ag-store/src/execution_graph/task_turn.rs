@@ -1,6 +1,7 @@
 //! Persists graph task-agent turns and appends node questions to the session
 //! transcript.
 
+use ag_contracts::UsagePurpose;
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
     ExecutionGraph, GraphExecutionRef, SessionMessageKind, node_question_notice,
@@ -42,8 +43,8 @@ impl SqliteGraphRepository {
             &metadata.assistant_message,
             &metadata.harness_turn_report,
             &metadata.instruction_conversation_id,
-            metadata.input_tokens,
-            metadata.output_tokens,
+            metadata.usage.input_tokens(),
+            metadata.usage.output_tokens(),
             &metadata.provider_conversation_id,
         ))
         .to_string();
@@ -74,10 +75,16 @@ impl SqliteGraphRepository {
         session::persist_turn_usage(
             &mut transaction,
             graph.session_id.as_str(),
+            UsagePurpose::Turn,
+            now,
+            &metadata.usage,
+        )
+        .await?;
+        session::persist_harness_turn_report(
+            &mut transaction,
+            graph.session_id.as_str(),
             dispatch.node.agent.model().as_str(),
             now,
-            metadata.input_tokens,
-            metadata.output_tokens,
             metadata.harness_turn_report.as_deref(),
         )
         .await?;

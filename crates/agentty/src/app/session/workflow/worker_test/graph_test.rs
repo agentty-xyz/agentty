@@ -292,9 +292,8 @@ async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
                 assistant_message: serde_json::json!(recorded_message).to_string(),
                 harness_turn_report: None,
                 instruction_conversation_id: Some("task-provider".into()),
-                input_tokens: 0,
-                output_tokens: 0,
                 provider_conversation_id: Some("task-provider".into()),
+                usage: ag_contracts::TurnUsage::default(),
             },
         )
         .await

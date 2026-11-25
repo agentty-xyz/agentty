@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT session_id, model, purpose, created_at, input_tokens, invocation_count, output_tokens\nFROM session_usage\nWHERE session_id = ?\nORDER BY model, purpose\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "purpose",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "purpose"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "input_tokens",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "input_tokens"
+          }
+        }
+      },
+      {
+        "name": "invocation_count",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "invocation_count"
+          }
+        }
+      },
+      {
+        "name": "output_tokens",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_usage",
+            "name": "output_tokens"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6e05bc8c86426a1fbea5807b6d475ceb1c1b50eee8b14162e472db41e7308645"
+}

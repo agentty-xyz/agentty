@@ -4,7 +4,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use ag_session::{SessionDiffState, SessionMessageKind, SessionStats};
+use ag_contracts::UsagePurpose;
+use ag_contracts::test_support::token_usage;
+use ag_session::SessionMessageKind;
 use ag_worker::MockOperationRepository;
 use sqlx::SqlitePool;
 
@@ -70,14 +72,8 @@ async fn injected_clock_drives_all_repository_timestamps() {
         .usage()
         .upsert_session_usage(
             "session-a",
-            "gpt-5.6-sol",
-            &SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: SessionDiffState::Unknown,
-                input_tokens: 1,
-                output_tokens: 2,
-            },
+            UsagePurpose::Turn,
+            &token_usage("gpt-5.6-sol", 1, 2),
         )
         .await
         .expect("failed to insert usage");
@@ -101,8 +97,8 @@ INNER JOIN session_usage ON session_usage.session_id = session.id
     .await
     .expect("failed to load timestamps");
 
-    // Assert
-    assert_eq!(timestamps, (120, 120, 121, 122, 122, 123, 124));
+    // Assert: recording usage also updates the session's token totals.
+    assert_eq!(timestamps, (120, 120, 121, 124, 122, 123, 124));
 }
 
 #[tokio::test]
@@ -130,13 +126,7 @@ async fn fixed_clock_drives_session_metadata_status_and_usage_writes() {
         provider_conversation_id: Some("conversation-a".to_string()),
         questions_json: "[]".to_string(),
         review_comment_resolutions: Vec::new(),
-        token_usage_delta: SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: SessionDiffState::Unknown,
-            input_tokens: 3,
-            output_tokens: 5,
-        },
+        usage: token_usage("gpt-5.6-sol", 3, 5),
     };
 
     // Act
@@ -154,14 +144,8 @@ async fn fixed_clock_drives_session_metadata_status_and_usage_writes() {
         .usage()
         .upsert_session_usage(
             "session-a",
-            "review-model",
-            &SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: SessionDiffState::Unknown,
-                input_tokens: 7,
-                output_tokens: 11,
-            },
+            UsagePurpose::Review,
+            &token_usage("review-model", 7, 11),
         )
         .await
         .expect("failed to persist usage");

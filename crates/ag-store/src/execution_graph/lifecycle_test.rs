@@ -4,6 +4,7 @@
 use std::num::NonZeroU64;
 use std::path::Path;
 
+use ag_contracts::TurnUsage;
 use ag_protocol::TurnPromptAttachment;
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphStatus, GraphBlockedReason,
@@ -938,9 +939,8 @@ async fn graph_lifecycle_retry_retains_observed_task_turns_when_ordered_effects_
         assistant_message: r#"{"answer":"Observed changes before effects failed"}"#.into(),
         harness_turn_report: None,
         instruction_conversation_id: None,
-        input_tokens: 1,
-        output_tokens: 2,
         provider_conversation_id: None,
+        usage: TurnUsage::default(),
     };
     database
         .graphs()
@@ -1020,9 +1020,8 @@ async fn graph_lifecycle_node_questions_join_chat_with_their_task_turn() {
             .into(),
         harness_turn_report: None,
         instruction_conversation_id: None,
-        input_tokens: 1,
-        output_tokens: 2,
         provider_conversation_id: None,
+        usage: TurnUsage::default(),
     };
 
     // Act

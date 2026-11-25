@@ -45,13 +45,7 @@ impl RunClient for DelayedTitleClient {
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain("Assess project quality"),
-            stats: ag_contracts::SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: ag_contracts::SessionDiffState::Unknown,
-                input_tokens: 0,
-                output_tokens: 0,
-            },
+            usage: ag_contracts::TurnUsage::default(),
         })
     }
 }
@@ -64,13 +58,7 @@ pub(super) fn mock_title_client(response: &str) -> Arc<dyn RunClient> {
     run_client.expect_submit().times(1).returning(move |_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(response.clone()),
-            stats: ag_contracts::SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: ag_contracts::SessionDiffState::Unknown,
-                input_tokens: 0,
-                output_tokens: 0,
-            },
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
 

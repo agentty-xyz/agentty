@@ -2,9 +2,7 @@
 
 use std::path::PathBuf;
 
-use ag_contracts::{
-    AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, SessionStats,
-};
+use ag_contracts::{AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, TurnUsage};
 use ag_protocol::AgentResponse;
 use ag_session::{AgentKind, AgentModel, AgentSelection, GraphOutputReplyOutcome};
 use ag_worker::MockRunClient;
@@ -65,7 +63,7 @@ async fn decision_accepts_only_an_explicit_accept_answer() {
 
             Ok(OneShotSubmission {
                 response: AgentResponse::plain(answer),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
 

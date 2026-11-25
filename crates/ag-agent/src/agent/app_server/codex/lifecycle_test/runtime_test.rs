@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{ContextFill, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::test_support as model_fixture;
 use ag_telemetry::Span;
@@ -128,7 +129,9 @@ async fn codex_terminal_items_complete_responses_and_deduplicate_item_notificati
         let result = state.process_stream_response(&serde_json::json!({"method": "turn/completed", "params": {
             "threadId": "thread-1", "turn": {"id": "turn-1", "status": "completed", "items": items},
         }})).expect("turn completion");
-        assert_eq!(result, Some(("private final response".to_string(), 0, 0)));
+        let (message, turn_usage) = result.expect("completed turn");
+        assert_eq!(message, "private final response");
+        assert_eq!(turn_usage.models[0].unreported_requests, 1);
     }).await;
 
     // Assert
@@ -406,13 +409,15 @@ fn final_completion_fallback_uses_only_the_active_protocol_profile() {
         &assistant_messages,
         ProtocolRequestProfile::SessionTurn,
         &stream_tx,
-        12,
-        34,
+        token_usage("", 12, 34),
     )
     .expect("completed turn should produce a response");
 
     // Assert
-    assert_eq!(result, ("later status text".to_string(), 12, 34));
+    assert_eq!(
+        result,
+        ("later status text".to_string(), token_usage("", 12, 34))
+    );
 }
 
 #[test]
@@ -542,9 +547,10 @@ async fn completed_turn_uses_cumulative_deltas_without_overwriting_request_conte
             .with_simple_exporter(exporter.clone())
             .build(),
     );
-    let (stream_tx, _) = mpsc::unbounded_channel();
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
     let mut state =
         CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+    state.model = model_fixture::CODEX_MODEL.as_str().to_string();
     state.usage.begin_turn();
     state
         .process_turn_start_response(&serde_json::json!({"result":{"turn":{"id":"turn-1"}}}))
@@ -552,13 +558,35 @@ async fn completed_turn_uses_cumulative_deltas_without_overwriting_request_conte
     // Act
     let result = Span::root("agent.attempt", Vec::new()).scope(async {
         for (thread, total, last, cached) in [("thread-1", 100, 100, 30), ("thread-1", 250, 150, 70), ("thread-2", 5_000, 4_000, 3_000), ("thread-1", 250, 150, 70)] {
-            state.process_stream_response(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"threadId":thread,"turnId":"turn-1","tokenUsage":{"total":{"inputTokens":total,"outputTokens":30,"cachedInputTokens":cached},"last":{"inputTokens":last,"outputTokens":20}}}})).expect("usage event");
+            state.process_stream_response(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"threadId":thread,"turnId":"turn-1","tokenUsage":{"total":{"inputTokens":total,"outputTokens":30,"cachedInputTokens":cached},"last":{"inputTokens":last,"outputTokens":20},"modelContextWindow":400_000}}})).expect("usage event");
         }
         state.process_stream_response(&serde_json::json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","usage":{"inputTokens":150,"outputTokens":20}}}})).expect("completion")
     }).await;
     // Assert
-    let (_, input, output) = result.expect("completed turn");
-    assert_eq!((input, output), (250, 30));
+    let (_, turn_usage) = result.expect("completed turn");
+    let model_usage = &turn_usage.models[0];
+    assert_eq!(model_usage.model, model_fixture::CODEX_MODEL.as_str());
+    assert_eq!(
+        (model_usage.input_tokens, model_usage.output_tokens),
+        (250, 30)
+    );
+    assert_eq!(model_usage.cache_read_tokens, Some(70));
+    assert_eq!(
+        model_usage.context,
+        Some(ContextFill {
+            last_input_tokens: 150,
+            peak_input_tokens: 150,
+            window_tokens: Some(400_000),
+        })
+    );
+    assert!(model_usage.cost.is_some());
+    let streamed = std::iter::from_fn(|| stream_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppServerStreamEvent::UsageUpdated(usage) => Some(usage.input_tokens()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(streamed, [100, 250, 250]);
     assert_eq!(state.usage.latest_input, Some(150));
     let spans = exporter.get_finished_spans().expect("spans");
     let attempt = spans
@@ -614,7 +642,11 @@ async fn completed_turns_never_rebill_fallback_usage_after_a_counter_gap() {
             state.process_stream_response(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":usage}})).expect("usage");
             state.process_stream_response(&serde_json::json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}})).expect("completion").expect("completed turn")
         }).await;
-            results.push((result.1, result.2));
+            results.push((
+                result.1.input_tokens(),
+                result.1.output_tokens(),
+                result.1.models[0].unreported_requests,
+            ));
             tracker = state.usage;
         }
     }
@@ -622,14 +654,14 @@ async fn completed_turns_never_rebill_fallback_usage_after_a_counter_gap() {
     assert_eq!(
         results,
         [
-            (100, 10),
-            (50, 5),
-            (0, 0),
-            (50, 5),
-            (100, 10),
-            (50, 5),
-            (50, 5),
-            (50, 5)
+            (100, 10, 0),
+            (50, 5, 0),
+            (0, 0, 1),
+            (50, 5, 0),
+            (100, 10, 0),
+            (50, 5, 0),
+            (50, 5, 0),
+            (50, 5, 0)
         ]
     );
     let spans = exporter.get_finished_spans().expect("spans");
@@ -679,12 +711,16 @@ async fn resumed_turns_with_only_cumulative_usage_never_bill_retained_history() 
                 state.process_stream_response(&notification).expect("usage");
                 state.process_stream_response(&serde_json::json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}})).expect("completion").expect("completed turn")
             }).await;
-            results.push((result.1, result.2));
+            results.push((
+                result.1.input_tokens(),
+                result.1.output_tokens(),
+                result.1.models[0].unreported_requests,
+            ));
             tracker = state.usage;
         }
     }
     // Assert
-    assert_eq!(results, [(0, 0), (50, 5), (0, 0), (50, 5)]);
+    assert_eq!(results, [(0, 0, 1), (50, 5, 0), (0, 0, 1), (50, 5, 0)]);
     let known = exporter
         .get_finished_spans()
         .expect("spans")

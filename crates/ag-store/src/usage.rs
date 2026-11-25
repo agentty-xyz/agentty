@@ -2,15 +2,17 @@
 
 use std::sync::Arc;
 
-use ag_session::SessionStats;
+use ag_contracts::{TurnUsage, UsagePurpose};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use crate::DbError;
+use crate::connection::begin_write;
+use crate::session::persist_turn_usage;
 use crate::timestamp::TimestampSource;
 
-/// Row returned when loading per-model token usage from the `session_usage`
-/// table.
+/// Row returned when loading one model's token usage for one purpose from
+/// the `session_usage` table.
 pub struct SessionUsageRow {
     /// Row creation timestamp in Unix seconds.
     pub created_at: i64,
@@ -22,6 +24,9 @@ pub struct SessionUsageRow {
     pub model: String,
     /// Accumulated output-token count.
     pub output_tokens: i64,
+    /// Persisted label of the work the usage served, as
+    /// [`UsagePurpose::as_str`] writes it.
+    pub purpose: String,
     /// Owning session identifier, when present.
     pub session_id: Option<String>,
 }
@@ -30,15 +35,17 @@ pub struct SessionUsageRow {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait UsageRepository: Send + Sync {
-    /// Loads per-model token usage rows for a session, ordered by model name.
+    /// Loads a session's token usage rows, one per model and purpose,
+    /// ordered by model and purpose.
     async fn load_session_usage(&self, session_id: &str) -> Result<Vec<SessionUsageRow>, DbError>;
 
-    /// Accumulates per-model token usage for a session.
+    /// Records one invocation's usage of every model under `purpose`, and
+    /// adds its tokens to the session's totals.
     async fn upsert_session_usage(
         &self,
         session_id: &str,
-        model: &str,
-        stats: &SessionStats,
+        purpose: UsagePurpose,
+        usage: &TurnUsage,
     ) -> Result<(), DbError>;
 }
 
@@ -66,10 +73,10 @@ impl UsageRepository for SqliteUsageRepository {
         let rows = sqlx::query_as!(
             SessionUsageRow,
             r#"
-SELECT session_id, model, created_at, input_tokens, invocation_count, output_tokens
+SELECT session_id, model, purpose, created_at, input_tokens, invocation_count, output_tokens
 FROM session_usage
 WHERE session_id = ?
-ORDER BY model
+ORDER BY model, purpose
             "#,
             session_id
         )
@@ -82,34 +89,13 @@ ORDER BY model
     async fn upsert_session_usage(
         &self,
         session_id: &str,
-        model: &str,
-        stats: &SessionStats,
+        purpose: UsagePurpose,
+        usage: &TurnUsage,
     ) -> Result<(), DbError> {
-        if stats.input_tokens == 0 && stats.output_tokens == 0 {
-            return Ok(());
-        }
-
         let now = self.timestamp_source.now_timestamp_seconds();
-
-        sqlx::query!(
-            r"
-INSERT INTO session_usage (
-    session_id, model, created_at, input_tokens, output_tokens, invocation_count
-)
-VALUES (?, ?, ?, ?, ?, 1)
-ON CONFLICT(session_id, model) DO UPDATE SET
-    input_tokens = input_tokens + excluded.input_tokens,
-    output_tokens = output_tokens + excluded.output_tokens,
-    invocation_count = invocation_count + 1
-",
-            session_id,
-            model,
-            now,
-            stats.input_tokens.cast_signed(),
-            stats.output_tokens.cast_signed()
-        )
-        .execute(&self.pool)
-        .await?;
+        let mut transaction = begin_write(&self.pool, "record session usage").await?;
+        persist_turn_usage(&mut transaction, session_id, purpose, now, usage).await?;
+        transaction.commit().await?;
 
         Ok(())
     }

@@ -7,7 +7,7 @@ use ag_protocol::{AgentResponse, TurnPromptAttachment};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::{AgentRequestKind, PermissionMode, ReasoningLevel, SessionStats, SpeedMode};
+use crate::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
 
 /// Input payload for one isolated prompt that prefers structured protocol
 /// output.
@@ -50,8 +50,9 @@ pub struct OneShotRequest {
 pub struct OneShotSubmission {
     /// Structured protocol response parsed from the final successful attempt.
     pub response: AgentResponse,
-    /// Aggregated token usage for the one-shot prompt execution.
-    pub stats: SessionStats,
+    /// Usage of every provider attempt of the prompt, including protocol
+    /// repairs.
+    pub usage: crate::TurnUsage,
 }
 
 /// Typed failure returned by [`OneShotClient`] submissions.

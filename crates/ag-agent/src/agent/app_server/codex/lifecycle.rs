@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
+use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode, TurnUsage};
 use ag_protocol::{
     ProtocolRequestProfile, SchemaRequiredPolicy, TurnPrompt, TurnPromptContentPart,
     protocol_output_schema,
@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use super::super::stdio_transport::{AppServerRuntimeTransport, AppServerStdioTransport};
 use super::{policy, stream_parser, usage};
 use crate::agent;
+use crate::agent::usage::priced_turn_usage;
 use crate::app_server::{
     AppServerError, AppServerStreamEvent, AppServerTurnRequest, TurnSteer, TurnSteeringInbox,
     steering,
@@ -402,7 +403,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     prompt: impl Into<TurnPrompt>,
     options: CodexTurnOptions<'_>,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
-) -> Result<(String, u64, u64), AppServerError> {
+) -> Result<(String, TurnUsage), AppServerError> {
     let CodexTurnOptions {
         protocol_profile,
         reasoning_level,
@@ -448,10 +449,10 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     .await;
 
     match result {
-        Ok((message, input_tokens, output_tokens)) => {
+        Ok(completion) => {
             state.latest_input_tokens = state.usage.latest_input.unwrap_or(0);
 
-            Ok((message, input_tokens, output_tokens))
+            Ok(completion)
         }
         Err(ref error) if stream_parser::is_context_window_exceeded_error(&error.to_string()) => {
             let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
@@ -462,7 +463,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
                 .await?;
             state.usage.clear_context();
 
-            let (message, input_tokens, output_tokens) = execute_turn_event_loop(
+            let completion = execute_turn_event_loop(
                 transport,
                 CodexTurnEventLoopInput {
                     folder: &state.folder,
@@ -482,7 +483,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             .await?;
             state.latest_input_tokens = state.usage.latest_input.unwrap_or(0);
 
-            Ok((message, input_tokens, output_tokens))
+            Ok(completion)
         }
         Err(error) => Err(error),
     }
@@ -614,13 +615,14 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
 pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     input: CodexTurnEventLoopInput<'_>,
-) -> Result<(String, u64, u64), AppServerError> {
+) -> Result<(String, TurnUsage), AppServerError> {
     let turn_start_id = write_turn_start_request(transport, &input).await?;
     let folder = input.folder;
     let permission_mode = input.permission_mode;
     let turn_timeout = input.turn_timeout;
     let mut state =
         CodexTurnEventLoopState::new(input.stream_tx, input.protocol_profile, input.thread_id);
+    state.model = input.model.to_string();
     state.usage = input.usage_state.clone();
     state.usage.begin_turn();
 
@@ -675,6 +677,8 @@ struct CodexTurnEventLoopState {
     assistant_messages: Vec<String>,
     completed_turn_usage: Option<(u64, u64)>,
     latest_stream_usage: Option<(u64, u64)>,
+    /// Model the turn runs on, under which its usage is recorded.
+    model: String,
     operation_trace: agent::trace::OperationTrace,
     /// Prompts awaiting `turn/steer` responses, keyed by request id.
     pending_steers: HashMap<String, TurnSteer>,
@@ -704,6 +708,7 @@ impl CodexTurnEventLoopState {
             assistant_messages: Vec::new(),
             completed_turn_usage: None,
             latest_stream_usage: None,
+            model: String::new(),
             operation_trace: agent::trace::OperationTrace::new(),
             pending_steers: HashMap::new(),
             protocol_profile,
@@ -723,7 +728,7 @@ impl CodexTurnEventLoopState {
         folder: &Path,
         turn_start_id: &str,
         response_value: Value,
-    ) -> Result<Option<(String, u64, u64)>, AppServerError> {
+    ) -> Result<Option<(String, TurnUsage)>, AppServerError> {
         if response_id_matches(&response_value, turn_start_id) {
             self.process_turn_start_response(&response_value)?;
 
@@ -838,7 +843,7 @@ impl CodexTurnEventLoopState {
     fn process_stream_response(
         &mut self,
         response_value: &Value,
-    ) -> Result<Option<(String, u64, u64)>, AppServerError> {
+    ) -> Result<Option<(String, TurnUsage)>, AppServerError> {
         update_active_turn_tracking_for_response(
             response_value,
             &mut self.active_turn_id,
@@ -858,7 +863,8 @@ impl CodexTurnEventLoopState {
             self.operation_trace
                 .observe(AgentKind::Codex, response_value);
             self.activity.observe(AgentKind::Codex, response_value);
-            self.usage
+            let reported = self
+                .usage
                 .observe(response_value, self.active_turn_id.as_deref());
             usage::update_turn_usage_from_response(
                 response_value,
@@ -866,6 +872,11 @@ impl CodexTurnEventLoopState {
                 &mut self.completed_turn_usage,
                 &mut self.latest_stream_usage,
             );
+            if reported {
+                let _ = self
+                    .stream_tx
+                    .send(AppServerStreamEvent::UsageUpdated(self.turn_usage()));
+            }
         }
         stream_turn_content_from_response(
             response_value,
@@ -901,7 +912,7 @@ impl CodexTurnEventLoopState {
     fn completed_turn(
         &mut self,
         response_value: &Value,
-    ) -> Result<Option<(String, u64, u64)>, AppServerError> {
+    ) -> Result<Option<(String, TurnUsage)>, AppServerError> {
         let Some(turn_result) =
             stream_parser::parse_turn_completed(response_value, self.active_turn_id.as_deref())
         else {
@@ -923,11 +934,7 @@ impl CodexTurnEventLoopState {
             self.active_turn_id.as_deref(),
         );
         self.usage.record();
-        let (input_tokens, output_tokens) = self
-            .usage
-            .totals()
-            .or(self.completed_turn_usage)
-            .unwrap_or_else(|| usage::resolve_turn_usage(None, self.latest_stream_usage));
+        let usage = self.turn_usage();
         self.usage.finish_turn();
 
         finalize_turn_completion(
@@ -936,10 +943,22 @@ impl CodexTurnEventLoopState {
             &self.assistant_messages,
             self.protocol_profile,
             &self.stream_tx,
-            input_tokens,
-            output_tokens,
+            usage,
         )
         .map(Some)
+    }
+
+    /// Returns the turn's usage so far, priced at the `OpenAI` list price of
+    /// its model: the cumulative counters' turn total, else the usage
+    /// `turn/completed` or the latest request reported.
+    fn turn_usage(&self) -> TurnUsage {
+        let fallback = self.completed_turn_usage.or(self.latest_stream_usage);
+
+        priced_turn_usage(
+            self.usage.turn_usage(fallback),
+            &self.model,
+            AgentKind::Codex,
+        )
     }
 }
 
@@ -1212,9 +1231,8 @@ fn finalize_turn_completion(
     assistant_messages: &[String],
     protocol_profile: ProtocolRequestProfile,
     stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
-    input_tokens: u64,
-    output_tokens: u64,
-) -> Result<(String, u64, u64), AppServerError> {
+    usage: TurnUsage,
+) -> Result<(String, TurnUsage), AppServerError> {
     match turn_result {
         Ok(()) => {
             let assistant_message = completed_assistant_message.map_or_else(
@@ -1227,7 +1245,7 @@ fn finalize_turn_completion(
                 |message| message.message.clone(),
             );
 
-            Ok((assistant_message, input_tokens, output_tokens))
+            Ok((assistant_message, usage))
         }
         Err(error) => {
             let streamed_error = format!("[Codex app-server] {error}");

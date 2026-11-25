@@ -3,9 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use ag_contracts::{
-    AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, SessionStats,
-};
+use ag_contracts::{AgentRequestKind, OneShotError, OneShotSubmission, PermissionMode, TurnUsage};
 use ag_protocol::{AgentResponse, GraphProposalOutcome, GraphProposalResponse, QuestionItem};
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
@@ -144,7 +142,7 @@ async fn decision_accepts_only_contract_words_and_gates_approval() {
 
             Ok(OneShotSubmission {
                 response: AgentResponse::plain(answer),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
         let mut decision = GraphProposalReplyDecision::new(

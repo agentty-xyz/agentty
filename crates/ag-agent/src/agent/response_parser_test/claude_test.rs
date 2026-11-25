@@ -1,5 +1,8 @@
 //! Claude response and stream-line parsing unit tests.
 
+use ag_contracts::ModelUsage;
+
+use crate::agent::claude_usage::ClaudeUsageMeter;
 use crate::agent::cli::execution::CliStdoutPayload;
 use crate::agent::response_parser::{
     parse_claude_response_with_fallback, parse_claude_stream_payload,
@@ -22,8 +25,8 @@ fn test_claude_parse_response_reads_result_payload() {
 
     // Assert
     assert_eq!(parsed.content, "Planned response");
-    assert_eq!(parsed.stats.input_tokens, 11);
-    assert_eq!(parsed.stats.output_tokens, 7);
+    assert_eq!(parsed.usage.input_tokens, 11);
+    assert_eq!(parsed.usage.output_tokens, 7);
 }
 
 #[test]
@@ -43,8 +46,8 @@ fn test_claude_parse_response_reads_structured_output_payload() {
         parsed.content,
         r#"{"answer":"Rendered response","questions":[]}"#
     );
-    assert_eq!(parsed.stats.input_tokens, 13);
-    assert_eq!(parsed.stats.output_tokens, 9);
+    assert_eq!(parsed.usage.input_tokens, 13);
+    assert_eq!(parsed.usage.output_tokens, 9);
 }
 
 #[test]
@@ -61,8 +64,8 @@ fn test_claude_parse_response_uses_stream_message_when_result_is_empty() {
 
     // Assert
     assert_eq!(parsed.content, "Recovered response payload");
-    assert_eq!(parsed.stats.input_tokens, 11);
-    assert_eq!(parsed.stats.output_tokens, 7);
+    assert_eq!(parsed.usage.input_tokens, 11);
+    assert_eq!(parsed.usage.output_tokens, 7);
 }
 
 #[test]
@@ -79,8 +82,8 @@ fn test_claude_parse_response_reads_usage_when_result_is_missing() {
 
     // Assert
     assert_eq!(parsed.content, "Recovered response payload");
-    assert_eq!(parsed.stats.input_tokens, 13);
-    assert_eq!(parsed.stats.output_tokens, 5);
+    assert_eq!(parsed.usage.input_tokens, 13);
+    assert_eq!(parsed.usage.output_tokens, 5);
 }
 
 #[test]
@@ -100,8 +103,8 @@ fn test_claude_parse_response_keeps_follow_up_turn_results_and_sums_usage() {
     // Assert
     assert_eq!(parsed.content, "First answer");
     assert_eq!(parsed.follow_up_contents, vec!["Steer answer".to_string()]);
-    assert_eq!(parsed.stats.input_tokens, 18);
-    assert_eq!(parsed.stats.output_tokens, 11);
+    assert_eq!(parsed.usage.input_tokens, 18);
+    assert_eq!(parsed.usage.output_tokens, 11);
 }
 
 #[test]
@@ -117,8 +120,8 @@ fn test_claude_parse_response_reads_result_from_json_array_payload() {
         parsed.content,
         r#"{"answer":"Recovered payload","questions":[]}"#
     );
-    assert_eq!(parsed.stats.input_tokens, 5);
-    assert_eq!(parsed.stats.output_tokens, 3);
+    assert_eq!(parsed.usage.input_tokens, 5);
+    assert_eq!(parsed.usage.output_tokens, 3);
 }
 
 #[test]
@@ -139,8 +142,8 @@ fn test_claude_parse_response_reads_structured_output_from_json_array_payload() 
         parsed.content,
         r#"{"answer":"Array response","questions":[]}"#
     );
-    assert_eq!(parsed.stats.input_tokens, 7);
-    assert_eq!(parsed.stats.output_tokens, 4);
+    assert_eq!(parsed.usage.input_tokens, 7);
+    assert_eq!(parsed.usage.output_tokens, 4);
 }
 
 #[test]
@@ -215,7 +218,35 @@ fn test_claude_parse_response_recovers_stream_text_and_falls_back_without_it() {
 
         // Assert
         assert_eq!(parsed.content, expected_content, "stdout: {stdout:?}");
+        assert_eq!(parsed.usage, ModelUsage::unreported("", 1));
+        assert_eq!(parsed.totals, None);
     }
+}
+
+#[test]
+fn test_claude_parse_response_feeds_each_stream_line_to_the_usage_meter() {
+    // Arrange
+    let assistant_line = concat!(
+        r#"{"type":"assistant","message":{"id":"msg-1","model":"claude-opus-5-5","content":[],"#,
+        r#""usage":{"input_tokens":5,"output_tokens":1}}}"#
+    );
+    let result_line = concat!(
+        r#"{"type":"result","result":"Done","usage":{"input_tokens":25,"output_tokens":50},"#,
+        r#""modelUsage":{"claude-opus-5-5":{"inputTokens":25,"outputTokens":50}}}"#
+    );
+    let mut meter = ClaudeUsageMeter::default();
+    for line in [assistant_line, result_line] {
+        meter.observe(&serde_json::from_str(line).expect("valid event"));
+    }
+
+    // Act
+    let parsed = parse_claude_response_with_fallback(&[assistant_line, result_line].join("\n"), "");
+
+    // Assert
+    assert_eq!(parsed.content, "Done");
+    assert_eq!(parsed.usage, meter.usage());
+    assert!(parsed.totals.is_some());
+    assert_eq!(parsed.totals, meter.totals());
 }
 
 #[test]

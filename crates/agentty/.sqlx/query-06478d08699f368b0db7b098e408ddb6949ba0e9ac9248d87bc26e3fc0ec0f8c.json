@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.snapshot FROM execution_graph_revision r JOIN execution_graph g ON g.id = r.execution_graph_id WHERE g.id = ? AND r.revision = COALESCE(?, g.revision)",
+  "describe": {
+    "columns": [
+      {
+        "name": "snapshot",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_revision",
+            "name": "snapshot"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "06478d08699f368b0db7b098e408ddb6949ba0e9ac9248d87bc26e3fc0ec0f8c"
+}

@@ -150,6 +150,36 @@ spawning, though provider exceptions such as resumed subagents can exceed it.
 Enforcement depends on the installed CLI. Antigravity subagents are not capped. These
 are per-session provider limits, not host-wide CPU or memory limits.
 
+## Token Usage Reporting
+
+<a id="backends-usage-reporting"></a> Agentty records the tokens each session uses per
+model, with the work they served: session turns, titles, commit assistance, focused
+reviews, rebase assistance, or other utility prompts. Input counts include prompt-cache
+reads and writes, matching the providers' own counts. A detail a backend does not report
+is kept as unknown, never as zero, and a turn that reports no counts is recorded as
+unreported with no charge. Estimated charges are not bills.
+
+| Backend     | Cache reads | Cache writes | Reasoning     | Context window | Estimated charge                 |
+| ----------- | ----------- | ------------ | ------------- | -------------- | -------------------------------- |
+| Harness     | Yes         | Anthropic    | Not Anthropic | Yes            | List price of cataloged models   |
+| Claude      | Yes         | Yes          | Yes           | Yes            | Claude Code's own, or list price |
+| Codex       | Yes         | Yes          | Yes           | Yes            | OpenAI list price, when listed   |
+| Antigravity | Yes         | No           | Yes           | No             | None                             |
+
+Claude Code reports each model's tokens and estimated cost, subagents included, as
+running totals that a resumed session carries over on Claude Code 2.1.277 and later. A
+resumed turn continues the most recent conversation in the session's worktree, which a
+chat turn, task agent, or utility prompt may have left. Agentty therefore keeps one set
+of totals per session, replaced by every Claude run in the worktree, and charges the
+next resumed turn the difference. Runs elsewhere, such as a draft title generated in the
+project folder, leave it unchanged. A model without a known price is charged at the
+Anthropic list price. When the difference cannot be trusted, the turn falls back to its
+main-conversation tokens at the Anthropic list price. This happens on the first resumed
+turn after upgrading Agentty, when the Claude Code release is unknown, or when the
+previous Claude run reported no totals. While a Claude turn runs, its live figures use
+the list price. Codex and Claude estimates do not yet distinguish a subscription login
+from an API key.
+
 ## Available Models
 
 <a id="backends-available-models"></a> Pickers show only the models below. Stored

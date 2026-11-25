@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::UsagePurpose;
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -322,7 +323,7 @@ async fn test_load_auto_commit_agent_setting_never_falls_back_to_harness() {
 
 #[tokio::test]
 /// Verifies one-shot assist output unwraps structured protocol answers
-/// before persistence and session usage updates.
+/// before persistence.
 async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
@@ -355,6 +356,7 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
+        purpose: UsagePurpose::Rebase,
         session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
@@ -375,13 +377,6 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
     assert!(output_text.contains("Resolved the rebase conflict."));
     assert!(!output_text.contains(r#"{"answer""#));
     assert_eq!(*child_pid.lock().expect("failed to lock child pid"), None);
-    let sessions = database
-        .sessions()
-        .load_sessions()
-        .await
-        .expect("failed to load sessions");
-    assert_eq!(sessions[0].input_tokens, 11);
-    assert_eq!(sessions[0].output_tokens, 7);
 }
 
 #[tokio::test]

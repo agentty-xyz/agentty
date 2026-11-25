@@ -317,6 +317,7 @@ impl App {
                 cancellation: Some(cancellation.clone()),
                 purpose: Some(DECISION_RUN_PURPOSE.to_string()),
                 session_id: Some(state.input.session_id.to_string()),
+                usage_purpose: Some(ag_contracts::UsagePurpose::Other),
                 ..ag_worker::RunScope::default()
             },
         );

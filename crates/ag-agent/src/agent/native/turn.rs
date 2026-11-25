@@ -1,12 +1,9 @@
 //! Prompt assembly and result conversion shared by native session turns and
 //! one-shot utility runs.
 
-use std::future::IntoFuture as _;
+use std::pin::pin;
 
-use ag_contracts::{
-    AgentDefinitionPromptUpdate, OneShotRequest, OneShotSubmission, SessionDiffState, SessionStats,
-    TurnEvent,
-};
+use ag_contracts::{AgentDefinitionPromptUpdate, OneShotRequest, OneShotSubmission, TurnEvent};
 use ag_harness::{RunError, RunOutput, Unsettled};
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPromptAttachment,
@@ -21,6 +18,7 @@ use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig, R
 use super::failure;
 use super::sandbox::UTILITY_SANDBOX;
 use super::turn_error::NativeTurnError;
+use super::usage::UsageMeter;
 use crate::agent::{
     InstructionDeliveryMode, PromptPreparationRequest, execution_policy, parse_turn_response,
     prepare_prompt_text,
@@ -154,18 +152,21 @@ pub(crate) async fn run_one_shot(
         workspace_root: &request.folder,
     }
     .render()?;
-    let run = harness.run(options.request(prompt));
-    let cancel = run.cancel_token();
-    let mut outcome = run.into_future();
+    let meter = UsageMeter::new(&selection, &environment, running_context_window);
+    let (stream, handle) = harness.run(options.request(prompt)).into_parts();
+    let cancel = handle.cancel_token();
+    let mut outcome = pin!(handle.outcome());
     // A cancelled run still resolves only once its effects settle.
-    let outcome = tokio::select! {
-        biased;
-        () = cancellation.cancelled() => {
-            cancel.cancel();
-            outcome.await
+    let (usage, outcome) = tokio::join!(meter.drain(stream), async {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                cancel.cancel();
+                outcome.await
+            }
+            outcome = &mut outcome => outcome,
         }
-        outcome = &mut outcome => outcome,
-    };
+    });
     outcome
         .settlement
         .as_ref()
@@ -174,16 +175,7 @@ pub(crate) async fn run_one_shot(
     let output = outcome.result.map_err(NativeTurnError::from_run)?;
     let response = parse_output(&output, profile)?;
 
-    Ok(OneShotSubmission {
-        response,
-        stats: SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: SessionDiffState::Unknown,
-            input_tokens: outcome.usage.input,
-            output_tokens: outcome.usage.output,
-        },
-    })
+    Ok(OneShotSubmission { response, usage })
 }
 
 /// Describes cleanup of a finished run that still failed to settle.

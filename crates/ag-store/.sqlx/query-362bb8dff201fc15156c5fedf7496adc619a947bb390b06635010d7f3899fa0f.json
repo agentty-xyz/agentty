@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT input_tokens, output_tokens, context_tokens, context_window_tokens FROM session WHERE id = 'session-a'",
+  "describe": {
+    "columns": [
+      {
+        "name": "input_tokens",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "input_tokens"
+          }
+        }
+      },
+      {
+        "name": "output_tokens",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "output_tokens"
+          }
+        }
+      },
+      {
+        "name": "context_tokens",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "context_tokens"
+          }
+        }
+      },
+      {
+        "name": "context_window_tokens",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "context_window_tokens"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "362bb8dff201fc15156c5fedf7496adc619a947bb390b06635010d7f3899fa0f"
+}

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ag_contracts::{
-    AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, SessionStats,
+    AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, TurnUsage,
     is_input_size_error,
 };
 use ag_protocol::{AgentResponse, FocusedReview};
@@ -105,7 +105,7 @@ impl RunClient for ReviewResumeClient {
                 CachedReviewCall::Answer(answer) if Self::cacheable(&request, &answer) => {
                     return Ok(OneShotSubmission {
                         response: AgentResponse::plain(answer),
-                        stats: SessionStats::default(),
+                        usage: TurnUsage::default(),
                     });
                 }
                 CachedReviewCall::InputLimit(error) => return Err(OneShotError::new(error)),

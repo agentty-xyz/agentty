@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
-    TurnResult,
+    TurnResult, TurnUsage,
 };
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt};
 use ag_session::AgentKind;
@@ -86,6 +86,9 @@ impl AppServerAgentChannel {
                             // Fire-and-forget: receiver may be dropped during
                             // shutdown.
                             let _ = events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
+                        }
+                        AppServerStreamEvent::UsageUpdated(usage) => {
+                            let _ = events.send(TurnEvent::UsageUpdated(usage));
                         }
                     }
                 }
@@ -178,14 +181,15 @@ impl AgentChannel for AppServerAgentChannel {
                         &events,
                     )
                     .await?;
+                    let mut usage = response.usage;
+                    usage.merge(&parsed.repair_usage);
 
                     Ok(TurnResult {
                         assistant_message: parsed.assistant_message,
                         context_reset: response.context_reset,
                         harness_report: None,
-                        input_tokens: response.input_tokens + parsed.repair_input_tokens,
-                        output_tokens: response.output_tokens + parsed.repair_output_tokens,
                         provider_conversation_id: parsed.provider_conversation_id,
+                        usage,
                     })
                 }
                 Err(error) => Err(AgentError::Runtime(error.to_string())),
@@ -238,12 +242,8 @@ struct AppServerParsedTurnResult {
     /// falling back to the original response when the repair turn does
     /// not produce one.
     provider_conversation_id: Option<String>,
-    /// Additional input tokens consumed by a repair turn (zero when no
-    /// repair was needed).
-    repair_input_tokens: u64,
-    /// Additional output tokens consumed by a repair turn (zero when no
-    /// repair was needed).
-    repair_output_tokens: u64,
+    /// Usage of a repair turn, empty when no repair was needed.
+    repair_usage: TurnUsage,
 }
 
 /// Parses one app-server turn response strictly, falling back to a single
@@ -281,8 +281,7 @@ async fn parse_or_repair_app_server_response(
                     return Ok(AppServerParsedTurnResult {
                         assistant_message: parsed,
                         provider_conversation_id: response.provider_conversation_id.clone(),
-                        repair_input_tokens: 0,
-                        repair_output_tokens: 0,
+                        repair_usage: TurnUsage::default(),
                     });
                 }
                 Err(error) => error,
@@ -363,8 +362,7 @@ async fn parse_or_repair_app_server_response(
                 provider_conversation_id: repair_result
                     .provider_conversation_id
                     .or(response.provider_conversation_id.clone()),
-                repair_input_tokens: repair_result.input_tokens,
-                repair_output_tokens: repair_result.output_tokens,
+                repair_usage: repair_result.usage,
             })
         },
         |_| ag_telemetry::Outcome::Failed,

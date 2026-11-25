@@ -1,17 +1,29 @@
 //! Codex app-server usage extraction helpers.
 
+use ag_contracts::{ContextFill, ModelUsage};
 use serde_json::Value;
 
 /// Retained thread counters, separated from the latest request's context size.
+///
+/// Codex reports `inputTokens` with the cached prompt included and
+/// `outputTokens` with reasoning included, as the shared usage contract
+/// counts them.
 #[derive(Clone)]
 pub(super) struct UsageTracker {
     pub(super) latest_input: Option<u64>,
     baseline_observed: bool,
+    cache_write: DetailCounter,
+    cached: DetailCounter,
+    /// Context window Codex reports for the thread's model.
+    context_window: Option<u64>,
     observed: bool,
+    /// Largest request input of the current turn.
+    peak_input: Option<u64>,
     previous: Option<(u64, u64)>,
-    previous_cached: Option<u64>,
+    reasoning: DetailCounter,
+    /// Usage notifications of the current turn, one per model request.
+    requests: u32,
     turn: Option<(u64, u64)>,
-    turn_cached: Option<u64>,
 }
 
 impl UsageTracker {
@@ -19,14 +31,20 @@ impl UsageTracker {
     /// complete snapshot reconstructs it by subtracting its latest response.
     pub(super) fn resumed(&mut self) {
         self.previous = None;
-        self.previous_cached = None;
+        for detail in self.details_mut() {
+            detail.previous = None;
+        }
     }
 
     pub(super) fn begin_turn(&mut self) {
         self.baseline_observed = false;
         self.observed = false;
+        self.peak_input = None;
+        self.requests = 0;
         self.turn = Some((0, 0));
-        self.turn_cached = Some(0);
+        for detail in self.details_mut() {
+            detail.turn = Some(0);
+        }
     }
 
     /// Discards stale baselines after turns lacking complete cumulative usage.
@@ -43,7 +61,9 @@ impl UsageTracker {
         self.latest_input = None;
     }
 
-    pub(super) fn observe(&mut self, response: &Value, expected_turn: Option<&str>) {
+    /// Folds one app-server line and returns whether it was a usage
+    /// notification of the expected turn.
+    pub(super) fn observe(&mut self, response: &Value, expected_turn: Option<&str>) -> bool {
         if matches!(
             response.get("method").and_then(Value::as_str),
             Some("item/completed")
@@ -60,13 +80,20 @@ impl UsageTracker {
             {
                 self.latest_input = Some(last.0);
             }
-            return;
+            return false;
         };
         self.observed = true;
+        self.requests = self.requests.saturating_add(1);
+        let window = usage
+            .get("modelContextWindow")
+            .or_else(|| usage.get("model_context_window"))
+            .and_then(Value::as_u64);
+        self.context_window = window.or(self.context_window);
         let last_breakdown = usage.get("last").or_else(|| usage.get("last_token_usage"));
         self.latest_input = last_breakdown
             .and_then(|last| last.get("inputTokens").or_else(|| last.get("input_tokens")))
             .and_then(Value::as_u64);
+        self.peak_input = self.peak_input.max(self.latest_input);
         let total = usage
             .get("total")
             .or_else(|| usage.get("total_token_usage"));
@@ -111,40 +138,53 @@ impl UsageTracker {
                 self.baseline_observed = false;
                 self.turn = None;
             }
-            let cached = total
-                .get("cachedInputTokens")
-                .or_else(|| total.get("cached_input_tokens"))
-                .and_then(Value::as_u64);
-            if self.previous_cached.is_none() {
-                self.previous_cached = cached.and_then(|cached| {
-                    preceding_total(
-                        cached,
-                        last_counter(last_breakdown, "cachedInputTokens", "cached_input_tokens"),
-                    )
-                });
+            for detail in self.details_mut() {
+                detail.observe(total, last_breakdown);
             }
-            self.turn_cached = self.turn_cached.zip(self.previous_cached).zip(cached).map(
-                |((turn, previous), current)| {
-                    turn.saturating_add(if current < previous {
-                        current
-                    } else {
-                        current - previous
-                    })
-                },
-            );
-            self.previous_cached = cached;
         } else {
             // Last-only notifications cannot distinguish duplicate events
             // from distinct provider calls with equal usage.
             self.turn = None;
-            self.turn_cached = None;
+            for detail in self.details_mut() {
+                detail.turn = None;
+            }
             self.baseline_observed = false;
         }
+
+        true
     }
 
     pub(super) fn totals(&self) -> Option<(u64, u64)> {
         self.turn
             .filter(|_| self.observed && self.previous.is_some())
+    }
+
+    /// Returns the current turn's usage under an empty model name: the
+    /// cumulative counters' turn total when known, else `fallback`, the
+    /// usage `turn/completed` or the latest request reported. Details are
+    /// known only with the cumulative total, and a turn without any count is
+    /// one unreported request.
+    pub(super) fn turn_usage(&self, fallback: Option<(u64, u64)>) -> ModelUsage {
+        let totals = self.totals();
+        let Some((input_tokens, output_tokens)) = totals.or(fallback) else {
+            return ModelUsage::unreported("", self.requests.max(1));
+        };
+        let detail = |counter: &DetailCounter| counter.turn.filter(|_| totals.is_some());
+
+        ModelUsage {
+            cache_read_tokens: detail(&self.cached),
+            cache_write_tokens: detail(&self.cache_write),
+            context: self.latest_input.map(|last_input_tokens| ContextFill {
+                last_input_tokens,
+                peak_input_tokens: self.peak_input.unwrap_or(last_input_tokens),
+                window_tokens: self.context_window,
+            }),
+            input_tokens,
+            output_tokens,
+            reasoning_tokens: detail(&self.reasoning),
+            requests: self.requests.max(1),
+            ..ModelUsage::new("")
+        }
     }
 
     pub(super) fn record(&self) {
@@ -155,12 +195,17 @@ impl UsageTracker {
                 i64::try_from(input).unwrap_or(i64::MAX),
             );
         }
-        if let Some(cached) = self.turn_cached.filter(|_| self.totals().is_some()) {
+        if let Some(cached) = self.cached.turn.filter(|_| self.totals().is_some()) {
             ag_telemetry::current_attribute(
                 "gen_ai.usage.cache_read.input_tokens",
                 i64::try_from(cached).unwrap_or(i64::MAX),
             );
         }
+    }
+
+    /// Returns the optional detail counters.
+    fn details_mut(&mut self) -> [&mut DetailCounter; 3] {
+        [&mut self.cache_write, &mut self.cached, &mut self.reasoning]
     }
 }
 
@@ -168,25 +213,75 @@ impl Default for UsageTracker {
     fn default() -> Self {
         Self {
             baseline_observed: false,
-            observed: false,
-            previous: Some((0, 0)),
-            previous_cached: Some(0),
+            cache_write: DetailCounter::new("cacheWriteInputTokens", "cache_write_input_tokens"),
+            cached: DetailCounter::new("cachedInputTokens", "cached_input_tokens"),
+            context_window: None,
             latest_input: None,
+            observed: false,
+            peak_input: None,
+            previous: Some((0, 0)),
+            reasoning: DetailCounter::new("reasoningOutputTokens", "reasoning_output_tokens"),
+            requests: 0,
             turn: None,
-            turn_cached: None,
         }
     }
 }
 
-/// Resolves final turn usage by preferring `turn/completed` payload usage and
-/// falling back to the last per-request usage update when completion omits it.
-pub(super) fn resolve_turn_usage(
-    completed_turn_usage: Option<(u64, u64)>,
-    latest_stream_usage: Option<(u64, u64)>,
-) -> (u64, u64) {
-    completed_turn_usage
-        .or(latest_stream_usage)
-        .unwrap_or((0, 0))
+/// One optional cumulative counter of a thread's usage snapshots, such as
+/// cached input, whose turn total stays unknown once a snapshot omits it.
+#[derive(Clone)]
+struct DetailCounter {
+    /// Snapshot field name in camel case.
+    camel_case: &'static str,
+    /// Thread total before the current snapshot, or `None` until a snapshot
+    /// reconstructs it.
+    previous: Option<u64>,
+    /// Snapshot field name in snake case.
+    snake_case: &'static str,
+    /// Current turn's total, or `None` when unknown.
+    turn: Option<u64>,
+}
+
+impl DetailCounter {
+    /// Creates a counter read from the named snapshot fields, with a zero
+    /// baseline for a new thread.
+    fn new(camel_case: &'static str, snake_case: &'static str) -> Self {
+        Self {
+            camel_case,
+            previous: Some(0),
+            snake_case,
+            turn: None,
+        }
+    }
+
+    /// Adds the difference between `total` and the previous snapshot to the
+    /// turn, reconstructing a missing baseline from the latest response.
+    fn observe(&mut self, total: &Value, last: Option<&Value>) {
+        let current = total
+            .get(self.camel_case)
+            .or_else(|| total.get(self.snake_case))
+            .and_then(Value::as_u64);
+        if self.previous.is_none() {
+            self.previous = current.and_then(|current| {
+                preceding_total(
+                    current,
+                    last_counter(last, self.camel_case, self.snake_case),
+                )
+            });
+        }
+        self.turn = self
+            .turn
+            .zip(self.previous)
+            .zip(current)
+            .map(|((turn, previous), current)| {
+                turn.saturating_add(if current < previous {
+                    current
+                } else {
+                    current - previous
+                })
+            });
+        self.previous = current;
+    }
 }
 
 /// Updates usage trackers for one app-server response line.

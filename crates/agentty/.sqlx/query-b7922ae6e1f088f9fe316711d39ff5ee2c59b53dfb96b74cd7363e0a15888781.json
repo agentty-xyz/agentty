@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT id\nFROM session\nWHERE project_id = ?\n  AND focused_review_status = 'Pending'\n  AND status IN ('Review', 'AgentReview', 'Watching')\nORDER BY updated_at DESC, id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b7922ae6e1f088f9fe316711d39ff5ee2c59b53dfb96b74cd7363e0a15888781"
+}

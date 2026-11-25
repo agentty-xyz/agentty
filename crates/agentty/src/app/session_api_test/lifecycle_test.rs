@@ -578,10 +578,9 @@ async fn runtime_backend_starts_regular_and_staged_draft_messages() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -680,10 +679,9 @@ async fn runtime_backend_preserves_saved_draft_when_message_arrives_after_restar
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -773,10 +771,9 @@ async fn runtime_backend_loads_inherited_creation_before_acknowledging_event_bac
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });

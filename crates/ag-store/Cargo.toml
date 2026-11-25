@@ -24,6 +24,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+ag-contracts = { workspace = true, features = ["test-utils"] }
 ag-session = { workspace = true, features = ["test-utils"] }
 ag-worker = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true

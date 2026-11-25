@@ -465,9 +465,8 @@ impl GraphScenario {
                                 assistant_message: AgentResponse::plain("result @decorator"),
                                 context_reset: false,
                                 harness_report: None,
-                                input_tokens: 3,
-                                output_tokens: 5,
                                 provider_conversation_id: Some("isolated-provider".into()),
+                                usage: ag_contracts::test_support::token_usage("graph-model", 3, 5),
                             })
                         })
                     });

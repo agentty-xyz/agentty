@@ -231,9 +231,8 @@ async fn execute(
                 assistant_message: body.clone(),
                 harness_turn_report: result.harness_report,
                 instruction_conversation_id,
-                input_tokens: result.input_tokens,
-                output_tokens: result.output_tokens,
                 provider_conversation_id: result.provider_conversation_id,
+                usage: result.usage,
             },
         )
         .await?;

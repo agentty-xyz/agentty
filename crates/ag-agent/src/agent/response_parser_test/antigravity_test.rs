@@ -1,6 +1,6 @@
 //! Antigravity response and stream-line parsing unit tests.
 
-use ag_contracts::{SessionDiffState, SessionStats};
+use ag_contracts::ModelUsage;
 use ag_protocol::{FocusedReview, ReviewMetadata, UtilityResponse};
 
 use crate::agent::cli::execution::CliStdoutPayload;
@@ -55,9 +55,17 @@ fn test_antigravity_parse_response_reads_stream_result() {
             .expect("content should remain JSON"),
         response
     );
-    assert_eq!(parsed.stats.input_tokens, 21);
-    assert_eq!(parsed.stats.output_tokens, 8);
-    assert_eq!(parsed.stats.diff_state, SessionDiffState::Unknown);
+    assert_eq!(
+        parsed.usage,
+        ModelUsage {
+            cache_read_tokens: Some(5),
+            input_tokens: 26,
+            output_tokens: 8,
+            reasoning_tokens: Some(3),
+            requests: 1,
+            ..ModelUsage::new("")
+        }
+    );
 }
 
 #[test]
@@ -71,7 +79,7 @@ fn test_antigravity_parse_response_falls_back_for_empty_stdout() {
 
     // Assert
     assert_eq!(parsed.content, stderr);
-    assert_eq!(parsed.stats, SessionStats::default());
+    assert_eq!(parsed.usage, ModelUsage::unreported("", 1));
 }
 
 #[test]
@@ -246,7 +254,7 @@ fn test_antigravity_parse_response_falls_back_to_raw_output() {
 
     // Assert
     assert_eq!(parsed.content, stdout);
-    assert_eq!(parsed.stats, SessionStats::default());
+    assert_eq!(parsed.usage, ModelUsage::unreported("", 1));
 }
 
 #[test]

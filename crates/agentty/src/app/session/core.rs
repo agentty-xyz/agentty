@@ -25,7 +25,7 @@ use crate::domain::question::QuestionItem;
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{
     DailyActivity, FollowUpTaskAction, ReviewRequest, Session, SessionFollowUpTask, SessionId,
-    SessionStats, Status,
+    Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::session_order::ArchiveAction;
@@ -93,28 +93,14 @@ pub(crate) struct TurnAppliedState {
     pub(crate) follow_up_tasks: Vec<SessionFollowUpTask>,
     /// Persisted clarification questions for the latest completed turn.
     pub(crate) questions: Vec<QuestionItem>,
-    /// Token-usage delta reported for the completed turn.
-    pub(crate) token_usage_delta: SessionStats,
 }
 
 impl TurnAppliedState {
-    /// Merges one newer reducer projection into this batched state.
-    ///
-    /// Latest-turn fields (`follow_up_tasks` and `questions`) replace
-    /// the previous projection, while `token_usage_delta` accumulates so
-    /// multiple completed turns queued in one reducer tick do not undercount
-    /// session usage.
+    /// Merges one newer reducer projection into this batched state: the
+    /// latest turn's fields replace the previous projection.
     pub(crate) fn merge_newer(&mut self, newer_turn_applied_state: Self) {
         self.follow_up_tasks = newer_turn_applied_state.follow_up_tasks;
         self.questions = newer_turn_applied_state.questions;
-        self.token_usage_delta.input_tokens = self
-            .token_usage_delta
-            .input_tokens
-            .saturating_add(newer_turn_applied_state.token_usage_delta.input_tokens);
-        self.token_usage_delta.output_tokens = self
-            .token_usage_delta
-            .output_tokens
-            .saturating_add(newer_turn_applied_state.token_usage_delta.output_tokens);
     }
 }
 
@@ -984,14 +970,6 @@ impl SessionManager {
         session
             .transient_messages
             .retract(TransientMessageSlot::GeneratedTurnProgress);
-        session.stats.input_tokens = session
-            .stats
-            .input_tokens
-            .saturating_add(turn_applied_state.token_usage_delta.input_tokens);
-        session.stats.output_tokens = session
-            .stats
-            .output_tokens
-            .saturating_add(turn_applied_state.token_usage_delta.output_tokens);
         self.active_prompt_outputs.remove(session_id);
     }
 

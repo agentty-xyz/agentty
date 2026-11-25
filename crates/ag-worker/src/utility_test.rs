@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    PermissionMode, ReasoningLevel, SpeedMode, TurnUsage, UsagePurpose,
 };
 use ag_protocol::AgentResponse;
 use ag_telemetry::{Context, KeyValue, Span, TraceContextExt as _};
@@ -204,10 +205,9 @@ fn policy_response(text: &str) -> AppServerTurnResponse {
     AppServerTurnResponse {
         assistant_message: text.into(),
         context_reset: false,
-        input_tokens: 1,
-        output_tokens: 1,
         pid: None,
         provider_conversation_id: None,
+        usage: TurnUsage::default(),
     }
 }
 
@@ -218,6 +218,7 @@ struct Repository {
     runs: Mutex<Vec<RunInfo>>,
     states: Mutex<Vec<RunState>>,
     heartbeats: AtomicU8,
+    usage: Mutex<Vec<(String, UsagePurpose, TurnUsage)>>,
 }
 
 #[async_trait]
@@ -272,6 +273,22 @@ impl RunRepository for Repository {
         self.heartbeats.fetch_add(1, Ordering::SeqCst);
         if self.failure.load(Ordering::SeqCst) == 4 {
             return Err(OneShotError::new("heartbeat failed"));
+        }
+        Ok(())
+    }
+
+    async fn record_usage(
+        &self,
+        session_id: &str,
+        purpose: UsagePurpose,
+        usage: &TurnUsage,
+    ) -> Result<(), OneShotError> {
+        self.usage
+            .lock()
+            .expect("usage")
+            .push((session_id.into(), purpose, usage.clone()));
+        if self.failure.load(Ordering::SeqCst) == 7 {
+            return Err(OneShotError::new("usage write failed"));
         }
         Ok(())
     }
@@ -345,7 +362,7 @@ fn request() -> OneShotRequest {
 fn result() -> OneShotSubmission {
     OneShotSubmission {
         response: AgentResponse::plain("summary"),
-        stats: SessionStats::default(),
+        usage: TurnUsage::default(),
     }
 }
 
@@ -541,6 +558,117 @@ async fn nested_scope_crosses_spawn_and_preserves_parent_cancellation() {
     assert_eq!(runs[0].session_id.as_deref(), Some("session"));
     assert_eq!(runs[0].project_id, Some(7));
     assert_eq!(runs[0].purpose, "title");
+}
+
+#[tokio::test]
+async fn successful_session_runs_record_usage_under_their_inherited_purpose() {
+    // Arrange
+    let usage = token_usage("model", 3, 5);
+    let session = Some("session".to_string());
+    let cases = [
+        // (outer purpose, inner session, inner purpose, provider ok, failure,
+        // recorded)
+        (
+            None,
+            session.clone(),
+            Some(UsagePurpose::Title),
+            true,
+            0,
+            Some(UsagePurpose::Title),
+        ),
+        (
+            Some(UsagePurpose::Review),
+            session.clone(),
+            None,
+            true,
+            0,
+            Some(UsagePurpose::Review),
+        ),
+        (
+            Some(UsagePurpose::Review),
+            session.clone(),
+            Some(UsagePurpose::Title),
+            true,
+            0,
+            Some(UsagePurpose::Title),
+        ),
+        (None, session.clone(), None, true, 0, None),
+        (None, None, Some(UsagePurpose::Title), true, 0, None),
+        (
+            None,
+            session.clone(),
+            Some(UsagePurpose::Title),
+            false,
+            0,
+            None,
+        ),
+        (
+            None,
+            session,
+            Some(UsagePurpose::Title),
+            true,
+            7,
+            Some(UsagePurpose::Title),
+        ),
+    ];
+    for (outer_purpose, session_id, usage_purpose, succeeds, failure, recorded) in cases {
+        let (worker, repository, mut calls) = fixture(1);
+        repository.failure.store(failure, Ordering::SeqCst);
+        let client = in_scope(
+            RunScope {
+                usage_purpose: outer_purpose,
+                ..RunScope::default()
+            },
+            async {
+                scoped_client(
+                    worker.clone(),
+                    RunScope {
+                        session_id,
+                        usage_purpose,
+                        ..RunScope::default()
+                    },
+                )
+            },
+        )
+        .await;
+
+        // Act
+        let task = tokio::spawn(async move { client.submit(request()).await });
+        let call = calls.recv().await.expect("runtime");
+        let outcome = if succeeds {
+            Ok(OneShotSubmission {
+                usage: usage.clone(),
+                ..result()
+            })
+        } else {
+            Err(OneShotError::new("provider failed"))
+        };
+        call.result.send(outcome).expect("result");
+        let submitted = task.await.expect("task");
+        worker.shutdown().await;
+
+        // Assert
+        assert_eq!(submitted.is_ok(), succeeds);
+        assert_eq!(
+            *repository.usage.lock().expect("usage"),
+            recorded
+                .map(|purpose| ("session".to_string(), purpose, usage.clone()))
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        let expected_state = if succeeds {
+            RunState::Completed
+        } else {
+            RunState::Failed
+        };
+        assert!(
+            repository
+                .states
+                .lock()
+                .expect("states")
+                .contains(&expected_state)
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]

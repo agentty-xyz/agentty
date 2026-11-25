@@ -252,7 +252,8 @@ async fn turn_writes_user_event_and_returns_step_usage() {
         .expect("turn should succeed");
 
     // Assert
-    assert_eq!(output, ("{\"answer\":\"done\"}".to_string(), 10, 2));
+    assert_eq!(output.0, "{\"answer\":\"done\"}");
+    assert_eq!((output.1.input_tokens(), output.1.output_tokens()), (10, 2));
     let spans = exporter.get_finished_spans().expect("spans");
     let attempt = spans
         .iter()

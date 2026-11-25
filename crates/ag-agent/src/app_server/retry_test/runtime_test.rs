@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentRequestKind, ReasoningLevel};
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnUsage};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
 use opentelemetry::global;
@@ -276,7 +277,7 @@ async fn run_turn_with_restart_retry_uses_live_output_on_retry() {
                         *guard = prompt;
                     }
 
-                    Ok(("done".to_string(), 7, 3))
+                    Ok(("done".to_string(), token_usage("model", 7, 3)))
                 })
             }
         },
@@ -342,7 +343,9 @@ async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
 
             Box::pin(async move { Ok(TestRuntime { model }) })
         },
-        |_runtime, _prompt| Box::pin(async { Ok(("done".to_string(), 7, 3)) }),
+        |_runtime, _prompt| {
+            Box::pin(async { Ok(("done".to_string(), token_usage("model", 7, 3))) })
+        },
         {
             let shutdown_count = Arc::clone(&shutdown_count);
             move |_runtime| {
@@ -451,7 +454,7 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
                         return Err(AppServerError::Provider("first failure".to_string()));
                     }
 
-                    Ok(("done".to_string(), 7, 3))
+                    Ok(("done".to_string(), token_usage("model", 7, 3)))
                 })
             }
         },
@@ -472,7 +475,7 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
     // Assert
     assert_eq!(response.assistant_message, "done");
     assert!(response.context_reset);
-    assert_eq!((response.input_tokens, response.output_tokens), (7, 3));
+    assert_eq!(response.usage, token_usage("model", 7, 3));
     assert_eq!(response.pid, Some(42));
     assert_eq!(response.provider_conversation_id, None);
     assert_eq!(start_count.load(Ordering::SeqCst), 2);
@@ -538,7 +541,7 @@ async fn run_turn_with_restart_retry_shutdown_signal_interrupts_in_flight_runtim
                     sessions
                         .cancel_active_turn("session-1")
                         .expect("cancel should signal active turn");
-                    std::future::pending::<Result<(String, u64, u64), AppServerError>>().await
+                    std::future::pending::<Result<(String, TurnUsage), AppServerError>>().await
                 })
             }
         },
@@ -615,7 +618,7 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
                         *guard = prompt;
                     }
 
-                    Ok(("done".to_string(), 1, 1))
+                    Ok(("done".to_string(), TurnUsage::default()))
                 })
             }
         },
@@ -825,7 +828,7 @@ async fn successful_turn_stops_runtime_when_registry_store_fails() {
                 }));
                 assert!(poisoning.is_err());
 
-                Box::pin(async { Ok(("done".to_string(), 1, 1)) })
+                Box::pin(async { Ok(("done".to_string(), TurnUsage::default())) })
             }
         },
         {

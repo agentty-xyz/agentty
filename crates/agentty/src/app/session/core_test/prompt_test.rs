@@ -17,7 +17,7 @@ use super::support::{
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::file_entry::FileEntry;
-use crate::domain::session::{SessionStats, Status};
+use crate::domain::session::Status;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
@@ -54,7 +54,6 @@ async fn test_apply_turn_applied_state_clears_active_prompt_and_resolution_loade
         &TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            token_usage_delta: SessionStats::default(),
         },
     );
 
@@ -182,9 +181,8 @@ async fn test_reply_replays_history_once_after_model_switch() {
                 assistant_message: AgentResponse::plain(""),
                 context_reset: false,
                 harness_report: None,
-                input_tokens: 0,
-                output_tokens: 0,
                 provider_conversation_id: None,
+                usage: ag_contracts::TurnUsage::default(),
             })
         })
     });

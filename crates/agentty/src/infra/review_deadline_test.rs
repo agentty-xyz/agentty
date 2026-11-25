@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    ReasoningLevel, SessionStats, SpeedMode,
+    ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::AgentResponse;
 use ag_worker::RunClient;
@@ -25,7 +25,7 @@ impl RunClient for DeadlineFixture {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("done"),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
 

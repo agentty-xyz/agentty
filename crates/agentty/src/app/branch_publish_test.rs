@@ -230,7 +230,7 @@ fn refresh_run_client(outcome: &'static str) -> ag_worker::MockRunClient {
             Ok(ag_contracts::OneShotSubmission { response: ag_protocol::AgentResponse::plain(serde_json::json!({
                 "title": "Cosmetic change", "is_title_change_significant": false,
                 "description": "## Why?\nClearer reviews.\n\n## What?\nUpdate descriptions.\n\n## Impact?\nPreserved context.\n\n- [ ] Keep user note #42\nText below legacy footer",
-            }).to_string()), stats: ag_contracts::SessionStats::default() })
+            }).to_string()), usage: ag_contracts::TurnUsage::default() })
         });
     }
 
@@ -919,7 +919,7 @@ fn publication_run_client() -> ag_worker::MockRunClient {
         assert!(request.prompt.contains("cumulative change"));
         Ok(ag_contracts::OneShotSubmission {
             response: ag_protocol::AgentResponse::plain(r###"{"title":"Publish changes","description":"## Why?\nFix publication.\n\n## What?\nGenerate review descriptions.\n\n## Impact?\nReviewers receive structured context.","is_title_change_significant":false}"###),
-            stats: ag_contracts::SessionStats::default(),
+            usage: ag_contracts::TurnUsage::default(),
         })
     });
 

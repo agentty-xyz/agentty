@@ -60,10 +60,9 @@ impl AppServerClient for RestartOnlyServer {
                 }
                 .into(),
                 context_reset: false,
-                input_tokens: 0,
-                output_tokens: 0,
                 pid: None,
                 provider_conversation_id: None,
+                usage: ag_contracts::TurnUsage::default(),
             })
         })
     }

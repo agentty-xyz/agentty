@@ -17,11 +17,13 @@ use ag_session::AgentKind;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::claude_usage::ClaudeUsageMeter;
 use crate::agent::cli::error;
 use crate::agent::cli::execution::{
     self, CliExecutionError, CliExecutionObserver, CliExitStatus, CliStdoutPayload,
 };
-use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
+use crate::agent::usage::{cli_turn_usage, priced_turn_usage};
+use crate::agent::{self as agent, AgentBackend, BuildCommandRequest, ParsedResponse};
 use crate::app_server::steering::{self, TurnSteeringRegistry};
 
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
@@ -103,6 +105,11 @@ struct CliTurnObserver {
     kind: AgentKind,
     /// Whether ordinary loader text may be forwarded for this attempt.
     show_progress: bool,
+    /// Model and usage of a turn whose live usage is forwarded as
+    /// [`TurnEvent::UsageUpdated`]; only Claude Code reports usage while a
+    /// turn runs. Live updates carry the main-loop usage at list price; the
+    /// turn result replaces it with Claude Code's own per-model figures.
+    usage: Option<(String, Mutex<ClaudeUsageMeter>)>,
 }
 
 impl CliTurnObserver {
@@ -116,6 +123,31 @@ impl CliTurnObserver {
             events,
             kind,
             show_progress,
+            usage: None,
+        }
+    }
+
+    /// Forwards the live usage of a Claude Code turn on `model`.
+    fn with_usage(mut self, model: &str) -> Self {
+        if self.kind == AgentKind::Claude {
+            self.usage = Some((model.to_string(), Mutex::default()));
+        }
+
+        self
+    }
+
+    /// Folds one stdout event into the turn's usage and forwards the usage
+    /// when the event reported some.
+    fn forward_usage(&self, event: &serde_json::Value) {
+        let Some((model, meter)) = &self.usage else {
+            return;
+        };
+        let mut meter = meter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if meter.observe(event) {
+            let usage = priced_turn_usage(meter.usage(), model, self.kind);
+            let _ = self.events.send(TurnEvent::UsageUpdated(usage));
         }
     }
 }
@@ -131,6 +163,7 @@ impl CliExecutionObserver for CliTurnObserver {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .observe(self.kind, value);
+            self.forward_usage(value);
         }
         if !self.show_progress {
             return;
@@ -236,7 +269,8 @@ impl AgentChannel for CliAgentChannel {
                 .map_err(|error| AgentError::Backend(error.to_string()))?;
                 let mut build_request = build_command_request(&req, &prompt_text);
                 build_request.replay_transcript = replay.text.as_deref();
-                let observer = CliTurnObserver::new(events.clone(), kind, true);
+                let observer =
+                    CliTurnObserver::new(events.clone(), kind, true).with_usage(&req.model);
                 if let Some(budget) = &req.provider_call_budget {
                     budget
                         .consume()
@@ -273,29 +307,8 @@ impl AgentChannel for CliAgentChannel {
                 }
 
                 let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
-                let mut assistant_message =
-                    parse_or_repair_cli_response(kind, &parsed.content, &req, &backend, &events)
-                        .await?;
-                for follow_up_content in &parsed.follow_up_contents {
-                    let follow_up = parse_or_keep_follow_up_response(
-                        kind,
-                        follow_up_content,
-                        &req,
-                        &backend,
-                        &events,
-                    )
-                    .await;
-                    append_follow_up_response(&mut assistant_message, follow_up);
-                }
 
-                Ok(TurnResult {
-                    assistant_message,
-                    context_reset: false,
-                    harness_report: None,
-                    input_tokens: parsed.stats.input_tokens,
-                    output_tokens: parsed.stats.output_tokens,
-                    provider_conversation_id: None,
-                })
+                complete_cli_turn(kind, parsed, &req, &backend, &events).await
             };
             let result = tokio::select! {
                 result = execution => result,
@@ -337,6 +350,53 @@ impl AgentChannel for CliAgentChannel {
     }
 }
 
+/// Turns the parsed output of a successful CLI turn into its result: the
+/// answer and follow-up replies, repaired when they miss the protocol, and
+/// the usage of the turn's process and its repairs.
+///
+/// # Errors
+/// Returns an error when the answer fails protocol parsing and repair.
+async fn complete_cli_turn(
+    kind: AgentKind,
+    parsed: ParsedResponse,
+    req: &TurnRequest,
+    backend: &Arc<dyn AgentBackend>,
+    events: &mpsc::UnboundedSender<TurnEvent>,
+) -> Result<TurnResult, AgentError> {
+    let mut repairs = Vec::new();
+    let mut assistant_message =
+        parse_or_repair_cli_response(kind, &parsed.content, req, backend, events, &mut repairs)
+            .await?;
+    for follow_up_content in &parsed.follow_up_contents {
+        let follow_up = parse_or_keep_follow_up_response(
+            kind,
+            follow_up_content,
+            req,
+            backend,
+            events,
+            &mut repairs,
+        )
+        .await;
+        append_follow_up_response(&mut assistant_message, follow_up);
+    }
+    let runs = std::iter::once(&parsed).chain(&repairs).collect::<Vec<_>>();
+
+    Ok(TurnResult {
+        assistant_message,
+        context_reset: false,
+        harness_report: None,
+        provider_conversation_id: None,
+        usage: cli_turn_usage(
+            kind,
+            &req.model,
+            &req.request_kind,
+            &req.folder,
+            req.continuation.usage_checkpoint(),
+            &runs,
+        ),
+    })
+}
+
 /// Parses one follow-up reply, keeping its raw text when neither the strict
 /// parse nor the repair retry produces a protocol response.
 ///
@@ -349,8 +409,9 @@ async fn parse_or_keep_follow_up_response(
     req: &TurnRequest,
     backend: &Arc<dyn AgentBackend>,
     events: &mpsc::UnboundedSender<TurnEvent>,
+    repairs: &mut Vec<ParsedResponse>,
 ) -> AgentResponse {
-    match parse_or_repair_cli_response(kind, content, req, backend, events).await {
+    match parse_or_repair_cli_response(kind, content, req, backend, events, repairs).await {
         Ok(follow_up) => follow_up,
         Err(error) => {
             let _ = events.send(TurnEvent::ThoughtDelta(format!(
@@ -388,12 +449,15 @@ fn append_follow_up_response(response: &mut AgentResponse, follow_up: AgentRespo
 /// When repair is attempted, a concise [`TurnEvent::ThoughtDelta`] is emitted
 /// so the user can see that schema repair is in progress without flooding the
 /// session output with parser diagnostics unless the turn ultimately fails.
+/// A repair process that ran is pushed to `repairs`, so the turn counts its
+/// usage.
 async fn parse_or_repair_cli_response(
     kind: AgentKind,
     content: &str,
     req: &TurnRequest,
     backend: &Arc<dyn AgentBackend>,
     events: &mpsc::UnboundedSender<TurnEvent>,
+    repairs: &mut Vec<ParsedResponse>,
 ) -> Result<AgentResponse, AgentError> {
     let span = ag_telemetry::Span::child("response.validate");
     span.run(
@@ -413,7 +477,7 @@ async fn parse_or_repair_cli_response(
             let repair_prompt =
                 build_protocol_repair_prompt(&parse_error, content).map_err(AgentError::Backend)?;
 
-            let repair_content =
+            let repair =
                 execute_cli_repair_turn(backend.as_ref(), kind, req, &repair_prompt, events)
                     .await
                     .map_err(|error| {
@@ -421,6 +485,8 @@ async fn parse_or_repair_cli_response(
                             "{parse_error}\nprotocol repair transport failed: {error}"
                         ))
                     })?;
+            let repair_content = repair.content.clone();
+            repairs.push(repair);
 
             agent::parse_turn_response(kind, &repair_content, protocol_profile).map_err(
                 |repair_error| {
@@ -444,7 +510,7 @@ async fn parse_or_repair_cli_response(
 const REPAIR_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Spawns a fresh CLI process for one protocol-repair retry and returns
-/// the parsed provider content string.
+/// its parsed provider content and usage.
 ///
 /// This helper strips down the full turn-execution pipeline to the minimum
 /// needed for repair: command build, spawn, stdout/stderr collection, and
@@ -457,7 +523,7 @@ async fn execute_cli_repair_turn(
     request: &TurnRequest,
     repair_prompt: &str,
     events: &mpsc::UnboundedSender<TurnEvent>,
-) -> Result<String, String> {
+) -> Result<ParsedResponse, String> {
     let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.to_string());
     if let Some(budget) = &request.provider_call_budget {
         budget.consume().map_err(|error| error.to_string())?;
@@ -487,7 +553,7 @@ async fn execute_cli_repair_command(
     build_request: BuildCommandRequest<'_>,
     timeout: std::time::Duration,
     events: &mpsc::UnboundedSender<TurnEvent>,
-) -> Result<String, String> {
+) -> Result<ParsedResponse, String> {
     let observer = CliTurnObserver::new(events.clone(), kind, false);
     let output = execution::execute_cli_command(
         backend,
@@ -513,9 +579,7 @@ async fn execute_cli_repair_command(
         CliExitStatus::Success => {}
     }
 
-    let parsed = agent::parse_response(kind, &output.stdout, &output.stderr);
-
-    Ok(parsed.content)
+    Ok(agent::parse_response(kind, &output.stdout, &output.stderr))
 }
 
 /// Maps shared execution failures into the existing channel error categories.

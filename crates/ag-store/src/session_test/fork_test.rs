@@ -1,7 +1,8 @@
 //! Fork session snapshot tests that verify source-specific state is reset.
 
-use ag_session as agent;
-use ag_session::{FocusedReviewStatus, ResponseStyle, SessionStats};
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{TurnUsage, UsageCheckpoint, UsagePurpose};
+use ag_session::{FocusedReviewStatus, ResponseStyle};
 use sqlx::SqlitePool;
 
 use crate::AppRepositories;
@@ -70,11 +71,14 @@ struct ForkResetRow {
     focused_review_text: Option<String>,
     in_progress_started_at: Option<i64>,
     in_progress_total_seconds: i64,
+    input_tokens: i64,
     is_draft: bool,
     merged_commit_hash: Option<String>,
+    output_tokens: i64,
     provider_conversation_id: Option<String>,
     published_upstream_ref: Option<String>,
     questions: Option<String>,
+    usage_checkpoint: Option<String>,
 }
 
 /// Loads reset-sensitive fork columns that are not exposed by public
@@ -88,11 +92,14 @@ SELECT app_server_instruction_provider_conversation_id,
        focused_review_text,
        in_progress_started_at,
        in_progress_total_seconds,
+       input_tokens,
        is_draft AS "is_draft: bool",
        merged_commit_hash,
+       output_tokens,
        provider_conversation_id,
        published_upstream_ref,
-       questions
+       questions,
+       usage_checkpoint
 FROM session
 WHERE id = ?
 "#,
@@ -152,7 +159,10 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats::default(),
+                usage: TurnUsage {
+                    checkpoint: Some(UsageCheckpoint::new("/worktree", "source-checkpoint")),
+                    ..TurnUsage::default()
+                },
             },
         )
         .await
@@ -202,16 +212,11 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
         .await
         .expect("failed to update focused review");
     database
-        .sessions()
-        .update_session_stats(
+        .usage()
+        .upsert_session_usage(
             "source-session",
-            &SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: agent::SessionDiffState::Unknown,
-                input_tokens: 11,
-                output_tokens: 29,
-            },
+            UsagePurpose::Turn,
+            &token_usage("gpt-5.6-sol", 11, 29),
         )
         .await
         .expect("failed to update token stats");
@@ -261,6 +266,17 @@ fn assert_source_reset_state(
     assert_eq!(source_row.size, "S");
     assert!(source_reset_row.is_draft);
     assert_eq!(
+        (
+            source_reset_row.input_tokens,
+            source_reset_row.output_tokens
+        ),
+        (11, 29)
+    );
+    assert_eq!(
+        source_reset_row.usage_checkpoint.as_deref(),
+        Some("source-checkpoint")
+    );
+    assert_eq!(
         source_reset_row.provider_conversation_id.as_deref(),
         Some("provider-thread")
     );
@@ -307,8 +323,11 @@ fn assert_fork_reset_state(
 ) {
     assert_eq!(fork_row.status, "Review");
     assert!(!fork_row.is_draft);
-    assert_eq!(fork_row.input_tokens, 0);
-    assert_eq!(fork_row.output_tokens, 0);
+    assert_eq!(
+        (fork_reset_row.input_tokens, fork_reset_row.output_tokens),
+        (0, 0)
+    );
+    assert_eq!(fork_reset_row.usage_checkpoint, None);
     assert_eq!(fork_row.added_lines, 0);
     assert_eq!(fork_row.deleted_lines, 0);
     assert_eq!(fork_row.has_diff, None);

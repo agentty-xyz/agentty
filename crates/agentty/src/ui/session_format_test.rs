@@ -340,8 +340,6 @@ fn header_preserves_totals_at_constrained_widths() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = model_fixture::codex_selection();
-    session.stats.input_tokens = 123;
-    session.stats.output_tokens = 456;
     session.title = Some("修复 **wide title** with a long description".to_string());
 
     for width in 0..=200 {

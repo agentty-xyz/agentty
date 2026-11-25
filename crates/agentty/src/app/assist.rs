@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::UsagePurpose;
 use ag_git::GitClient;
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
@@ -196,7 +197,8 @@ pub(super) async fn append_assist_header(
     .await;
 }
 
-/// Executes one assistance run using the current session context.
+/// Executes one assistance run using the current session context and records
+/// its usage under `purpose`.
 ///
 /// # Errors
 /// Returns an error when the one-shot assist command fails or returns invalid
@@ -204,6 +206,7 @@ pub(super) async fn append_assist_header(
 pub(super) async fn run_agent_assist(
     context: &AssistContext,
     prompt: &str,
+    purpose: UsagePurpose,
 ) -> Result<(), SessionError> {
     SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
         app_event_tx: context.app_event_tx.clone(),
@@ -213,6 +216,7 @@ pub(super) async fn run_agent_assist(
         id: context.id.clone(),
         run_client: Arc::clone(&context.run_client),
         prompt: prompt.to_string(),
+        purpose,
         session_agent: context.session_agent,
         session_update_versions: context.session_update_versions.clone(),
         transcript: Arc::clone(&context.transcript),

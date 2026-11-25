@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT reference, body FROM execution_graph_result WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "reference",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_result",
+            "name": "reference"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_result",
+            "name": "body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f92410c439630b13f99a0e33109e981ab7aa020aec2a2caad36a6ad8337a74d9"
+}

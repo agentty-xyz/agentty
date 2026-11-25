@@ -1,5 +1,6 @@
 //! Task plan acceptance and implementation handoff tests.
 
+use ag_contracts::TurnUsage;
 use ag_session::{
     AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, SubmitAgentTaskRequest,
     TaskAgentRole,
@@ -354,9 +355,8 @@ async fn record_plan(database: &Database, attempt_id: &str, response: &str, stat
                     assistant_message: response.into(),
                     harness_turn_report: None,
                     instruction_conversation_id: None,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     provider_conversation_id: None,
+                    usage: TurnUsage::default(),
                 },
             )
             .await

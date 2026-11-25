@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    ReasoningLevel, SessionStats, SpeedMode, is_input_size_error,
+    ReasoningLevel, SpeedMode, TurnUsage, is_input_size_error,
 };
 use ag_protocol::AgentResponse;
 use ag_session::{AgentKind, AgentModel};
@@ -39,7 +39,7 @@ fn request() -> OneShotRequest {
 fn answer(text: &str) -> OneShotSubmission {
     OneShotSubmission {
         response: AgentResponse::plain(text),
-        stats: SessionStats::default(),
+        usage: TurnUsage::default(),
     }
 }
 

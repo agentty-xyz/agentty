@@ -5,9 +5,10 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    ReasoningLevel, SessionStats, SpeedMode,
+    ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::AgentResponse;
 use ag_session::FocusedReviewStatus;
@@ -53,7 +54,7 @@ async fn resumes_successful_calls_across_clients_and_invalidates_changed_input()
     worker.expect_submit().times(5).returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let worker = Arc::new(worker);
@@ -206,7 +207,7 @@ async fn invalid_disposition_is_not_cached(answer: &'static str) {
     worker.expect_submit().times(2).returning(move |_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(answer),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let worker = Arc::new(worker);
@@ -257,10 +258,7 @@ async fn previously_cached_omitted_dispositions_are_replaced_with_a_valid_fresh_
     worker.expect_submit().times(2).returning(move |_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(valid),
-            stats: SessionStats {
-                input_tokens: 7,
-                ..SessionStats::default()
-            },
+            usage: token_usage("model", 7, 0),
         })
     });
     let worker = Arc::new(worker);
@@ -309,9 +307,9 @@ async fn previously_cached_omitted_dispositions_are_replaced_with_a_valid_fresh_
 
     // Assert
     assert_eq!(fresh.response.answer, valid);
-    assert_eq!(fresh.stats.input_tokens, 7);
+    assert_eq!(fresh.usage.input_tokens(), 7);
     assert_eq!(replay.response.answer, valid);
-    assert_eq!(replay.stats.input_tokens, 0);
+    assert_eq!(replay.usage, TurnUsage::default());
 }
 
 #[tokio::test]
@@ -338,7 +336,7 @@ async fn completed_audit_preserves_discovery_and_group_scoped_rejection_reasons_
             } else {
                 discovery
             }),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let worker = Arc::new(worker);
@@ -450,7 +448,7 @@ async fn budget_retries_advance_past_cached_size_rejections_and_completed_batche
         );
         Ok(OneShotSubmission {
             response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let worker = Arc::new(worker);
@@ -509,7 +507,7 @@ async fn checkpoint_failures_are_reported_and_invalid_answers_are_not_reused() {
     worker.expect_submit().times(2).returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain("invalid"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let worker = Arc::new(worker);
@@ -566,7 +564,7 @@ async fn corrupted_checkpoints_and_failed_saves_surface_errors() {
     worker.expect_submit().times(2).returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let worker = Arc::new(worker);
@@ -624,7 +622,7 @@ async fn delayed_older_submission_cannot_supersede_newer_checkpoints() {
         worker.expect_submit().times(3).returning(|_| {
             Ok(OneShotSubmission {
                 response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
         let worker = Arc::new(worker);
@@ -712,7 +710,7 @@ async fn invalidation_prevents_identical_inputs_from_reusing_or_restoring_old_ev
     worker.expect_submit().times(3).returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     let worker = Arc::new(worker);

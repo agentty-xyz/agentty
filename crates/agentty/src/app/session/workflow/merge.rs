@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::UsagePurpose;
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_telemetry::{FutureExt as _, Outcome, Span};
@@ -599,6 +600,7 @@ impl RealSyncAssistClient {
         let _ = ag_worker::in_scope(
             ag_worker::RunScope {
                 purpose: Some("rebase conflict assistance".to_string()),
+                usage_purpose: Some(UsagePurpose::Rebase),
                 ..ag_worker::RunScope::default()
             },
             run_client.submit(ag_contracts::OneShotRequest {
@@ -2642,7 +2644,7 @@ impl SessionManager {
             RebaseAssistMode::OneShot => {
                 let assist_context = Self::assist_context(input);
 
-                run_agent_assist(&assist_context, &prompt)
+                run_agent_assist(&assist_context, &prompt, UsagePurpose::Rebase)
                     .await
                     .map_err(|error| error.with_context("Rebase assistance failed"))
             }

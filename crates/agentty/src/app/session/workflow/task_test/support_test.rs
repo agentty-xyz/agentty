@@ -5,6 +5,7 @@ use std::sync::{Mutex, Mutex as StdMutex};
 use std::time::{Instant, SystemTime};
 
 use ag_contracts::OneShotSubmission;
+use ag_contracts::test_support::token_usage;
 
 use crate::app::session::Clock;
 use crate::db::AppRepositories;
@@ -54,13 +55,7 @@ pub(super) fn one_shot_submission(
 ) -> OneShotSubmission {
     OneShotSubmission {
         response: ag_protocol::AgentResponse::plain(answer),
-        stats: ag_contracts::SessionStats {
-            added_lines: 0,
-            deleted_lines: 0,
-            diff_state: ag_contracts::SessionDiffState::Unknown,
-            input_tokens,
-            output_tokens,
-        },
+        usage: token_usage("fixture-model", input_tokens, output_tokens),
     }
 }
 

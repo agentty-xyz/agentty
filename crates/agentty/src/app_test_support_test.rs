@@ -1,9 +1,9 @@
 //! Test-only access to app internals shared by sibling layer suites.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use ag_contracts::OneShotError;
-use ag_worker::{RunInfo, RunRepository, RunState};
+use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
+use ag_worker::RunRepository;
 
 pub(crate) use super::core::test_support::AppClients;
 pub(crate) use super::remote_control::tests::start_fake_listener;
@@ -12,59 +12,22 @@ pub(crate) use super::service::test_support::{SteerableSessionChannel, TestSessi
 pub(crate) use super::session::{SyncMainOutcome, SyncSessionStartError};
 pub(crate) use super::sync::{MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion};
 
-/// Builds a utility worker that answers every submission with `answer` and
-/// records the purpose of each accepted run.
-pub(crate) fn purpose_recording_run_worker(
-    answer: &'static str,
-) -> (ag_worker::RunWorker, Arc<Mutex<Vec<String>>>) {
-    let repository = Arc::new(PurposeRecordingRuns::default());
+/// Builds a utility worker that persists its runs, and the usage they record,
+/// through `runs` while `answer` resolves every submission.
+pub(crate) fn persisting_run_worker(
+    runs: Arc<dyn RunRepository>,
+    answer: impl Fn(OneShotRequest) -> Result<OneShotSubmission, OneShotError> + Send + 'static,
+) -> Arc<ag_worker::RunWorker> {
     let mut runtime = ag_contracts::MockOneShotClient::new();
-    runtime.expect_submit_cancellable().returning(move |_, _| {
-        Ok(ag_contracts::OneShotSubmission {
-            response: ag_protocol::AgentResponse::plain(answer),
-            stats: ag_contracts::SessionStats::default(),
-        })
-    });
-    let worker = ag_worker::RunWorker::with_client(
+    runtime
+        .expect_submit_cancellable()
+        .returning(move |request, _| answer(request));
+    runtime.expect_close().return_const(());
+
+    Arc::new(ag_worker::RunWorker::with_client(
         Arc::new(runtime),
-        Arc::clone(&repository) as Arc<dyn RunRepository>,
+        runs,
         Arc::new(ag_worker::HeartbeatClock),
         std::num::NonZeroUsize::MIN,
-    );
-
-    (worker, Arc::clone(&repository.purposes))
-}
-
-/// Accepts every run lifecycle change and records each run's purpose.
-#[derive(Default)]
-struct PurposeRecordingRuns {
-    purposes: Arc<Mutex<Vec<String>>>,
-}
-
-#[async_trait::async_trait]
-impl RunRepository for PurposeRecordingRuns {
-    async fn create(&self, run: &RunInfo) -> Result<(), OneShotError> {
-        self.purposes
-            .lock()
-            .expect("recorded purposes")
-            .push(run.purpose.clone());
-
-        Ok(())
-    }
-
-    async fn close_session(&self, _: &str) -> Result<(), OneShotError> {
-        Ok(())
-    }
-
-    async fn transition(&self, _: &str, _: RunState, _: Option<&str>) -> Result<(), OneShotError> {
-        Ok(())
-    }
-
-    async fn heartbeat(&self, _: &str) -> Result<(), OneShotError> {
-        Ok(())
-    }
-
-    async fn recover(&self) -> Result<(), OneShotError> {
-        Ok(())
-    }
+    ))
 }

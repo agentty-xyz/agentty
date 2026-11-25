@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, ContextCompaction, ReasoningLevel, SessionRef,
-    StartSessionRequest, TurnEvent, TurnNotice, TurnRequest, TurnResult,
+    StartSessionRequest, TurnEvent, TurnNotice, TurnRequest, TurnResult, TurnUsage,
 };
 use ag_harness::provider::chatgpt_is_signed_in;
 use ag_harness::transcript::TranscriptInput;
@@ -34,8 +34,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
-    NativeTurnError, RunOptions, RunProjector, SESSION_SANDBOX, cleanup_failure, failure,
-    output_schema, parse_output, reject_attachments, repository, running_context_window,
+    NativeTurnError, RunOptions, RunProjector, SESSION_SANDBOX, UsageMeter, cleanup_failure,
+    failure, output_schema, parse_output, reject_attachments, repository, running_context_window,
     system_prompt, with_stored_api_keys,
 };
 use crate::agent::{
@@ -196,11 +196,12 @@ async fn run_session_turn(
     .render()?;
     let input_digest = input_digest(&input);
     let offers_bash = options.offers_bash();
+    let meter = UsageMeter::new(&selection, &environment, running_context_window);
     let (run, stream) = ActiveRun::start(session.run(options.request(input)));
     // Dropping this turn cancels the run, which keeps settling on its task.
     let _cancel_on_drop = CancelOnDrop(run.cancel.clone());
     lock(active).insert(session_id.clone(), run.clone());
-    let ((), settled) = tokio::join!(forward_output(stream, &events), run.settle());
+    let (usage, settled) = tokio::join!(forward_output(stream, &events, meter), run.settle());
     // A failed settlement stays registered so the next turn retries it.
     let outcome = settled?;
     lock(active).remove(&session_id);
@@ -233,23 +234,33 @@ async fn run_session_turn(
         assistant_message,
         context_reset: false,
         harness_report: serde_json::to_string(&outcome.report).ok(),
-        input_tokens: outcome.usage.input,
-        output_tokens: outcome.usage.output,
         provider_conversation_id,
+        usage,
     })
 }
 
 /// Forwards, in stream order, the output a run streams as
 /// [`TurnEvent::Output`] events, its tool calls as [`TurnEvent::Activity`]
-/// rows, and its compaction attempts and what it reports about the sandbox
-/// as [`TurnEvent::Notice`] events, until the run's stream ends.
-async fn forward_output(mut stream: EventStream, events: &mpsc::UnboundedSender<TurnEvent>) {
+/// rows, its compaction attempts and what it reports about the sandbox as
+/// [`TurnEvent::Notice`] events, and the turn's usage after each completed
+/// model request as [`TurnEvent::UsageUpdated`], until the run's stream
+/// ends. Returns the usage of every request.
+async fn forward_output(
+    mut stream: EventStream,
+    events: &mpsc::UnboundedSender<TurnEvent>,
+    mut meter: UsageMeter,
+) -> TurnUsage {
     let mut projector = RunProjector::new();
     while let Some(event) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
+        if let Some(usage) = meter.observe(&event.kind) {
+            let _ = events.send(TurnEvent::UsageUpdated(usage.clone()));
+        }
         for turn_event in projector.project(event.kind) {
             let _ = events.send(turn_event);
         }
     }
+
+    meter.finish()
 }
 
 /// One session's started run, shared by its turn and a concurrent shutdown.

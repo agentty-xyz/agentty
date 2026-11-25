@@ -7,11 +7,12 @@ use std::time::SystemTime;
 
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentDefinitionPrompt, AgentError,
-    AgentRequestKind, MockAgentChannel, TurnEvent, TurnNotice, TurnResult,
+    AgentRequestKind, MockAgentChannel, TurnEvent, TurnNotice, TurnResult, TurnUsage,
+    UsageCheckpoint,
 };
 use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_protocol::AgentResponse;
-use ag_session::{EnvId, ResolvedEnv, SessionStats, test_support as model_fixture};
+use ag_session::{EnvId, ResolvedEnv, test_support as model_fixture};
 use ag_worker::SessionRunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -88,6 +89,7 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
             prepared.request.continuation.replay_transcript(),
             Some("Ordinary chat history")
         );
+        assert_eq!(prepared.request.continuation.usage_checkpoint(), None);
     }
 
     // Act: use the ordinary successful-turn persistence boundary.
@@ -103,7 +105,10 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
                 provider_conversation_id: Some("old-context".into()),
                 questions_json: "[]".into(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats::default(),
+                usage: TurnUsage {
+                    checkpoint: Some(UsageCheckpoint::new("/worktree", "cumulative-totals")),
+                    ..TurnUsage::default()
+                },
             },
         )
         .await
@@ -118,10 +123,14 @@ async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence
     )
     .await;
 
-    // Assert
+    // Assert: the next turn continues from the stored usage checkpoint.
     assert_eq!(
         prepared.request.agent_profile,
         AgentDefinitionPrompt::default()
+    );
+    assert_eq!(
+        prepared.request.continuation.usage_checkpoint(),
+        Some("cumulative-totals")
     );
 }
 
@@ -345,9 +354,8 @@ async fn main_checkout_status_failure_after_the_turn_fails_the_turn() {
         assistant_message: AgentResponse::plain("done"),
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: TurnUsage::default(),
     };
 
     // Act

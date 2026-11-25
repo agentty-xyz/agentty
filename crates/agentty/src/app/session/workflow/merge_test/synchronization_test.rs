@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::OneShotSubmission;
+use ag_contracts::test_support::token_usage;
 use ag_forge as forge;
 use ag_git as git;
 use ag_git::{BranchPushOutcome, GitClient, GitError};
@@ -37,14 +38,14 @@ use crate::app::service::HarnessModels;
 use crate::app::session::workflow::merge::SyncAssistClient;
 use crate::app::session::{Clock, SessionError};
 use crate::app::sync::SyncMainEventContext;
-use crate::app::test_support::purpose_recording_run_worker;
+use crate::app::test_support::persisting_run_worker;
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionHandles, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
-use crate::test_support::enable_tracing_log_fallback;
 use crate::test_support::telemetry::{assert_span_attributes, capture_spans, finished_span};
+use crate::test_support::{enable_tracing_log_fallback, session_usage_by_purpose};
 
 /// Verifies session and sync assistance abort when the conflicted file
 /// fingerprint repeats across attempts without any file changes.
@@ -2345,13 +2346,7 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
 
             Ok(OneShotSubmission {
                 response: ag_protocol::AgentResponse::plain("resolved"),
-                stats: ag_contracts::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_contracts::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
     let sync_assist_client = RealSyncAssistClient {
@@ -2375,16 +2370,47 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
 async fn test_real_sync_assist_client_labels_rebase_assistance_unless_scoped() {
     // Arrange
     let cases = [
-        (None, "rebase conflict assistance"),
-        (Some("sync conflict assistance"), "sync conflict assistance"),
+        // A session rebase records its usage as rebase work.
+        (
+            Some("session-id"),
+            None,
+            "rebase conflict assistance",
+            vec![("model".to_string(), "rebase".to_string(), 4, 2)],
+        ),
+        // Project sync owns no session, so its usage has no owner.
+        (
+            None,
+            Some("sync conflict assistance"),
+            "sync conflict assistance",
+            Vec::new(),
+        ),
     ];
 
-    for (scoped_purpose, expected_purpose) in cases {
-        let (worker, purposes) = purpose_recording_run_worker("resolved");
+    for (session_id, scoped_purpose, expected_purpose, expected_usage) in cases {
+        let (database, pool) = AppRepositories::in_memory_with_pool()
+            .await
+            .expect("db should open");
+        let project_id = database
+            .projects()
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("project should persist");
+        database
+            .sessions()
+            .insert_session("session-id", "model", "main", "Review", project_id)
+            .await
+            .expect("session should persist");
+        let worker = persisting_run_worker(database.runs(), |_| {
+            Ok(OneShotSubmission {
+                response: ag_protocol::AgentResponse::plain("resolved"),
+                usage: token_usage("model", 4, 2),
+            })
+        });
         let run_client = ag_worker::scoped_client(
-            Arc::new(worker),
+            worker.clone(),
             ag_worker::RunScope {
                 purpose: scoped_purpose.map(str::to_string),
+                session_id: session_id.map(str::to_string),
                 ..ag_worker::RunScope::default()
             },
         );
@@ -2398,12 +2424,18 @@ async fn test_real_sync_assist_client_labels_rebase_assistance_unless_scoped() {
                 AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             )
             .await;
+        worker.shutdown().await;
 
         // Assert
+        let purposes: Vec<String> = sqlx::query_scalar("SELECT purpose FROM agent_run")
+            .fetch_all(&pool)
+            .await
+            .expect("recorded runs");
         assert!(result.is_ok());
+        assert_eq!(purposes, [expected_purpose]);
         assert_eq!(
-            *purposes.lock().expect("recorded purposes"),
-            [expected_purpose]
+            session_usage_by_purpose(&pool, "session-id").await,
+            expected_usage
         );
     }
 }

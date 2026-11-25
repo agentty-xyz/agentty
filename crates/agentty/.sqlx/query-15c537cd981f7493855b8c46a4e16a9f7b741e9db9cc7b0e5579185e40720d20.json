@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO session_operation (id, session_id, kind, status, queued_at) VALUES (?, ?, ?, 'queued', ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "15c537cd981f7493855b8c46a4e16a9f7b741e9db9cc7b0e5579185e40720d20"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_agent_turn (\n                   task_attempt_id, assistant_message, input_tokens, output_tokens,\n                   provider_conversation_id, instruction_conversation_id, harness_turn_report\n               ) SELECT a.id, ?, ?, ?, ?, ?, ? FROM task_attempt a\n                 JOIN task_agent_context c ON c.task_id = a.task_id\n                 JOIN session_operation o ON o.id = a.session_operation_id\n               WHERE a.id = ? AND o.status = 'running' AND o.cancel_requested = 0\n               ON CONFLICT(task_attempt_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "66f4ef9c0e9171ba500751783e5334bc62910770f2ad933a224470de0d844ca3"
+}

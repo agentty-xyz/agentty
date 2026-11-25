@@ -176,7 +176,9 @@ async fn running_turn_delivers_steering_prompts_and_reports_codex_answers() {
         tokio::join!(execute_turn_event_loop(&mut transport, input), driver);
 
     // Assert
-    assert_eq!(result.expect("turn completes"), (String::new(), 0, 0));
+    let (message, turn_usage) = result.expect("turn completes");
+    assert_eq!(message, String::new());
+    assert_eq!(turn_usage.models[0].unreported_requests, 1);
     assert_eq!(
         early.expect_err("no turn id yet").to_string(),
         "No running turn can receive this message"

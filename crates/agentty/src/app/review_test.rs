@@ -2,9 +2,15 @@
 //! hydration, pruning, and update application.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
+use ag_contracts::OneShotSubmission;
+use ag_contracts::test_support::token_usage;
+use ag_protocol::AgentResponse;
 use ag_session::test_support as model_fixture;
+use tokio::sync::mpsc;
 
 use super::{
     FocusedReviewPersistence, FocusedReviewPersistenceRetry, ReviewAgent, ReviewCacheEntry,
@@ -12,10 +18,15 @@ use super::{
     hydrate_review_transient, hydrate_review_transients, normalize_review_agent,
     prune_review_cache, review_agent_kind_label, review_cache_from_rows, review_loading_message,
     review_progress_message, review_reasoning_label, review_view_text, session_review_agent,
-    shown_focused_review, shown_focused_review_id, text_hash,
+    shown_focused_review, shown_focused_review_id, start_review_assist, text_hash,
 };
+use crate::app::AppEvent;
+use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session_state::SessionState;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::app::test_support::persisting_run_worker;
+use crate::domain::agent::{
+    AgentCliInfo, AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode,
+};
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{SessionId, Status};
@@ -24,8 +35,8 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::infra::clock::RealClock;
-use crate::infra::db::SessionFocusedReviewRow;
-use crate::test_support::SessionFixtureBuilder;
+use crate::infra::db::{AppRepositories, SessionFocusedReviewRow};
+use crate::test_support::{SessionFixtureBuilder, session_usage_by_purpose};
 
 /// Builds empty session state for review reducer tests that only need mode
 /// field updates.
@@ -1033,4 +1044,91 @@ fn shown_focused_review_is_absent_while_loading_suppressed_or_outside_review() {
     // Assert
     assert_eq!(shown, [None, None, None]);
     assert_eq!(shown_ids, [None, None, None]);
+}
+
+#[tokio::test]
+async fn focused_review_records_its_usage_as_review_work() {
+    // Arrange
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", None)
+        .await
+        .expect("project should persist");
+    database
+        .sessions()
+        .insert_session("session-id", "model", "main", "Review", project_id)
+        .await
+        .expect("session should persist");
+    let run_worker = persisting_run_worker(database.runs(), |_| {
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain(
+                r#"{"project_impact":["Review completed."],"suggestions":[]}"#,
+            ),
+            usage: token_usage("review-model", 2, 1),
+        })
+    });
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let services = AppServices::new_with_agent_clis(
+        PathBuf::from("/tmp/agentty-tests"),
+        Arc::new(RealClock),
+        app_event_tx,
+        AppServiceDeps {
+            session_run_factory: Arc::new(
+                crate::app::service::test_support::TestSessionRunFactory::default(),
+            ),
+            runtime_config: ag_worker::RuntimeConfig::with_app_server(
+                crate::test_support::mock_app_server(),
+            ),
+            available_agent_kinds: AgentKind::ALL.to_vec(),
+            clipboard_image_client_override: None,
+            fs_client: Arc::new(crate::infra::fs::RealFsClient),
+            git_client: Arc::new(ag_git::MockGitClient::new()),
+            run_client_override: Some(run_worker.clone()),
+            agent_profile_catalog_client_override: None,
+            repositories: database.clone(),
+            review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
+        },
+        AgentCliInfo::from_kinds(AgentKind::ALL),
+    );
+
+    // Act
+    let request_id = start_review_assist(
+        &services,
+        test_review_agent(),
+        "session-id",
+        Path::new("/tmp/review-usage"),
+        42,
+        "diff --git a/src/lib.rs b/src/lib.rs",
+        None,
+    )
+    .await;
+    let completion = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match app_event_rx.recv().await.expect("review event") {
+                AppEvent::ReviewPrepared {
+                    request_id: completed,
+                    ..
+                } => break Ok(completed),
+                AppEvent::ReviewPreparationFailed { error, .. } => break Err(error),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("review should finish");
+    run_worker.shutdown().await;
+
+    // Assert
+    let usage = session_usage_by_purpose(&pool, "session-id").await;
+    assert_eq!(completion, Ok(request_id));
+    assert_eq!(
+        usage
+            .iter()
+            .map(|(model, purpose, _, _)| (model.as_str(), purpose.as_str()))
+            .collect::<Vec<_>>(),
+        [("review-model", "review")]
+    );
 }

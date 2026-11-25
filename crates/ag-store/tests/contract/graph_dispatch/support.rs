@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentRequestKind, ExecutionPolicy, OneShotClient, OneShotError, OneShotRequest,
-    OneShotSubmission, PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
+    OneShotSubmission, PermissionMode, ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt};
 use ag_session::{
@@ -117,7 +117,7 @@ impl OneShotClient for BusyProvider {
 
             return Ok(OneShotSubmission {
                 response: AgentResponse::plain("released"),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             });
         }
 
@@ -267,7 +267,7 @@ impl OneShotClient for Provider {
 
         Ok(OneShotSubmission {
             response,
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     }
 }

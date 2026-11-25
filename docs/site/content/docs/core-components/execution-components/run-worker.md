@@ -76,6 +76,13 @@ Resources attached with `with_execution_resource`, such as
 through cancellation cleanup. A coordinating run holds no utility slot while its
 children run and settles only after every child finishes cleanup.
 
+## Utility Usage
+
+A `RunScope` that names a session and a `usage_purpose` makes each successful utility
+run under it record its usage, per model, through `RunRepository::record_usage`. Nested
+scopes inherit the purpose, so a narrower scope such as title generation overrides a
+session-wide default. A failed write is logged and never fails the run.
+
 ## Execution Policy
 
 `ag-worker::RuntimeConfig` owns the subagent, built-in tool, and MCP policy for each

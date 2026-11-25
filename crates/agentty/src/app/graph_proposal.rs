@@ -500,6 +500,7 @@ impl App {
                 parent_id: Some(state.version.parent_id.clone()),
                 purpose: Some("graph-proposal".into()),
                 session_id: Some(state.input.session_id.to_string()),
+                usage_purpose: Some(ag_contracts::UsagePurpose::Other),
                 ..ag_worker::RunScope::default()
             },
         );

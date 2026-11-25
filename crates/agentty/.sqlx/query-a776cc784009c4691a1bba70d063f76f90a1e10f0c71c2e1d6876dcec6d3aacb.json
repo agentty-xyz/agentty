@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_review_comment_resolution\nSET is_posting = 1\nWHERE session_id = ?\n  AND reply_token = ?\n  AND is_posting = 0\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a776cc784009c4691a1bba70d063f76f90a1e10f0c71c2e1d6876dcec6d3aacb"
+}

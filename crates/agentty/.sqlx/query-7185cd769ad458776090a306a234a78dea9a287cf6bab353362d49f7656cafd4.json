@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT is_posting AS \"is_posting: bool\",\n       commit_hash,\n       reply,\n       reply_token,\n       resolution,\n       review_request_display_id,\n       thread_id\nFROM session_review_comment_resolution\nWHERE session_id = ?\nORDER BY rowid\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "is_posting: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "is_posting"
+          }
+        }
+      },
+      {
+        "name": "commit_hash",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "commit_hash"
+          }
+        }
+      },
+      {
+        "name": "reply",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "reply"
+          }
+        }
+      },
+      {
+        "name": "reply_token",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "reply_token"
+          }
+        }
+      },
+      {
+        "name": "resolution",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "resolution"
+          }
+        }
+      },
+      {
+        "name": "review_request_display_id",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "review_request_display_id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "thread_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7185cd769ad458776090a306a234a78dea9a287cf6bab353362d49f7656cafd4"
+}

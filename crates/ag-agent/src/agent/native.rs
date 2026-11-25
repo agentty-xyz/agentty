@@ -13,6 +13,7 @@ mod sign_in;
 mod tool_description;
 mod turn;
 mod turn_error;
+mod usage;
 
 pub(crate) use activity::ActivityBridge;
 pub(crate) use api_key::{save_api_key, with_stored_api_keys};
@@ -30,3 +31,4 @@ pub(crate) use turn::{
     NativePrompt, cleanup_failure, parse_output, reject_attachments, run_one_shot,
 };
 pub(crate) use turn_error::NativeTurnError;
+pub(crate) use usage::UsageMeter;

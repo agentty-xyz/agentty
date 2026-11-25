@@ -301,10 +301,9 @@ fn provider() -> MockAppServerClient {
             Ok(AppServerTurnResponse {
                 assistant_message: answer,
                 context_reset: false,
-                input_tokens: 1,
-                output_tokens: 1,
                 pid: None,
                 provider_conversation_id: None,
+                usage: ag_contracts::TurnUsage::default(),
             })
         })
     });

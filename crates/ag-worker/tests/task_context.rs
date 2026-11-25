@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentDefinitionPrompt, AgentRequestKind, PermissionMode, ReasoningLevel, ResponseStyle,
-    SpeedMode, TurnContinuation, TurnRequest,
+    SpeedMode, TurnContinuation, TurnRequest, TurnUsage,
 };
 use ag_protocol::TurnPrompt;
 use ag_session::{
@@ -31,10 +31,9 @@ async fn task_runtime_keys_are_stable_and_separate_from_ordinary_chat() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"done","questions":[]}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: TurnUsage::default(),
                 })
             })
         });

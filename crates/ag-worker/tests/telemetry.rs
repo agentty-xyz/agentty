@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    ReasoningLevel, SessionStats, SpeedMode,
+    ReasoningLevel, SpeedMode, TurnUsage,
 };
 use ag_protocol::AgentResponse;
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, Span, TraceContextExt as _};
@@ -23,7 +23,7 @@ impl RunClient for ObservedClient {
             .scope(async {
                 Ok(OneShotSubmission {
                     response: AgentResponse::plain("done"),
-                    stats: SessionStats::default(),
+                    usage: TurnUsage::default(),
                 })
             })
             .await
@@ -44,7 +44,7 @@ impl RunClient for ContextClient {
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain("done"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     }
 }

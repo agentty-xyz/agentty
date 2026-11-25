@@ -1,6 +1,10 @@
-//! `RunState` storage name unit tests.
+//! `RunState` storage name and `RunRepository` default unit tests.
 
-use crate::run::RunState;
+use ag_contracts::UsagePurpose;
+use ag_contracts::test_support::token_usage;
+
+use crate::run::mock::MockRunRepository;
+use crate::run::{RunRepository, RunState};
 
 #[test]
 fn run_states_use_stable_storage_names() {
@@ -21,4 +25,18 @@ fn run_states_use_stable_storage_names() {
         names,
         ["queued", "running", "completed", "failed", "canceled"]
     );
+}
+
+#[tokio::test]
+async fn repositories_that_keep_no_usage_accept_and_ignore_it() {
+    // Arrange
+    let repository = MockRunRepository::new();
+
+    // Act
+    let result = repository
+        .record_usage("session", UsagePurpose::Title, &token_usage("model", 3, 5))
+        .await;
+
+    // Assert
+    assert!(result.is_ok());
 }

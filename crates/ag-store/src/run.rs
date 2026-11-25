@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
-use ag_contracts::OneShotError;
+use ag_contracts::{OneShotError, TurnUsage, UsagePurpose};
 use ag_worker::{RunInfo, RunRepository, RunState};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::TimestampSource;
+use crate::connection::begin_write;
+use crate::session::persist_turn_usage;
+use crate::{DbError, TimestampSource};
 
 pub(crate) struct SqliteRunRepository {
     pool: SqlitePool,
@@ -122,6 +124,30 @@ impl RunRepository for SqliteRunRepository {
             .bind(self.timestamp_source.now_timestamp_seconds())
             .bind(id)
             .execute(&self.pool)
+            .await
+            .map_err(|error| Self::error(&error))?;
+
+        Ok(())
+    }
+
+    async fn record_usage(
+        &self,
+        session_id: &str,
+        purpose: UsagePurpose,
+        usage: &TurnUsage,
+    ) -> Result<(), OneShotError> {
+        let persistence_error = |error: DbError| {
+            OneShotError::new(format!("Agent run usage persistence failed: {error}"))
+        };
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = begin_write(&self.pool, "record agent run usage")
+            .await
+            .map_err(persistence_error)?;
+        persist_turn_usage(&mut transaction, session_id, purpose, now, usage)
+            .await
+            .map_err(persistence_error)?;
+        transaction
+            .commit()
             .await
             .map_err(|error| Self::error(&error))?;
 

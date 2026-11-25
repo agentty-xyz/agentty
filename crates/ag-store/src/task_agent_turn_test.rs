@@ -1,6 +1,8 @@
 //! Task agent response persistence tests for idempotency, conflicts, usage,
 //! and per-task history.
 
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{TurnUsage, UsageCheckpoint};
 use ag_session::{SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus};
 
 use crate::test_support::{agent_task_request, task_database_fixture};
@@ -50,6 +52,17 @@ async fn task_response_preserves_ordinary_conversation_and_uses_captured_model()
     assert_eq!(
         history.instruction_conversation_id,
         metadata.instruction_conversation_id
+    );
+    assert_eq!(
+        database
+            .sessions()
+            .get_session_usage_checkpoint("session")
+            .await
+            .expect("checkpoint"),
+        metadata
+            .usage
+            .checkpoint
+            .map(|checkpoint| checkpoint.totals)
     );
     assert_eq!(history.turns.len(), 1);
     assert_eq!(history.turns[0].attempt_id, "first");
@@ -102,9 +115,8 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
     running_attempt(&database, "second").await;
     let second = TaskAgentTurnMetadata {
         harness_turn_report: None,
-        input_tokens: 0,
         instruction_conversation_id: None,
-        output_tokens: 0,
+        usage: TurnUsage::default(),
         ..metadata("second")
     };
     database
@@ -180,7 +192,7 @@ async fn conflicting_response_cannot_replace_observed_output_or_provider_state()
             ..original.clone()
         },
         TaskAgentTurnMetadata {
-            input_tokens: 9,
+            usage: token_usage("gpt-6.1-sol", 9, 3),
             ..original.clone()
         },
         TaskAgentTurnMetadata {
@@ -284,11 +296,11 @@ async fn invalid_response_metadata_is_rejected_without_storage() {
             ..valid.clone()
         },
         TaskAgentTurnMetadata {
-            input_tokens: u64::MAX,
+            usage: token_usage("gpt-6.1-sol", u64::MAX, 3),
             ..valid.clone()
         },
         TaskAgentTurnMetadata {
-            output_tokens: u64::MAX,
+            usage: token_usage("gpt-6.1-sol", 7, u64::MAX),
             ..valid
         },
     ];
@@ -503,9 +515,14 @@ fn metadata(label: &str) -> TaskAgentTurnMetadata {
         assistant_message: serde_json::json!({"answer": label, "questions": []}).to_string(),
         harness_turn_report: Some("content-free harness report".to_string()),
         instruction_conversation_id: Some(format!("bootstrap-{label}")),
-        input_tokens: 7,
-        output_tokens: 3,
         provider_conversation_id: Some(format!("thread-{label}")),
+        usage: TurnUsage {
+            checkpoint: Some(UsageCheckpoint::new(
+                "/worktree",
+                format!("checkpoint-{label}"),
+            )),
+            ..token_usage("gpt-6.1-sol", 7, 3)
+        },
     }
 }
 

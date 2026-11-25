@@ -20,7 +20,7 @@ use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::StatusTransition;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
-use crate::domain::session::{SessionFollowUpTask, SessionSize, SessionStats, Status};
+use crate::domain::session::{SessionFollowUpTask, SessionSize, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{TransientMessageAnchor, TransientMessageSlot};
 use crate::infra::clock::RealClock;
@@ -45,10 +45,9 @@ async fn test_done_status_triggers_app_server_shutdown() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });
@@ -497,7 +496,6 @@ fn test_session_reducer_updates_ignore_unloaded_sessions() {
         &TurnAppliedState {
             follow_up_tasks: Vec::new(),
             questions: Vec::new(),
-            token_usage_delta: SessionStats::default(),
         },
     );
 

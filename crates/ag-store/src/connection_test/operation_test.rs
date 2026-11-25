@@ -1,7 +1,8 @@
 //! Session operation persistence tests for unfinished rows, cancellation, and
 //! state transitions.
 
-use ag_session::{SessionStats, test_support as model_fixture};
+use ag_contracts::TurnUsage;
+use ag_session::test_support as model_fixture;
 use tempfile::tempdir;
 
 use super::support::{insert_session_fixture, load_session_row};
@@ -332,7 +333,7 @@ async fn test_persist_session_turn_metadata_and_review_operation_are_restart_ato
             review_request_display_id: "#42".to_string(),
             thread_id: "thread-1".to_string(),
         }],
-        token_usage_delta: SessionStats::default(),
+        usage: TurnUsage::default(),
     };
 
     // Act

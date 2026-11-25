@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{AgentChannel, AgentError, ReasoningLevel, StartSessionRequest, TurnEvent};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::AgentKind;
@@ -223,27 +224,31 @@ async fn test_run_turn_client_failure_returns_agent_error() {
 }
 
 #[tokio::test]
-/// Verifies `TurnResult` carries the correct token counts and context-reset
-/// flag from the underlying `AppServerTurnResponse`.
-async fn test_run_turn_returns_correct_token_counts_and_context_reset() {
+/// Verifies `TurnResult` carries the usage and context-reset flag from the
+/// underlying `AppServerTurnResponse`, and live usage updates reach the
+/// turn's events.
+async fn test_run_turn_returns_usage_and_context_reset_and_forwards_live_usage() {
     // Arrange
     let mut mock_client = MockAppServerClient::new();
     mock_client
         .expect_run_turn()
-        .returning(|_request, _stream_tx| {
+        .returning(|_request, stream_tx| {
+            let _ = stream_tx.send(AppServerStreamEvent::UsageUpdated(token_usage(
+                "model", 40, 20,
+            )));
+
             Box::pin(async {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"Result","questions":[]}"#.to_string(),
                     context_reset: true,
-                    input_tokens: 100,
-                    output_tokens: 50,
                     pid: Some(1234),
                     provider_conversation_id: None,
+                    usage: token_usage("model", 100, 50),
                 })
             })
         });
     let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
-    let (events_tx, _events_rx) = mpsc::unbounded_channel();
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
 
     // Act
     let result = channel
@@ -254,8 +259,14 @@ async fn test_run_turn_returns_correct_token_counts_and_context_reset() {
     // Assert
     assert_eq!(result.assistant_message.to_display_text(), "Result");
     assert!(result.context_reset);
-    assert_eq!(result.input_tokens, 100);
-    assert_eq!(result.output_tokens, 50);
+    assert_eq!(result.usage, token_usage("model", 100, 50));
+    let usage_updates = std::iter::from_fn(|| events_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            TurnEvent::UsageUpdated(usage) => Some(usage),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(usage_updates, [token_usage("model", 40, 20)]);
 }
 
 #[tokio::test]
@@ -283,10 +294,9 @@ async fn test_run_turn_passes_and_returns_provider_conversation_id() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"ok","questions":[]}"#.to_string(),
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: Some(42),
                     provider_conversation_id: Some("thread-xyz".to_string()),
+                    usage: token_usage("model", 1, 1),
                 })
             })
         });

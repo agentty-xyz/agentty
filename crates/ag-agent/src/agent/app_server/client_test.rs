@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode};
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode, TurnUsage};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::{Mutex, MutexGuard, mpsc};
 
@@ -79,11 +80,11 @@ impl RuntimeClientProvider for TestProvider {
         _speed_mode: SpeedMode,
         _stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
         _steering: Option<Arc<TurnSteeringInbox>>,
-    ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
+    ) -> BorrowedAppServerFuture<'scope, Result<(String, TurnUsage), AppServerError>> {
         Box::pin(async {
             RUN_COUNT.fetch_add(1, Ordering::SeqCst);
 
-            Ok(("assistant".to_string(), 11, 12))
+            Ok(("assistant".to_string(), token_usage("test-model", 11, 12)))
         })
     }
 }
@@ -205,7 +206,7 @@ async fn retry_shutdown_clears_pid_before_delayed_replacement_startup() {
                         return Err(AppServerError::Provider("first runtime exited".to_string()));
                     }
 
-                    Ok(("recovered".to_string(), 1, 1))
+                    Ok(("recovered".to_string(), TurnUsage::default()))
                 })
             },
             move |runtime| {
@@ -258,8 +259,7 @@ async fn runtime_client_retains_and_replaces_runtime_with_pid_updates() {
     // Assert
     assert_eq!(response.assistant_message, "assistant");
     assert!(!response.context_reset);
-    assert_eq!(response.input_tokens, 11);
-    assert_eq!(response.output_tokens, 12);
+    assert_eq!(response.usage, token_usage("test-model", 11, 12));
     assert_eq!(response.pid, Some(42));
     assert_eq!(
         stream_rx.try_recv().expect("runtime PID before turn"),
@@ -360,7 +360,7 @@ impl RuntimeClientProvider for ResetProvider {
         speed: SpeedMode,
         stream: mpsc::UnboundedSender<AppServerStreamEvent>,
         steering: Option<Arc<TurnSteeringInbox>>,
-    ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
+    ) -> BorrowedAppServerFuture<'scope, Result<(String, TurnUsage), AppServerError>> {
         TestProvider::run_turn(runtime, prompt, profile, reasoning, speed, stream, steering)
     }
 }
@@ -427,15 +427,15 @@ impl RuntimeClientProvider for SteeringProvider {
         _speed: SpeedMode,
         _stream: mpsc::UnboundedSender<AppServerStreamEvent>,
         steering: Option<Arc<TurnSteeringInbox>>,
-    ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>> {
+    ) -> BorrowedAppServerFuture<'scope, Result<(String, TurnUsage), AppServerError>> {
         Box::pin(async move {
             let Some(steering) = steering else {
-                return Ok(("not steerable".to_string(), 0, 0));
+                return Ok(("not steerable".to_string(), TurnUsage::default()));
             };
             let fails_after_steer = prompt.text.contains(FAIL_AFTER_STEER);
             let resent_prompt = steering.prompt_with_accepted(prompt);
             if fails_after_steer && resent_prompt.text != prompt.text {
-                return Ok((resent_prompt.text, 0, 0));
+                return Ok((resent_prompt.text, TurnUsage::default()));
             }
             let steer = steering.next().await;
             if fails_after_steer {
@@ -448,7 +448,7 @@ impl RuntimeClientProvider for SteeringProvider {
                 steer.acknowledge(Ok(()));
             }
 
-            Ok((steer_text, 0, 0))
+            Ok((steer_text, TurnUsage::default()))
         })
     }
 }

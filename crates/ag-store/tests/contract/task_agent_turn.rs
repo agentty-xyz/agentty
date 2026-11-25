@@ -1,5 +1,6 @@
 //! Public task-history durability and idempotent response persistence.
 
+use ag_contracts::test_support::token_usage;
 use ag_session::{
     AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, DurableMessageVisibility,
     SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
@@ -38,9 +39,8 @@ async fn reopening_retains_task_only_continuation_and_exact_response() {
         assistant_message: "\n{\"answer\":\"A plan\",\"questions\":[]}\n".to_string(),
         harness_turn_report: None,
         instruction_conversation_id: Some("task-bootstrap".to_string()),
-        input_tokens: 5,
-        output_tokens: 2,
         provider_conversation_id: Some("task-thread".to_string()),
+        usage: token_usage("gpt-6.1-sol", 5, 2),
     };
     database
         .tasks()

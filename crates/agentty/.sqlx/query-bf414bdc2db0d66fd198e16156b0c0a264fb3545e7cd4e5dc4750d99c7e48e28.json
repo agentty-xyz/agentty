@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, execution_graph_id, revision, node_id, reference FROM execution_graph_execution WHERE task_attempt_id = ? OR agent_run_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_execution",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "execution_graph_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_execution",
+            "name": "execution_graph_id"
+          }
+        }
+      },
+      {
+        "name": "revision",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_execution",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "name": "node_id",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_execution",
+            "name": "node_id"
+          }
+        }
+      },
+      {
+        "name": "reference",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_execution",
+            "name": "reference"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bf414bdc2db0d66fd198e16156b0c0a264fb3545e7cd4e5dc4750d99c7e48e28"
+}

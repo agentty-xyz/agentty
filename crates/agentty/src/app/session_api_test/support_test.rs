@@ -229,10 +229,9 @@ pub(super) fn app_server_response(
     AppServerTurnResponse {
         assistant_message: assistant_message.to_string(),
         context_reset: false,
-        input_tokens: 0,
-        output_tokens: 0,
         pid: None,
         provider_conversation_id: provider_conversation_id.map(str::to_string),
+        usage: ag_contracts::TurnUsage::default(),
     }
 }
 
@@ -271,10 +270,8 @@ pub(super) fn session_row() -> SessionRow {
         id: "session-1".to_string(),
         in_progress_started_at: None,
         in_progress_total_seconds: 40,
-        input_tokens: 50,
         is_draft: true,
         model: model_fixture::CODEX_MODEL_ID.to_string(),
-        output_tokens: 60,
         project_id: Some(7),
         prompt: "staged prompt".to_string(),
         published_upstream_ref: Some("origin/wt/session-1".to_string()),

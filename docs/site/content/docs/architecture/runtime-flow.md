@@ -161,6 +161,26 @@ persisted or replayed. When a harness turn compacts the session's earlier contex
 fails to, the runtime also sends a `TurnEvent::Notice`; the worker saves it as a
 workflow notice ahead of the turn's answer, which provider replay leaves out.
 
+Token usage travels the same worker event path. Each adapter reports usage as the shared
+`TurnUsage` contract, one `ModelUsage` per model with tokens, cache and reasoning
+counts, an estimated charge in integer micro-USD, and the context fill of the latest
+request. Details a backend does not report stay unknown rather than zero. After each
+model request whose usage the backend reports while the turn runs (native harness
+requests, Codex `thread/tokenUsage/updated` notifications, and Claude Code assistant
+messages), the runtime sends `TurnEvent::UsageUpdated` with the turn's cumulative usage;
+the final `TurnResult.usage` supersedes it. Post-turn handling persists the final usage
+per model under the session-turn purpose and records the latest context fill on the
+session. An agent whose usage totals run across a resumed session, such as Claude Code,
+also returns an opaque checkpoint with the folder it ran in. Chat turns, task turns, and
+utility runs share the session's worktree, whose most recent conversation the next
+resumed turn continues, so the session keeps one checkpoint and passes it back with the
+next continuation of either kind. Every session turn replaces it; a utility run replaces
+it only when it ran in that same folder. Utility runs record their usage through the Run
+Worker: a `RunScope` names the session and the purpose (title, commit assistance,
+review, rebase assistance, or other), and the worker's run repository records each
+successful run under it. No model call is added: usage is a consequence of the turns
+that run.
+
 Sandbox notices travel the same path as `TurnEvent::Notice`. Session turns, sync
 assistance turns, and execution-graph and task turns relay the turn's events before the
 consumer and append each sandbox notice as a workflow notice as soon as it arrives: a
@@ -264,8 +284,9 @@ contracts. Composition selects the adapter; workers own its execution and cleanu
 | ------------------ | ------------------------------------------- |
 | `TurnRequest`      | Inputs, permissions, settings, agent        |
 | `TurnContinuation` | Fresh, replay, or native-resume context     |
-| `TurnEvent`        | Progress, completion, failure, PID updates  |
+| `TurnEvent`        | Progress, usage, failure, PID updates       |
 | `TurnResult`       | Answer, usage, provider identity            |
+| `TurnUsage`        | Per-model tokens, estimated cost, context   |
 | `AgentRequestKind` | Start, resume, account-read, utility intent |
 
 <a id="architecture-provider-conversation-id-flow"></a> Successful turns persist the

@@ -1,6 +1,6 @@
 //! Session row loading, status timing, and lookup persistence tests.
 
-use ag_session::{ReviewRequest, SessionDiffState, SessionStats};
+use ag_session::ReviewRequest;
 
 use super::support::{assert_review_request_row, insert_session_fixture, load_session_row};
 use crate::connection::Database;
@@ -30,8 +30,6 @@ async fn test_load_sessions_maps_joined_session_fields() {
     assert_eq!(session_row.added_lines, 14);
     assert_eq!(session_row.deleted_lines, 6);
     assert_eq!(session_row.has_diff, Some(true));
-    assert_eq!(session_row.input_tokens, 11);
-    assert_eq!(session_row.output_tokens, 29);
     assert_eq!(session_row.size, "L");
     assert_eq!(session_row.questions.as_deref(), Some("[\"Need logs?\"]"));
     assert_eq!(session_row.title.as_deref(), Some("Feature work"));
@@ -283,20 +281,6 @@ async fn persist_joined_session_metadata(database: &Database, review_request: &R
         .update_session_title("session-a", "Feature work")
         .await
         .expect("failed to update session title");
-    database
-        .sessions()
-        .update_session_stats(
-            "session-a",
-            &SessionStats {
-                added_lines: 0,
-                deleted_lines: 0,
-                diff_state: SessionDiffState::Unknown,
-                input_tokens: 11,
-                output_tokens: 29,
-            },
-        )
-        .await
-        .expect("failed to update session stats");
     database
         .sessions()
         .update_session_model("session-a", "claude-opus-4.1")

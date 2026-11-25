@@ -13,6 +13,11 @@ mod permission;
 mod provider_call_budget;
 mod reasoning;
 mod session;
+/// Shared usage fixtures for deterministic consumer tests.
+#[cfg(any(test, feature = "test-utils"))]
+#[path = "test_support_test.rs"]
+pub mod test_support;
+mod usage;
 
 pub use activity::{
     ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
@@ -37,3 +42,6 @@ pub use permission::PermissionMode;
 pub use provider_call_budget::{ProviderCallBudget, ProviderCallLedger};
 pub use reasoning::ReasoningLevel;
 pub use session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
+pub use usage::{
+    ContextFill, CostBasis, CostEstimate, ModelUsage, TurnUsage, UsageCheckpoint, UsagePurpose,
+};

@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
-use ag_contracts::{ExecutionPolicy, OneShotError, OneShotRequest, OneShotSubmission};
+use ag_contracts::{
+    ExecutionPolicy, OneShotError, OneShotRequest, OneShotSubmission, UsagePurpose,
+};
 use ag_telemetry::{FutureExt as _, Outcome, Span};
 use async_trait::async_trait;
 use tokio::sync::{Semaphore, oneshot};
@@ -359,6 +361,7 @@ impl Execution {
         mut sender: oneshot::Sender<Result<OneShotSubmission, OneShotError>>,
     ) {
         let scope = context.scope.clone();
+        let usage_purpose = scope.usage_purpose;
         let run = recorded.clone().unwrap_or_else(|| RunInfo {
             folder: request.folder.clone(),
             id: id.to_string(),
@@ -437,6 +440,7 @@ impl Execution {
             cancellation.cancel();
             let _ = work.await;
         }
+        self.record_usage(&run, usage_purpose, &result).await;
         let error = result.as_ref().err().map(ToString::to_string);
         let recorded = self
             .repository
@@ -455,6 +459,26 @@ impl Execution {
             _ => Outcome::Failed,
         });
         let _ = sender.send(result);
+    }
+
+    /// Records a successful run's usage for its session under `purpose`; a
+    /// run without a session or purpose records none, and a failed write is
+    /// logged rather than failing the run.
+    async fn record_usage(
+        &self,
+        run: &RunInfo,
+        purpose: Option<UsagePurpose>,
+        result: &Result<OneShotSubmission, OneShotError>,
+    ) {
+        if let (Ok(submission), Some(session_id), Some(purpose)) =
+            (result, &run.session_id, purpose)
+            && let Err(error) = self
+                .repository
+                .record_usage(session_id, purpose, &submission.usage)
+                .await
+        {
+            warn!(run_id = %run.id, %error, "Failed to record agent run usage");
+        }
     }
 
     /// Mirrors `execute` for host coordination: the claim precedes `work`,

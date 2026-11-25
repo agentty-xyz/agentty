@@ -493,7 +493,7 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
         command.arg("-c").arg(concat!(
             r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash"}]}}';"#,
             r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"streamed fragment"}]}}';"#,
-            r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3}}'"#,
+            r#"echo '{"result":"{\"answer\":\"final answer\",\"questions\":[]}","usage":{"input_tokens":5,"output_tokens":3},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":5,"outputTokens":3,"costUSD":0.0125}}}'"#,
         ));
 
         Ok(command)
@@ -515,13 +515,35 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
 
     // Assert
     let mut saw_loader_update = false;
+    let mut usage_updates = Vec::new();
     while let Ok(event) = events_rx.try_recv() {
-        if matches!(event, TurnEvent::ThoughtDelta(_)) {
-            saw_loader_update = true;
+        match event {
+            TurnEvent::ThoughtDelta(_) => saw_loader_update = true,
+            TurnEvent::UsageUpdated(usage) => usage_updates.push(usage),
+            _ => {}
         }
     }
     assert!(saw_loader_update, "loader updates should be streamed live");
     assert_eq!(result.assistant_message.to_display_text(), "final answer");
+    assert_eq!(
+        usage_updates
+            .iter()
+            .map(ag_contracts::TurnUsage::input_tokens)
+            .collect::<Vec<_>>(),
+        [5]
+    );
+    assert_eq!(result.usage.models[0].model, "claude-sonnet-5-5");
+    assert_eq!(
+        (result.usage.input_tokens(), result.usage.output_tokens()),
+        (5, 3)
+    );
+    assert_eq!(
+        result.usage.models[0].cost,
+        Some(ag_contracts::CostEstimate {
+            basis: ag_contracts::CostBasis::AgentReported,
+            micro_usd: 12_500,
+        })
+    );
 }
 
 #[tokio::test]
@@ -588,6 +610,103 @@ fn repair_activity_is_forwarded_without_private_loader_text() {
             .iter()
             .all(|event| matches!(event, TurnEvent::Activity(_)))
     );
+}
+
+#[tokio::test]
+/// Verifies a resumed Claude turn is charged the difference from the usage
+/// checkpoint its continuation carries, and returns the next checkpoint.
+async fn resumed_claude_turn_continues_from_the_usage_checkpoint() {
+    // Arrange
+    let directory = tempdir().expect("temporary folder");
+    let mut backend = MockAgentBackend::new();
+    backend.expect_build_command().times(1).returning(|_| {
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(concat!(
+            r#"printf '%s\n' '{"type":"system","subtype":"init","claude_code_version":"2.1.300"}' "#,
+            r#"'{"type":"result","result":"{\"answer\":\"ok\",\"questions\":[]}","usage":{"input_tokens":30,"output_tokens":40},"#,
+            r#""modelUsage":{"claude-sonnet-5-5":{"inputTokens":130,"outputTokens":50,"costUSD":0.015}}}'"#,
+        ));
+
+        Ok(command)
+    });
+    let channel = CliAgentChannel::with_backend(Arc::new(backend), AgentKind::Claude);
+    let mut request = make_turn_request(directory.path().to_path_buf());
+    request.request_kind = AgentRequestKind::SessionResume;
+    request.continuation = TurnContinuation::fresh().with_usage_checkpoint(Some(
+        r#"{"claude-sonnet-5-5":{"cache_read":0,"cache_write":0,"cost":5000,"input":100,"output":10,"thinking":null}}"#
+            .to_string(),
+    ));
+
+    // Act
+    let result = channel
+        .run_turn("session".into(), request, mpsc::unbounded_channel().0)
+        .await
+        .expect("resumed turn");
+
+    // Assert
+    let usage = &result.usage.models[0];
+    assert_eq!(
+        (
+            usage.model.as_str(),
+            usage.input_tokens,
+            usage.output_tokens
+        ),
+        ("claude-sonnet-5-5", 30, 40)
+    );
+    assert_eq!(
+        usage.cost,
+        Some(ag_contracts::CostEstimate {
+            basis: ag_contracts::CostBasis::AgentReported,
+            micro_usd: 10_000,
+        })
+    );
+    assert!(
+        result
+            .usage
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.totals.contains(r#""input":130"#))
+    );
+}
+
+#[test]
+fn cli_turn_observer_forwards_live_usage_only_for_new_claude_responses() {
+    // Arrange
+    let response = r#"{"type":"assistant","message":{"id":"msg-1","model":"claude-opus-5-5","content":[],"usage":{"input_tokens":5,"cache_read_input_tokens":100,"output_tokens":1}}}"#;
+    let cases = [
+        (AgentKind::Claude, vec![105]),
+        (AgentKind::Codex, Vec::new()),
+    ];
+
+    for (kind, expected_inputs) in cases {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let observer = CliTurnObserver::new(sender, kind, false).with_usage("claude-opus-5-5");
+
+        // Act
+        observe_line(&observer, response);
+        observe_line(&observer, response);
+        drop(observer);
+        let usage_updates = std::iter::from_fn(|| receiver.try_recv().ok())
+            .filter_map(|event| match event {
+                TurnEvent::UsageUpdated(usage) => Some(usage),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            usage_updates
+                .iter()
+                .map(ag_contracts::TurnUsage::input_tokens)
+                .collect::<Vec<_>>(),
+            expected_inputs
+        );
+        for usage in &usage_updates {
+            assert_eq!(usage.models[0].model, "claude-opus-5-5");
+            assert_eq!(usage.models[0].cache_read_tokens, Some(100));
+            assert!(usage.models[0].cost.is_some());
+        }
+    }
 }
 
 #[test]

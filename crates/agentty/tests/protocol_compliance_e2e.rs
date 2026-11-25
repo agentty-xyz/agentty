@@ -251,8 +251,8 @@ async fn assert_provider_protocol_compliance(
              {}\ninput_tokens: {}\noutput_tokens: {}\ndisplay_text:\n{}",
             model.as_str(),
             turn_result.context_reset,
-            turn_result.input_tokens,
-            turn_result.output_tokens,
+            turn_result.usage.input_tokens(),
+            turn_result.usage.output_tokens(),
             turn_result.assistant_message.to_display_text()
         ));
     }

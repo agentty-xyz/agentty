@@ -1,5 +1,6 @@
 //! Shared app-server restart and retry orchestration.
 
+use ag_contracts::TurnUsage;
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
 use super::contract::{
@@ -63,7 +64,7 @@ where
         &'scope TurnPrompt,
     ) -> BorrowedAppServerFuture<
         'scope,
-        Result<(String, u64, u64), AppServerError>,
+        Result<(String, TurnUsage), AppServerError>,
     >,
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
@@ -217,14 +218,14 @@ async fn complete_successful_runtime_response<Runtime, ShutdownRuntime>(
     session_id: String,
     mut session_runtime: Runtime,
     context_reset: bool,
-    attempt_output: (String, u64, u64),
+    attempt_output: (String, TurnUsage),
     inspector: &RuntimeInspector<Runtime>,
     shutdown_runtime: &mut ShutdownRuntime,
 ) -> Result<AppServerTurnResponse, AppServerError>
 where
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
-    let (assistant_message, input_tokens, output_tokens) = attempt_output;
+    let (assistant_message, usage) = attempt_output;
     let provider_conversation_id = (inspector.provider_conversation_id)(&session_runtime);
 
     if !inspector.retain_runtime_after_turn {
@@ -233,10 +234,9 @@ where
         return Ok(AppServerTurnResponse {
             assistant_message,
             context_reset,
-            input_tokens,
-            output_tokens,
             pid: None,
             provider_conversation_id,
+            usage,
         });
     }
 
@@ -251,10 +251,9 @@ where
     Ok(AppServerTurnResponse {
         assistant_message,
         context_reset,
-        input_tokens,
-        output_tokens,
         pid,
         provider_conversation_id,
+        usage,
     })
 }
 
@@ -274,14 +273,14 @@ async fn run_cancellable_turn_attempt<Runtime, RunTurn, ShutdownRuntime>(
     provider_call_budget: Option<&ag_contracts::ProviderCallBudget>,
     run_turn_with_runtime: &mut RunTurn,
     shutdown_runtime: &mut ShutdownRuntime,
-) -> Result<(String, u64, u64), AppServerError>
+) -> Result<(String, TurnUsage), AppServerError>
 where
     RunTurn: for<'scope> FnMut(
         &'scope mut Runtime,
         &'scope TurnPrompt,
     ) -> BorrowedAppServerFuture<
         'scope,
-        Result<(String, u64, u64), AppServerError>,
+        Result<(String, TurnUsage), AppServerError>,
     >,
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
@@ -330,7 +329,7 @@ where
 /// Result of racing one app-server turn against cancellation.
 enum TurnAttemptOutcome {
     /// The provider turn completed before cancellation fired.
-    Completed(Result<(String, u64, u64), AppServerError>),
+    Completed(Result<(String, TurnUsage), AppServerError>),
     /// The session cancellation token fired first.
     Interrupted,
 }

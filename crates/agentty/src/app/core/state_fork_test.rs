@@ -2,7 +2,7 @@
 
 use super::App;
 use crate::app::AppError;
-use crate::domain::session::{SessionDiffState, SessionStats, Status};
+use crate::domain::session::{SessionDiffState, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::presentation::app_mode::AppMode;
 
@@ -74,19 +74,6 @@ async fn persist_fork_source_runtime_linkage(app: &App, source_session_id: &str)
     app.services
         .db()
         .sessions()
-        .update_session_stats(
-            source_session_id,
-            &SessionStats {
-                input_tokens: 13,
-                output_tokens: 21,
-                ..SessionStats::default()
-            },
-        )
-        .await
-        .expect("failed to persist source usage stats");
-    app.services
-        .db()
-        .sessions()
         .update_session_diff_stats(1, 0, true, source_session_id, "XS")
         .await
         .expect("failed to persist source diff stats");
@@ -134,8 +121,6 @@ async fn assert_forked_session_snapshot(app: &App, forked_session_id: &str) {
             && session.stats.added_lines == 0
             && session.stats.deleted_lines == 0
             && session.stats.diff_state == SessionDiffState::Empty
-            && session.stats.input_tokens == 0
-            && session.stats.output_tokens == 0
     ));
     let forked_session = app
         .sessions

@@ -1,7 +1,9 @@
 //! Session metadata persistence tests for conversation IDs, upstream refs,
 //! merged commits, and turn metadata.
 
-use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{TurnUsage, UsageCheckpoint, UsagePurpose};
+use ag_session::test_support as model_fixture;
 
 use super::support::insert_session_fixture;
 use crate::SessionTurnMetadata;
@@ -366,12 +368,9 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 provider_conversation_id: Some("thread-123".to_string()),
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: SessionDiffState::Unknown,
-                    input_tokens: 3,
-                    output_tokens: 5,
+                usage: TurnUsage {
+                    checkpoint: Some(UsageCheckpoint::new("/worktree", "checkpoint")),
+                    ..token_usage(model_fixture::CODEX_MODEL.as_str(), 3, 5)
                 },
             },
         )
@@ -389,13 +388,121 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .get_session_provider_conversation_id("session-a")
         .await
         .expect("failed to load provider conversation id");
+    let usage_checkpoint = database
+        .sessions()
+        .get_session_usage_checkpoint("session-a")
+        .await
+        .expect("failed to load usage checkpoint");
+    let token_totals: (i64, i64) =
+        sqlx::query_as("SELECT input_tokens, output_tokens FROM session WHERE id = 'session-a'")
+            .fetch_one(database.pool())
+            .await
+            .expect("failed to load session token totals");
 
     // Assert
     assert!(matches!(result, Err(DbError::Query(_))));
     assert_eq!(session.questions.as_deref(), None);
-    assert_eq!(session.input_tokens, 0);
-    assert_eq!(session.output_tokens, 0);
+    assert_eq!(token_totals, (0, 0));
     assert_eq!(provider_conversation_id.as_deref(), None);
+    assert_eq!(usage_checkpoint, None);
+}
+
+/// Verifies the session keeps one usage checkpoint: every session turn's
+/// replaces it, a utility prompt's replaces it only when reported in the
+/// turns' folder or before any turn, so a title finishing after the first
+/// turn in the project folder leaves it, an invocation without one keeps it,
+/// and a missing session reads none.
+#[tokio::test]
+async fn test_recorded_usage_replaces_the_single_session_checkpoint() {
+    // Arrange
+    let database = Database::in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", None)
+        .await
+        .expect("failed to upsert project");
+    database
+        .sessions()
+        .insert_session("session-a", "gpt-5.6-sol", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    let initial = database
+        .sessions()
+        .get_session_usage_checkpoint("session-a")
+        .await
+        .expect("failed to load initial checkpoint");
+    let mut checkpoints = Vec::new();
+
+    // Act
+    for (purpose, checkpoint) in [
+        // A draft title generated before the worktree exists.
+        (UsagePurpose::Title, Some(("/project", "draft-title"))),
+        (UsagePurpose::Turn, Some(("/worktree", "first"))),
+        // A title finishing after the first turn, in the project folder.
+        (UsagePurpose::Title, Some(("/project", "late-title"))),
+        (UsagePurpose::CommitAssist, Some(("/worktree", "utility"))),
+        (UsagePurpose::Turn, None),
+        (UsagePurpose::CommitAssist, None),
+    ] {
+        let usage = TurnUsage {
+            checkpoint: checkpoint.map(|(folder, totals)| UsageCheckpoint::new(folder, totals)),
+            ..TurnUsage::default()
+        };
+        if purpose == UsagePurpose::Turn {
+            database
+                .sessions()
+                .persist_session_turn_metadata(
+                    "session-a",
+                    &SessionTurnMetadata {
+                        harness_turn_report: None,
+                        instruction_conversation_id: None,
+                        model: "gpt-5.6-sol".to_string(),
+                        provider_conversation_id: None,
+                        questions_json: String::new(),
+                        review_comment_resolutions: Vec::new(),
+                        usage,
+                    },
+                )
+                .await
+                .expect("failed to persist turn metadata");
+        } else {
+            database
+                .usage()
+                .upsert_session_usage("session-a", purpose, &usage)
+                .await
+                .expect("failed to record utility usage");
+        }
+        checkpoints.push(
+            database
+                .sessions()
+                .get_session_usage_checkpoint("session-a")
+                .await
+                .expect("failed to load checkpoint"),
+        );
+    }
+    let missing = database
+        .sessions()
+        .get_session_usage_checkpoint("missing")
+        .await
+        .expect("failed to load missing session checkpoint");
+
+    // Assert
+    assert_eq!(initial, None);
+    assert_eq!(
+        checkpoints,
+        [
+            Some("draft-title"),
+            Some("first"),
+            Some("first"),
+            Some("utility"),
+            Some("utility"),
+            Some("utility")
+        ]
+        .map(|value| value.map(str::to_string))
+    );
+    assert_eq!(missing, None);
 }
 
 /// Verifies a harness turn report is stored with its turn and outlives the
@@ -430,13 +537,7 @@ async fn test_persist_session_turn_metadata_keeps_harness_turn_report_after_sess
                 provider_conversation_id: None,
                 questions_json: String::new(),
                 review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: SessionDiffState::Unknown,
-                    input_tokens: 30,
-                    output_tokens: 7,
-                },
+                usage: token_usage("muse-spark-1.3", 30, 7),
             },
         )
         .await

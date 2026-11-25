@@ -154,8 +154,8 @@ pub enum SessionDiffState {
     Present,
 }
 
-/// Token and diff usage statistics associated with one agent session or
-/// isolated prompt.
+/// Diff statistics of one session worktree. Token usage is recorded
+/// separately as [`crate::TurnUsage`].
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SessionStats {
     /// Added diff lines currently attributed to the session worktree.
@@ -164,10 +164,6 @@ pub struct SessionStats {
     pub deleted_lines: u64,
     /// Availability derived from the latest worktree diff refresh.
     pub diff_state: SessionDiffState,
-    /// Input/prompt tokens consumed by this session.
-    pub input_tokens: u64,
-    /// Output/response tokens produced by this session.
-    pub output_tokens: u64,
 }
 
 impl SessionStats {

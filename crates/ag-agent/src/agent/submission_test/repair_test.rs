@@ -3,7 +3,10 @@
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_contracts::{
+    AgentRequestKind, CostBasis, CostEstimate, OneShotRequest, PermissionMode, ReasoningLevel,
+    SpeedMode,
+};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tempfile::tempdir;
@@ -278,6 +281,74 @@ async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
     assert_eq!(
         response.response.answers(),
         vec!["Repaired title".to_string()]
+    );
+}
+
+#[tokio::test]
+/// Verifies a repaired Claude one-shot charges both attempts, each a fresh
+/// process, their own per-model totals.
+async fn claude_repair_folds_both_attempts_into_the_usage() {
+    // Arrange
+    let initial = r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":2,"outputTokens":1,"costUSD":0.01}}}"#;
+    let repaired = r#"{"result":"{\"answer\":\"Repaired\"}","usage":{"input_tokens":3,"output_tokens":2},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":3,"outputTokens":2,"costUSD":0.002}}}"#;
+    let temp_directory = tempdir().expect("failed to create temp dir");
+    let outputs = Arc::new(Mutex::new(vec![repaired, initial]));
+    let mut backend = MockAgentBackend::new();
+    backend.expect_build_command().times(2).returning(move |_| {
+        let stdout = outputs.lock().expect("outputs").pop().expect("attempt");
+
+        Ok(mock_shell_command(stdout, "", 0))
+    });
+
+    // Act
+    let submission = submit_one_shot_with_backend(
+        &backend,
+        OneShotRequest {
+            activity_tx: None,
+            attachments: Vec::new(),
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
+            provider_call_budget: None,
+            harness: (AgentKind::Claude).to_string(),
+            child_pid: None,
+            folder: temp_directory.path().to_path_buf(),
+            model: AgentModel::ClaudeSonnet55.as_str().to_string(),
+            permission_mode: PermissionMode::AutoEdit,
+            prompt: "Generate title".to_string(),
+            request_kind: AgentRequestKind::UtilityPrompt,
+            reasoning_level: ReasoningLevel::default(),
+            speed_mode: SpeedMode::Normal,
+        },
+    )
+    .await
+    .expect("repair retry should succeed");
+
+    // Assert
+    assert_eq!(submission.response.answers(), vec!["Repaired".to_string()]);
+    // The repair process leaves the folder's most recent conversation, so its
+    // totals become the checkpoint a later continued turn there needs.
+    assert!(
+        submission
+            .usage
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.folder == temp_directory.path()
+                && checkpoint.totals.contains("\"input\":3")),
+        "{:?}",
+        submission.usage.checkpoint
+    );
+    assert_eq!(submission.usage.models.len(), 1);
+    let usage = &submission.usage.models[0];
+    assert_eq!(usage.model, AgentModel::ClaudeSonnet55.as_str());
+    assert_eq!(
+        (usage.input_tokens, usage.output_tokens, usage.requests),
+        (5, 3, 2)
+    );
+    assert_eq!(
+        usage.cost,
+        Some(CostEstimate {
+            basis: CostBasis::AgentReported,
+            micro_usd: 12_000,
+        })
     );
 }
 

@@ -766,13 +766,7 @@ async fn test_run_title_generation_command_returns_answer_text() {
 
             Ok(OneShotSubmission {
                 response: AgentResponse::plain("Refine session titles"),
-                stats: ag_contracts::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_contracts::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
 
@@ -810,13 +804,7 @@ async fn test_run_title_generation_command_retries_provider_failure() {
 
             Ok(OneShotSubmission {
                 response: AgentResponse::plain("Stabilize session titles"),
-                stats: ag_contracts::SessionStats {
-                    added_lines: 0,
-                    deleted_lines: 0,
-                    diff_state: ag_contracts::SessionDiffState::Unknown,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: ag_contracts::TurnUsage::default(),
             })
         });
 

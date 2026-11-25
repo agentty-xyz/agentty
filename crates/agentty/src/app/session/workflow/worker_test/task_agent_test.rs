@@ -8,7 +8,8 @@ use std::time::{Duration, SystemTime};
 
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, ContextCompaction,
-    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest,
+    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest, TurnUsage, UsageCheckpoint,
+    UsagePurpose,
 };
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem};
@@ -94,6 +95,9 @@ async fn planner_execution_uses_captured_model_own_history_and_read_only_permiss
             expected_kind,
         )
         .await;
+        if attempt == "first" {
+            interleave_chat_turn_checkpoint(&app, &session_id).await;
+        }
     }
     assert_task_admission_rejections(&mut app, &service, &session_id).await;
     assert_unloaded_claim_fails(&mut app, &service, &session_id).await;
@@ -204,6 +208,8 @@ async fn assert_planner_attempt(
                 let mut result = successful_turn_result("A plan");
                 result.assistant_message.questions = vec![QuestionItem::new("Task question?")];
                 result.provider_conversation_id = Some("task-provider".to_string());
+                result.usage.checkpoint =
+                    Some(UsageCheckpoint::new("/worktree", "task-checkpoint"));
                 Ok(result)
             })
         });
@@ -290,6 +296,42 @@ fn assert_planner_request(turn: &TurnRequest, attempt: &str, expected_kind: &Age
             Some("task-provider")
         }
     );
+    assert_eq!(
+        turn.continuation.usage_checkpoint(),
+        if attempt == "first" {
+            None
+        } else {
+            Some("chat-checkpoint")
+        }
+    );
+}
+
+/// Verifies the task turn left its checkpoint on the session, then records a
+/// chat turn that becomes the worktree's most recent conversation, whose
+/// checkpoint the next task turn must continue from.
+async fn interleave_chat_turn_checkpoint(app: &App, session_id: &SessionId) {
+    let sessions = app.services.db().sessions();
+    assert_eq!(
+        sessions
+            .get_session_usage_checkpoint(session_id)
+            .await
+            .expect("task checkpoint")
+            .as_deref(),
+        Some("task-checkpoint")
+    );
+    app.services
+        .db()
+        .usage()
+        .upsert_session_usage(
+            session_id,
+            UsagePurpose::Turn,
+            &TurnUsage {
+                checkpoint: Some(UsageCheckpoint::new("/worktree", "chat-checkpoint")),
+                ..TurnUsage::default()
+            },
+        )
+        .await
+        .expect("chat turn usage");
 }
 
 async fn assert_ordinary_continuation(app: &App, session_id: &SessionId) {
@@ -1436,9 +1478,8 @@ async fn accepted_implementation(
                     .to_string(),
                 harness_turn_report: None,
                 instruction_conversation_id: None,
-                input_tokens: 0,
-                output_tokens: 0,
                 provider_conversation_id: None,
+                usage: ag_contracts::TurnUsage::default(),
             },
         )
         .await

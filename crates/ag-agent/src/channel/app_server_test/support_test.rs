@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use ag_contracts::test_support::token_usage;
 use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnEvent, TurnRequest};
 use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
@@ -33,10 +34,9 @@ pub(super) fn make_ok_response(assistant_message: &str) -> AppServerTurnResponse
     AppServerTurnResponse {
         assistant_message: assistant_message.to_string(),
         context_reset: false,
-        input_tokens: 10,
-        output_tokens: 5,
         pid: None,
         provider_conversation_id: None,
+        usage: token_usage(model_fixture::CODEX_MODEL_ID, 10, 5),
     }
 }
 

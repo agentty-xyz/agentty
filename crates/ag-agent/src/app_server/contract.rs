@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use ag_contracts::{
     AgentDefinitionPrompt, AgentRequestKind, LiveTranscript, PermissionMode, ReasoningLevel,
-    SpeedMode,
+    SpeedMode, TurnUsage,
 };
 use ag_protocol::TurnPrompt;
 use tokio::sync::mpsc;
@@ -48,6 +48,8 @@ pub enum AppServerStreamEvent {
     },
     /// An `item/started` event produced a progress description.
     ProgressUpdate(String),
+    /// Cumulative usage of the running turn after a provider usage report.
+    UsageUpdated(TurnUsage),
 }
 
 /// Input payload for one app-server turn execution.
@@ -104,15 +106,13 @@ pub struct AppServerTurnResponse {
     pub assistant_message: String,
     /// Whether the provider reset its native context during the turn.
     pub context_reset: bool,
-    /// Input token count reported for the completed turn.
-    pub input_tokens: u64,
-    /// Output token count reported for the completed turn.
-    pub output_tokens: u64,
     /// Provider runtime process identifier when retained after the turn.
     /// Cleared once a non-retained runtime has shut down.
     pub pid: Option<u32>,
     /// Provider-native thread/session id observed after the turn.
     pub provider_conversation_id: Option<String>,
+    /// Usage of the completed turn.
+    pub usage: TurnUsage,
 }
 
 /// Persistent app-server session boundary used by session workers.

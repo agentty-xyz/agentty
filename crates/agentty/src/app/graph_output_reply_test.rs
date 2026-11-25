@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ag_contracts::{
     AgentRequestKind, MockAgentChannel, OneShotError, OneShotRequest, OneShotSubmission,
-    SessionStats, TurnRequest, TurnResult,
+    TurnRequest, TurnResult, TurnUsage,
 };
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt};
@@ -1086,7 +1086,7 @@ async fn decided_app(
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain(decision),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     app.services.set_run_client(Arc::new(client));
@@ -1155,9 +1155,8 @@ async fn reader_graph_app() -> (App, TempDir, mpsc::UnboundedReceiver<TurnReques
                             assistant_message: AgentResponse::plain("Plan ready"),
                             context_reset: false,
                             harness_report: None,
-                            input_tokens: 1,
-                            output_tokens: 1,
                             provider_conversation_id: None,
+                            usage: TurnUsage::default(),
                         })
                     })
                 });
@@ -1193,7 +1192,7 @@ async fn reader_graph_app() -> (App, TempDir, mpsc::UnboundedReceiver<TurnReques
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain("accept"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     app.services.set_run_client(Arc::new(client));
@@ -1305,7 +1304,7 @@ impl RunClient for GatedAcceptance {
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain("accept"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     }
 }

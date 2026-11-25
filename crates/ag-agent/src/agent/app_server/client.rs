@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use ag_contracts::{ReasoningLevel, SpeedMode};
+use ag_contracts::{ReasoningLevel, SpeedMode, TurnUsage};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
@@ -61,7 +61,7 @@ pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {
         speed_mode: SpeedMode,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
         steering: Option<Arc<TurnSteeringInbox>>,
-    ) -> BorrowedAppServerFuture<'scope, Result<(String, u64, u64), AppServerError>>;
+    ) -> BorrowedAppServerFuture<'scope, Result<(String, TurnUsage), AppServerError>>;
 }
 
 /// Runtime query and shutdown hooks shared by provider clients.

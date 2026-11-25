@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use ag_contracts::OneShotError;
+use ag_contracts::{OneShotError, TurnUsage, UsagePurpose};
 use async_trait::async_trait;
 
 /// Durable identity and ownership of one isolated model execution.
@@ -78,6 +78,16 @@ pub trait RunRepository: Send + Sync {
     ) -> Result<(), OneShotError>;
     /// Refreshes liveness only for a running record.
     async fn heartbeat(&self, id: &str) -> Result<(), OneShotError>;
+    /// Records a completed run's usage for its session under `purpose`.
+    /// Adapters that keep no usage ignore it.
+    async fn record_usage(
+        &self,
+        _session_id: &str,
+        _purpose: UsagePurpose,
+        _usage: &TurnUsage,
+    ) -> Result<(), OneShotError> {
+        Ok(())
+    }
     /// Fails abandoned records after exclusive startup recovery.
     async fn recover(&self) -> Result<(), OneShotError>;
 }

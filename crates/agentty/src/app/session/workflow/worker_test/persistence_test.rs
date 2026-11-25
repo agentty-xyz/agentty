@@ -4,7 +4,8 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
+use ag_contracts::test_support::token_usage;
+use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult, TurnUsage, UsageCheckpoint};
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::AgentResponse;
@@ -32,6 +33,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::test_support::session_usage_by_purpose;
 
 #[tokio::test]
 /// Verifies failed turn-metadata persistence forces a refresh and skips
@@ -98,9 +100,8 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
         },
         context_reset: false,
         harness_report: None,
-        input_tokens: 2,
-        output_tokens: 3,
         provider_conversation_id: None,
+        usage: token_usage(AgentModel::Gemini38Flash.as_str(), 2, 3),
     });
 
     // Act
@@ -207,9 +208,8 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
         },
         context_reset: false,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: None,
+        usage: TurnUsage::default(),
     });
 
     // Act
@@ -237,9 +237,9 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
 }
 
 #[tokio::test]
-/// Stores a native harness turn's report with the completed turn so its
-/// per-request telemetry can be analyzed later.
-async fn test_apply_turn_result_persists_harness_turn_report() {
+/// Stores a native harness turn's report and usage with the completed turn
+/// so its per-request telemetry can be analyzed later.
+async fn test_apply_turn_result_persists_harness_turn_report_and_usage() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let (db, pool) = AppRepositories::in_memory_with_pool()
@@ -287,9 +287,11 @@ async fn test_apply_turn_result_persists_harness_turn_report() {
         },
         context_reset: false,
         harness_report: Some(report.to_string()),
-        input_tokens: 30,
-        output_tokens: 7,
         provider_conversation_id: None,
+        usage: TurnUsage {
+            checkpoint: Some(UsageCheckpoint::new("/worktree", "cumulative-totals")),
+            ..token_usage(AgentModel::MuseSpark13.as_str(), 30, 7)
+        },
     });
     let turn_metadata = TurnMetadata {
         session_agent,
@@ -305,13 +307,29 @@ async fn test_apply_turn_result_persists_harness_turn_report() {
             .fetch_all(&pool)
             .await
             .expect("reports should load");
+    let usage = session_usage_by_purpose(&pool, "sess1").await;
+    let usage_checkpoint = db
+        .sessions()
+        .get_session_usage_checkpoint("sess1")
+        .await
+        .expect("checkpoint should load");
 
     // Assert
+    assert_eq!(usage_checkpoint.as_deref(), Some("cumulative-totals"));
     assert_eq!(
         stored,
         [(
             AgentModel::MuseSpark13.as_str().to_string(),
             report.to_string()
+        )]
+    );
+    assert_eq!(
+        usage,
+        [(
+            AgentModel::MuseSpark13.as_str().to_string(),
+            "turn".to_string(),
+            30,
+            7
         )]
     );
 }
@@ -382,9 +400,8 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         },
         context_reset: true,
         harness_report: None,
-        input_tokens: 0,
-        output_tokens: 0,
         provider_conversation_id: Some("thread-123".to_string()),
+        usage: TurnUsage::default(),
     });
 
     // Act

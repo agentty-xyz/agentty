@@ -144,10 +144,9 @@ async fn fresh_graph_utilities_use_the_worker_and_keep_task_history_empty() {
                 Ok(AppServerTurnResponse {
                     assistant_message: r#"{"answer":"fresh response"}"#.into(),
                     context_reset: false,
-                    input_tokens: 1,
-                    output_tokens: 1,
                     pid: None,
                     provider_conversation_id: None,
+                    usage: ag_contracts::TurnUsage::default(),
                 })
             })
         });

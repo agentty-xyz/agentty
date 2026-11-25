@@ -1,5 +1,6 @@
 //! Existing task adapters can omit the optional role-aware capability.
 
+use ag_contracts::TurnUsage;
 use ag_session::{
     AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, CreateTaskRequest,
     DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentAssignment,
@@ -107,9 +108,8 @@ async fn ordinary_adapter_keeps_its_contract_and_explicitly_rejects_role_tasks()
                 assistant_message: "observed output".to_string(),
                 harness_turn_report: None,
                 instruction_conversation_id: None,
-                input_tokens: 0,
-                output_tokens: 0,
                 provider_conversation_id: None,
+                usage: TurnUsage::default(),
             },
         )
         .await

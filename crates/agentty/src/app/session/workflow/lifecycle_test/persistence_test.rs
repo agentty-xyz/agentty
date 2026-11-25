@@ -3,16 +3,20 @@
 
 use std::sync::Arc;
 
+use ag_contracts::OneShotSubmission;
+use ag_contracts::test_support::token_usage;
+use ag_protocol::AgentResponse;
 use ag_worker::RunClient;
 use tokio::sync::{Notify, mpsc};
 
 use super::support::{
-    DelayedTitleClient, load_persisted_session_row, mock_title_client, provisional_title_database,
+    DelayedTitleClient, load_persisted_session_row, provisional_title_database,
     title_generation_task_input,
 };
 use crate::app::SessionManager;
+use crate::app::test_support::persisting_run_worker;
 use crate::infra::db::AppRepositories;
-use crate::test_support::enable_tracing_log_fallback;
+use crate::test_support::{enable_tracing_log_fallback, session_usage_by_purpose};
 
 #[tokio::test]
 /// Ensures title generation loads the persisted original goal, current
@@ -137,16 +141,23 @@ async fn test_title_generation_handles_persistence_failure() {
 }
 
 #[tokio::test]
-/// Ensures a generated title persists after the app event receiver closes.
+/// Ensures a generated title and its usage, recorded as title work, persist
+/// after the app event receiver closes.
 async fn test_title_generation_persists_title_after_event_receiver_closes() {
     // Arrange
-    let (database, _pool) = provisional_title_database("Background context only.").await;
+    let (database, pool) = provisional_title_database("Background context only.").await;
     let (app_event_tx, app_event_rx) = mpsc::unbounded_channel();
     drop(app_event_rx);
+    let run_worker = persisting_run_worker(database.runs(), |_| {
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain("Assess project quality"),
+            usage: token_usage("title-model", 2, 1),
+        })
+    });
     let input = title_generation_task_input(
         app_event_tx,
         database.clone(),
-        mock_title_client("Assess project quality"),
+        run_worker.clone(),
         "review the project",
     );
     enable_tracing_log_fallback();
@@ -157,11 +168,16 @@ async fn test_title_generation_persists_title_after_event_receiver_closes() {
         .expect("title generation should start")
         .await
         .expect("title generation task should finish");
+    run_worker.shutdown().await;
 
     // Assert
     assert_eq!(
         load_persisted_session_row(&database).await.title.as_deref(),
         Some("Assess project quality")
+    );
+    assert_eq!(
+        session_usage_by_purpose(&pool, "session-id").await,
+        [("title-model".to_string(), "title".to_string(), 2, 1)]
     );
 }
 

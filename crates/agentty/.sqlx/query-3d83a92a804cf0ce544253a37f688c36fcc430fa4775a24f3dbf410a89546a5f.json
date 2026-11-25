@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO execution_graph_evidence (execution_graph_result_id, kind, actor, reason, recorded_at) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "3d83a92a804cf0ce544253a37f688c36fcc430fa4775a24f3dbf410a89546a5f"
+}

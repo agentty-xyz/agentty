@@ -5,7 +5,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_contracts::{AgentRequestKind, OneShotSubmission, SessionStats};
+use ag_contracts::{AgentRequestKind, OneShotSubmission, TurnUsage};
 use ag_git::MockGitClient;
 use ag_protocol::{
     AgentResponse, GraphProposalOutcome, GraphProposalResponse, QuestionItem, TurnPrompt,
@@ -501,7 +501,7 @@ async fn install_pending_proposal(
 
         Ok(OneShotSubmission {
             response: AgentResponse::plain(&answer),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     app.services.set_run_client(Arc::new(client));
@@ -809,7 +809,7 @@ async fn failed_reply_persistence_keeps_the_composer_and_reports_the_error() {
         client.expect_submit().returning(|_| {
             Ok(OneShotSubmission {
                 response: AgentResponse::plain("cancel"),
-                stats: SessionStats::default(),
+                usage: TurnUsage::default(),
             })
         });
         app.services.set_run_client(Arc::new(client));
@@ -964,7 +964,7 @@ async fn recovery_skips_lost_proposals_and_tolerates_a_failed_abandonment_write(
     client.expect_submit().returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain("revise"),
-            stats: SessionStats::default(),
+            usage: TurnUsage::default(),
         })
     });
     app.services.set_run_client(Arc::new(client));

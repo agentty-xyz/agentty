@@ -1,0 +1,170 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT app_server_instruction_provider_conversation_id,\n       focused_review_diff_hash,\n       focused_review_text,\n       in_progress_started_at,\n       in_progress_total_seconds,\n       input_tokens,\n       is_draft AS \"is_draft: bool\",\n       merged_commit_hash,\n       output_tokens,\n       provider_conversation_id,\n       published_upstream_ref,\n       questions,\n       usage_checkpoint\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "app_server_instruction_provider_conversation_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "app_server_instruction_provider_conversation_id"
+          }
+        }
+      },
+      {
+        "name": "focused_review_diff_hash",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "focused_review_diff_hash"
+          }
+        }
+      },
+      {
+        "name": "focused_review_text",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "focused_review_text"
+          }
+        }
+      },
+      {
+        "name": "in_progress_started_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "in_progress_started_at"
+          }
+        }
+      },
+      {
+        "name": "in_progress_total_seconds",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "in_progress_total_seconds"
+          }
+        }
+      },
+      {
+        "name": "input_tokens",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "input_tokens"
+          }
+        }
+      },
+      {
+        "name": "is_draft: bool",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "is_draft"
+          }
+        }
+      },
+      {
+        "name": "merged_commit_hash",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "merged_commit_hash"
+          }
+        }
+      },
+      {
+        "name": "output_tokens",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "output_tokens"
+          }
+        }
+      },
+      {
+        "name": "provider_conversation_id",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "provider_conversation_id"
+          }
+        }
+      },
+      {
+        "name": "published_upstream_ref",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "published_upstream_ref"
+          }
+        }
+      },
+      {
+        "name": "questions",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "questions"
+          }
+        }
+      },
+      {
+        "name": "usage_checkpoint",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "usage_checkpoint"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "43b4ca138279dc0075355026baeecee72dc77e51e1eb86aa00f5c4dfa2234b4e"
+}

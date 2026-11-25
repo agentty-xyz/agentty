@@ -570,6 +570,7 @@ pub(crate) async fn start_review_assist(
         ag_worker::RunScope {
             session_id: Some(session_id.to_string()),
             purpose: Some("focused review".to_string()),
+            usage_purpose: Some(ag_contracts::UsagePurpose::Review),
             ..ag_worker::RunScope::default()
         },
     );

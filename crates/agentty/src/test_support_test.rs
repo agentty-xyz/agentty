@@ -403,6 +403,22 @@ pub(crate) fn mock_app_server() -> Arc<dyn AppServerClient> {
     Arc::new(MockAppServerClient::new())
 }
 
+/// Loads `(model, purpose, input_tokens, output_tokens)` of every persisted
+/// usage row of `session_id`, ordered by model and purpose.
+pub(crate) async fn session_usage_by_purpose(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Vec<(String, String, i64, i64)> {
+    sqlx::query_as(
+        "SELECT model, purpose, input_tokens, output_tokens FROM session_usage WHERE session_id = \
+         ? ORDER BY model, purpose",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .expect("session usage rows should load")
+}
+
 /// Builds one client bundle with a caller-provided agent availability
 /// snapshot.
 pub(crate) fn test_app_clients_with_available_agent_kinds(

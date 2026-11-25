@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM session_review_comment_target\n             WHERE session_id = ? AND (review_request_display_id, thread_id) IN\n             (SELECT review_request_display_id, thread_id FROM session_review_comment_resolution\n              WHERE session_id = ? AND reply_token = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1583cf330907a00637dca2e5ca8ea3507845ed4653ae5199ae4040fe7c128556"
+}
