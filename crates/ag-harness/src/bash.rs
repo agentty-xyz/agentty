@@ -405,8 +405,10 @@ impl BashConfig {
     /// It shares exactly the trust that unsandboxed agents get: commands
     /// can tamper with packages that other sessions and the host's own
     /// builds later use without re-verifying them, such as a cached
-    /// `.crate` whose `build.rs` then runs on the host. Grant it only when
-    /// the user explicitly accepts that for the sessions concerned.
+    /// `.crate` whose `build.rs` then runs on the host, or Git configuration
+    /// planted in a cached repository that the host's Git later reads, even
+    /// from a Git-aware shell prompt. Grant it only when the user explicitly
+    /// accepts that for the sessions concerned.
     ///
     /// Preparation resolves links and refuses a directory that is a home
     /// directory or contains one; that is, contains, or lies inside a

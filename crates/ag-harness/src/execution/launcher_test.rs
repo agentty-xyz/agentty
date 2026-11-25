@@ -309,7 +309,7 @@ fn seatbelt_host_caches_keep_their_directories_and_lock_files_in_place() {
         environment: BTreeMap::new(),
         executable: "/bin/bash".into(),
         external_reads: vec![],
-        git_metadata: vec![],
+        git_metadata: vec!["/workspace/.git".into()],
         hidden_paths: vec![],
         host_information: false,
         launcher: "/launcher".into(),
@@ -345,7 +345,10 @@ fn seatbelt_host_caches_keep_their_directories_and_lock_files_in_place() {
     let pinned = profile
         .find("(deny file-write-unlink file-write-create (literal \"/home/user/.cargo/registry\"))")
         .expect("host cache root denial");
-    assert!(granted < pinned, "{profile}");
+    let git = profile
+        .find("(deny file-write* (regex #\"^/[wW][oO][rR][kK][sS][pP][aA][cC][eE]/")
+        .expect("Git metadata denial");
+    assert!(granted < git && git < pinned, "{profile}");
 }
 
 #[cfg(target_os = "macos")]
