@@ -8,7 +8,7 @@ use std::time::Duration;
 use std::{env, fs};
 
 use agentty::analytics::Analytics;
-use agentty::app::{App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home};
+use agentty::app::{App, AppError, DEFAULT_REMOTE_CONTROL_PORT, Tab, agentty_home};
 use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
 use agentty::infra::platform::DEFAULT_PLATFORM_URL;
 use clap::Parser;
@@ -45,6 +45,12 @@ async fn root_working_dir_runtime(app: &mut App) -> Result<(), AppError> {
 }
 
 async fn traced_closed_runtime(app: &mut App) -> Result<(), AppError> {
+    let available_tabs = app.tabs.available_tabs();
+    assert!(available_tabs.contains(&Tab::Remote), "{available_tabs:?}");
+    assert!(
+        !available_tabs.contains(&Tab::Platform),
+        "{available_tabs:?}"
+    );
     assert_eq!(
         ag_telemetry::Context::current()
             .get::<ag_telemetry::CaptureToolContent>()
@@ -659,18 +665,19 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
 }
 
 /// Builds the launch options the telemetry startup child reads from its
-/// environment, with remote control enabled so the full launch wires it.
+/// environment, with a relay so the full launch wires remote control and
+/// leaves the platform out.
 fn telemetry_child_cli() -> Cli {
     Cli {
         disable_telemetry: true,
-        experimental: ExperimentalFeatures { remote: true },
+        experimental: ExperimentalFeatures::default(),
         no_update: true,
         otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
         otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
         platform_url: DEFAULT_PLATFORM_URL.to_string(),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         remote_control_host: Vec::new(),
-        remote_relay: None,
+        remote_relay: Some("wss://relay.example".to_string()),
     }
 }
 
