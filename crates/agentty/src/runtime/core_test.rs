@@ -979,12 +979,13 @@ async fn run_cycle_advances_the_remote_revision_once_for_a_change_made_by_a_key(
         .returning(|_, _, _, _| {});
     app.sync_main_runner = Arc::new(sync_main_runner);
     // The sync orchestrator reports Git status once at startup and then
-    // waits for its next periodic pass; apply that report now.
+    // waits for its next periodic pass; apply that report now, one event at a
+    // time so a batch cannot reduce it before this loop sees it.
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let event = app.next_app_event().await.expect("startup event");
             let is_git_status = matches!(event, AppEvent::GitStatusUpdated { .. });
-            app.apply_app_events(event).await;
+            app.apply_single_app_event(event).await;
             if is_git_status {
                 break;
             }
