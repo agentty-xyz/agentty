@@ -547,7 +547,8 @@ async fn prepare_session_turn(context: &SessionWorkerContext, request_kind: &Age
     let _ = status_transition.apply(Status::InProgress).await;
 }
 
-/// Runs one turn through the headless worker's cancellation boundary.
+/// Runs one turn through the headless worker's cancellation boundary and
+/// records the usage of a completed turn on the current `session.turn` span.
 pub(super) async fn run_turn_with_cancellation(
     context: &SessionWorkerContext,
     cancel_token: CancellationToken,
@@ -562,6 +563,9 @@ pub(super) async fn run_turn_with_cancellation(
         && let Ok(mut pid) = context.child_pid.lock()
     {
         *pid = None;
+    }
+    if let Ok(turn_result) = &result {
+        ag_worker::record_turn_usage(&turn_result.usage);
     }
     result
 }

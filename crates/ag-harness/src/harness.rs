@@ -2198,6 +2198,7 @@ impl Harness {
                 context_budget: summary.context_budget,
                 context_calibration: &summary.context_calibration,
                 context_estimator: &summary.context_estimator,
+                context_window: summary.context_window,
                 max_output: summary.max_output,
                 model: &summary.model,
                 model_id: Some(&summary.id),
@@ -2393,6 +2394,7 @@ impl Harness {
             context_calibration: &config.context_calibration,
             context_estimator: &config.context_estimator,
             context_summaries: config.context_summaries,
+            context_window: config.context_window,
             control: None,
             effects: Effects::default(),
             events: None,
@@ -2991,6 +2993,9 @@ struct HarnessConfig {
     context_estimator: Arc<dyn ContextEstimator>,
     context_policy: ContextPolicy,
     context_summaries: ContextSummaryPolicy,
+    /// Context window of [`Self::model`] in tokens, from the catalog entry
+    /// it comes from; `None` for any other model.
+    context_window: Option<u64>,
     #[cfg(feature = "sqlite")]
     database: Arc<OnceCell<Database>>,
     #[cfg(feature = "sqlite")]
@@ -3042,6 +3047,7 @@ impl HarnessConfig {
             context_estimator: Arc::new(HeuristicContextEstimator::DEFAULT),
             context_policy: ContextPolicy::Evict,
             context_summaries: ContextSummaryPolicy::Disabled,
+            context_window: None,
             #[cfg(feature = "sqlite")]
             database: Arc::new(OnceCell::new()),
             #[cfg(feature = "sqlite")]
@@ -3080,11 +3086,12 @@ impl HarnessConfig {
         config
     }
 
-    /// Adopts the prices, concurrency cap, maximum output, and identifier of
-    /// the catalog entry `handle` that [`Self::model`] comes from, or clears
-    /// them for a model without one.
+    /// Adopts the prices, concurrency cap, context window, maximum output,
+    /// and identifier of the catalog entry `handle` that [`Self::model`]
+    /// comes from, or clears them for a model without one.
     fn adopt_catalog_entry(&mut self, handle: Option<&ModelHandle>) {
         self.concurrency = handle.and_then(ModelHandle::concurrency);
+        self.context_window = handle.and_then(|handle| handle.spec().context_window());
         self.max_output = handle.and_then(|handle| handle.spec().max_output());
         self.model_id = handle.map(|handle| handle.id().clone());
         self.pricing = handle.and_then(|handle| handle.spec().pricing());

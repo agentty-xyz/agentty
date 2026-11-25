@@ -13,6 +13,7 @@ pub use opentelemetry::{Context, KeyValue};
 
 #[cfg(feature = "otlp")]
 pub mod otlp;
+pub mod usage;
 
 /// Explicit host policy for bounded, sanitized tool-content capture.
 /// Attach this value to the execution context; absence disables capture.

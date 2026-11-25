@@ -12,7 +12,8 @@ use super::{
     LifecycleOperationGuard, ModelResponseType, ToolErrorType, ToolUnavailableReason,
     TurnErrorType,
 };
-use crate::model::{CompletionMetadata, ModelErrorType};
+use crate::catalog::Pricing;
+use crate::model::{CompletionMetadata, CompletionUsage, ModelErrorType};
 
 fn completion_metadata() -> CompletionMetadata {
     CompletionMetadata::new("stop")
@@ -598,6 +599,71 @@ fn context_summaries_emit_one_terminal_event_each() {
     ));
     assert_eq!(events.len(), 6);
     assert!(disabled);
+}
+
+#[test]
+fn completed_requests_carry_the_answering_models_cost_and_window() {
+    // Arrange
+    let (emitter, events) = recording_emitter();
+    let pricing = Pricing::built_in(1_000_000, 2_000_000);
+    let reported = CompletionMetadata::new("stop").with_usage(Some(
+        CompletionUsage::default()
+            .with_input_tokens(Some(10))
+            .with_output_tokens(Some(5)),
+    ));
+    let cached = CompletionMetadata::new("stop").with_usage(Some(
+        CompletionUsage::default()
+            .with_cache_hit_tokens(Some(4))
+            .with_input_tokens(Some(10))
+            .with_output_tokens(Some(5)),
+    ));
+    let cache_priced = Pricing::built_in_cached(1_000_000, 2_000_000, 100_000, Some(1_000_000));
+    let cases = [
+        (Some(pricing), Some(reported.clone()), Some((20, false))),
+        // Cache reads priced at the undeclared cache-read price, the input
+        // price, make the cost an upper bound.
+        (Some(pricing), Some(cached.clone()), Some((20, true))),
+        (Some(cache_priced), Some(cached), Some((16, false))),
+        (Some(pricing), Some(completion_metadata()), None),
+        (Some(pricing), None, None),
+        (None, Some(reported), None),
+    ];
+
+    // Act
+    for (pricing, completion, _) in &cases {
+        emitter
+            .start_model_request(None, 0, None)
+            .expect("model request should be observed")
+            .with_model_spec(*pricing, Some(1_000))
+            .completed(completion.clone(), ModelResponseType::Output);
+    }
+
+    // Assert
+    let events = events
+        .lock()
+        .expect("event recorder should not be poisoned");
+    let completed = events
+        .iter()
+        .filter_map(|event| match event.kind() {
+            LifecycleEventKind::ModelRequestCompleted {
+                context_window,
+                cost,
+                cost_upper_bound,
+                ..
+            } => Some((
+                *context_window,
+                cost.map(|cost| (cost.micro_usd, *cost_upper_bound)),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completed,
+        cases
+            .iter()
+            .map(|(_, _, cost)| (Some(1_000), *cost))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

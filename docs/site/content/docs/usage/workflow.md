@@ -827,6 +827,32 @@ nest beneath `agent.run` and time each model request exactly. A `bash` tool span
 the integer array `agentty.tool.exit_code.pipeline`. A nonzero exit is not marked as an
 error, since commands such as `grep` exit nonzero as an ordinary answer.
 
+Usage appears on these spans; any figure a backend does not report is left out, never
+exported as zero:
+
+- `session.turn`, `agent.run`, and `utility.run` carry the totals: the
+  `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`,
+  `cache_creation.input_tokens`, and `reasoning.output_tokens` counts,
+  `agentty.usage.requests` and `agentty.usage.unreported_requests`, and
+  `agentty.context.peak_tokens`.
+- Harness `chat <model>` spans and app-server `agent.attempt` spans carry
+  `gen_ai.usage.cache_creation.input_tokens`, `agentty.context.input_tokens`, and
+  `agentty.context.window_tokens` for each request or attempt.
+- Each of these spans carries the estimated cost only when every model involved has a
+  known price. Metered usage reports its charge as `agentty.usage.cost.micro_usd`, with
+  `agentty.usage.cost.basis` (`list`, `host`, `agent_reported`, or `mixed`) and
+  `agentty.usage.cost.upper_bound`, which is `true` when cache reads were priced at the
+  input price. Subscription usage reports what it would cost at API prices under
+  `agentty.usage.api_equivalent.*` instead, with the plan `login` when known; the two
+  are never summed.
+
+Metrics add the `agentty.usage.cost` counter (`{micro_usd}`, by `gen_ai.request.model`,
+`agentty.usage.cost.basis`, and `agentty.usage.cost.upper_bound`), whose API equivalents
+count under the basis `api_equivalent`, and the `agentty.usage.cache_tokens` counter (by
+model and `agentty.cache.op`, `read` or `write`). `gen_ai.client.token.usage` keeps only
+the `input` and `output` token types. Costs are estimates; the provider bill is
+authoritative. PostHog usage events never include token counts or costs.
+
 Git and forge CLI work inside a traced workflow appears as content-free spans:
 
 - `git.command`: one per Git subprocess, with an allowlisted `git.subcommand` (others

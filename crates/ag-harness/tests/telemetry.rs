@@ -1273,6 +1273,7 @@ fn assert_exact_span_attribute_keys(span: &ProtoSpan) {
         && proto_string_attribute(&span.attributes, "error.type").is_none()
     {
         expected_keys.extend([
+            "agentty.context.input_tokens",
             "gen_ai.response.finish_reasons",
             "gen_ai.response.id",
             "gen_ai.response.model",

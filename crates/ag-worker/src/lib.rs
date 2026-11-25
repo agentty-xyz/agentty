@@ -13,6 +13,7 @@ mod scheduler;
 mod scope;
 mod store;
 mod turn;
+mod usage_telemetry;
 mod utility;
 
 /// Per-project Cargo cache that native sandboxed sessions copy from: hosts
@@ -44,6 +45,7 @@ pub use scope::{RunScope, in_scope, scoped_client, with_execution_resource};
 pub use store::MockOperationRepository;
 pub use store::{OperationRepository, SessionOperationRow};
 pub use turn::SessionRunClient;
+pub use usage_telemetry::record_turn_usage;
 #[cfg(any(test, feature = "test-utils"))]
 pub use utility::MockRunClient;
 pub use utility::{RunClient, RunWorker};

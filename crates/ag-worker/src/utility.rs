@@ -21,7 +21,7 @@ use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::warn;
 
 use crate::scope::RunContext;
-use crate::{Clock, RunInfo, RunRepository, RunState};
+use crate::{Clock, RunInfo, RunRepository, RunState, usage_telemetry};
 
 /// Application-facing submission boundary for worker-owned isolated runs.
 /// Runtime adapters are injected into the worker, never exposed to workflows.
@@ -440,7 +440,7 @@ impl Execution {
             cancellation.cancel();
             let _ = work.await;
         }
-        self.record_usage(&run, usage_purpose, &result).await;
+        self.record_usage(&run, usage_purpose, &result, &span).await;
         let error = result.as_ref().err().map(ToString::to_string);
         let recorded = self
             .repository
@@ -461,15 +461,20 @@ impl Execution {
         let _ = sender.send(result);
     }
 
-    /// Records a successful run's usage for its session under `purpose`; a
-    /// run without a session or purpose records none, and a failed write is
-    /// logged rather than failing the run.
+    /// Records a successful run's usage on its `span` and usage counters,
+    /// and for its session under `purpose`; a run without a session or
+    /// purpose stores none, and a failed write is logged rather than failing
+    /// the run.
     async fn record_usage(
         &self,
         run: &RunInfo,
         purpose: Option<UsagePurpose>,
         result: &Result<OneShotSubmission, OneShotError>,
+        span: &Span,
     ) {
+        if let Ok(submission) = result {
+            usage_telemetry::record_run_usage(span, &submission.usage);
+        }
         if let (Ok(submission), Some(session_id), Some(purpose)) =
             (result, &run.session_id, purpose)
             && let Err(error) = self

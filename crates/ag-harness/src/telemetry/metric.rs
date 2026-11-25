@@ -23,6 +23,8 @@ pub(crate) const ATTRIBUTE_RESPONSE_MODEL: &str = "gen_ai.response.model";
 pub(crate) const ATTRIBUTE_TOOL_CALL_ID: &str = "gen_ai.tool.call.id";
 pub(crate) const ATTRIBUTE_TOOL_NAME: &str = "gen_ai.tool.name";
 pub(crate) const ATTRIBUTE_TOOL_TYPE: &str = "gen_ai.tool.type";
+pub(crate) const ATTRIBUTE_USAGE_CACHE_CREATION_INPUT_TOKENS: &str =
+    "gen_ai.usage.cache_creation.input_tokens";
 pub(crate) const ATTRIBUTE_USAGE_CACHE_READ_INPUT_TOKENS: &str =
     "gen_ai.usage.cache_read.input_tokens";
 pub(crate) const ATTRIBUTE_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";

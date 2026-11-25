@@ -19,9 +19,12 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::fixture::{run_git, seed_session_title_candidate_project};
+use super::harness::{answer, git_only_path};
 use crate::common::{self, BuilderEnv, FeatureTest};
 
 const TRACE_COMMAND: &str = "cargo test --filter 'quoted case'";
+/// Answer of the unpriced local model in the usage scenario.
+const UNPRICED_ANSWER: &str = "Usage reported on a local model.";
 const TRACE_RESULT: &str = "Test compilation failed: 'quoted case'";
 
 #[tokio::test]
@@ -418,6 +421,151 @@ fn assert_timing_spans(spans: &[Span]) -> io::Result<()> {
             "{key}"
         );
     }
+    // The stub Claude Code reports 5 input and 9 output tokens on
+    // `claude-haiku-5-5`, which the built-in list prices cover.
+    assert_eq!(int_attribute(turn, "gen_ai.usage.input_tokens"), Some(5));
+    assert_eq!(int_attribute(turn, "gen_ai.usage.output_tokens"), Some(9));
+    assert_eq!(int_attribute(turn, "agentty.usage.requests"), Some(1));
+    assert!(int_attribute(turn, "agentty.usage.cost.micro_usd").is_some_and(|cost| cost > 0));
+    assert_eq!(
+        string_attribute(turn, "agentty.usage.cost.basis"),
+        Some("list")
+    );
+    assert!(
+        turn.attributes
+            .iter()
+            .all(|attribute| !attribute.key.starts_with("agentty.usage.api_equivalent."))
+    );
+
+    Ok(())
+}
+
+/// Checks that a turn on an unpriced local model exports its token counts
+/// on `session.turn` and its `chat` span, but no cost, since an unknown
+/// charge is omitted rather than reported as zero.
+#[tokio::test]
+async fn unpriced_harness_turn_exports_usage_without_a_cost()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let (server, exported, _events) = trace_receiver().await;
+    let endpoint = format!("{}/v1/traces", server.uri());
+    let provider = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(answer(UNPRICED_ANSWER))
+        .mount(&provider)
+        .await;
+    let git_directory = git_only_path()?;
+    let observed = Arc::clone(&exported);
+
+    // Act
+    FeatureTest::new("session_otlp_unpriced_usage")
+        .with_git()
+        .with_stub_only_path()
+        .env("PATH", git_directory.path().to_string_lossy())
+        .env("DASHSCOPE_API_KEY", "")
+        .env("KIMI_API_KEY", "")
+        .env("MODEL_API_KEY", "")
+        .env("OPENAI_API_KEY", "")
+        .env("OPENAI_COMPATIBLE_BASE_URL", provider.uri())
+        .env("OPENAI_COMPATIBLE_MODEL", "qwen3:latest")
+        .args(["--otlp-endpoint".to_string(), endpoint])
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .write_text("Report usage")
+                    .wait_for_text("Report usage", 3000)
+                    .press_key("Enter")
+                    .wait_for_text(UNPRICED_ANSWER, 30000)
+                    .step(Step::eventually(
+                        Duration::from_secs(15),
+                        Duration::from_millis(50),
+                        move |frame| {
+                            let ready = observed.lock().is_ok_and(|spans| {
+                                spans.iter().any(|span| {
+                                    span.name == "session.turn"
+                                        && int_attribute(span, "gen_ai.usage.input_tokens")
+                                            .is_some()
+                                })
+                            });
+                            if ready {
+                                return Ok(());
+                            }
+                            assertion::match_text_in_region(
+                                frame,
+                                "session.turn",
+                                &Region::full(frame.cols(), frame.rows()),
+                            )
+                            .map_err(|mut failure| {
+                                failure.message = "Waiting for an exported session turn".into();
+                                failure
+                            })
+                        },
+                    ))
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    assertion::assert_text_in_region(
+                        frame,
+                        UNPRICED_ANSWER,
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                })
+            },
+        )
+        .await?;
+
+    // Assert
+    let spans = exported
+        .lock()
+        .map_err(|_| io::Error::other("trace receiver poisoned"))?
+        .clone();
+    assert_unpriced_usage(&spans)
+}
+
+/// Checks the token counts of the unpriced turn on `session.turn` and its
+/// completed `chat` span, and that neither carries a cost.
+fn assert_unpriced_usage(spans: &[Span]) -> Result<(), Box<dyn std::error::Error>> {
+    let turn = spans
+        .iter()
+        .find(|span| span.name == "session.turn")
+        .ok_or_else(|| io::Error::other("missing turn root"))?;
+    let chat = spans
+        .iter()
+        .find(|span| {
+            span.name == "chat qwen3:latest"
+                && span.trace_id == turn.trace_id
+                && string_attribute(span, "error.type").is_none()
+        })
+        .ok_or_else(|| io::Error::other("missing completed chat span"))?;
+    assert_eq!(int_attribute(turn, "gen_ai.usage.input_tokens"), Some(30));
+    assert_eq!(int_attribute(turn, "gen_ai.usage.output_tokens"), Some(7));
+    assert_eq!(int_attribute(turn, "agentty.usage.requests"), Some(1));
+    assert_eq!(
+        int_attribute(turn, "agentty.usage.unreported_requests"),
+        Some(0)
+    );
+    assert_eq!(
+        int_attribute(chat, "agentty.context.input_tokens"),
+        Some(30)
+    );
+    for span in [turn, chat] {
+        for prefix in ["agentty.usage.cost.", "agentty.usage.api_equivalent."] {
+            assert!(
+                span.attributes
+                    .iter()
+                    .all(|attribute| !attribute.key.starts_with(prefix)),
+                "{} should omit {prefix}*",
+                span.name
+            );
+        }
+    }
 
     Ok(())
 }
@@ -553,6 +701,17 @@ fn tool_span<'a>(spans: &'a [Span], id: &str) -> io::Result<&'a Span> {
         .iter()
         .find(|span| string_attribute(span, "gen_ai.tool.call.id") == Some(id))
         .ok_or_else(|| io::Error::other(format!("missing tool span {id}")))
+}
+
+fn int_attribute(span: &Span, key: &str) -> Option<i64> {
+    span.attributes
+        .iter()
+        .find(|attribute| attribute.key == key)
+        .and_then(|attribute| attribute.value.as_ref())
+        .and_then(|value| match value.value.as_ref() {
+            Some(any_value::Value::IntValue(value)) => Some(*value),
+            _ => None,
+        })
 }
 
 fn string_attribute<'a>(span: &'a Span, key: &str) -> Option<&'a str> {

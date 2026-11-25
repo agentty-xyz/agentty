@@ -32,7 +32,7 @@ pub(super) const NO_LOCAL_SERVER: &str = "http://127.0.0.1:9/v1";
 
 /// Returns one terminal session answer, two thirds of whose prompt the
 /// provider served from its cache.
-fn answer(text: &str) -> ResponseTemplate {
+pub(super) fn answer(text: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({
         "choices": [{
             "finish_reason": "stop",
@@ -608,7 +608,7 @@ async fn test_ag_harness_models_are_listed_without_provider_keys() -> E2eResult 
 ///
 /// It lives outside the fixture root, whose guard `.git` would otherwise make
 /// the harness treat the executable as part of the worktree.
-fn git_only_path() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
+pub(super) fn git_only_path() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
     let git_directory = tempfile::tempdir()?;
     let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|directory| directory.join("git"))

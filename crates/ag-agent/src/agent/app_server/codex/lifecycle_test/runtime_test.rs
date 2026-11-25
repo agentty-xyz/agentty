@@ -595,7 +595,6 @@ async fn completed_turn_uses_cumulative_deltas_without_overwriting_request_conte
         .expect("attempt");
     for attribute in [
         KeyValue::new("agentty.usage.aggregate_known", true),
-        KeyValue::new("agentty.context.last_request.input_tokens", 150_i64),
         KeyValue::new("gen_ai.usage.cache_read.input_tokens", 70_i64),
     ] {
         assert!(attempt.attributes.contains(&attribute));

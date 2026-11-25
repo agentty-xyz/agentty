@@ -1175,6 +1175,9 @@ pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCancelled::model_call
 pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCancelled::turn_id: core::option::Option<ag_harness::lifecycle::LifecycleId>
 #[non_exhaustive] pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted
 pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted::completion: core::option::Option<ag_router::model::CompletionMetadata>
+pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted::context_window: core::option::Option<u64>
+pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted::cost: core::option::Option<ag_harness::Cost>
+pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted::cost_upper_bound: bool
 pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted::duration: core::time::Duration
 pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted::model_call_id: ag_harness::lifecycle::LifecycleId
 pub ag_harness::lifecycle::LifecycleEventKind::ModelRequestCompleted::response_type: ag_harness::lifecycle::ModelResponseType

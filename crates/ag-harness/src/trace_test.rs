@@ -19,10 +19,12 @@ use tokio::sync::{Mutex as TestMutex, Notify};
 use tokio::time::{Instant, timeout};
 
 use super::{
-    LifecycleTraceObserver, PendingTool, TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES, TraceState,
-    finish_span,
+    ATTRIBUTE_CONTEXT_INPUT_TOKENS, ATTRIBUTE_CONTEXT_WINDOW_TOKENS, ATTRIBUTE_COST_BASIS,
+    ATTRIBUTE_COST_MICRO_USD, ATTRIBUTE_COST_UPPER_BOUND, LifecycleTraceObserver, PendingTool,
+    TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES, TraceState, estimate_attributes, finish_span,
 };
 use crate::bash::CommandExit;
+use crate::catalog::{Pricing, PricingSource};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
@@ -44,6 +46,7 @@ use crate::store::{HistoryProjection, ModelSwitch, Reservation, StoreBackend, Tu
 use crate::telemetry;
 use crate::tool::{ReadArguments, ToolCall, ToolSet};
 use crate::turn::{TurnError, TurnOutcome};
+use crate::usage::Cost;
 use crate::write_journal::{WriteRecord, WriteStatus};
 
 static TRACE_PROVIDER_LOCK: TestMutex<()> = TestMutex::const_new(());
@@ -127,6 +130,7 @@ fn full_completion() -> CompletionMetadata {
             CompletionUsage::default()
                 .with_cache_hit_tokens(Some(2))
                 .with_cache_miss_tokens(Some(3))
+                .with_cache_write_tokens(Some(1))
                 .with_input_tokens(Some(5))
                 .with_output_tokens(Some(8))
                 .with_reasoning_tokens(Some(1))
@@ -140,6 +144,7 @@ fn project_successes(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
     emitter
         .start_model_request(Some(metadata.clone()), 0, Some(successful_turn_id))
         .expect("observer should enable model calls")
+        .with_model_spec(Some(Pricing::built_in(1_000_000, 2_000_000)), Some(200_000))
         .completed(Some(full_completion()), ModelResponseType::ToolCall);
     let mut successful_tool = emitter
         .request_tool(
@@ -355,6 +360,22 @@ fn assert_success_spans(spans: &[SpanData]) {
         model_attributes.get(telemetry::ATTRIBUTE_USAGE_CACHE_READ_INPUT_TOKENS),
         Some(&"2".to_string())
     );
+    assert_eq!(
+        model_attributes.get(telemetry::ATTRIBUTE_USAGE_CACHE_CREATION_INPUT_TOKENS),
+        Some(&"1".to_string())
+    );
+    // Uncached, cache-read, and cache-write input at 1 µUSD a token, and
+    // output at 2 µUSD a token, since this test's built-in prices declare no
+    // cache price, which makes the cost an upper bound.
+    for (key, value) in [
+        (ATTRIBUTE_COST_MICRO_USD, "21"),
+        (ATTRIBUTE_COST_BASIS, "list"),
+        (ATTRIBUTE_COST_UPPER_BOUND, "true"),
+        (ATTRIBUTE_CONTEXT_INPUT_TOKENS, "5"),
+        (ATTRIBUTE_CONTEXT_WINDOW_TOKENS, "200000"),
+    ] {
+        assert_eq!(model_attributes.get(key).map(String::as_str), Some(value));
+    }
     assert_eq!(
         model_attributes.get(telemetry::ATTRIBUTE_USAGE_INPUT_TOKENS),
         Some(&"5".to_string())
@@ -1048,6 +1069,60 @@ async fn trace_observer_recovers_after_its_state_mutex_is_poisoned() {
 
     // Assert
     assert!(emitter.is_enabled());
+}
+
+#[test]
+fn estimate_attributes_name_the_price_source_and_omit_unknown_costs() {
+    // Arrange
+    let cost = |pricing: PricingSource, upper_bound: bool| {
+        Some((
+            Cost {
+                micro_usd: 7,
+                pricing,
+            },
+            upper_bound,
+        ))
+    };
+    let cases = [
+        (
+            cost(PricingSource::BuiltIn, true),
+            Some(9),
+            Some("list"),
+            Some("9"),
+        ),
+        (cost(PricingSource::Host, false), None, Some("host"), None),
+        (cost(PricingSource::Mixed, false), None, Some("mixed"), None),
+        (None, Some(9), None, Some("9")),
+    ];
+
+    for (cost, context_window, basis, window) in cases {
+        let upper_bound = cost.map(|(_, upper_bound)| upper_bound.to_string());
+        // Act
+        let attributes = estimate_attributes(cost, context_window)
+            .into_iter()
+            .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+            .collect::<BTreeMap<_, _>>();
+
+        // Assert
+        assert_eq!(
+            attributes.get(ATTRIBUTE_COST_BASIS).map(String::as_str),
+            basis
+        );
+        assert_eq!(
+            attributes.get(ATTRIBUTE_COST_MICRO_USD).map(String::as_str),
+            basis.map(|_| "7")
+        );
+        assert_eq!(
+            attributes.get(ATTRIBUTE_COST_UPPER_BOUND),
+            upper_bound.as_ref()
+        );
+        assert_eq!(
+            attributes
+                .get(ATTRIBUTE_CONTEXT_WINDOW_TOKENS)
+                .map(String::as_str),
+            window
+        );
+    }
 }
 
 #[test]
