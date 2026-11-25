@@ -9,9 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{env, io};
 
-use ag_contracts::{
-    HostCacheSharing, PermissionMode, ProviderCallBudget, ReasoningLevel, TurnRequest,
-};
+use ag_contracts::{HostCacheSharing, PermissionMode, ReasoningLevel, TurnRequest};
 use ag_harness::bash::BashConfig;
 use ag_harness::catalog::{
     Capabilities, ModelCatalog, ModelHandle, ModelId, ModelSelector, ModelSpec,
@@ -28,7 +26,7 @@ use ag_harness::provider::{
 use ag_harness::sandbox::Sandbox;
 use ag_harness::{
     Harness, HarnessError, Model, ModelError, OutputSchema, Repository, RepositoryError,
-    RunRequest, ToolSet, TurnInput,
+    RunRequest, ToolSet,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{
@@ -785,10 +783,9 @@ impl ModelSelection {
     pub(crate) fn registry(
         &self,
         environment: &BTreeMap<String, String>,
-        provider_call_budget: Option<&ProviderCallBudget>,
         running_context_window: Option<u64>,
     ) -> Result<ModelRegistry, String> {
-        let model = self.client(environment, provider_call_budget)?;
+        let model = self.client(environment)?;
 
         self.register(model, self.profile(environment, running_context_window)?)
     }
@@ -800,11 +797,7 @@ impl ModelSelection {
     /// # Errors
     /// Returns an actionable error when credentials or the endpoint are
     /// missing, or the entry is invalid.
-    fn summary_entry(
-        &self,
-        environment: &BTreeMap<String, String>,
-        provider_call_budget: Option<&ProviderCallBudget>,
-    ) -> Result<ModelHandle, String> {
+    fn summary_entry(&self, environment: &BTreeMap<String, String>) -> Result<ModelHandle, String> {
         let id = ModelId::cataloged(self.provider, &self.model);
         let spec = self
             .provider
@@ -812,23 +805,19 @@ impl ModelSelection {
             .ok_or("The harness provider catalog does not list the summary model.")?;
 
         ModelCatalog::builder()
-            .model(spec, self.client(environment, provider_call_budget)?)
+            .model(spec, self.client(environment)?)
             .build()
             .and_then(|catalog| catalog.resolve(&ModelSelector::Id(id)))
             .map_err(failure("Invalid harness summary model"))
     }
 
-    /// Returns this model's provider client, charging `provider_call_budget`
-    /// for every request when one is set.
+    /// Returns this model's provider client. Provider-call budgets are
+    /// charged once per run by the turn, not per model request here.
     ///
     /// # Errors
     /// Returns an actionable error when credentials or the endpoint are
     /// missing.
-    fn client(
-        &self,
-        environment: &BTreeMap<String, String>,
-        provider_call_budget: Option<&ProviderCallBudget>,
-    ) -> Result<Arc<dyn Model>, String> {
+    fn client(&self, environment: &BTreeMap<String, String>) -> Result<Arc<dyn Model>, String> {
         let mut configuration = ModelConfiguration::new(self.provider, &self.model);
         // Only the `ChatGPT` provider reads a sign-in, and the harness keeps
         // no default location for it.
@@ -857,15 +846,7 @@ impl ModelSelection {
                 )
             })?;
 
-        let model: Arc<dyn Model> = match provider_call_budget {
-            Some(budget) => Arc::new(BudgetedModel {
-                budget: budget.clone(),
-                inner: client,
-            }),
-            None => Arc::new(client),
-        };
-
-        Ok(model)
+        Ok(Arc::new(client))
     }
 
     /// Builds a harness for this model with Agentty's defaults, summarizing
@@ -879,11 +860,7 @@ impl ModelSelection {
         context: &HarnessContext<'_>,
         observer: impl LifecycleObserver + 'static,
     ) -> Result<Harness, String> {
-        let registry = self.registry(
-            context.environment,
-            context.provider_call_budget,
-            context.running_context_window,
-        )?;
+        let registry = self.registry(context.environment, context.running_context_window)?;
         let mut harness = self.harness_from(&registry, context, observer)?;
         context.apply_summary_model(|summary| harness.set_summary_model(summary));
 
@@ -1026,8 +1003,6 @@ pub(crate) struct HarnessContext<'a> {
     pub(crate) compacts: bool,
     /// Environment snapshot used for credentials.
     pub(crate) environment: &'a BTreeMap<String, String>,
-    /// Optional limit charged for every model request.
-    pub(crate) provider_call_budget: Option<&'a ProviderCallBudget>,
     /// Requested reasoning depth.
     pub(crate) reasoning_level: ReasoningLevel,
     /// Validated worktree available to tools.
@@ -1054,7 +1029,7 @@ impl HarnessContext<'_> {
             return;
         };
         let applied = summary_model
-            .summary_entry(self.environment, self.provider_call_budget)
+            .summary_entry(self.environment)
             .and_then(|entry| apply(&entry).map_err(|error| error.to_string()));
         if let Err(error) = applied {
             let summary_model = summary_model.key();
@@ -1256,45 +1231,6 @@ fn traced(observer: impl LifecycleObserver + 'static) -> LifecycleObserverSet {
     observers.with_observer(
         LifecycleTraceObserver::new().with_tool_attributes(ag_telemetry::run_identity),
     )
-}
-
-/// Model wrapper that charges one provider call before every request.
-struct BudgetedModel {
-    budget: ProviderCallBudget,
-    inner: ModelClient,
-}
-
-#[async_trait]
-impl Model for BudgetedModel {
-    fn metadata(&self) -> Option<ModelMetadata> {
-        Model::metadata(&self.inner)
-    }
-
-    fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
-        Model::validate_schema(&self.inner, schema)
-    }
-
-    fn validate_input(&self, input: &TurnInput) -> Result<(), ModelError> {
-        Model::validate_input(&self.inner, input)
-    }
-
-    fn keeps_prefix_across_schemas(&self) -> bool {
-        Model::keeps_prefix_across_schemas(&self.inner)
-    }
-
-    fn replays_reasoning_text(&self) -> bool {
-        Model::replays_reasoning_text(&self.inner)
-    }
-
-    fn replays_turn_instructions(&self) -> bool {
-        Model::replays_turn_instructions(&self.inner)
-    }
-
-    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
-        self.budget.consume().map_err(ModelError::request)?;
-
-        Model::complete(&self.inner, request).await
-    }
 }
 
 /// Stand-in for a recorded model that only lets its session resume and switch

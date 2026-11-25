@@ -28,7 +28,7 @@ pub(crate) use sandbox::SESSION_SANDBOX;
 pub use sandbox::dispatch_sandbox_helper;
 pub(crate) use sign_in::sign_in_chatgpt;
 pub(crate) use turn::{
-    NativePrompt, cleanup_failure, parse_output, reject_attachments, run_one_shot,
+    NativePrompt, charge_run, cleanup_failure, parse_output, reject_attachments, run_one_shot,
 };
 pub(crate) use turn_error::NativeTurnError;
 pub(crate) use usage::UsageMeter;

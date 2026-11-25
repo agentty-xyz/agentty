@@ -43,7 +43,9 @@ are attempts within the same supervised run and keep its filesystem permissions 
 provider-call budget.
 
 A provider-call budget is one shared limit across a request, its retries, repairs, and
-utility children; a child's own limit is an additional ceiling. A budget built with
+utility children; a child's own limit is an additional ceiling. One call is one turn
+attempt on every backend: a CLI or app-server turn, repair, or restart retry, or one
+native harness run, however many model requests it sends. A budget built with
 `ProviderCallBudget::with_ledger` reports each charge and refund to a host ledger, which
 graph hosts persist so restarts never replenish spent calls. `extend` adds calls to a
 live pool after the host records an explicit extension; it reports nothing to the

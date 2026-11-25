@@ -9,8 +9,7 @@ use std::sync::Arc;
 
 use ag_contracts::{
     AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, HostCacheSharing,
-    PermissionMode, ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
-    TurnRequest,
+    PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
 };
 use ag_harness::catalog::ModelId;
 use ag_harness::lifecycle::LifecycleEvent;
@@ -21,9 +20,7 @@ use ag_harness::model::{
 use ag_harness::provider::{AnthropicConfig, CostTier, ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{MemoryStore, SessionStore};
-use ag_harness::{
-    Harness, HarnessBuildError, ImageContent, ImageMediaType, InputBlock, Model, TurnInput,
-};
+use ag_harness::{Harness, HarnessBuildError, Model};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::{AgentModel, HarnessModelOption, HarnessModelStatus, ModelCost, ServedModel};
 use serde_json::{Value, json};
@@ -32,9 +29,9 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    BudgetedModel, FALLBACK_MODEL_PROFILE, HarnessContext, ModelSelection, NativeHarnessConfig,
-    ResumeOnlyModel, RunOptions, bash_environment, chatgpt_auth_file, configuration_status,
-    harness_models, model_cost, output_schema, provider_display_name, reasoning_effort, repository,
+    FALLBACK_MODEL_PROFILE, HarnessContext, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
+    RunOptions, bash_environment, chatgpt_auth_file, configuration_status, harness_models,
+    model_cost, output_schema, provider_display_name, reasoning_effort, repository,
     running_context_window, unicode_environment,
 };
 use crate::agent::model_profile;
@@ -134,7 +131,7 @@ fn chatgpt_registry_reads_the_sign_in_under_agentty_root() {
         ModelSelection::resolve("chatgpt/gpt-6.1-sol", &environment).expect("served model");
 
     // Act
-    let registry = selection.registry(&environment, None, None);
+    let registry = selection.registry(&environment, None);
 
     // Assert
     let registry = registry.expect("registry");
@@ -240,7 +237,6 @@ fn harness_summarizes_on_a_usable_summary_model() {
     let context = |environment| HarnessContext {
         compacts: true,
         environment,
-        provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,
         repository: &repository,
         running_context_window: None,
@@ -259,7 +255,7 @@ fn harness_summarizes_on_a_usable_summary_model() {
     });
     let unlisted = ModelSelection::resolve("openai-compatible/local", &keyed)
         .expect("served model")
-        .summary_entry(&keyed, None);
+        .summary_entry(&keyed);
 
     // Assert
     let summarizing = summarizing.expect("harness with a summary model");
@@ -607,7 +603,7 @@ fn openai_compatible_registration_uses_the_running_window() {
 
     // Act
     let registry = selection
-        .registry(&environment(&[]), None, Some(20_000))
+        .registry(&environment(&[]), Some(20_000))
         .expect("registry");
 
     // Assert
@@ -663,11 +659,9 @@ fn openai_compatible_registration_uses_the_declared_profile() {
         ModelSelection::resolve("openai-compatible", &configured).expect("served model");
 
     // Act
-    let registry = selection
-        .registry(&configured, None, None)
-        .expect("registry");
+    let registry = selection.registry(&configured, None).expect("registry");
     let invalid = selection
-        .registry(&invalid_window, None, None)
+        .registry(&invalid_window, None)
         .err()
         .expect("an invalid window should fail");
 
@@ -704,7 +698,7 @@ fn openai_compatible_configuration_failures_name_the_model_and_endpoint() {
 
     // Act
     let error = blank
-        .registry(&environment(&[]), None, None)
+        .registry(&environment(&[]), None)
         .err()
         .expect("a blank served model should fail");
 
@@ -825,7 +819,7 @@ fn chatgpt_registration_without_sign_in_names_the_login_command() {
 
     // Act
     let error = selection
-        .registry(&environment, None, None)
+        .registry(&environment, None)
         .err()
         .expect("a missing sign-in should fail");
 
@@ -856,7 +850,6 @@ fn chatgpt_resume_only_harness_needs_no_sign_in() {
         sandbox: SESSION_SANDBOX,
         summary_model: None,
         environment: &environment,
-        provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,
         repository: &repository,
         running_context_window: None,
@@ -907,9 +900,7 @@ fn registrations_declare_revision_profiles_and_capabilities() {
             model.to_string()
         };
         let selection = ModelSelection::resolve(&id, &environment).expect("served model");
-        let registry = selection
-            .registry(&environment, None, None)
-            .expect("registry");
+        let registry = selection.registry(&environment, None).expect("registry");
         let registration = registry.resolve(&selection.key()).expect("registration");
         // The harness catalog's own profile wins over Agentty's fitted one.
         let expected = provider
@@ -939,7 +930,7 @@ fn registrations_declare_revision_profiles_and_capabilities() {
         );
     }
     let sol = ModelSelection::resolve("gpt-6.1-sol", &environment).expect("served model");
-    let sol_registry = sol.registry(&environment, None, None).expect("registry");
+    let sol_registry = sol.registry(&environment, None).expect("registry");
     let sol_profile = sol_registry
         .resolve("openai/gpt-6.1-sol")
         .expect("registration")
@@ -1051,7 +1042,6 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
 fn session_request(folder: &Path) -> TurnRequest {
     TurnRequest {
         context_compaction: ContextCompaction::Off,
-        provider_call_budget: None,
         execution_policy: ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder: folder.to_path_buf(),
@@ -1061,6 +1051,7 @@ fn session_request(folder: &Path) -> TurnRequest {
         permission_mode: PermissionMode::AutoEdit,
         agent_profile: AgentDefinitionPrompt::default(),
         prompt: "Commit".into(),
+        provider_call_budget: None,
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
@@ -1437,57 +1428,10 @@ fn reasoning_levels_map_one_to_one() {
     }
 }
 
-#[tokio::test]
-/// Delegates validation and metadata, and stops when the budget is spent.
-async fn budgeted_model_charges_before_each_request() {
-    // Arrange
-    let client = ModelConfiguration::new(ModelProvider::Muse, "muse-spark-1.3")
-        .base_url("http://127.0.0.1:9")
-        .client_from_environment(|_| Ok("key".to_string()))
-        .expect("client should build");
-    let model = BudgetedModel {
-        budget: ProviderCallBudget::new(0),
-        inner: client,
-    };
-    let schema = output_schema(ProtocolRequestProfile::UtilityPrompt).expect("schema");
-    let png_signature = vec![0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
-    let image = ImageContent::new(ImageMediaType::Png, png_signature).expect("image");
-    let image_input = TurnInput::from_blocks(vec![
-        InputBlock::Text("Describe this.".to_string()),
-        InputBlock::Image(image),
-    ])
-    .expect("image input");
-
-    // Act
-    let completion = model
-        .complete(ModelRequest::new("Hi", schema.clone()))
-        .await;
-
-    // Assert
-    assert_eq!(
-        model
-            .metadata()
-            .map(|metadata| metadata.model().to_string()),
-        Some("muse-spark-1.3".to_string())
-    );
-    assert!(model.validate_schema(&schema).is_ok());
-    assert!(model.validate_input(&TurnInput::from("Hi")).is_ok());
-    // Muse reads images, so the registered image input reaches its client.
-    assert!(model.validate_input(&image_input).is_ok());
-    assert!(!model.keeps_prefix_across_schemas());
-    assert!(!model.replays_reasoning_text());
-    assert!(!model.replays_turn_instructions());
-    let error = completion.expect_err("an exhausted budget should refuse the request");
-    assert!(
-        error.to_string().contains("provider call limit reached"),
-        "{error}"
-    );
-}
-
 #[test]
 /// Serves Claude ids shared with the Claude Code backend through the
-/// Anthropic provider, under an `anthropic/<model>` key, with or without a
-/// provider-call budget and without credentials when only resuming.
+/// Anthropic provider, under an `anthropic/<model>` key, and without
+/// credentials when only resuming.
 fn claude_models_register_on_the_anthropic_provider() {
     // Arrange
     let worktree = tempfile::tempdir().expect("worktree");
@@ -1495,24 +1439,11 @@ fn claude_models_register_on_the_anthropic_provider() {
     let keyed = environment(&[("ANTHROPIC_API_KEY", "key"), ("PATH", &real_path)]);
     let unkeyed = environment(&[("PATH", &real_path)]);
     let repository = repository(worktree.path(), &unkeyed).expect("repository");
-    let budget = ProviderCallBudget::new(1);
-    let budgeted_client = BudgetedModel {
-        budget: budget.clone(),
-        inner: ModelConfiguration::new(ModelProvider::Anthropic, "claude-opus-5-5")
-            .client_from_environment(|name| {
-                keyed
-                    .get(name)
-                    .cloned()
-                    .ok_or(std::env::VarError::NotPresent)
-            })
-            .expect("client should build"),
-    };
     let context = HarnessContext {
         compacts: false,
         sandbox: SESSION_SANDBOX,
         summary_model: None,
         environment: &unkeyed,
-        provider_call_budget: None,
         reasoning_level: ReasoningLevel::Medium,
         repository: &repository,
         running_context_window: None,
@@ -1520,11 +1451,8 @@ fn claude_models_register_on_the_anthropic_provider() {
 
     // Act
     let selection = ModelSelection::resolve("claude-opus-5-5", &keyed).expect("served model");
-    let unbudgeted = selection.registry(&keyed, None, None).expect("registry");
-    let budgeted = selection
-        .registry(&keyed, Some(&budget), None)
-        .expect("budgeted registry");
-    let missing_key = selection.registry(&unkeyed, None, None);
+    let registry = selection.registry(&keyed, None).expect("registry");
+    let missing_key = selection.registry(&unkeyed, None);
     let resume_only = selection.resume_only_harness(&context, |_: LifecycleEvent| {});
 
     // Assert
@@ -1534,20 +1462,15 @@ fn claude_models_register_on_the_anthropic_provider() {
         Some(&selection)
     );
     assert_eq!(ModelSelection::from_key("anthropic/claude-unlisted"), None);
-    for registry in [&unbudgeted, &budgeted] {
-        let registration = registry
-            .resolve("anthropic/claude-opus-5-5")
-            .expect("registration");
-        assert_eq!(registration.identity().revision(), "agentty-native-2");
-        assert_eq!(
-            registration.capabilities().profile.context_window_tokens(),
-            1_000_000
-        );
-        assert!(registration.capabilities().image_input);
-    }
-    // Anthropic keeps signed thinking valid only when history replays each
-    // turn's instructions, which a provider-call budget must not hide.
-    assert!(budgeted_client.replays_turn_instructions());
+    let registration = registry
+        .resolve("anthropic/claude-opus-5-5")
+        .expect("registration");
+    assert_eq!(registration.identity().revision(), "agentty-native-2");
+    assert_eq!(
+        registration.capabilities().profile.context_window_tokens(),
+        1_000_000
+    );
+    assert!(registration.capabilities().image_input);
     let error = missing_key.err().expect("a missing key should be reported");
     assert!(
         error.ends_with("Pick the model with `/model` to paste its API key, then retry."),
@@ -1559,18 +1482,14 @@ fn claude_models_register_on_the_anthropic_provider() {
 }
 
 #[test]
-/// Declares the same key, revision, and capabilities with a provider-call
-/// budget as without one.
-fn budgeted_registration_keeps_the_identity_and_capabilities() {
+/// Declares Muse's key, revision, tool calls, and image input.
+fn muse_registration_declares_its_identity_and_capabilities() {
     // Arrange
     let environment = environment(&[("MODEL_API_KEY", "key")]);
     let selection = ModelSelection::resolve("muse-spark-1.3", &environment).expect("served model");
-    let budget = ProviderCallBudget::new(1);
 
     // Act
-    let registry = selection
-        .registry(&environment, Some(&budget), None)
-        .expect("registry");
+    let registry = selection.registry(&environment, None).expect("registry");
 
     // Assert
     let registration = registry
@@ -1589,9 +1508,7 @@ async fn sessions_recorded_on_manual_registrations_resume_on_catalog_registratio
     // Arrange
     let environment = environment(&[("KIMI_API_KEY", "key"), ("KIMI_BASE_URL", "http://kimi")]);
     let selection = ModelSelection::resolve("kimi-k3", &environment).expect("served model");
-    let registry = selection
-        .registry(&environment, None, None)
-        .expect("registry");
+    let registry = selection.registry(&environment, None).expect("registry");
     let current = registry.resolve("kimi/kimi-k3").expect("registration");
     // Earlier releases declared the provider catalog's profile for Kimi K3.
     let recorded_profile = ModelProvider::Kimi

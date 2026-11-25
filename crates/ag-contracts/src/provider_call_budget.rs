@@ -28,6 +28,8 @@ pub trait ProviderCallLedger: Send + Sync {
 ///
 /// Transports must consume one slot immediately before each provider attempt,
 /// including repairs and restart retries. Failed attempts also consume a slot.
+/// An in-process harness run is one attempt however many model requests it
+/// sends, so one slot means the same on every backend.
 #[derive(Clone, Debug)]
 pub struct ProviderCallBudget {
     ceiling: Option<Box<ProviderCallBudget>>,
