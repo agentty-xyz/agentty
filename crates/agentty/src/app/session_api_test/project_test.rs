@@ -596,6 +596,7 @@ async fn runtime_backend_creates_sessions_in_a_viewed_project_from_its_own_check
                 .to_string()
         ))
     );
+    let mut created_rows = Vec::new();
     for session_id in &created {
         let row = app
             .services
@@ -605,14 +606,15 @@ async fn runtime_backend_creates_sessions_in_a_viewed_project_from_its_own_check
             .await
             .expect("session read")
             .expect("created session");
-        assert_eq!(row.project_id, Some(other_project_id), "{session_id}");
-        assert_eq!(row.base_branch, "release", "{session_id}");
-        assert_eq!(
-            (row.agent.as_str(), row.model.as_str()),
-            ("claude", AgentModel::ClaudeOpus55.as_str()),
-            "{session_id}"
-        );
+        created_rows.push((row.project_id, row.base_branch, row.agent, row.model));
     }
+    let expected_row = (
+        Some(other_project_id),
+        "release".to_string(),
+        "claude".to_string(),
+        AgentModel::ClaudeOpus55.as_str().to_string(),
+    );
+    assert_eq!(created_rows, vec![expected_row.clone(), expected_row]);
     assert_eq!(
         viewed_session_ids(&app, other_project_id),
         created.iter().map(ToString::to_string).collect::<Vec<_>>()
