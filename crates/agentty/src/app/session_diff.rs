@@ -468,7 +468,8 @@ impl App {
         .is_some()
     }
 
-    /// Starts automatic review diff loads for eligible touched sessions.
+    /// Starts automatic review diff loads for eligible touched sessions on
+    /// the active page, whose project's review agent applies.
     ///
     /// Requests are deduplicated per session, and existing generated output
     /// remains visible while its current diff hash is checked in the
@@ -478,7 +479,7 @@ impl App {
             if self.role_review_suppression.contains_key(session_id) {
                 continue;
             }
-            let Some(session) = self.sessions.session_for_id(session_id) else {
+            let Some(session) = self.sessions.active_page_session(session_id) else {
                 continue;
             };
             let current_status = session.status;
@@ -689,7 +690,7 @@ impl App {
 
         let completed_auto_address_iterations = if auto_address {
             let auto_address_is_enabled = self.settings.auto_address_review_comments()
-                && self.sessions.session_for_id(session_id).is_some();
+                && self.sessions.is_in_active_page(session_id);
             let completed_iterations = self
                 .auto_address_review_iterations
                 .get(session_id)
@@ -850,8 +851,11 @@ impl App {
 
     /// Starts one deduplicated review-preparation request and shows loading
     /// state only when there is no prior review output to retain.
+    ///
+    /// The review agent is the active project's, so only a session on the
+    /// active page starts one here.
     fn start_review_diff_load(&mut self, session_id: &SessionId, is_manual: bool) -> bool {
-        let Some(session) = self.sessions.session_for_id(session_id) else {
+        let Some(session) = self.sessions.active_page_session(session_id) else {
             return false;
         };
         let review_agent = review::session_review_agent(

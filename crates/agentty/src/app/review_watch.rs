@@ -554,9 +554,11 @@ impl App {
         if !self.review_watch.reruns_in_flight.contains(session_id) {
             record_rerun_progress(&mut current_keys, &attention);
         }
+        // Follow-ups are automation of the terminal's project, whose review
+        // requests are the only ones polled.
         let watched_folder = self
             .sessions
-            .session_for_id(session_id)
+            .active_page_session(session_id)
             .filter(|session| session.status == Status::Watching)
             .map(|session| session.folder.clone());
         let mut follow_up = ReviewWatchAction::plan(&attention, &current_keys).zip(watched_folder);

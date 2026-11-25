@@ -332,18 +332,18 @@ impl SessionManager {
         self.resources.refresh(self.state.clock.now_instant()).await
     }
 
-    /// Returns all loaded session snapshots in current list order.
+    /// Returns the active page's session snapshots in current list order.
     pub(crate) fn sessions(&self) -> &[Session] {
         self.state.sessions()
     }
 
-    /// Returns mutable access to all loaded session snapshots for focused
-    /// reducers and tests that need to stage state directly.
+    /// Returns mutable access to the active page's session snapshots for
+    /// focused reducers and tests that need to stage state directly.
     pub(crate) fn sessions_mut(&mut self) -> &mut [Session] {
         self.state.sessions_mut()
     }
 
-    /// Removes one loaded session snapshot by list index.
+    /// Removes one session snapshot by its active-page list index.
     pub(crate) fn remove_session_at(&mut self, session_index: usize) -> Option<Session> {
         self.state.remove_session_at(session_index)
     }
@@ -358,14 +358,25 @@ impl SessionManager {
         self.state.table_state.select(session_index);
     }
 
-    /// Returns one mutable session snapshot by current list index.
-    pub(crate) fn session_at_mut(&mut self, session_index: usize) -> Option<&mut Session> {
-        self.state.sessions_mut().get_mut(session_index)
-    }
-
-    /// Returns one immutable session snapshot by stable identifier.
+    /// Returns one immutable session snapshot by stable identifier from any
+    /// loaded page.
     pub(crate) fn session_for_id(&self, session_id: &str) -> Option<&Session> {
         self.state.session_for_id(session_id)
+    }
+
+    /// Returns whether `session_id` is on the active page, the one the
+    /// terminal shows.
+    ///
+    /// See [`SessionState::is_in_active_page`].
+    pub(crate) fn is_in_active_page(&self, session_id: &str) -> bool {
+        self.state.is_in_active_page(session_id)
+    }
+
+    /// Returns one session snapshot only when it is on the active page.
+    ///
+    /// See [`SessionState::active_page_session`].
+    pub(crate) fn active_page_session(&self, session_id: &str) -> Option<&Session> {
+        self.state.active_page_session(session_id)
     }
 
     /// Synchronizes one loaded session snapshot from its live runtime handle.
@@ -443,12 +454,7 @@ impl SessionManager {
         session_id: &str,
         session_agent: crate::domain::agent::AgentSelection,
     ) {
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.agent = session_agent;
         }
     }
@@ -460,12 +466,7 @@ impl SessionManager {
         session_id: &str,
         reasoning_level: ReasoningLevel,
     ) {
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.reasoning_level_override = Some(reasoning_level);
         }
     }
@@ -477,12 +478,7 @@ impl SessionManager {
         session_id: &str,
         response_style: ResponseStyle,
     ) {
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.response_style = response_style;
         }
     }
@@ -494,12 +490,7 @@ impl SessionManager {
         session_id: &str,
         speed_mode: SpeedMode,
     ) {
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.speed_mode = speed_mode;
         }
     }
@@ -511,12 +502,7 @@ impl SessionManager {
         session_id: &str,
         published_upstream_ref: String,
     ) {
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.published_upstream_ref = Some(published_upstream_ref);
         }
     }
@@ -524,12 +510,7 @@ impl SessionManager {
     /// Applies one persisted review-request snapshot to the matching in-memory
     /// session row.
     pub(crate) fn apply_review_request(&mut self, session_id: &str, review_request: ReviewRequest) {
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.review_request = Some(review_request);
         }
     }
@@ -538,12 +519,7 @@ impl SessionManager {
     pub(crate) fn start_branch_publish(&mut self, session_id: &str, loading_label: String) {
         self.state
             .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.transient_messages.upsert(TransientMessage {
                 anchor: TransientMessageAnchor::Tail,
                 body: TransientMessageBody::Loading(loading_label),
@@ -657,12 +633,7 @@ impl SessionManager {
         }
         if let GeneratedTurnUpdate::Started(label) = update {
             self.show_generated_turn_progress(session_id, label);
-        } else if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        } else if let Some(session) = self.state.session_mut_for_id(session_id) {
             session
                 .transient_messages
                 .retract(TransientMessageSlot::GeneratedTurnProgress);
@@ -672,12 +643,7 @@ impl SessionManager {
     /// Shows `label` in place of the working indicator while a generated
     /// turn runs; the turn result or leaving `InProgress` retracts it.
     pub(crate) fn show_generated_turn_progress(&mut self, session_id: &str, label: String) {
-        let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.state.session_mut_for_id(session_id) else {
             return;
         };
 
@@ -708,12 +674,7 @@ impl SessionManager {
         self.state
             .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
         let persistent_notice = body.text().to_string();
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.transient_messages.upsert(TransientMessage {
                 anchor: TransientMessageAnchor::AfterCompletedTurn,
                 body,
@@ -743,12 +704,7 @@ impl SessionManager {
         if appended_to_handle {
             self.state.sync_session_from_handle(session_id);
         }
-        let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.state.session_mut_for_id(session_id) else {
             return appended_to_handle;
         };
         if !appended_to_handle {
@@ -804,12 +760,7 @@ impl SessionManager {
             .published_branch_sync_operations
             .insert(SessionId::from(session_id), sync_operation_id);
 
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             session.transient_messages.upsert(TransientMessage {
                 anchor: TransientMessageAnchor::Tail,
                 body: TransientMessageBody::Loading(
@@ -852,12 +803,7 @@ impl SessionManager {
             self.state.sync_session_from_handle(session_id);
         }
 
-        let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.state.session_mut_for_id(session_id) else {
             return appended_to_handle;
         };
         if !appended_to_handle && let Some(persistent_notice) = persistent_notice {
@@ -875,12 +821,7 @@ impl SessionManager {
 
     /// Appends one transient workflow notice shown for one session.
     pub(crate) fn append_workflow_notice(&mut self, session_id: &str, notice: String) {
-        if let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
             let notice = session
                 .transient_messages
                 .get(TransientMessageSlot::WorkflowNotice)
@@ -937,12 +878,7 @@ impl SessionManager {
     /// Replaces or removes a session's live-timeline message; an empty
     /// timeline removes it.
     fn show_live_turn(&mut self, session_id: &str, snapshot: Option<Arc<TimelineSnapshot>>) {
-        let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.state.session_mut_for_id(session_id) else {
             return;
         };
         match snapshot.filter(|snapshot| snapshot.step_count > 0) {
@@ -968,12 +904,7 @@ impl SessionManager {
         session_id: &str,
         turn_applied_state: &TurnAppliedState,
     ) {
-        let Some(session) = self
-            .state
-            .sessions_mut()
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.state.session_mut_for_id(session_id) else {
             return;
         };
 
@@ -1047,13 +978,12 @@ impl SessionManager {
     }
 
     /// Drops cached prompt transcript blocks for sessions that are no longer
-    /// actively running a turn and prunes expired `@`-mention indexes.
+    /// loaded on any page or no longer running a turn, and prunes expired
+    /// `@`-mention indexes.
     pub(crate) fn retain_active_prompt_outputs(&mut self) {
         self.active_prompt_outputs.retain(|session_id, _| {
             self.state
-                .sessions()
-                .iter()
-                .find(|session| session.id == *session_id)
+                .session_for_id(session_id)
                 .is_some_and(|session| {
                     matches!(
                         session.status,
@@ -1132,9 +1062,9 @@ impl SessionManager {
         self.state.remove_session_worktree_availability(session_id);
     }
 
-    /// Refreshes cached branch names for all currently loaded sessions by
-    /// detecting each worktree `HEAD` and falling back to the derived default
-    /// session branch when detection is unavailable.
+    /// Refreshes the active page's cached branch names by detecting each
+    /// worktree `HEAD` and falling back to the derived default session branch
+    /// when detection is unavailable.
     ///
     /// Branch detection runs concurrently so startup and session refresh do
     /// not pay one subprocess round trip per session in series.
@@ -1195,11 +1125,7 @@ impl SessionManager {
         session_id: &str,
     ) -> Option<FollowUpTaskAction> {
         let position = self.selected_follow_up_task_position(session_id)?;
-        let session = self
-            .state
-            .sessions()
-            .iter()
-            .find(|session| session.id == session_id)?;
+        let session = self.state.session_for_id(session_id)?;
 
         let task = session.follow_up_task(position)?;
         if session.status.is_read_only() && task.launched_session_id.is_none() {
@@ -1212,9 +1138,7 @@ impl SessionManager {
     /// Returns whether one session has more than one follow-up task.
     pub(crate) fn has_multiple_follow_up_tasks(&self, session_id: &str) -> bool {
         self.state
-            .sessions()
-            .iter()
-            .find(|session| session.id == session_id)
+            .session_for_id(session_id)
             .is_some_and(|session| session.follow_up_tasks.len() > 1)
     }
 

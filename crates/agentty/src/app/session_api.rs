@@ -1357,9 +1357,7 @@ impl App {
     ) -> Result<ag_session::AgentDefinition, ApiSessionError> {
         let folder = self
             .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == *session_id)
+            .session_for_id(session_id)
             .map(|session| session.folder.clone())
             .ok_or(ApiSessionError::NotFound)?;
 
@@ -1661,12 +1659,7 @@ impl App {
     /// acknowledging creation, scheduling a refresh retry when loading is
     /// temporarily unavailable.
     pub(super) async fn finish_api_session_creation(&mut self, session_id: &str) {
-        if self
-            .sessions
-            .sessions()
-            .iter()
-            .any(|session| session.id == session_id)
-        {
+        if self.sessions.session_for_id(session_id).is_some() {
             return;
         }
 
@@ -1674,12 +1667,7 @@ impl App {
             .sessions
             .register_created_session(&self.services, session_id, self.projects.working_dir())
             .await;
-        if self
-            .sessions
-            .sessions()
-            .iter()
-            .any(|session| session.id == session_id)
-        {
+        if self.sessions.session_for_id(session_id).is_some() {
             return;
         }
 

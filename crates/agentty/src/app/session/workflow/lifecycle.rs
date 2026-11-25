@@ -896,10 +896,7 @@ impl SessionManager {
             .clear_session_draft_flag(session_id)
             .await?;
 
-        self.state
-            .session_mut_for_id(session_id)
-            .ok_or(SessionError::NotFound)?
-            .is_draft = false;
+        self.session_mut_or_err(session_id)?.is_draft = false;
 
         Ok(())
     }
@@ -1000,7 +997,7 @@ impl SessionManager {
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), SessionError> {
         let prompt = prompt.into();
-        let session_index = self.session_index_or_err(session_id)?;
+        self.session_or_err(session_id)?;
         let (persisted_prompt, persisted_attachments) =
             Self::load_staged_draft(services, session_id).await?;
         let (
@@ -1011,9 +1008,7 @@ impl SessionManager {
             staged_prompt,
             title_to_save,
         ) = {
-            let session = self
-                .session_at(session_index)
-                .ok_or(SessionError::NotFound)?;
+            let session = self.session_or_err(session_id)?;
             if !session.is_draft_session() {
                 return Err(SessionError::Workflow(
                     "Only draft sessions can stage drafts".to_string(),
@@ -1069,9 +1064,7 @@ impl SessionManager {
 
         let title_generation_prompt = staged_prompt.clone();
 
-        let session = self
-            .session_at_mut(session_index)
-            .ok_or(SessionError::NotFound)?;
+        let session = self.session_mut_or_err(&persisted_session_id)?;
         session.prompt = staged_prompt;
         session.draft_attachments = staged_attachments;
         if let Some(title_to_save) = title_to_save {
@@ -1268,9 +1261,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
     ) {
-        if let Ok(session_index) = self.session_index_or_err(session_id)
-            && let Some(session) = self.session_at_mut(session_index)
-        {
+        if let Ok(session) = self.session_mut_or_err(session_id) {
             session.draft_attachments.clear();
         }
 
@@ -1307,7 +1298,6 @@ impl SessionManager {
         self.ensure_session_worktree_ready(services, session_id)
             .await?;
 
-        let session_index = self.session_index_or_err(session_id)?;
         let session = self.session_or_err(session_id)?;
         let persisted_session_id = session.id.clone();
         let session_agent = session.agent;
@@ -1352,9 +1342,7 @@ impl SessionManager {
         };
 
         let title = {
-            let session = self
-                .session_at_mut(session_index)
-                .ok_or(SessionError::NotFound)?;
+            let session = self.session_mut_or_err(&persisted_session_id)?;
 
             session.prompt.clone_from(&prompt.text);
 
@@ -1779,13 +1767,9 @@ impl SessionManager {
         session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
         let session_model = session_agent.model();
-        let session_index = self.session_index_or_err(session_id)?;
-        let agent_changed = self
-            .session_at(session_index)
-            .is_some_and(|session| session.agent != session_agent);
-        let model_changed = self
-            .session_at(session_index)
-            .is_some_and(|session| session.agent.model() != session_model);
+        let current_agent = self.session_or_err(session_id)?.agent;
+        let agent_changed = current_agent != session_agent;
+        let model_changed = current_agent.model() != session_model;
         let paused_worker = if agent_changed {
             self.pause_session_worker(session_id).await
         } else {
@@ -1852,7 +1836,7 @@ impl SessionManager {
         session_id: &str,
         reasoning_level: ReasoningLevel,
     ) -> Result<(), SessionError> {
-        self.session_index_or_err(session_id)?;
+        self.session_or_err(session_id)?;
 
         services
             .db()
@@ -1878,7 +1862,7 @@ impl SessionManager {
         session_id: &str,
         response_style: ResponseStyle,
     ) -> Result<(), SessionError> {
-        self.session_index_or_err(session_id)?;
+        self.session_or_err(session_id)?;
 
         services
             .db()
@@ -1905,7 +1889,7 @@ impl SessionManager {
         session_id: &str,
         speed_mode: SpeedMode,
     ) -> Result<(), SessionError> {
-        self.session_index_or_err(session_id)?;
+        self.session_or_err(session_id)?;
 
         services
             .db()
@@ -1942,7 +1926,7 @@ impl SessionManager {
         Ok(should_persist)
     }
 
-    /// Returns the currently selected session, if any.
+    /// Returns the session selected on the active page, if any.
     pub fn selected_session(&self) -> Option<&Session> {
         self.state
             .table_state
@@ -1950,12 +1934,13 @@ impl SessionManager {
             .and_then(|index| self.state.sessions().get(index))
     }
 
-    /// Returns the session snapshot for one list index, if it still exists.
+    /// Returns the session snapshot at one active-page list index, if it
+    /// still exists.
     pub fn session_at(&self, session_index: usize) -> Option<&Session> {
         self.state.sessions().get(session_index)
     }
 
-    /// Returns the session identifier for the given list index.
+    /// Returns the session identifier at one active-page list index.
     pub fn session_id_for_index(&self, session_index: usize) -> Option<SessionId> {
         self.state
             .sessions()
@@ -1963,7 +1948,7 @@ impl SessionManager {
             .map(|session| session.id.clone())
     }
 
-    /// Resolves a stable session identifier to the current list index.
+    /// Resolves a stable session identifier to its active-page list index.
     pub fn session_index_for_id(&self, session_id: &str) -> Option<usize> {
         self.state.session_index_for_id(session_id)
     }
@@ -2175,10 +2160,10 @@ impl SessionManager {
         session_id: &str,
         summary: forge::ReviewRequestSummary,
     ) -> Result<ReviewRequest, SessionError> {
-        let session_index = self.session_index_or_err(session_id)?;
+        self.session_or_err(session_id)?;
         let review_request = self.build_review_request(summary);
 
-        self.store_review_request(services, session_index, review_request)
+        self.store_review_request(services, session_id, review_request)
             .await
     }
 
@@ -2189,26 +2174,16 @@ impl SessionManager {
     pub(super) async fn store_review_request(
         &mut self,
         services: &AppServices,
-        session_index: usize,
+        session_id: &str,
         review_request: ReviewRequest,
     ) -> Result<ReviewRequest, SessionError> {
-        let session_id = self
-            .state
-            .sessions()
-            .get(session_index)
-            .map(|session| session.id.clone())
-            .ok_or(SessionError::NotFound)?;
         services
             .db()
             .reviews()
-            .update_session_review_request(&session_id, Some(review_request.clone()))
+            .update_session_review_request(session_id, Some(review_request.clone()))
             .await?;
 
-        self.state
-            .sessions_mut()
-            .get_mut(session_index)
-            .ok_or(SessionError::NotFound)?
-            .review_request = Some(review_request.clone());
+        self.session_mut_or_err(session_id)?.review_request = Some(review_request.clone());
 
         Ok(review_request)
     }
@@ -2425,8 +2400,7 @@ impl SessionManager {
         should_replay_history: bool,
         reply_eligibility: ReplyEligibility,
     ) -> Result<ReplyContext, SessionError> {
-        let session_index = self.session_index_or_err(session_id)?;
-        let session = &mut self.state.sessions_mut()[session_index];
+        let session = self.session_mut_or_err(session_id)?;
 
         let is_first_message = session.awaits_first_message();
         if !reply_eligibility.allows(session.status, is_first_message) {
@@ -2476,10 +2450,9 @@ impl SessionManager {
         session_id: &SessionId,
         prompt: &str,
     ) {
-        let Ok(index) = self.session_index_or_err(session_id) else {
+        let Ok(session) = self.session_mut_or_err(session_id) else {
             return;
         };
-        let session = &mut self.state.sessions_mut()[index];
         let folder = session.folder.clone();
         let session_agent = session.agent;
         if session.prompt.is_empty() && session.title.is_none() {

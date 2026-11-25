@@ -1,21 +1,28 @@
 //! Shared session lookup helpers using typed [`SessionError`] results.
+//!
+//! Every helper resolves a session by its stable identifier on any loaded
+//! page, never by a list position, so a position on one page is never used on
+//! another.
 
 use crate::app::SessionManager;
 use crate::app::session::SessionError;
 use crate::domain::session::{Session, SessionHandles};
 
 impl SessionManager {
-    /// Resolves a session identifier into its current list index.
-    pub(crate) fn session_index_or_err(&self, session_id: &str) -> Result<usize, SessionError> {
-        self.session_index_for_id(session_id)
+    /// Resolves an immutable session reference by identifier.
+    pub(crate) fn session_or_err(&self, session_id: &str) -> Result<&Session, SessionError> {
+        self.session_for_id(session_id)
             .ok_or(SessionError::NotFound)
     }
 
-    /// Resolves an immutable session reference by identifier.
-    pub(crate) fn session_or_err(&self, session_id: &str) -> Result<&Session, SessionError> {
-        let session_index = self.session_index_or_err(session_id)?;
-
-        self.session_at(session_index).ok_or(SessionError::NotFound)
+    /// Resolves a mutable session reference by identifier.
+    pub(crate) fn session_mut_or_err(
+        &mut self,
+        session_id: &str,
+    ) -> Result<&mut Session, SessionError> {
+        self.state
+            .session_mut_for_id(session_id)
+            .ok_or(SessionError::NotFound)
     }
 
     /// Resolves runtime handles for a session identifier.

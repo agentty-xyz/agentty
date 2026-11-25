@@ -120,9 +120,10 @@ impl App {
         Some(self.reply_to_graph_output(session_id, output, prompt).await)
     }
 
-    /// Decides or applies the unsettled output replies of loaded sessions
-    /// after a restart or a project switch, at most one per output. A decided
-    /// reply reapplies its recorded decision instead of deciding again.
+    /// Decides or applies the unsettled output replies of the active page's
+    /// sessions after a restart or a project switch, at most one per output.
+    /// A decided reply reapplies its recorded decision instead of deciding
+    /// again.
     pub(crate) async fn recover_graph_output_replies(&mut self) {
         let session_ids: Vec<SessionId> = self
             .sessions
