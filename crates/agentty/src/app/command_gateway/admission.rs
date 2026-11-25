@@ -23,8 +23,10 @@ impl App {
     /// worker-owned publication completion.
     ///
     /// A paired device's mutation is refused first, in this same turn, when
-    /// remote control does not serve it or it names a session the host does
-    /// not list; see [`Self::remote_refusal`].
+    /// remote control does not serve it or it names a project or session
+    /// the host does not list; see [`Self::remote_refusal`]. Every caller
+    /// but the terminal renews the lease of the page holding the session it
+    /// names.
     pub(crate) async fn admit_session_command(
         &mut self,
         command: SessionCommand,
@@ -44,7 +46,10 @@ impl App {
             initiator = ?initiator,
             "admitting session command"
         );
-        if let Some(refusal) = self.remote_refusal(initiator, delivery.remote_scope()) {
+        if let Some(refusal) = self
+            .remote_refusal(initiator, delivery.remote_scope())
+            .await
+        {
             return delivery.refuse(refusal);
         }
         if let Some(session_id) = session_id.cloned() {
@@ -88,13 +93,22 @@ impl App {
     /// Returns the error that turns away a request from `initiator` that
     /// reaches `scope`, checked in the foreground turn that serves it.
     ///
-    /// Only a paired device is limited: it reaches the operations remote
-    /// control serves, only the active project, which it otherwise answers
-    /// as inactive, and a session only while the host lists it for the
-    /// active project, which it otherwise answers as missing. A session on
-    /// a page that session-API callers view is outside its reach.
-    pub(crate) fn remote_refusal(
-        &self,
+    /// Only a paired device is limited. It reaches the operations remote
+    /// control serves, the list of projects the host lists, the active
+    /// project or another project the host lists, which it otherwise
+    /// answers as missing, and a session only while the host lists it: on
+    /// the session page of a listed project, active sessions and the
+    /// page's archive window, which it otherwise answers as missing. A
+    /// listed session whose page is not loaded has that page loaded here,
+    /// in this turn.
+    ///
+    /// `ag-remote` checks the same before it asks the host, in an earlier
+    /// turn. A project the terminal switches to or away from in between
+    /// changes nothing a device reaches; a project hidden or removed from
+    /// the list, or a session deleted or archived out of its page, in
+    /// between is refused here.
+    pub(crate) async fn remote_refusal(
+        &mut self,
         initiator: CommandInitiator,
         scope: RemoteScope<'_>,
     ) -> Option<SessionError> {
@@ -104,13 +118,16 @@ impl App {
 
         match scope {
             RemoteScope::NotServed => Some(SessionError::Operation(REMOTE_NOT_SERVED.to_string())),
-            RemoteScope::Project(ProjectScope::Active) => None,
-            RemoteScope::Project(ProjectScope::Project(project_id)) => (project_id
-                != self.active_project_id())
-            .then(|| SessionError::Operation(format!("Project `{project_id}` is not active"))),
-            RemoteScope::Session(session_id) => {
-                (!self.sessions.is_in_active_page(session_id)).then_some(SessionError::NotFound)
+            RemoteScope::Project(ProjectScope::Active) | RemoteScope::ProjectList => None,
+            RemoteScope::Project(ProjectScope::Project(project_id)) => {
+                (!self.projects.is_listed(project_id)).then_some(SessionError::NotFound)
             }
+            RemoteScope::Session(session_id) => match self.listed_session_project(session_id).await
+            {
+                Ok(Some(_)) => None,
+                Ok(None) => Some(SessionError::NotFound),
+                Err(error) => Some(error),
+            },
         }
     }
 

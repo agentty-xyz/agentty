@@ -46,13 +46,10 @@ fn rendered_text(
 ) -> String {
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let mut page = PlatformPage::new(
-        PlatformTabView {
-            platform,
-            remote_control,
-        },
-        Some("agentty".to_string()),
-    );
+    let mut page = PlatformPage::new(PlatformTabView {
+        platform,
+        remote_control,
+    });
     terminal
         .draw(|frame| {
             let area = frame.area();
@@ -82,7 +79,8 @@ fn signed_out_page_explains_what_signing_in_gives_and_offers_it() {
     let text = rendered_text(&view, &RemoteControlView::default(), 200, 30);
 
     // Assert
-    assert!(text.contains("'agentty' on the platform"));
+    assert!(text.contains("Agentty Platform"));
+    assert!(!text.contains("' on the platform"));
     assert!(text.contains("Address https://platform.example"));
     assert!(text.contains("Account Signed out"));
     assert!(text.contains("Sign in to connect this Agentty to the platform's relay"));
@@ -233,6 +231,9 @@ fn registered_page_shows_remote_control_through_the_platform_relay() {
     // Assert
     assert!(stopped.contains("Name    Agentty on box"));
     assert!(stopped.contains("Remote  Off"));
+    assert!(stopped.contains(
+        "Start remote control to follow and steer the sessions of your projects from a paired"
+    ));
     assert!(stopped.contains("Enter: start"));
     assert!(running.contains("Remote  On"));
     assert!(running.contains("Relay   Not admitted"));
@@ -262,13 +263,10 @@ fn registered_page_shows_the_qr_code_only_when_it_fits() {
         ..RemoteControlView::default()
     };
     let platform = registered();
-    let page = PlatformPage::new(
-        PlatformTabView {
-            platform: &platform,
-            remote_control: &remote_control,
-        },
-        None,
-    );
+    let page = PlatformPage::new(PlatformTabView {
+        platform: &platform,
+        remote_control: &remote_control,
+    });
 
     // Act
     let tall = page.lines(200, 80);
@@ -280,7 +278,6 @@ fn registered_page_shows_the_qr_code_only_when_it_fits() {
     };
     assert!(has_qr_code(&tall));
     assert!(!has_qr_code(&short));
-    assert_eq!(page.title(), "Agentty Platform");
     let relay_row = tall
         .iter()
         .find(|line| line.to_string().starts_with("Relay   Connected"))

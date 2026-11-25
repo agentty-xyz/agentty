@@ -1,17 +1,18 @@
-//! Session pages of listed projects that session-API callers view while the
-//! terminal shows another project.
+//! Session pages of listed projects that session-API callers and paired
+//! devices view while the terminal shows another project.
 //!
-//! A request that names a listed project loads that project's page in the
-//! turn that serves it, beside the active page, and renews its lease. Each
-//! page refreshes by its own fingerprint, its project's git status is polled
-//! while it is loaded, and it is dropped once its lease goes idle, when more
-//! pages are held than the bound allows, when its project leaves the list, or
-//! when the last paired device disconnects. Automation
+//! A request that names a listed project, or a session of one, loads that
+//! project's page in the turn that serves it, beside the active page, and
+//! renews its lease. Each page refreshes by its own fingerprint, its
+//! project's git status is polled while it is loaded, and it is dropped
+//! once its lease goes idle, when more pages are held than the bound
+//! allows, when its project leaves the list, or when the last paired device
+//! disconnects; the next request that names it loads it again. Automation
 //! stays with the terminal's project: workflows that apply the active
 //! project's settings check the active page, and sessions on a viewed page
-//! take the paths that serve projects the terminal does not show. A
-//! session-API caller may also create sessions in, and sync, a viewed
-//! project, each from that project's own checkout and settings.
+//! take the paths that serve projects the terminal does not show. A caller
+//! may also create sessions in, and sync, a viewed project, each from that
+//! project's own checkout and settings.
 
 use ag_session::{ProjectScope, SessionError as ApiSessionError};
 
@@ -25,14 +26,14 @@ impl App {
     /// whose page the request then reads.
     ///
     /// [`ProjectScope::Active`] means the terminal's active project when
-    /// this turn serves the request. A session-API caller's request makes
-    /// the page available, as [`Self::ensure_project_page`] does; other
-    /// callers, the terminal and paired devices, reach only a loaded page
-    /// and renew no lease.
+    /// this turn serves the request. A request of a session-API caller or a
+    /// paired device makes the page available, as
+    /// [`Self::ensure_project_page`] does; the terminal reaches only a
+    /// loaded page and renews no lease.
     ///
     /// # Errors
     /// Returns [`ApiSessionError::NotFound`] for a project the host does not
-    /// list or, for other callers, whose page is not loaded, or an operation
+    /// list or, for the terminal, whose page is not loaded, or an operation
     /// error when its page cannot be loaded.
     pub(crate) async fn resolve_project_scope(
         &mut self,
@@ -43,7 +44,7 @@ impl App {
             ProjectScope::Active => self.active_project_id(),
             ProjectScope::Project(project_id) => project_id,
         };
-        if initiator == CommandInitiator::SessionApi {
+        if Self::leases_pages(initiator) {
             self.ensure_project_page(project_id).await?;
         } else if self.sessions.state().page_for_project(project_id).is_none() {
             return Err(ApiSessionError::NotFound);
@@ -52,8 +53,54 @@ impl App {
         Ok(project_id)
     }
 
+    /// Returns the listed project whose loaded page lists `session_id`, or
+    /// `None` for a session the host does not list.
+    ///
+    /// A session of a listed project whose page is not loaded has that page
+    /// loaded first, in this turn; it is listed only when the loaded page
+    /// holds it, among the project's active sessions and its archive
+    /// window. A session of a project the host does not list, or of the
+    /// active project but off its page, is not listed.
+    ///
+    /// # Errors
+    /// Returns an operation error when the session's project cannot be read
+    /// or its page cannot be loaded.
+    pub(crate) async fn listed_session_project(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Option<i64>, ApiSessionError> {
+        if self
+            .sessions
+            .state()
+            .session_project_id(session_id)
+            .is_none()
+        {
+            let project_id = self
+                .services
+                .db()
+                .sessions()
+                .load_session_project_id(session_id)
+                .await
+                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+            let Some(project_id) = project_id.filter(|project_id| {
+                *project_id != self.active_project_id() && self.projects.is_listed(*project_id)
+            }) else {
+                return Ok(None);
+            };
+            self.ensure_project_page(project_id).await?;
+        }
+        let projects = &self.projects;
+
+        Ok(self
+            .sessions
+            .state()
+            .session_project_id(session_id)
+            .filter(|project_id| projects.is_listed(*project_id)))
+    }
+
     /// Makes the session page of the listed project `project_id` available
-    /// to a session-API request and renews its lease.
+    /// to a request of a session-API caller or a paired device and renews
+    /// its lease.
     ///
     /// The active project's page is always loaded. Another listed project's
     /// page is loaded in this turn when it is not held yet: its branch is
@@ -91,14 +138,15 @@ impl App {
     }
 
     /// Renews the lease of the page holding `session_id` for a request of a
-    /// session-API caller. The terminal's own actions and paired devices,
-    /// which reach only the active page, renew no lease.
+    /// session-API caller or a paired device, so a page stays loaded while
+    /// a device works in it. The terminal's own actions, which reach only
+    /// the active page, renew no lease.
     pub(crate) fn renew_session_page_lease(
         &mut self,
         initiator: CommandInitiator,
         session_id: &str,
     ) {
-        if initiator != CommandInitiator::SessionApi {
+        if !Self::leases_pages(initiator) {
             return;
         }
 
@@ -252,6 +300,13 @@ impl App {
                 .or_insert(persisted_review);
         }
         review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
+    }
+
+    /// Returns whether a request from `initiator` loads and leases the
+    /// pages it names: every caller's but the terminal's, which shows only
+    /// the active page.
+    fn leases_pages(initiator: CommandInitiator) -> bool {
+        initiator != CommandInitiator::SessionView
     }
 
     /// Loads or reloads the viewed page of the switcher's project

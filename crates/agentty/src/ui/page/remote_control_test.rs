@@ -16,7 +16,7 @@ use crate::ui::style::palette;
 fn rendered_rows(view: &RemoteControlView, width: u16, height: u16) -> Vec<String> {
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let mut page = RemoteControlPage::new(view, Some("agentty".to_string()));
+    let mut page = RemoteControlPage::new(view);
     terminal
         .draw(|frame| {
             let area = frame.area();
@@ -78,7 +78,7 @@ fn running_listener_shows_address_code_devices_and_hints() {
     let text = rendered_text(&view);
 
     // Assert
-    assert!(text.contains("'agentty' remote control"));
+    assert!(text.contains("Remote control"));
     assert!(text.contains("Status  On"));
     assert!(text.contains("http://127.0.0.1:4646/"));
     assert!(text.contains("ABCD-EFGH"));
@@ -89,16 +89,18 @@ fn running_listener_shows_address_code_devices_and_hints() {
 }
 
 #[test]
-fn page_without_a_project_name_uses_the_plain_title() {
+fn title_names_no_project() {
     // Arrange
     let view = RemoteControlView::default();
-    let page = RemoteControlPage::new(&view, None);
 
     // Act
-    let title = page.title();
+    let rows = rendered_rows(&view, 100, 40);
 
     // Assert
-    assert_eq!(title, "Remote control");
+    // Paired devices reach every project the terminal lists, so the tab
+    // does not belong to the active one.
+    assert!(rows[0].contains("Remote control"), "{}", rows[0]);
+    assert!(!rows[0].contains("remote control"), "{}", rows[0]);
 }
 
 #[test]
@@ -155,7 +157,7 @@ fn selected_device_row_uses_the_selection_style() {
         selected_device_index: 1,
         ..RemoteControlView::default()
     };
-    let page = RemoteControlPage::new(&view, None);
+    let page = RemoteControlPage::new(&view);
 
     // Act
     let lines = page.lines(40, 40);
@@ -202,7 +204,7 @@ fn qr_code(view: &RemoteControlView) -> Vec<String> {
 fn relay_listener_shows_status_link_qr_code_and_link_hints() {
     // Arrange
     let view = relay_view(RelayStatus::Connected, Some("Link copied. It works once."));
-    let page = RemoteControlPage::new(&view, None);
+    let page = RemoteControlPage::new(&view);
 
     // Act
     let lines = page.lines(80, 60);
@@ -283,7 +285,7 @@ fn rendered_page_keeps_its_hints_when_the_qr_code_barely_fits() {
 fn relay_qr_code_is_left_out_when_it_does_not_fit() {
     // Arrange
     let view = relay_view(RelayStatus::Connecting, None);
-    let page = RemoteControlPage::new(&view, None);
+    let page = RemoteControlPage::new(&view);
     let qr_height = qr_code(&view).len();
 
     // Act
@@ -305,7 +307,7 @@ fn relay_qr_code_is_left_out_when_it_does_not_fit() {
 fn relay_that_does_not_admit_this_agentty_says_so_in_danger_color() {
     // Arrange
     let view = relay_view(RelayStatus::NotAdmitted, None);
-    let page = RemoteControlPage::new(&view, None);
+    let page = RemoteControlPage::new(&view);
 
     // Act
     let lines = page.lines(200, 80);
@@ -339,7 +341,9 @@ fn stopped_listener_shows_error_empty_devices_and_start_hint() {
 
     // Assert
     assert!(text.contains("Status  Off"));
-    assert!(text.contains("Start remote control to follow and steer"));
+    assert!(text.contains(
+        "Start remote control to follow and steer the sessions of your projects from a paired"
+    ));
     assert!(text.contains("Port 4646 is in use"));
     assert!(text.contains("None yet"));
     assert!(text.contains("Enter: start"));

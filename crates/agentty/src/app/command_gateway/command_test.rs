@@ -48,7 +48,7 @@ fn remote_control_is_served_exactly_the_mutations_the_owner_approved() {
             RemoteScope::Project(ProjectScope::Active),
         ),
         // A sync reaches the project it names, which a paired device may
-        // name only while it is the active one.
+        // name while the host lists it.
         (
             SessionMutation::SyncProject {
                 scope: ProjectScope::Project(7),

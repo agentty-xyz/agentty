@@ -93,9 +93,10 @@ impl CommandDelivery {
     }
 
     /// Classifies the delivery for a paired device: creation reaches the
-    /// project it names and the session it inherits from, if any;
-    /// publication reaches its session under the branch name the host
-    /// chooses, and a device may not name one.
+    /// project it names, or the session it inherits from, whose project
+    /// creation then requires it to name; publication reaches its session
+    /// under the branch name the host chooses, and a device may not name
+    /// one.
     pub(super) fn remote_scope(&self) -> RemoteScope<'_> {
         match self {
             Self::Create { request, .. } => request.inherit_from_session_id.as_ref().map_or(
@@ -295,8 +296,9 @@ impl SessionMutation {
     }
 
     /// Classifies the mutation for a paired device: the operations the
-    /// project owner approved for remote control, each with the session it
-    /// must name. A new mutation is not served until it is listed here.
+    /// project owner approved for remote control, each with the session or
+    /// project it must name. A new mutation is not served until it is
+    /// listed here.
     ///
     /// Payloads count too: a device sends no attachments, which name files
     /// on this computer, so a question answer or graph proposal request that
@@ -366,10 +368,12 @@ pub(crate) enum RemoteScope<'a> {
     /// Remote control does not serve the request.
     NotServed,
     /// The request reaches the project this scope names, not a named
-    /// session; a paired device reaches only the active project.
+    /// session: the active project, or a project the host lists.
     Project(ProjectScope),
-    /// The request reaches this session, only while the host lists it for
-    /// the active project.
+    /// The request reads the list of projects the host lists.
+    ProjectList,
+    /// The request reaches this session, only while the host lists it: on
+    /// the session page of a project the host lists.
     Session(&'a SessionId),
 }
 

@@ -1010,19 +1010,14 @@ fn render_list_background(
             }
         }
         Tab::Remote => {
-            let active_project_name =
-                active_project_name(shared.active_project_id, shared.projects);
             if let Some(remote_control) = shared.remote_control {
-                page::remote_control::RemoteControlPage::new(remote_control, active_project_name)
+                page::remote_control::RemoteControlPage::new(remote_control)
                     .render(frame, chunks[1]);
             }
         }
         Tab::Platform => {
-            let active_project_name =
-                active_project_name(shared.active_project_id, shared.projects);
             if let Some(platform) = shared.platform {
-                page::platform::PlatformPage::new(platform, active_project_name)
-                    .render(frame, chunks[1]);
+                page::platform::PlatformPage::new(platform).render(frame, chunks[1]);
             }
         }
     }

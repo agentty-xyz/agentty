@@ -118,7 +118,7 @@ fn page_git_status_ids(app: &App, project_id: i64) -> Option<Vec<String>> {
 }
 
 /// Hides `project_id` in the project catalog and reloads the list.
-async fn hide_project(app: &mut App, project_id: i64) {
+pub(crate) async fn hide_project(app: &mut App, project_id: i64) {
     app.services
         .db()
         .settings()

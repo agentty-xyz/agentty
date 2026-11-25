@@ -12,10 +12,11 @@ published are lost; the device asks before it cancels. While an execution graph 
 for you, a message replies to it as a terminal reply would; see
 [Generated Graph Proposals](@/docs/usage/workflow.md#generated-graph-proposals). A
 paired device can also stop a running turn, sync a session branch with its base branch,
-change a session's settings, create sessions in the active project, merge a session into
-its base branch, publish its branch, sync the active project's branch with its remote,
-ask for a graph proposal with `/graph`, and act on an execution graph as the terminal's
-graph inspector does; the web page offers each of these.
+change a session's settings, create sessions, merge a session into its base branch,
+publish its branch, sync a project's branch with its remote, ask for a graph proposal
+with `/graph`, and act on an execution graph as the terminal's graph inspector does; the
+web page offers each of these. A device reaches every project in `Projects` and picks
+the one it shows with the [project menu](#usage-remote-control-project).
 
 Remote control is a preview feature. Start Agentty with `--experimental-remote`, or with
 `--remote-relay <URL>` alone to [use a relay](#usage-remote-control-relay), to add the
@@ -39,9 +40,9 @@ The device stays paired, so later visits connect without a code. While the liste
 runs, the tab reads `Remote (1 online)` with the number of connected devices. Pairing
 requests appear only in the tab, so keep it open while you pair a device.
 
-The tab belongs to the active project: its title names the project whose sessions paired
-devices follow, and it lists the paired devices. Opening the tab while the listener runs
-replaces the pairing code, because a code works once.
+The tab lists the paired devices. It names no project: a paired device reaches every
+project in `Projects`, whichever one the terminal has open. Opening the tab while the
+listener runs replaces the pairing code, because a code works once.
 
 Remote control stays off until you start it, and it stops when you press `Enter` in the
 tab again or quit Agentty. It does not start again on the next launch. See
@@ -68,24 +69,37 @@ that can merge; see [Project Sync](@/docs/usage/workflow.md#project-sync) for wh
 terminal's same labels mean. With no session open, the page offers the sessions waiting
 for you, with their changed lines.
 
-The top of the sidebar names the active project, its branch, and how far that branch is
-from its remote: `↓2 ↑1` means two commits to pull and one to push, and `✓` means none.
-When this Agentty lets devices sync the project, `Sync` beside it pulls and pushes that
-branch as `s` does in the terminal. The line under it follows the sync and shows its
-result for a few seconds. A sync that cannot start, such as while a merge runs, says
-why.
+The top of the sidebar names the project the page shows, its branch, and how far that
+branch is from its remote: `↓2 ↑1` means two commits to pull and one to push, and `✓`
+means none. When this Agentty lets devices sync the project, `Sync` beside it pulls and
+pushes that branch as `s` does in the terminal. The line under it follows the sync and
+shows its result for a few seconds. A sync that cannot start, such as while a merge in
+any project runs or waits, says why.
+
+<a id="usage-remote-control-project"></a> When this Agentty lists more than one project,
+a menu takes the place of the project name at the top of the sidebar. It lists the
+projects in the order the terminal's `p` popup does and marks the one the terminal has
+open `· terminal`. The page starts on the terminal's project, or on the project you last
+picked in this browser for this Agentty, and keeps showing its project when the terminal
+switches to another. The session list, the project line with its branch, counts, and
+`Sync`, `New session`, and `@` file lookup in a new session's first message all follow
+the pick. The browser remembers only projects you pick yourself, for each Agentty, and
+forgets them when you forget the pairing. If the project the page shows is no longer
+listed, the page goes back to the terminal's project and says
+`The project shown here is no longer listed, so this shows the terminal's project.` On a
+relay page with several Agenttys, each one has its own menu.
 
 When this Agentty lets devices create sessions, the sidebar offers `New session`. Home
-then asks what the agent should work on in the active project and base branch, with a
-choice of session type when Agentty offers more than one. Its message box is the open
-session's: the line under it shows the new session's model, reasoning level, answer
-style, and speed, and when the device may change session settings, the line and the
-slash commands change them, with the agent that session type starts on, or another one
-when this Agentty lets devices change it. Because the session has no worktree yet, `@`
-lists the files in the active project's checkout, as it does for a draft in the
-terminal. Sending creates the session, applies the settings you changed, sends your text
-as its first message, and opens it. If the settings or the message do not go through,
-the new session opens with your text still in its box.
+then asks what the agent should work on in the project the page shows and its base
+branch, with a choice of session type when Agentty offers more than one. Its message box
+is the open session's: the line under it shows the new session's model, reasoning level,
+answer style, and speed, and when the device may change session settings, the line and
+the slash commands change them, with the agent that session type starts on, or another
+one when this Agentty lets devices change it. Because the session has no worktree yet,
+`@` lists the files in that project's checkout, as it does for a draft in the terminal.
+Sending creates the session, applies the settings you changed, sends your text as its
+first message, and opens it. If the settings or the message do not go through, the new
+session opens with your text still in its box.
 
 The header of the open session shows its size and changed lines, a merge conflict with
 its base branch, the session branch and its base branch, the remote branch it was
@@ -377,8 +391,9 @@ run with the session's permissions, so treat a pairing like a login.
 
 ### What a paired device can do
 
-<a id="usage-remote-control-device-access"></a> Within the sessions it lists, a paired
-device can:
+<a id="usage-remote-control-device-access"></a> A paired device reaches every project in
+`Projects` and the project the terminal has open, whichever that is. Within those
+projects and the sessions their lists show, it can:
 
 - list sessions and read their transcripts, focused review results, questions, queued
   messages and actions, staged draft messages, agent and model settings, branches, and
@@ -393,11 +408,11 @@ device can:
   status, objective, errors, questions, and outputs;
 - list the names of the files and directories in a session's worktree, as `@` lookup in
   the terminal does, without reading their contents;
-- list the names of the files and directories in the active project's checkout, for `@`
-  lookup in the first message of a new session, without reading their contents;
-- see the active project's name and branch, how far the branch is ahead of and behind
-  its remote, and the progress and result of its sync, including Git's message when it
-  fails;
+- list the projects and how many active sessions each has;
+- list the names of the files and directories in a project's checkout, for `@` lookup in
+  the first message of a new session, without reading their contents;
+- see a project's name and branch, how far the branch is ahead of and behind its remote,
+  and the progress and result of its sync, including Git's message when it fails;
 - send messages, with PNG or JPEG images that Agentty stores in its own temporary folder
   for the turn, which start, resume, or queue a turn that agents run with edit
   permissions;
@@ -416,11 +431,12 @@ device can:
   while a model or speed change waits for the running turn as it does in the terminal;
 - cancel a session, which deletes its worktree and branch;
 - merge a session, which lands its changes on the base branch;
-- create a session in the active project, which adds a worktree and branch;
+- create a session in any of these projects, not only the one the terminal has open,
+  which adds a worktree and branch in that project's checkout;
 - publish a session, which pushes its branch and opens or refreshes its pull request
   with this computer's Git and forge credentials;
-- sync the active project, which pulls its branch with a rebase and pushes it with this
-  computer's Git credentials, and starts an agent to resolve any conflicts; and
+- sync any of these projects, which pulls its branch with a rebase and pushes it with
+  this computer's Git credentials, and starts an agent to resolve any conflicts; and
 - act on a session's execution graph wherever the terminal's graph inspector could:
   accept an output, which releases the nodes waiting for it; retry a node, or reply to
   it with guidance, which runs it again with the session's permissions; resume a paused
@@ -439,9 +455,12 @@ control.
 - Each device gets its own key, which Agentty stores only as a hash. Remove a device in
   the `Remote` tab with `d`; its open connection closes at once. Keys do not expire, so
   remove a device you no longer control.
-- A device can read and act on only the sessions it lists, which are the sessions of the
-  active project, and creates sessions in and syncs only that project. Agentty refuses a
-  request for any other session.
+- A device reaches only the projects in `Projects` and the project the terminal has
+  open, and only the sessions their lists show: active sessions and the archived ones
+  the list shows. Agentty answers a request for any other project or session as if it
+  did not exist, checking again as it serves the request, so a project that leaves
+  `Projects` is out of reach at once. Which project the terminal has open does not
+  change what a device reaches.
 - A device that publishes a session pushes it to the branch it was published to before,
   or under the default name the first time, and opens or refreshes its pull request with
   this computer's Git and forge credentials; it cannot choose a branch name. See
@@ -457,9 +476,19 @@ control.
 <a id="usage-remote-control-limitations"></a>
 
 - Remote control works only while Agentty is open in a terminal.
-- Remote devices see and create the sessions of the active project. A project without a
-  current Git branch, such as a detached `HEAD`, cannot take new sessions; a device's
-  request for the host details or a new session then fails.
+- A project without a current Git branch, such as a detached `HEAD`, cannot take new
+  sessions; a device's request for the host details or a new session then fails.
+- When a device first shows a project the terminal does not have open, ahead and behind
+  counts and merge conflicts appear once Agentty has checked that project, shortly
+  after.
+- For a project the terminal does not have open, the archive shows its first page of
+  archived sessions only.
+- Pull request states, and the automatic follow-ups on review comments and failed
+  checks, refresh only for the project the terminal has open. Another project's pull
+  requests refresh when the terminal opens it or when that project syncs.
+- Two saved projects that share one repository, such as a main checkout and a linked
+  worktree, are not kept apart: a background fetch for one can collide with a fetch or
+  sync of the other, and is retried.
 - The transcript updates when a turn finishes; live streaming output is not shown.
 - Answers render as Markdown: headings, lists, quotes, code blocks, tables, and links.
   Mermaid and other diagrams show as code, and images show as links. The page's own

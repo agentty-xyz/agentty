@@ -1,5 +1,5 @@
 //! Remote tab page showing the remote-control listener, its pairing code,
-//! and the paired devices of the active project.
+//! and the paired devices, which reach every project the terminal lists.
 
 use ag_remote::RelayStatus;
 use ag_tui_text::text_util::truncate_with_ellipsis;
@@ -17,25 +17,19 @@ use crate::ui::{Page, layout, style};
 /// Width of the left-hand field labels.
 const LABEL_WIDTH: usize = 8;
 
+/// Title of the Remote tab, which names no project: paired devices pick
+/// their own among the projects the terminal lists.
+const TITLE: &str = "Remote control";
+
 /// Renders the Remote tab: remote-control status, pairing, and devices.
 pub struct RemoteControlPage<'a> {
-    project_name: Option<String>,
     view: &'a RemoteControlView,
 }
 
 impl<'a> RemoteControlPage<'a> {
-    /// Creates the page for one frame's remote-control state. Paired
-    /// devices follow the sessions of the project named `project_name`.
-    pub(crate) fn new(view: &'a RemoteControlView, project_name: Option<String>) -> Self {
-        Self { project_name, view }
-    }
-
-    /// Returns the title naming the project that paired devices follow.
-    fn title(&self) -> String {
-        match self.project_name.as_deref() {
-            Some(name) => format!("'{name}' remote control"),
-            None => "Remote control".to_string(),
-        }
+    /// Creates the page for one frame's remote-control state.
+    pub(crate) fn new(view: &'a RemoteControlView) -> Self {
+        Self { view }
     }
 
     /// Returns all render lines for content `width` columns wide and
@@ -74,8 +68,8 @@ impl<'a> RemoteControlPage<'a> {
             lines.push(field_line("Status", "Off", palette::text_muted()));
             lines.push(Line::from(""));
             lines.push(muted_line(
-                "Start remote control to follow and steer this project's sessions from a paired \
-                 phone or browser.",
+                "Start remote control to follow and steer the sessions of your projects from a \
+                 paired phone or browser.",
             ));
         }
         lines.extend(outcome_lines(self.view));
@@ -105,7 +99,7 @@ impl Page for RemoteControlPage<'_> {
         let main_area = layout::tab_page_area(area);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(self.title())
+            .title(TITLE)
             .border_style(style::border_style())
             .padding(Padding::horizontal(1));
         let content_area = block.inner(main_area);

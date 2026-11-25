@@ -10,20 +10,20 @@ use std::sync::{Arc, Mutex};
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, CreateSessionMode, CreateSessionRequest, HostProject,
     HostProjectStatus, HostProjectSync, HostProjectSyncPhase, ProjectScope, ProjectSessions,
-    ReasoningLevel, SessionError as ApiSessionError, SessionId, SessionListEntry, SessionOperation,
+    ReasoningLevel, SessionError as ApiSessionError, SessionId, SessionOperation,
     SessionSettingsChange, test_support as model_fixture,
 };
 use tempfile::TempDir;
 
 use super::support::{
-    request_project_status, request_project_sync, request_session, request_session_creation,
-    request_settings,
+    entry_ids, request_project_status, request_project_sync, request_session,
+    request_session_creation, request_settings, terminal_list, viewed_session_ids,
 };
 use crate::app::session::{SessionGitStatus, session_branch};
 use crate::app::test_support::{
     MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
-    SyncSessionStartError, add_listed_project, git_status_updated, hold_background_polls,
-    insert_loadable_session, start_fake_listener,
+    SyncSessionStartError, add_listed_project, git_status_updated, hide_project,
+    hold_background_polls, insert_loadable_session, start_fake_listener,
 };
 use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
 use crate::domain::session::Status;
@@ -405,25 +405,6 @@ async fn runtime_backend_rejects_cross_project_inheritance() {
     );
 }
 
-/// Hides `project_id` in the project catalog and reloads the list.
-async fn hide_project(app: &mut App, project_id: i64) {
-    app.services
-        .db()
-        .settings()
-        .upsert_project_setting(project_id, SettingName::ProjectCatalogVisible, "false")
-        .await
-        .expect("visibility should persist");
-    app.reload_projects().await;
-}
-
-/// Returns the ids of `entries` in order.
-fn entry_ids(entries: &[SessionListEntry]) -> Vec<&str> {
-    entries
-        .iter()
-        .map(|entry| entry.summary.id.as_str())
-        .collect()
-}
-
 /// Stores Claude Opus as the default agent and model of `project_id`.
 async fn prefer_claude_opus(app: &App, project_id: i64) {
     app.services
@@ -453,32 +434,6 @@ fn check_out_new_branch(directory: &TempDir, name: &str, branch: &str) {
         .expect("git should run");
 
     assert!(status.success(), "git checkout should succeed");
-}
-
-/// Returns the ids of the sessions on the viewed page of `project_id`.
-fn viewed_session_ids(app: &App, project_id: i64) -> Vec<String> {
-    app.sessions
-        .state()
-        .viewed_page(project_id)
-        .map_or_default(|page| {
-            page.sessions()
-                .iter()
-                .map(|session| session.id.to_string())
-                .collect()
-        })
-}
-
-/// Returns the ids of the terminal's sessions and the one it selects.
-fn terminal_list(app: &App) -> (Vec<String>, Option<String>) {
-    let session_ids = app
-        .sessions
-        .sessions()
-        .iter()
-        .map(|session| session.id.to_string())
-        .collect();
-    let selected_session_id = app.selected_session().map(|session| session.id.to_string());
-
-    (session_ids, selected_session_id)
 }
 
 /// What one started project sync was given.
@@ -885,9 +840,10 @@ async fn runtime_backend_reads_a_viewed_project_with_its_branch_and_no_counts() 
     );
     assert_eq!(app.sessions.default_session_model(), default_model);
     assert!(files.iter().any(|entry| entry.path == "marker.txt"));
+    // Paired devices may name a listed project too.
     assert!(service.supports(SessionOperation::Projects));
     assert!(
-        !app.remote_session_service()
+        app.remote_session_service()
             .supports(SessionOperation::Projects)
     );
 }
