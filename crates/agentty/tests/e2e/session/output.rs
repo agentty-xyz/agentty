@@ -1349,6 +1349,8 @@ case "$input" in
     printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"old","content":"done"}]}}'
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"mcp","name":"mcp__posthog__query","input":{"query":"SELECT 1"}}]}}'
     printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mcp","content":"ok"}]}}'
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"view","name":"Read","input":{"file_path":"src/example.rs"}},{"type":"tool_use","id":"grep","name":"Grep","input":{"pattern":"fn main"}}]}}'
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"view","content":"fn main() {}"},{"type":"tool_result","tool_use_id":"grep","content":"src/example.rs"}]}}'
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"read","name":"Bash","input":{"command":"printf activity-details-with-a-long-literal-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-hidden-command-tail"}},{"type":"tool_use","id":"skill","name":"Skill","input":{"skill":"review"}}]}}'
     printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"group","name":"Bash","input":{"command":"{ cargo fmt; cargo test; }"}}]}}'
     __RUNNING_GATE__
@@ -1383,17 +1385,16 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                 .write_text("Stream activity demo")
                 .press_key("Enter")
                 .wait_for_text("printf activity-details", 15000)
-                .wait_for_text("✓ mcp posthog/query · SELECT 1", 15000)
-                .wait_for_text("… skill review", 15000)
-                .wait_for_text("… Bash · { cargo fmt; cargo test; }", 15000)
+                .wait_for_text("posthog/query · SELECT 1", 15000)
+                .wait_for_text("Running { cargo fmt; cargo test; }", 15000)
                 .capture_labeled("running", "Invocations before the answer")
                 .compose(&running.release())
-                .wait_for_text("Status: 3 succeeded · 2 failed · 1 running", 10000)
-                .wait_for_text("… Edit · src/example.rs", 10000)
-                .capture_labeled("settled", "Statuses update in place")
+                .wait_for_text("│ group failed", 10000)
+                .wait_for_text("Editing src/example.rs", 10000)
+                .capture_labeled("settled", "Rows update in place")
                 .compose(&settled.release())
-                .wait_for_text("✓ Edit · src/example.rs", 10000)
-                .capture_labeled("thinking", "Recent activity remains between calls")
+                .wait_for_text("✓ Edit", 10000)
+                .capture_labeled("thinking", "Finished rows remain between calls")
                 .compose(&thinking.release())
                 // The summary is published before live-row cleanup completes.
                 // Wait for turn finalization before asserting the final frame.
@@ -1407,8 +1408,8 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
 }
 
 /// Wait until the live-activity turn has finished: the answer and saved
-/// counts-only footer render while the active-turn loader and live status
-/// rows are gone.
+/// counts-only footer render while the live timeline and its status line
+/// are gone.
 fn wait_for_finalized_live_activity() -> Step {
     Step::eventually(
         Duration::from_secs(15),
@@ -1417,7 +1418,7 @@ fn wait_for_finalized_live_activity() -> Step {
             let full = Region::full(frame.cols(), frame.rows());
             assertion::match_text_in_region(frame, "Activity demo finished", &full)?;
             assertion::match_text_in_region(frame, "Skills: review ×1 (1 failed)", &full)?;
-            for hidden in ["Working...", "Committing...", "Status:"] {
+            for hidden in ["Working...", "Committing...", "  ·  step "] {
                 assertion::match_not_visible(frame, hidden)?;
             }
 
@@ -1426,74 +1427,81 @@ fn wait_for_finalized_live_activity() -> Step {
     )
 }
 
-/// Checks live replacement, readable previews, and the counts-only saved
-/// footer.
+/// Checks the timeline's rows as calls start and finish, the status line,
+/// and the counts-only saved footer that replaces them.
 fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
-    let expected_labels: [&[&str]; 2] = [
-        &[
-            "… Bash · printf activity-details",
-            "✓ mcp posthog/query · SELECT 1",
-            "… skill review",
-            "… Bash · { cargo fmt; cargo test; }",
-        ],
-        &["✓ Bash · printf activity-details"],
-    ];
-    for (index, labels) in expected_labels.iter().enumerate() {
-        let capture = common::frame_from_capture(&report.captures[index]);
-        let full = Region::full(capture.cols(), capture.rows());
-        for label in *labels {
-            assertion::assert_text_in_region(&capture, label, &full);
-            assertion::assert_match_count(&capture, label, 1);
-        }
-        assertion::assert_text_in_region(&capture, "printf activity-details", &full);
-        assertion::assert_text_in_region(&capture, "Tools: Bash ×3", &full);
-        assertion::assert_text_in_region(&capture, "MCP: posthog/query ×1", &full);
-        assertion::assert_text_in_region(&capture, "Skills: review ×1", &full);
-        assertion::assert_text_in_region(
-            &capture,
-            if index == 0 {
-                "Status: 2 succeeded · 0 failed · 3 running"
-            } else {
-                "Status: 3 succeeded · 2 failed · 1 running"
-            },
-            &full,
-        );
-        let text = capture.all_text();
-        assert!(
-            text.lines()
-                .any(|line| line.contains("Bash · printf") && line.contains("..."))
-        );
-        assert!(!text.contains("hidden-command-tail"));
-        if index == 1 {
-            assert!(!text.contains("obsolete-command"));
-            assertion::assert_text_in_region(&capture, "… Edit · src/example.rs", &full);
-        }
-        assert!(!text.contains("✗ skill review"));
-        assert!(!text.contains("✗ Bash"));
-        assert!(!text.contains("error line"));
-        assert!(!text.contains("group failed"));
-        assert!(!capture.all_text().contains("second output line"));
-        assert!(!capture.all_text().contains("Input:"));
-        assert!(!capture.all_text().contains("Output:"));
-        assert!(!capture.all_text().contains("Activity demo finished"));
-        assert!(!text.contains("hidden-new-content"));
-        assert!(!text.contains("replace_all"));
+    let running = common::frame_from_capture(&report.captures[0]);
+    let running_full = Region::full(running.cols(), running.rows());
+    for row in [
+        "✓ Ran       obsolete-command",
+        "✓ MCP       posthog/query · SELECT 1",
+        "✓ Explored  read example.rs · search \"fn main\"",
+        "Running   printf activity-details",
+        "Skill     review",
+        "Running   { cargo fmt; cargo test; }",
+        "2 calls",
+        "Running { cargo fmt; cargo test; } 0s  ·  step 1  ·  turn 0s",
+    ] {
+        assertion::assert_text_in_region(&running, row, &running_full);
     }
+    let running_text = running.all_text();
+    assert!(
+        running_text
+            .lines()
+            .any(|line| line.contains("printf") && line.contains("..."))
+    );
+    // The overlay paints the spinner in the glyph column and, under the
+    // pinned clock, `0s` right-aligned at the row's end.
+    let group_row = running_text
+        .lines()
+        .find(|line| line.contains("Running   { cargo fmt; cargo test; }"))
+        .map_or_default(str::trim);
+    assert!(
+        group_row.starts_with("⠋ Running   { cargo fmt; cargo test; }"),
+        "{group_row}"
+    );
+    assert!(group_row.ends_with(" 0s"), "{group_row}");
+    for hidden in [
+        "hidden-command-tail",
+        "Working...",
+        "Tools:",
+        "Status:",
+        "error line",
+    ] {
+        assert!(!running_text.contains(hidden), "{hidden}");
+    }
+
+    let settled = common::frame_from_capture(&report.captures[1]);
+    let settled_full = Region::full(settled.cols(), settled.rows());
+    for row in [
+        "✓ Ran       printf activity-details",
+        "✗ Skill     review",
+        "│ first error line",
+        "│ hidden third error line",
+        "✗ Ran       { cargo fmt; cargo test; }",
+        "│ group failed",
+        "Edit      src/example.rs",
+        "Editing src/example.rs",
+    ] {
+        assertion::assert_text_in_region(&settled, row, &settled_full);
+    }
+    let settled_text = settled.all_text();
+    for hidden in ["second output line", "hidden-new-content", "replace_all"] {
+        assert!(!settled_text.contains(hidden), "{hidden}");
+    }
+
     let thinking = common::frame_from_capture(&report.captures[2]);
     let thinking_full = Region::full(thinking.cols(), thinking.rows());
-    assertion::assert_text_in_region(
-        &thinking,
-        "Status: 4 succeeded · 2 failed · 0 running",
-        &thinking_full,
-    );
-    assertion::assert_text_in_region(&thinking, "✓ Edit · src/example.rs", &thinking_full);
-    assert!(!thinking.all_text().contains("✗"));
-    assert!(!thinking.all_text().contains("error line"));
-    assert!(!thinking.all_text().contains("group failed"));
-    assert!(!thinking.all_text().contains("printf activity-details"));
+    assertion::assert_text_in_region(&thinking, "✓ Edit      src/example.rs", &thinking_full);
+    assert!(!thinking.all_text().contains("Activity demo finished"));
+
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(frame, "Activity demo finished", &full);
-    assertion::assert_text_in_region(frame, "Tools: Bash ×3 (1 failed), Edit ×1", &full);
+    assertion::assert_text_in_region(
+        frame,
+        "Tools: Bash ×3 (1 failed), Edit ×1, Grep ×1, Read ×1",
+        &full,
+    );
     assertion::assert_text_in_region(frame, "MCP: posthog/query ×1", &full);
     assertion::assert_text_in_region(frame, "Skills: review ×1 (1 failed)", &full);
     let text = frame.all_text();
@@ -1501,12 +1509,14 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
         ["Tools: Bash", "MCP: posthog/query", "Skills: review"].map(|label| text.find(label));
     assert!(footer.iter().all(Option::is_some));
     assert!(footer.windows(2).all(|pair| pair[0] < pair[1]));
-    assert!(!frame.all_text().contains("… Bash"));
-    assert!(!frame.all_text().contains("✓ Bash"));
-    assert!(!frame.all_text().contains("✗"));
-    assert!(!frame.all_text().contains("error line"));
-    assert!(!frame.all_text().contains("group failed"));
-    assert!(!frame.all_text().contains("{ cargo fmt; cargo test; }"));
-    assert!(!frame.all_text().contains("✓ Edit"));
-    assert!(!frame.all_text().contains("Status:"));
+    for hidden in [
+        "✓ Ran",
+        "✗",
+        "│ group failed",
+        "error line",
+        "{ cargo fmt; cargo test; }",
+        "✓ Edit",
+    ] {
+        assert!(!text.contains(hidden), "{hidden}");
+    }
 }

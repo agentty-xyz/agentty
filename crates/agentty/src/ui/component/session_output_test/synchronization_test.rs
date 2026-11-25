@@ -1,12 +1,15 @@
-//! Session output rebase caching, sync-status ordering, and live-activity
-//! rendering unit tests.
+//! Session output rebase caching, sync-status ordering, live-timeline, and
+//! usage-footer rendering unit tests.
 
 use std::sync::Arc;
 
+use ag_contracts::{OutputEvent, OutputKind};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 
 use super::super::{
-    SessionOutputLayoutCache, SessionOutputLineContext, activity_summary_lines, live_activity_lines,
+    SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext, activity_summary_lines,
 };
 use super::support::{line_context, output_lines, session_fixture, set_conversation_transcript};
 use crate::domain::session::Status;
@@ -15,7 +18,10 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
 };
-use crate::ui::{markdown, style};
+use crate::domain::turn_timeline::TurnTimeline;
+use crate::test_support::activity_event;
+use crate::ui::component::turn_timeline;
+use crate::ui::{Component, markdown, style};
 
 /// Verifies workflow-only status changes reuse the stable transcript body
 /// while a rebase adds progress output.
@@ -149,8 +155,29 @@ fn test_output_lines_orders_post_sync_statuses_chronologically() {
     assert!(auto_push_index < review_index);
 }
 
+/// Shows `timeline` as the session's live timeline.
+fn show_timeline(session: &mut crate::domain::session::Session, timeline: &mut TurnTimeline) {
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::AfterActiveTurn,
+        body: TransientMessageBody::Timeline(Arc::new(timeline.snapshot())),
+        lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+        slot: TransientMessageSlot::Turn,
+        turn_position: Some(0),
+    });
+}
+
+/// Joins rendered layout rows into one string.
+fn layout_text(layout: &super::super::SessionOutputLayout) -> String {
+    layout
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
-fn test_live_activity_invalidates_cached_output_without_transcript_changes() {
+fn test_live_timeline_replaces_the_loader_and_reuses_unchanged_steps() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::InProgress;
@@ -160,86 +187,214 @@ fn test_live_activity_invalidates_cached_output_without_transcript_changes() {
     );
     let cache = SessionOutputLayoutCache::default();
     let area = Rect::new(0, 0, 80, 20);
-    let mut texts = Vec::new();
+    let mut timeline = TurnTimeline::default();
+    timeline.observe_output(
+        OutputEvent::Started {
+            id: 0,
+            kind: OutputKind::Message,
+        },
+        0,
+    );
+    timeline.observe_output(
+        OutputEvent::Completed {
+            id: 0,
+            text: "Checking the tests.".into(),
+        },
+        0,
+    );
+    timeline.observe_activity(activity_event("call"), 0);
+    let before = layout_text(&cache.layout(&session, area, line_context(), None));
 
     // Act
-    for status in ["…", "✓", "✗", "!"] {
-        session.transient_messages.upsert(TransientMessage {
-            anchor: TransientMessageAnchor::AfterActiveTurn,
-            body: TransientMessageBody::Plain(format!("{status} **Read**\n… skill review")),
-            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
-            slot: TransientMessageSlot::Activity,
-            turn_position: Some(0),
-        });
-        let layout = cache.layout(&session, area, line_context(), None);
-        texts.push(
-            layout
-                .lines
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-    }
+    show_timeline(&mut session, &mut timeline);
+    let running = cache.layout(&session, area, line_context(), None);
+    let running_text = layout_text(&running);
+    timeline.observe_output(
+        OutputEvent::Started {
+            id: 1,
+            kind: OutputKind::Message,
+        },
+        0,
+    );
+    timeline.observe_output(
+        OutputEvent::Completed {
+            id: 1,
+            text: "Next step.".into(),
+        },
+        0,
+    );
+    show_timeline(&mut session, &mut timeline);
+    let grown_text = layout_text(&cache.layout(&session, area, line_context(), None));
     session
         .transient_messages
-        .retract(TransientMessageSlot::Activity);
-    let cleared = cache.layout(&session, area, line_context(), None);
-    let cleared_text = cleared
-        .lines
+        .retract(TransientMessageSlot::Turn);
+    let cleared_text = layout_text(&cache.layout(&session, area, line_context(), None));
+
+    // Assert
+    assert!(before.contains("Working..."));
+    assert!(running_text.contains("• Checking the tests."));
+    assert!(running_text.contains("Running"));
+    assert!(!running_text.contains("Working..."));
+    assert_eq!(running.spinner_rows.len(), 1);
+    assert!(running_text.find("inspect") < running_text.find("Checking"));
+    assert!(grown_text.contains("• Next step."));
+    assert!(cleared_text.contains("Working..."));
+    assert!(!cleared_text.contains("Checking"));
+}
+
+#[test]
+fn test_running_rows_paint_the_spinner_frame() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    let mut timeline = TurnTimeline::default();
+    timeline.observe_activity(activity_event("call"), 100_000);
+    show_timeline(&mut session, &mut timeline);
+    let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionOutput::new(&session)
+                .spinner_frame(3)
+                .now_millis(112_400)
+                .render(frame, frame.area());
+        })
+        .expect("draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let row = (0..buffer.area.height)
+        .find(|row| {
+            (0..buffer.area.width)
+                .map(|column| buffer[(column, *row)].symbol())
+                .collect::<String>()
+                .contains("Running")
+        })
+        .expect("running row");
+    let row_text = (0..buffer.area.width)
+        .map(|column| buffer[(column, row)].symbol())
+        .collect::<String>();
+    assert_eq!(
+        buffer[(turn_timeline::ROW_GLYPH_COLUMN, row)].symbol(),
+        turn_timeline::spinner_glyph(3)
+    );
+    assert!(row_text.ends_with(" 12s"), "{row_text}");
+    assert_eq!(
+        buffer[(buffer.area.width - 1, row)].fg,
+        style::palette::warning()
+    );
+}
+
+#[test]
+fn test_live_timeline_counts_hidden_steps_and_shows_nothing_for_an_empty_message() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    let area = Rect::new(0, 0, 80, 20);
+    let mut empty = TurnTimeline::default();
+    empty.observe_output(
+        OutputEvent::Started {
+            id: 0,
+            kind: OutputKind::Message,
+        },
+        0,
+    );
+    let mut long = TurnTimeline::default();
+    for id in 0..401 {
+        long.observe_output(
+            OutputEvent::Started {
+                id,
+                kind: OutputKind::Message,
+            },
+            0,
+        );
+        long.observe_output(
+            OutputEvent::Completed {
+                id,
+                text: format!("Step {id}."),
+            },
+            0,
+        );
+    }
+
+    // Act
+    show_timeline(&mut session, &mut empty);
+    let empty_text = output_lines(&session, area, line_context(), None)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    show_timeline(&mut session, &mut long);
+    let long_text = output_lines(&session, area, line_context(), None)
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
 
     // Assert
-    for (text, status) in texts.iter().zip(["…", "✓", "✗", "!"]) {
-        assert!(text.contains(&format!("{status} **Read**")));
-        assert!(text.contains("… skill review"));
-        assert!(text.find("inspect") < text.find("**Read**"));
-        assert_eq!(text.matches("**Read**").count(), 1);
-    }
-    assert!(!cleared_text.contains("**Read**"));
-    assert!(cleared_text.contains("inspect"));
+    assert!(!empty_text.contains('•'));
+    assert!(!empty_text.contains("Working..."));
+    assert!(long_text.contains("+1 earlier step"));
+    assert!(!long_text.contains("• Step 0."));
+    assert!(long_text.contains("• Step 400."));
 }
 
 #[test]
-fn compact_activity_clips_to_terminal_width_without_wrapping_or_markdown() {
+fn test_spinner_rows_scrolled_out_of_view_stay_unpainted() {
     // Arrange
-    let activity = "✗ shell (exit 1) · rg '**literal**' 界界界界\n  first error with many \
-                    details\n  second error …";
-
-    // Act, Assert
-    for width in [0, 1, 12, 100] {
-        let lines = live_activity_lines(activity, width);
-        assert_eq!(lines.len(), 3);
-        assert!(lines.iter().all(|line| line.width() <= width));
-        if width == 100 {
-            assert_eq!(lines[0].to_string(), activity.lines().next().expect("row"));
-        } else if width == 12 {
-            assert!(lines[0].to_string().ends_with("..."));
-        }
-    }
-    assert_eq!(
-        live_activity_lines("", 80),
-        Vec::<ratatui::text::Line<'_>>::new()
-    );
-}
-
-#[test]
-fn activity_outcomes_use_semantic_colors_in_live_and_saved_rows() {
-    // Arrange, Act, Assert
-    for (text, color) in [
-        ("✗ shell", style::palette::danger()),
-        ("! shell (interrupted)", style::palette::warning()),
-        ("… shell", style::palette::info()),
-        ("✓ shell", style::palette::success()),
-        ("Tools: shell ×1", style::palette::text_muted()),
-    ] {
-        assert_eq!(live_activity_lines(text, 80)[0].style.fg, Some(color));
-        assert_eq!(
-            activity_summary_lines(text, 80)[0].spans[0].style.fg,
-            Some(color)
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    let mut timeline = TurnTimeline::default();
+    for id in 0..8 {
+        timeline.observe_output(
+            OutputEvent::Started {
+                id,
+                kind: OutputKind::Message,
+            },
+            0,
+        );
+        timeline.observe_output(
+            OutputEvent::Completed {
+                id,
+                text: format!("Step {id}."),
+            },
+            0,
         );
     }
+    timeline.observe_activity(activity_event("call"), 0);
+    show_timeline(&mut session, &mut timeline);
+    let mut terminal = Terminal::new(TestBackend::new(40, 5)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionOutput::new(&session)
+                .scroll_offset(0)
+                .spinner_frame(3)
+                .render(frame, frame.area());
+        })
+        .expect("draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let text = (0..buffer.area.height)
+        .flat_map(|row| (0..buffer.area.width).map(move |column| (column, row)))
+        .map(|position| buffer[position].symbol())
+        .collect::<String>();
+    assert!(!text.contains("Running"));
+    assert!(!text.contains(turn_timeline::spinner_glyph(3)));
+}
+
+#[test]
+fn activity_summary_rows_are_muted_and_clipped() {
+    // Arrange, Act
+    let lines = activity_summary_lines("Tools: shell ×1, a-very-long-tool-name ×2", 12);
+
+    // Assert
+    assert!(lines.iter().all(|line| line.width() <= 12));
+    assert_eq!(
+        lines[0].spans[0].style.fg,
+        Some(style::palette::text_muted())
+    );
 }

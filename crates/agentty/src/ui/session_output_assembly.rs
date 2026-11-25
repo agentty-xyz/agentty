@@ -20,7 +20,8 @@ use crate::domain::session_message::{SessionMessage, SessionMessageKind, Session
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
 };
-use crate::ui::component::session_output;
+use crate::domain::turn_timeline::TimelineSnapshot;
+use crate::ui::component::{session_output, turn_timeline};
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
 use crate::ui::session_output_line::OutputLines;
@@ -40,12 +41,70 @@ const USER_PROMPT_TAB_WIDTH: usize = 4;
 /// One current rendered segment per durable message, owned by the bounded body
 /// LRU. Removed messages are pruned on rebuild; content, width, theme, Markdown
 /// version and live graph fingerprints invalidate individual segments.
+///
+/// The running turn's live timeline is cached per part: each visible step's
+/// narration and thought, and each of its rows, keyed by the turn's
+/// timeline, the step's index in the turn, and the row's position. A part's
+/// revision, the width, theme, and Markdown version invalidate it; parts of
+/// another turn or of hidden or vanished steps and rows are pruned on
+/// rebuild, and all of them go once the session shows no timeline.
 #[derive(Default)]
 pub(crate) struct TranscriptRenderCache {
     entries: RefCell<HashMap<i64, TranscriptRenderEntry>>,
+    timeline_parts: RefCell<HashMap<TimelinePart, TimelinePartEntry>>,
 }
 
 impl TranscriptRenderCache {
+    /// Returns the rendered lines of timeline `part`, rendering them with
+    /// `render` only when `revision` or the render inputs changed.
+    fn render_timeline_part(
+        &self,
+        part: TimelinePart,
+        revision: u64,
+        input: TranscriptRenderInput<'_>,
+        render: impl FnOnce() -> Vec<Line<'static>>,
+    ) -> Arc<[Line<'static>]> {
+        let mut hasher = FxHasher::default();
+        revision.hash(&mut hasher);
+        input.inner_width.hash(&mut hasher);
+        style::active_theme_cache_version().hash(&mut hasher);
+        input
+            .markdown_render_cache
+            .map_or(0, markdown::MarkdownRenderCache::version)
+            .hash(&mut hasher);
+        let fingerprint = hasher.finish();
+        if let Some(entry) = self.timeline_parts.borrow().get(&part)
+            && entry.fingerprint == fingerprint
+        {
+            return Arc::clone(&entry.lines);
+        }
+        let lines: Arc<[Line<'static>]> = render().into();
+        self.timeline_parts.borrow_mut().insert(
+            part,
+            TimelinePartEntry {
+                fingerprint,
+                lines: Arc::clone(&lines),
+            },
+        );
+
+        lines
+    }
+
+    /// Keeps only the cached parts of `snapshot`'s turn and its visible
+    /// steps and rows.
+    fn retain_timeline(&self, snapshot: Option<&TimelineSnapshot>) {
+        self.timeline_parts.borrow_mut().retain(|part, _| {
+            snapshot.is_some_and(|snapshot| {
+                part.turn == snapshot.id()
+                    && part
+                        .step
+                        .checked_sub(snapshot.hidden_steps)
+                        .and_then(|index| snapshot.steps.get(index))
+                        .is_some_and(|step| part.row.is_none_or(|row| row < step.rows.len()))
+            })
+        });
+    }
+
     fn retain_transcript(&self, session: &Session) {
         let positions = session.transcript.as_ref().map_or_default(|transcript| {
             transcript
@@ -99,6 +158,32 @@ struct TranscriptRenderEntry {
     lines: Arc<OutputLines>,
 }
 
+/// One cached part of a live timeline: a step's narration and thought when
+/// `row` is `None`, else one of its rows.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct TimelinePart {
+    row: Option<usize>,
+    /// Index of the step in the turn, counting hidden steps.
+    step: usize,
+    /// Identity of the turn's timeline, whose revisions restart per turn.
+    turn: u64,
+}
+
+struct TimelinePartEntry {
+    fingerprint: u64,
+    lines: Arc<[Line<'static>]>,
+}
+
+/// One live-timeline row of a running call, whose glyph spins and whose
+/// elapsed time the output paints each frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SpinnerRow {
+    /// Index of the row within the output lines.
+    pub(crate) line: usize,
+    /// Unix milliseconds the call started running.
+    pub(crate) since: u64,
+}
+
 /// Cached transcript body that excludes the dynamic session-status tail.
 #[derive(Clone)]
 pub(crate) struct SessionOutputBody {
@@ -106,6 +191,8 @@ pub(crate) struct SessionOutputBody {
     pub(crate) message_cache: Rc<TranscriptRenderCache>,
     pub(crate) queued_line_indices: Arc<[usize]>,
     pub(crate) queued_lines: Arc<[Line<'static>]>,
+    /// Live-timeline rows of running calls.
+    pub(crate) spinner_rows: Arc<[SpinnerRow]>,
     pub(crate) transient_loader_line_index: Option<usize>,
 }
 
@@ -118,6 +205,7 @@ pub(crate) fn output_body(
 ) -> SessionOutputBody {
     let message_cache = message_cache.unwrap_or_default();
     message_cache.retain_transcript(session);
+    message_cache.retain_timeline(session.live_timeline());
     let mut assembly = output_assembly(session, inner_width, None, markdown_render_cache);
     assembly.message_cache = Some(&message_cache);
 
@@ -132,7 +220,18 @@ pub(crate) struct SessionOutputTail {
 }
 
 /// Builds only the status rows; the cached transcript stays shared.
+///
+/// A turn that shows its live timeline names its progress in the status
+/// line above the composer instead of a loader row here.
 pub(crate) fn output_tail(session: &Session, active_progress: Option<&str>) -> SessionOutputTail {
+    if session.live_timeline().is_some() {
+        return SessionOutputTail {
+            active_loader_line_index: None,
+            lines: vec![Line::from("")],
+            trim_body: false,
+        };
+    }
+
     session_tail_lines(
         session.status,
         active_progress,
@@ -219,7 +318,7 @@ struct SessionOutputAssembly<'a> {
     message_cache: Option<&'a TranscriptRenderCache>,
     queued_line_indices: Vec<usize>,
     session: &'a Session,
-    status: Status,
+    spinner_rows: Vec<SpinnerRow>,
     trailing_notice_section: SessionOutputTranscriptSection<'a>,
     transient_loader_line_index: Option<usize>,
 }
@@ -248,6 +347,7 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
             message_cache,
             queued_line_indices: Arc::from(queued_line_indices),
             queued_lines: queued_lines.iter().cloned().collect(),
+            spinner_rows: Arc::from(self.spinner_rows),
             transient_loader_line_index: self.transient_loader_line_index,
         }
     }
@@ -298,6 +398,15 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
         });
 
         for message in remaining_messages {
+            // A timeline shows only while its turn runs, matching the
+            // status line and the cache it renders into.
+            if let TransientMessageBody::Timeline(_) = &message.body {
+                if let Some(snapshot) = self.session.live_timeline() {
+                    self.append_timeline(snapshot);
+                }
+
+                continue;
+            }
             if let Some(loader_line_index) = append_transient_message(
                 &mut self.lines,
                 message,
@@ -307,6 +416,71 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
                 self.transient_loader_line_index = Some(loader_line_index);
             }
         }
+    }
+
+    /// Appends a running turn's live timeline, sharing the rendered lines
+    /// of unchanged steps and rows, and records its running rows.
+    fn append_timeline(&mut self, snapshot: &TimelineSnapshot) {
+        let mut timeline = OutputLines::default();
+        let mut spinner_rows = Vec::new();
+        if snapshot.hidden_steps > 0 {
+            timeline.push(turn_timeline::hidden_steps_line(snapshot.hidden_steps));
+        }
+        // An uncached assembly renders every part into a throwaway cache.
+        let uncached = TranscriptRenderCache::default();
+        let input = self.render_input();
+        let cache = self.message_cache.unwrap_or(&uncached);
+        for (index, step) in snapshot.steps.iter().enumerate() {
+            let step_index = snapshot.hidden_steps + index;
+            timeline.append(cache.render_timeline_part(
+                TimelinePart {
+                    row: None,
+                    step: step_index,
+                    turn: snapshot.id(),
+                },
+                step.header_revision,
+                input,
+                || {
+                    turn_timeline::header_lines(
+                        step,
+                        input.inner_width,
+                        input.markdown_render_cache,
+                    )
+                },
+            ));
+            for (row_index, row) in step.rows.iter().enumerate() {
+                if let Some(since) = row.running_since() {
+                    spinner_rows.push(SpinnerRow {
+                        line: timeline.len(),
+                        since,
+                    });
+                }
+                timeline.append(cache.render_timeline_part(
+                    TimelinePart {
+                        row: Some(row_index),
+                        step: step_index,
+                        turn: snapshot.id(),
+                    },
+                    row.revision(),
+                    input,
+                    || turn_timeline::row_lines(row, input.inner_width),
+                ));
+            }
+        }
+        if timeline.is_empty() {
+            return;
+        }
+        append_block_separator(
+            &mut self.lines,
+            SessionOutputSeparator::AfterPreviousContent,
+        );
+        let offset = self.lines.len();
+        self.spinner_rows
+            .extend(spinner_rows.into_iter().map(|row| SpinnerRow {
+                line: row.line + offset,
+                since: row.since,
+            }));
+        self.lines.append_shared(&timeline);
     }
 
     fn append_active_turn(&mut self) {
@@ -327,10 +501,7 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
     fn append_session_tail(&mut self) {
         self.active_loader_line_index = append_session_tail_lines(
             &mut self.lines,
-            self.status,
-            self.active_progress,
-            self.session.review_loading_message(),
-            self.session.generated_turn_progress_message(),
+            output_tail(self.session, self.active_progress),
         );
     }
 }
@@ -341,8 +512,7 @@ fn output_assembly<'assembly>(
     active_progress: Option<&'assembly str>,
     markdown_render_cache: Option<&'assembly markdown::MarkdownRenderCache>,
 ) -> SessionOutputAssembly<'assembly> {
-    let status = session.status;
-    let transcript_sections = output_text_sections(session, status);
+    let transcript_sections = output_text_sections(session, session.status);
     let active_turn_has_visible_text = !transcript_sections.active_turn.is_empty();
 
     SessionOutputAssembly {
@@ -357,7 +527,7 @@ fn output_assembly<'assembly>(
         message_cache: None,
         queued_line_indices: Vec::new(),
         session,
-        status,
+        spinner_rows: Vec::new(),
         transient_loader_line_index: None,
         trailing_notice_section: transcript_sections.trailing_notice,
     }
@@ -377,19 +547,7 @@ fn trim_trailing_blank_lines(lines: &mut OutputLines) {
     }
 }
 
-fn append_session_tail_lines(
-    lines: &mut OutputLines,
-    status: Status,
-    active_progress: Option<&str>,
-    review_status_message: Option<&str>,
-    review_comment_resolution_message: Option<&str>,
-) -> Option<usize> {
-    let tail = session_tail_lines(
-        status,
-        active_progress,
-        review_status_message,
-        review_comment_resolution_message,
-    );
+fn append_session_tail_lines(lines: &mut OutputLines, tail: SessionOutputTail) -> Option<usize> {
     if tail.trim_body {
         trim_trailing_blank_lines(lines);
     }
@@ -459,14 +617,7 @@ fn append_transient_message(
             }
 
             append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-            if message.slot == TransientMessageSlot::Activity {
-                lines.extend(session_output::live_activity_lines(
-                    status_message,
-                    inner_width,
-                ));
-            } else {
-                append_plain_status_lines(lines, status_message, inner_width);
-            }
+            append_plain_status_lines(lines, status_message, inner_width);
 
             None
         }
@@ -486,7 +637,7 @@ fn append_transient_message(
 
             Some(loader_line_index)
         }
-        TransientMessageBody::Queued(_) => None,
+        TransientMessageBody::Queued(_) | TransientMessageBody::Timeline(_) => None,
     }
 }
 

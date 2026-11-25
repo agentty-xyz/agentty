@@ -100,8 +100,8 @@ message box shows the model, reasoning level, answer style, and speed. An older 
 sends fewer details, and the page leaves out what it does not know.
 
 The open session shows its transcript, with each activity summary in a box you can open
-or close. While the session works or waits, the transcript ends with the same status
-line as the terminal, such as `Working...` with the agent's latest step, or
+or close. While the session works or waits, the transcript ends with a status line, such
+as `Working...` with what the agent does now, like `Running cargo test`, or
 `Rebasing...`. When you scroll up, new messages leave your place alone and
 `Jump to latest` returns to the end. With a keyboard and mouse, `Enter` sends and
 `Shift+Enter` adds a line; on a touch screen, `Enter` adds a line and the button sends.

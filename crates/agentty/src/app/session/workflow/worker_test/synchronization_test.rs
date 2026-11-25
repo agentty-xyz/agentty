@@ -880,22 +880,17 @@ async fn rebase_assist_clears_live_activity_without_a_following_user_turn() {
         assert!(messages.lock().expect("messages").is_empty());
         let ready = events
             .iter()
-            .position(|event| matches!(event, AppEvent::SessionActivityReady { .. }))
+            .position(|event| matches!(event, AppEvent::SessionTurnReady { .. }))
             .expect("live rows");
         let clear = events
             .iter()
-            .position(|event| {
-                matches!(
-                    event,
-                    AppEvent::SessionActivityUpdated { activity: None, .. }
-                )
-            })
+            .position(|event| matches!(event, AppEvent::SessionTurnCleared { .. }))
             .expect("clear rows");
         assert!(clear > ready);
         assert!(
             !events[clear + 1..]
                 .iter()
-                .any(|event| matches!(event, AppEvent::SessionActivityReady { .. }))
+                .any(|event| matches!(event, AppEvent::SessionTurnReady { .. }))
         );
     }
 }

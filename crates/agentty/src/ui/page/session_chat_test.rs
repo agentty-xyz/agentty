@@ -2,7 +2,9 @@
 //! rendering unit tests.
 
 use std::cell::Cell;
+use std::sync::Arc;
 
+use ag_contracts::ActivityEvent;
 use ag_session::test_support as model_fixture;
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
@@ -17,6 +19,11 @@ use crate::domain::input::InputState;
 use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{Session, Status};
 use crate::domain::session_message::SessionTranscript;
+use crate::domain::transient_message::{
+    TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
+    TransientMessageSlot,
+};
+use crate::domain::turn_timeline::TurnTimeline;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
@@ -273,6 +280,70 @@ fn test_render_view_mode_omits_keybinding_help_line() {
             assert!(!text.contains(action), "unexpected {action} for {status:?}");
         }
     }
+}
+
+/// Verifies a running turn's live timeline reserves a status row above the
+/// composer margin, and that a pane too short for it keeps the transcript.
+#[test]
+fn test_live_timeline_renders_a_status_line_above_the_composer() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    let mut timeline = TurnTimeline::default();
+    timeline.observe_activity(
+        ActivityEvent {
+            input: Some("cargo test".into()),
+            ..crate::test_support::activity_event("call")
+        },
+        0,
+    );
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::AfterActiveTurn,
+        body: TransientMessageBody::Timeline(Arc::new(timeline.snapshot())),
+        lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+        slot: TransientMessageSlot::Turn,
+        turn_position: None,
+    });
+    let mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+    let short_plan =
+        SessionChatLayoutPlan::new(layout_input(Rect::new(0, 0, 80, 6), &session, &mode));
+    // The frame comes 12 seconds after the call started, so both timers
+    // read the frame clock.
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        frame_time: FrameTime::new(12, 12_000, 0),
+        ..test_page_input(&session, &mode)
+    });
+    let backend = ratatui::backend::TestBackend::new(80, 16);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    // Act
+    let plan = SessionChatLayoutPlan::new(layout_input(Rect::new(0, 0, 80, 16), &session, &mode));
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw session");
+
+    // Assert
+    let status_area = plan.turn_status_area.expect("status row");
+    assert_eq!(status_area.y, plan.areas.output_area.bottom());
+    assert_eq!(plan.areas.bottom_area.y - status_area.bottom(), 1);
+    assert_eq!(short_plan.turn_status_area, None);
+    let buffer = terminal.backend().buffer();
+    let status_row = buffer_row_text(buffer, status_area.y, 80);
+    assert_eq!(
+        status_row.trim_end(),
+        " ⠋ Running cargo test 12s  ·  step 1  ·  turn 0s"
+    );
+    let running_row = (plan.areas.output_area.y..plan.areas.output_area.bottom())
+        .map(|row| buffer_row_text(buffer, row, 80))
+        .find(|row| row.contains("Running   cargo test"))
+        .expect("running row");
+    assert!(running_row.trim_end().ends_with(" 12s"), "{running_row}");
 }
 
 #[test]

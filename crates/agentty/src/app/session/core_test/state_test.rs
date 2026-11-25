@@ -475,40 +475,6 @@ async fn test_reply_turn_completion_persists_session_size() {
 }
 
 #[test]
-fn test_live_activity_replaces_rows_invalidates_cache_and_clears() {
-    // Arrange
-    let mut manager = test_session_manager("session", None);
-    let before = manager.sessions()[0].transient_messages.fingerprint();
-
-    // Act
-    manager.update_live_activity("missing", Some("ignored".into()));
-    manager.update_live_activity("session", Some("Tool: Read [running]".into()));
-    let running = manager.sessions()[0].transient_messages.fingerprint();
-    manager.update_live_activity("session", Some("Tool: Read [completed]".into()));
-    let messages = &manager.sessions()[0].transient_messages;
-
-    // Assert
-    assert_ne!(before, running);
-    assert_ne!(running, messages.fingerprint());
-    let message = messages
-        .get(TransientMessageSlot::Activity)
-        .expect("live rows");
-    assert_eq!(message.body.text(), "Tool: Read [completed]");
-    assert_eq!(message.anchor, TransientMessageAnchor::AfterActiveTurn);
-
-    // Act
-    manager.update_live_activity("session", None);
-
-    // Assert
-    assert!(
-        manager.sessions()[0]
-            .transient_messages
-            .get(TransientMessageSlot::Activity)
-            .is_none()
-    );
-}
-
-#[test]
 /// Ensures session-scoped reducer updates leave the loaded snapshot unchanged
 /// when they target a session that is not loaded.
 fn test_session_reducer_updates_ignore_unloaded_sessions() {

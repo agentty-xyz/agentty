@@ -23,6 +23,7 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageBody, TransientMessageSlot, TransientMessageStore,
 };
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
+use crate::domain::turn_timeline::TimelineSnapshot;
 
 /// Full in-progress loader label shown while post-turn commit-message
 /// generation and git commit orchestration are running.
@@ -669,7 +670,22 @@ impl Session {
                 TransientMessageBody::Loading(message) => Some(message.as_str()),
                 TransientMessageBody::Markdown(_)
                 | TransientMessageBody::Plain(_)
-                | TransientMessageBody::Queued(_) => None,
+                | TransientMessageBody::Queued(_)
+                | TransientMessageBody::Timeline(_) => None,
+            })
+    }
+
+    /// Returns the live timeline of the running turn, when it shows one.
+    pub(crate) fn live_timeline(&self) -> Option<&TimelineSnapshot> {
+        if self.status != Status::InProgress {
+            return None;
+        }
+
+        self.transient_messages
+            .get(TransientMessageSlot::Turn)
+            .and_then(|message| match &message.body {
+                TransientMessageBody::Timeline(snapshot) => Some(snapshot.as_ref()),
+                _ => None,
             })
     }
 

@@ -1,8 +1,34 @@
 //! Markdown inline style, math, and code span rendering tests.
 
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier, Style};
 
-use crate::markdown::{code_block_style, inline_code_style, render_markdown};
+use crate::markdown::{
+    code_block_style, inline_code_style, parse_inline_spans_with_settings, render_markdown,
+};
+use crate::style::TextRenderSettings;
+
+#[test]
+fn test_inline_spans_style_code_with_the_injected_palette() {
+    // Arrange
+    let settings = TextRenderSettings {
+        cache_version: 1,
+        palette: crate::TextPalette {
+            warning: Color::Rgb(250, 194, 154),
+            ..crate::TextPalette::default()
+        },
+    };
+
+    // Act
+    let spans = parse_inline_spans_with_settings("see `code`", Style::default(), settings);
+
+    // Assert
+    let code = spans
+        .iter()
+        .find(|span| span.content == "code")
+        .expect("code span");
+    assert_eq!(code.style.fg, Some(Color::Rgb(250, 194, 154)));
+    assert_ne!(inline_code_style().fg, code.style.fg);
+}
 
 #[test]
 fn test_render_markdown_parses_inline_styles() {

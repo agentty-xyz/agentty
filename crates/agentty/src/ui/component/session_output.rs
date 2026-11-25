@@ -17,10 +17,11 @@ use rustc_hash::FxHasher;
 use crate::domain::session::{QueuedMessage, Session, SessionId, Status};
 use crate::ui::component::queue_pulse::QueuePulseEffect;
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
+use crate::ui::component::turn_timeline;
 use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
-use crate::ui::session_output_assembly::{self, SessionOutputBody};
+use crate::ui::session_output_assembly::{self, SessionOutputBody, SpinnerRow};
 use crate::ui::session_output_line::OutputLines;
 use crate::ui::{Component, markdown, session_format, style};
 
@@ -183,6 +184,8 @@ pub(crate) struct SessionOutputLayout {
     pub(crate) lines: Arc<SessionOutputLayoutLines>,
     /// Indices of queued rows whose leading glyph receives a calm pulse.
     pub(crate) queued_line_indices: Arc<[usize]>,
+    /// Live-timeline rows of running calls.
+    pub(crate) spinner_rows: Arc<[SpinnerRow]>,
     /// Index of an explicit transient loader row within `lines`, when present.
     pub(crate) transient_loader_line_index: Option<usize>,
 }
@@ -510,6 +513,8 @@ pub struct SessionOutput<'a> {
     /// Shared layout cache that avoids rebuilding the full rendered transcript
     /// for scroll metrics and frame painting within the same session/update
     /// version.
+    /// Frame time in Unix milliseconds, which times running calls.
+    now_millis: u128,
     output_layout_cache: Option<&'a SessionOutputLayoutCache>,
     scroll_offset: Option<usize>,
     session: &'a Session,
@@ -524,12 +529,22 @@ impl<'a> SessionOutput<'a> {
             active_prompt_output: None,
             active_progress: None,
             markdown_render_cache: None,
+            now_millis: 0,
             output_layout_cache: None,
             scroll_offset: None,
             session,
             session_update_version: 0,
             spinner_frame: 0,
         }
+    }
+
+    /// Sets the frame time in Unix milliseconds that running calls are
+    /// timed against.
+    #[must_use]
+    pub(crate) fn now_millis(mut self, now_millis: u128) -> Self {
+        self.now_millis = now_millis;
+
+        self
     }
 
     /// Sets the exact prompt transcript block for the currently active turn.
@@ -750,6 +765,7 @@ impl<'a> SessionOutput<'a> {
                 .iter()
                 .map(|index| queue_offset + index)
                 .collect(),
+            spinner_rows: Arc::clone(&body.spinner_rows),
             transient_loader_line_index: body.transient_loader_line_index,
         }
     }
@@ -979,32 +995,70 @@ impl Component for SessionOutput<'_> {
                 QueuePulseEffect::apply_stateless(frame.buffer_mut(), area, spinner_frame);
             }
         }
+        let content_width = if resolved_layout.show_scrollbar {
+            Self::scrollbar_layout_area(inner_area).width
+        } else {
+            inner_area.width
+        };
+        self.paint_running_rows(
+            frame.buffer_mut(),
+            output_area,
+            &layout.spinner_rows,
+            final_scroll,
+            inner_area.x.saturating_add(content_width),
+        );
     }
 }
 
-/// Keeps live activity to one terminal row per call or failure-preview line.
-pub(crate) fn live_activity_lines(activity: &str, width: usize) -> Vec<Line<'static>> {
-    activity
-        .lines()
-        .map(|line| {
-            Line::styled(
-                text_util::truncate_with_ellipsis(line, width),
-                activity_line_style(line),
-            )
-        })
-        .collect()
+impl SessionOutput<'_> {
+    /// Paints each visible running row's spinner frame and, right-aligned
+    /// before column `content_right`, how long its call has run.
+    fn paint_running_rows(
+        &self,
+        buffer: &mut Buffer,
+        output_area: Rect,
+        spinner_rows: &[SpinnerRow],
+        final_scroll: usize,
+        content_right: u16,
+    ) {
+        let glyph = turn_timeline::spinner_glyph(self.spinner_frame);
+        for row in spinner_rows {
+            let Some(area) = Self::indicator_area(
+                output_area,
+                row.line,
+                final_scroll,
+                turn_timeline::ROW_GLYPH_COLUMN + 1,
+            ) else {
+                continue;
+            };
+            buffer.set_string(
+                area.x + turn_timeline::ROW_GLYPH_COLUMN,
+                area.y,
+                glyph,
+                ratatui::style::Style::default(),
+            );
+            let elapsed = turn_timeline::running_time(row.since, self.now_millis);
+            let elapsed_width = u16::try_from(elapsed.width()).unwrap_or(u16::MAX);
+            buffer.set_span(
+                content_right.saturating_sub(elapsed_width),
+                area.y,
+                &elapsed,
+                elapsed_width,
+            );
+        }
+    }
 }
 
-/// Wraps usage as plain text, clipping identities wider than the viewport.
+/// Wraps usage as muted plain text, clipping identities wider than the
+/// viewport.
 pub(crate) fn activity_summary_lines(summary: &str, width: usize) -> Vec<Line<'static>> {
+    let muted = ratatui::style::Style::default().fg(style::palette::text_muted());
+
     summary
         .lines()
         .flat_map(|line| {
             ag_tui_text::text_util::wrap_styled_line(
-                vec![ratatui::text::Span::styled(
-                    line.to_string(),
-                    activity_line_style(line),
-                )],
+                vec![ratatui::text::Span::styled(line.to_string(), muted)],
                 width,
             )
             .into_iter()
@@ -1015,23 +1069,6 @@ pub(crate) fn activity_summary_lines(summary: &str, width: usize) -> Vec<Line<'s
             })
         })
         .collect()
-}
-
-/// Gives call outcomes the same semantic colors in live and saved activity.
-fn activity_line_style(line: &str) -> ratatui::style::Style {
-    let color = if line.starts_with('✗') {
-        style::palette::danger()
-    } else if line.starts_with('!') {
-        style::palette::warning()
-    } else if line.starts_with('…') {
-        style::palette::info()
-    } else if line.starts_with('✓') {
-        style::palette::success()
-    } else {
-        style::palette::text_muted()
-    };
-
-    ratatui::style::Style::default().fg(color)
 }
 
 #[cfg(test)]

@@ -127,18 +127,23 @@ only a successful manual target sync archives it as `Done`.
 
 <a id="architecture-runtime-flow-session-chat"></a> Durable transcript rows hold user
 prompts, final answers, and workflow notices. Typed transient slots hold progress,
-queued actions, live tool activity, and review output. Chat messages and workflow
-actions share one submission sequence for display and execution; generated prompts enter
-durable history only when the worker starts them, so canceled waiting work is never
-replayed.
+queued actions, the running turn's live timeline, and review output. Chat messages and
+workflow actions share one submission sequence for display and execution; generated
+prompts enter durable history only when the worker starts them, so canceled waiting work
+is never replayed.
 
 Rendering reads snapshots and performs no workflow side effects. Runtime-owned caches
 share derived layout between scrolling and painting and invalidate on content, width, or
 theme changes.
 
-Live tool activity follows the same worker event path as progress: the host reduces it
-into one replaceable snapshot per turn, and a durable usage summary replaces it when the
-turn finishes. Usage summaries are saved history but excluded from provider replay.
+A running turn's streamed output and tool activity share one live-timeline mailbox
+(`LiveTurn`). The worker stamps each event with the injected clock and reduces them in
+arrival order; the mailbox queues one `AppEvent::SessionTurnReady` while none is armed,
+the foreground groups the timeline into steps once per frame while it changes, and
+`AppEvent::SessionTurnCleared` removes it once the saved answer or failure notice
+replaces it. The timeline's current action also feeds the session's progress text, which
+the status line and remote clients show. A durable usage summary keeps the turn's call
+counts; usage summaries are saved history but excluded from provider replay.
 
 Harness sessions also stream model output on that path. The agent runtime turns the
 harness run's item events into `TurnEvent::Output` changes, decoding the protocol answer
@@ -146,16 +151,13 @@ as it arrives, and builds the session turn's tool rows from the same run events:
 `TurnEvent::Activity` rows keyed by the call's run item id, started when the harness
 requests the call and finished with its exit status, line counts, and duration, so they
 arrive in order with the narration around them. Utility runs, which have no event
-stream, take their tool rows from harness lifecycle events instead. The worker
-accumulates the output changes into one replaceable snapshot below the activity rows.
-One notification stays armed while the output changes, and the foreground applies
-further changes once per frame, so a fast stream cannot flood the event loop. The
-runtime drops a discarded response's items and reports which message the validated
-answer replaces. The worker removes the snapshot right after it saves the answer or
-failure notice to the transcript; streamed output is never persisted or replayed. When a
-harness turn compacts the session's earlier context, or fails to, the runtime also sends
-a `TurnEvent::Notice`; the worker saves it as a workflow notice ahead of the turn's
-answer, which provider replay leaves out.
+stream, take their tool rows from harness lifecycle events instead. A streamed tool
+call's row and its activity row share that id, so they are one timeline entry, and a
+fast stream cannot flood the event loop. The runtime drops a discarded response's items
+and reports which message the validated answer replaces. The live timeline is never
+persisted or replayed. When a harness turn compacts the session's earlier context, or
+fails to, the runtime also sends a `TurnEvent::Notice`; the worker saves it as a
+workflow notice ahead of the turn's answer, which provider replay leaves out.
 
 Sandbox notices travel the same path as `TurnEvent::Notice`. Session turns, sync
 assistance turns, and execution-graph and task turns relay the turn's events before the

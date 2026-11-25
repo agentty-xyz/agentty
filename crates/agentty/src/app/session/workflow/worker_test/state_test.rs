@@ -33,9 +33,16 @@ use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
+use crate::domain::turn_timeline::{RowState, TimelineRow};
 use crate::infra::cargo_cache::MockCargoCacheClient;
+use crate::infra::clock::Clock;
 use crate::infra::db::AppRepositories;
-use crate::test_support::{enable_tracing_log_fallback, poison_lock};
+use crate::test_support::{FixedClock, enable_tracing_log_fallback, poison_lock};
+
+/// Returns a clock pinned to the Unix epoch.
+fn fixed_clock() -> Arc<dyn Clock> {
+    Arc::new(FixedClock::unix_epoch())
+}
 
 #[tokio::test]
 /// Verifies process-only events do not append transcript content.
@@ -56,6 +63,7 @@ async fn test_consume_turn_events_ignores_pid_only_events_for_transcript_message
         app_event_tx,
         "session-1".into(),
         Arc::clone(&child_pid),
+        fixed_clock(),
     )
     .await;
 
@@ -79,7 +87,14 @@ async fn test_consume_turn_events_routes_thought_delta_to_progress_state_only() 
     drop(event_tx);
 
     // Act
-    consume_turn_events(event_rx, app_event_tx, "session-1".into(), child_pid).await;
+    consume_turn_events(
+        event_rx,
+        app_event_tx,
+        "session-1".into(),
+        child_pid,
+        fixed_clock(),
+    )
+    .await;
 
     let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
 
@@ -116,7 +131,14 @@ async fn test_consume_turn_events_coalesces_ready_thought_delta_bursts() {
     drop(event_tx);
 
     // Act
-    consume_turn_events(event_rx, app_event_tx, "session-1".into(), child_pid).await;
+    consume_turn_events(
+        event_rx,
+        app_event_tx,
+        "session-1".into(),
+        child_pid,
+        fixed_clock(),
+    )
+    .await;
 
     let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
 
@@ -174,6 +196,7 @@ async fn test_consume_turn_events_skips_blank_terminal_and_repeated_progress_eve
         app_event_tx,
         "session-1".into(),
         Arc::clone(&child_pid),
+        fixed_clock(),
     )
     .await;
     let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
@@ -214,6 +237,7 @@ async fn test_consume_turn_events_skips_pid_updates_for_a_poisoned_pid_slot() {
         mpsc::unbounded_channel().0,
         "session-1".into(),
         Arc::clone(&child_pid),
+        fixed_clock(),
     )
     .await;
 
@@ -439,6 +463,7 @@ async fn test_consume_activity_survives_progress_coalescing() {
         mpsc::unbounded_channel().0,
         "session".into(),
         Arc::new(Mutex::new(None)),
+        fixed_clock(),
     )
     .await;
 
@@ -486,34 +511,45 @@ async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
         app_event_tx.clone(),
         "session".into(),
         Arc::new(Mutex::new(None)),
+        fixed_clock(),
     )
     .await;
     activity.clear_live(&app_event_tx, &"session".into());
     let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
 
     // Assert
-    let outputs = events
+    let turns = events
         .iter()
         .filter_map(|event| match event {
-            AppEvent::SessionOutputReady { output, session_id } => {
-                Some((output, session_id.as_str()))
-            }
+            AppEvent::SessionTurnReady { session_id, turn } => Some((turn, session_id.as_str())),
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0].1, "session");
-    assert_eq!(outputs[0].0.snapshot(), "Hello");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].1, "session");
+    let snapshot = turns[0].0.snapshot();
+    assert_eq!(snapshot.steps.len(), 2);
+    assert_eq!(
+        snapshot.steps[1]
+            .narration
+            .as_ref()
+            .map(|narration| &*narration.text),
+        Some("Hello")
+    );
+    assert_eq!(
+        snapshot
+            .steps
+            .iter()
+            .map(|step| step.rows.len())
+            .sum::<usize>(),
+        2
+    );
     assert_eq!(
         events.last(),
-        Some(&AppEvent::SessionActivityUpdated {
-            activity: None,
+        Some(&AppEvent::SessionTurnCleared {
             session_id: "session".into(),
         })
     );
-    assert!(events.contains(&AppEvent::SessionOutputCleared {
-        session_id: "session".into(),
-    }));
 }
 
 #[tokio::test]
@@ -563,25 +599,15 @@ async fn test_run_channel_turn_clears_streamed_output_beside_the_saved_answer() 
 
     // Assert
     assert!(result.is_ok(), "{result:?}");
-    let is_cleared = |event: &AppEvent| matches!(event, AppEvent::SessionOutputCleared { .. });
+    let is_cleared = |event: &AppEvent| matches!(event, AppEvent::SessionTurnCleared { .. });
     let cleared = events
         .iter()
         .position(is_cleared)
-        .expect("streamed output cleared");
+        .expect("live timeline cleared");
     assert!(matches!(
         events[cleared - 1],
         AppEvent::SessionUpdated { .. }
     ));
-    let rows_cleared = events
-        .iter()
-        .position(|event| {
-            matches!(
-                event,
-                AppEvent::SessionActivityUpdated { activity: None, .. }
-            )
-        })
-        .expect("live rows cleared");
-    assert!(cleared < rows_cleared);
     assert_eq!(events.iter().filter(|event| is_cleared(event)).count(), 1);
     assert!(transcript_text(&context.transcript).contains("done"));
 }
@@ -662,6 +688,7 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
         app_sender,
         "session".into(),
         Arc::new(Mutex::new(None)),
+        fixed_clock(),
     ));
 
     // Act
@@ -674,18 +701,11 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
     let update = app_receiver.recv().await.expect("live update");
 
     // Assert
-    let AppEvent::SessionActivityReady {
-        activity: snapshot,
-        session_id,
-    } = update
-    else {
-        unreachable!("expected live activity");
+    let AppEvent::SessionTurnReady { session_id, turn } = update else {
+        unreachable!("expected a live timeline");
     };
     assert_eq!(session_id.as_str(), "session");
-    assert_eq!(
-        snapshot.snapshot(),
-        "Tools: Read ×1\nStatus: 0 succeeded · 0 failed · 1 running\n\n… Read\n"
-    );
+    let running = turn.snapshot();
     assert!(!consumer.is_finished());
 
     // Act
@@ -698,12 +718,24 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
     drop(sender);
     let activity = consumer.await.expect("consumer");
     let remaining = std::iter::from_fn(|| app_receiver.try_recv().ok()).collect::<Vec<_>>();
+    let finished = turn.refresh().expect("changed timeline");
 
     // Assert
+    assert_eq!(
+        running
+            .current
+            .as_ref()
+            .map(|current| current.text.as_str()),
+        Some("Calling Read")
+    );
     assert!(remaining.iter().any(|event| matches!(event,
-        AppEvent::SessionActivityReady { activity, session_id }
-            if session_id.as_str() == "session" && activity.snapshot() == "Tools: Read ×1\nStatus: 1 succeeded · 0 failed · 0 running\n\n✓ Read\n"
+        AppEvent::SessionProgressUpdated { progress_message: Some(progress), .. }
+            if progress == "Calling Read"
     )));
+    assert!(matches!(
+        &finished.steps[0].rows[0],
+        TimelineRow::Tool(row) if row.state == RowState::Succeeded
+    ));
     assert_eq!(activity.summary(), "Tools: Read ×1\n");
 }
 

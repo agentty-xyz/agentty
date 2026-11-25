@@ -1523,6 +1523,17 @@ fn character_display_width(character: char) -> usize {
     UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
+/// Parses inline markdown markers like [`parse_inline_spans`], styling code
+/// with the host-injected `settings` the way [`render_markdown_with_settings`]
+/// styles it in a rendered block.
+pub fn parse_inline_spans_with_settings(
+    content: &str,
+    base_style: Style,
+    settings: TextRenderSettings,
+) -> Vec<Span<'static>> {
+    style::with_render_settings(settings, || parse_inline_spans(content, base_style))
+}
+
 /// Parses inline markdown markers (`**bold**`, `*italic*`, `` `code` ``) and
 /// supported dollar-delimited math symbols into styled spans.
 ///

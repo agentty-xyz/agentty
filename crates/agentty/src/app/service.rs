@@ -617,10 +617,8 @@ impl AppServices {
             AppEvent::SessionReviewCommentSnapshotLoaded { .. } => {
                 "SessionReviewCommentSnapshotLoaded"
             }
-            AppEvent::SessionActivityReady { .. } => "SessionActivityReady",
-            AppEvent::SessionActivityUpdated { .. } => "SessionActivityUpdated",
-            AppEvent::SessionOutputReady { .. } => "SessionOutputReady",
-            AppEvent::SessionOutputCleared { .. } => "SessionOutputCleared",
+            AppEvent::SessionTurnReady { .. } => "SessionTurnReady",
+            AppEvent::SessionTurnCleared { .. } => "SessionTurnCleared",
             AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
             AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
             AppEvent::SyncMainConflictResolutionStarted { .. } => {

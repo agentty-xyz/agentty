@@ -2108,6 +2108,290 @@ async fn test_harness_session_streams_its_answer_before_the_turn_completes() -> 
         .await
 }
 
+/// Prompt of the live-timeline scenario's session turn.
+const TIMELINE_PROMPT: &str = "Add beta to the notes";
+/// Narration of the live-timeline turn's first step.
+const TIMELINE_EXPLORE_NARRATION: &str = "Checking the notes first.";
+/// Narration of the live-timeline turn's second step.
+const TIMELINE_EDIT_NARRATION: &str = "Adding beta below alpha.";
+/// Start of the answer the live-timeline turn streams before it is held.
+const TIMELINE_ANSWER_HEAD: &str = "Added beta";
+/// Rest of the live-timeline turn's answer, streamed once released.
+const TIMELINE_ANSWER_TAIL: &str = " to the notes.";
+
+/// Serves Chat Completions on a local port for the live-timeline turn and
+/// returns its base URL.
+///
+/// The first response narrates and reads and searches the notes; the second
+/// narrates, sends a patch that does not apply, rereads one line, and sends
+/// one that does; the third streams the start of the answer and holds the
+/// rest until `gate` is released. Every other request gets `404 Not Found`.
+fn live_timeline_provider(gate: ReleaseGate) -> std::io::Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let gate = gate.clone();
+            std::thread::spawn(move || serve_live_timeline(stream, &gate));
+        }
+    });
+
+    Ok(format!("http://{address}"))
+}
+
+/// Answers one provider connection for [`live_timeline_provider`].
+fn serve_live_timeline(mut stream: TcpStream, gate: &ReleaseGate) {
+    let Some(body) = read_request_body(&mut stream) else {
+        return;
+    };
+    if !body.contains(TIMELINE_PROMPT) || body.contains(TITLE_PROMPT) {
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+        return;
+    }
+    if body.contains(r#""tool_call_id":"call-edit""#) {
+        serve_held_timeline_answer(stream, gate);
+
+        return;
+    }
+    let (narration, calls) = if body.contains(r#""tool_call_id":"call-read""#) {
+        (
+            TIMELINE_EDIT_NARRATION,
+            vec![
+                tool_call(
+                    "call-bad-edit",
+                    "write",
+                    &json!({
+                        "path": "notes.txt",
+                        "patch": "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1,2 @@\n gamma\n+beta\n"
+                    }),
+                ),
+                tool_call(
+                    "call-reread",
+                    "read",
+                    &json!({"action": "file", "path": "notes.txt", "offset": 1, "limit": 1}),
+                ),
+                tool_call(
+                    "call-edit",
+                    "write",
+                    &json!({
+                        "path": "notes.txt",
+                        "patch": "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1,2 @@\n alpha\n+beta\n"
+                    }),
+                ),
+            ],
+        )
+    } else {
+        (
+            TIMELINE_EXPLORE_NARRATION,
+            vec![
+                tool_call(
+                    "call-read",
+                    "read",
+                    &json!({"action": "file", "path": "notes.txt"}),
+                ),
+                tool_call(
+                    "call-search",
+                    "read",
+                    &json!({"action": "search", "query": "alpha"}),
+                ),
+            ],
+        )
+    };
+    let response = json!({
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {"content": narration, "tool_calls": calls}
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+    })
+    .to_string();
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: \
+         close\r\n\r\n{response}",
+        response.len()
+    );
+}
+
+/// Returns one Chat Completions tool call of `name` with `arguments`.
+fn tool_call(id: &str, name: &str, arguments: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "id": id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments.to_string()}
+    })
+}
+
+/// Streams the start of the live-timeline answer, holds until `gate` is
+/// released, then streams the rest.
+fn serve_held_timeline_answer(mut stream: TcpStream, gate: &ReleaseGate) {
+    let answer = json!({
+        "answer": format!("{TIMELINE_ANSWER_HEAD}{TIMELINE_ANSWER_TAIL}"),
+        "questions": []
+    })
+    .to_string();
+    let (head, tail) = answer.split_at(answer.find(TIMELINE_ANSWER_TAIL).unwrap_or_default());
+    let _ = stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+    );
+    let _ = stream.write_all(
+        sse_chunks(&[json!({"choices": [{"index": 0, "delta": {"content": head}}]})]).as_bytes(),
+    );
+    if !gate.wait_blocking(Duration::from_secs(60)) {
+        return;
+    }
+    let _ = stream.write_all(
+        sse_chunks(&[
+            json!({"choices": [{"index": 0, "delta": {"content": tail}}]}),
+            json!({
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+            }),
+        ])
+        .as_bytes(),
+    );
+    let _ = stream.write_all(b"data: [DONE]\n\n");
+}
+
+/// Commits `notes.txt` reading `alpha` to the scenario repository.
+fn commit_notes(workdir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::write(workdir.join("notes.txt"), "alpha\n")?;
+    for arguments in [&["add", "notes.txt"][..], &["commit", "-m", "add notes"]] {
+        let status = std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(workdir)
+            .status()?;
+        if !status.success() {
+            return Err(format!("git {} failed", arguments.join(" ")).into());
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_harness_session_shows_a_live_timeline_while_the_turn_runs() -> E2eResult {
+    // Arrange
+    let gate = ReleaseGate::new()?;
+    let server = live_timeline_provider(gate.clone())?;
+
+    // Act, Assert
+    FeatureTest::new("harness_live_timeline")
+        .with_git()
+        .with_terminal_size(120, 36)
+        .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
+        .env("MODEL_API_KEY", "test-key")
+        .env("MODEL_API_BASE_URL", server)
+        .setup(|env| Box::pin(async move { commit_notes(&env.workdir) }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Start immediately", 5000)
+                    .press_key("Enter")
+                    .step(common::wait_for_prompt_composer())
+                    .compose(&switch_to_harness_muse_model())
+                    .write_text(TIMELINE_PROMPT)
+                    .wait_for_text(TIMELINE_PROMPT, 3000)
+                    .press_key("Enter")
+                    // The provider holds the rest of its answer until the
+                    // gate opens, so this frame shows the running turn.
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(frame, TIMELINE_ANSWER_HEAD, &full)?;
+
+                            assertion::match_text_in_region(frame, "step 3", &full)
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_live_timeline_running",
+                        "The running turn shows its steps and tool rows",
+                    )
+                    .compose(&gate.release())
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(100),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+                            assertion::match_text_in_region(
+                                frame,
+                                &format!("{TIMELINE_ANSWER_HEAD}{TIMELINE_ANSWER_TAIL}"),
+                                &full,
+                            )?;
+
+                            assertion::match_not_visible(frame, "  ·  step 3")
+                        },
+                    )
+                    .capture_labeled(
+                        "harness_live_timeline_answer",
+                        "The saved answer replaces the timeline",
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    assert_live_timeline_report(frame, report);
+                })
+            },
+        )
+        .await
+}
+
+/// Checks the held turn's narration steps, folded exploration, rejected and
+/// applied edits, and status line, and that the saved answer replaces them.
+fn assert_live_timeline_report(frame: &testty::frame::TerminalFrame, report: &ProofReport) {
+    let running = common::frame_from_capture(&report.captures[0]);
+    let full = Region::full(running.cols(), running.rows());
+    for text in [
+        "• Checking the notes first.",
+        "✓ Explored  read notes.txt · search \"alpha\"",
+        "2 calls",
+        "• Adding beta below alpha.",
+        "✗ Edit      notes.txt",
+        "rejected",
+        "✓ Edit      notes.txt",
+        "+1 −0   read :1-1 first",
+        "• Added beta",
+    ] {
+        assertion::assert_text_in_region(&running, text, &full);
+    }
+    let text = running.all_text();
+    // The held turn waits for the model's next response; the pinned clock
+    // keeps both timers at zero.
+    let status_row = text
+        .lines()
+        .find(|line| line.contains("  ·  step 3"))
+        .map(str::trim);
+    assert_eq!(
+        status_row,
+        Some("⠋ Waiting for muse-spark-1.3 0s  ·  step 3  ·  turn 0s")
+    );
+    assert!(text.find("Checking the notes") < text.find("Adding beta below"));
+    assert!(text.find("✗ Edit") < text.find("✓ Edit"));
+    assert!(!text.contains("Working..."));
+
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(
+        frame,
+        &format!("{TIMELINE_ANSWER_HEAD}{TIMELINE_ANSWER_TAIL}"),
+        &full,
+    );
+    for hidden in [
+        "• Checking the notes first.",
+        "✓ Explored",
+        "✗ Edit",
+        "step 3",
+    ] {
+        assertion::assert_not_visible(frame, hidden);
+    }
+}
+
 /// Session turns the compaction scenario runs; the earlier, longer turns
 /// fill the small window's history.
 const COMPACTION_TURNS: usize = 5;

@@ -410,11 +410,10 @@ fn truncate_turn_error_notice(error_text: &str) -> String {
     notice
 }
 
-/// Persists display-only usage directly after the answer or failure notice,
-/// then removes the live rows the summary replaces. The streamed output goes
-/// first, beside the answer or notice that just replaced it.
+/// Removes the live timeline, which the answer or failure notice saved just
+/// before replaces, then persists display-only usage directly after it.
 async fn append_turn_activity(context: &PostTurnContext, activity: &super::activity::TurnActivity) {
-    activity.clear_output(&context.app_event_tx, &context.session_id);
+    activity.clear_live(&context.app_event_tx, &context.session_id);
     let summary = activity.summary();
     if !summary.is_empty() {
         SessionTaskService::append_session_transcript_message(
@@ -430,7 +429,6 @@ async fn append_turn_activity(context: &PostTurnContext, activity: &super::activ
         )
         .await;
     }
-    activity.clear_live(&context.app_event_tx, &context.session_id);
 }
 
 /// Persists the successful turn payload, emits the reducer projection, and

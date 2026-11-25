@@ -150,3 +150,27 @@ fn status_message_explains_waiting_statuses() {
         .map(ToString::to_string)
     );
 }
+
+#[test]
+fn live_timeline_is_shown_only_while_the_turn_runs_and_the_slot_holds_one() {
+    // Arrange
+    let timeline = TransientMessageBody::Timeline(std::sync::Arc::new(
+        crate::domain::turn_timeline::TurnTimeline::default().snapshot(),
+    ));
+    let running = session_with_transient(
+        Status::InProgress,
+        TransientMessageSlot::Turn,
+        timeline.clone(),
+    );
+    let finished = session_with_transient(Status::Review, TransientMessageSlot::Turn, timeline);
+    let other_body = session_with_transient(
+        Status::InProgress,
+        TransientMessageSlot::Turn,
+        TransientMessageBody::Plain("rows".into()),
+    );
+
+    // Act, Assert
+    assert!(running.live_timeline().is_some());
+    assert!(finished.live_timeline().is_none());
+    assert!(other_body.live_timeline().is_none());
+}
