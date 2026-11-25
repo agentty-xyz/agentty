@@ -237,11 +237,14 @@ function installBinary(source, binary) {
 
 /** Runs `program` and exits as it does: with its status, or by its signal. */
 function spawn(program) {
-  const child = childProcess.spawn(program, process.argv.slice(2), { stdio: "inherit" });
+  // The listeners go in before the binary starts, so no signal sent once it
+  // runs ends this process instead of reaching it. They run on the event
+  // loop, after `child` is assigned below.
   const ignore = () => {};
   const forward = (signal) => child.kill(signal);
   IGNORED_SIGNALS.forEach((signal) => process.on(signal, ignore));
   FORWARDED_SIGNALS.forEach((signal) => process.on(signal, forward));
+  const child = childProcess.spawn(program, process.argv.slice(2), { stdio: "inherit" });
   child.on("error", (error) => {
     report(new Error(`cannot run ${program}: ${error.message}`));
   });
