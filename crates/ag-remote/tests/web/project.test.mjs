@@ -38,8 +38,9 @@ const PROJECTS = parseProjects({
     { id: "2", name: "website" },
   ],
 });
-// What the line says when the project picked here is no longer listed.
-const FALLBACK_NOTE = "The project picked here is no longer listed, so this shows the terminal's project.";
+// What the line says when the project shown or picked here is no longer
+// listed.
+const FALLBACK_NOTE = "The project shown here is no longer listed, so this shows the terminal's project.";
 
 // The project a listing names, with `fields` over `agentty` on `main`,
 // two commits behind its upstream.
@@ -431,6 +432,71 @@ test("a pick that is no longer listed falls back to the terminal's project and s
   assert.equal(shown.project.projectId(), "1");
   assert.equal(shown.byId("project-error").textContent, FALLBACK_NOTE);
   assert.equal(shown.byId("project-select").value, "1");
+});
+
+test("the terminal's project dropping out leaves a pick stored meanwhile alone", () => {
+  // Arrange: the line keeps to the terminal's `agentty` without a pick,
+  // and another tab picks `website`.
+  const storage = new MemoryStorage();
+  const page = mountProject({ capabilities: ["projects"], storage: storage });
+  page.project.setProjects(PROJECTS);
+  projectPicks(storage, "").save("2");
+
+  // Act
+  page.project.setProjects([{ ...PROJECTS[1], isActive: true }]);
+
+  // Assert
+  assert.equal(page.project.projectId(), "2");
+  assert.equal(page.byId("project-error").textContent, FALLBACK_NOTE);
+  assert.deepEqual(JSON.parse(storage.getItem(PROJECT_PICKS_KEY)), { "": "2" });
+});
+
+test("a failed listing keeps the project shown and stops waiting for one", () => {
+  // Arrange
+  const fresh = mountProject({ capabilities: ["projects"] });
+  const picking = mountProject({ capabilities: ["projects"] });
+  picking.project.setProjects(PROJECTS);
+  choose(picking, "2");
+
+  // Act
+  fresh.project.listFailed("Host is busy");
+  picking.project.listFailed("Host is busy");
+
+  // Assert: the terminal's project until one was listed, else the pick.
+  assert.equal(fresh.project.awaitsProjects(), false);
+  assert.equal(fresh.project.projectId(), null);
+  assert.equal(fresh.byId("project-error").textContent, "Could not list the projects: Host is busy");
+  assert.equal(picking.project.projectId(), "2");
+  assert.equal(picking.byId("project-select").hidden, false);
+});
+
+test("a sync belongs to the project it was sent for", async () => {
+  // Arrange: the host answers the sync of `agentty` only when released.
+  let refuse;
+  const page = mountProject({
+    capabilities: ["projects", "sync_project"],
+    respond: () =>
+      new Promise((_resolve, reject) => {
+        refuse = () => reject(new Error("Sync is blocked"));
+      }),
+  });
+  page.project.setProjects(PROJECTS);
+  page.project.update(listed({ id: "1" }));
+  page.byId("project-sync").click();
+  const whileSyncing = page.byId("project-sync").disabled;
+
+  // Act: the device picks `website` before the host answers.
+  choose(page, "2");
+  page.project.update(listed({ branch: "site", id: "2", name: "website" }));
+  const other = { disabled: page.byId("project-sync").disabled, label: page.byId("project-sync-label").textContent };
+  refuse();
+  await settle();
+
+  // Assert
+  assert.equal(whileSyncing, true);
+  assert.deepEqual(other, { disabled: false, label: "Sync" });
+  assert.deepEqual(page.requests, [{ method: "sync_project", project_id: "1" }]);
+  assert.equal(page.byId("project-error").textContent, "");
 });
 
 test("a host that stops offering projects returns the line to the terminal's project", () => {

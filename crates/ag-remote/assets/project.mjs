@@ -24,8 +24,9 @@ import { projectCounts, projectSyncLine } from "./format.mjs";
 // object from the Agentty's instance id, `""` without a relay, to the id
 // of the project.
 export const PROJECT_PICKS_KEY = "agentty.remote.projects";
-// What the line says when the project picked here is no longer listed.
-const FALLBACK_NOTE = "The project picked here is no longer listed, so this shows the terminal's project.";
+// What the line says when the project shown or picked here is no longer
+// listed.
+const FALLBACK_NOTE = "The project shown here is no longer listed, so this shows the terminal's project.";
 
 // Whether the host lets this device sync the project it shows.
 export function offersProjectSync(capabilities) {
@@ -115,8 +116,9 @@ export function projectPicks(storage, instanceId) {
 // the host does not report it), `setHostName(name)` for the name
 // `get_host` gives, `setProjects(list)` for the projects `parseProjects`
 // read, `projectId()` for the id requests name the project by (`null` for
-// the terminal's project), `awaitsProjects()`, whether the host offers
-// `projects` but has not listed them yet, `setCapabilities(list)`, and
+// the terminal's project), `listFailed(message)` when the host could not
+// list them, `awaitsProjects()`, whether the host offers `projects` but has
+// not answered a listing yet, `setCapabilities(list)`, and
 // `setConnected(isConnected)`.
 export function createProject({ elements, request, picks = null, onSelect = () => {} }) {
   const state = {
@@ -124,16 +126,18 @@ export function createProject({ elements, request, picks = null, onSelect = () =
     // The name `get_host` gives, shown while no listing names the project.
     hostName: null,
     isConnected: false,
-    // Whether a sync request waits for the host's answer.
-    isRequesting: false,
-    project: null,
-    // Whether the host listed its projects since it offered `projects`.
+    // Whether the host listed its projects, or failed to, since it offered
+    // `projects`.
     isListed: false,
+    project: null,
     // The id of the project this device shows, once the host listed its
     // projects; `null` follows the terminal's.
     projectId: null,
     // The projects the host lists, while it offers `projects`.
     projects: [],
+    // The sync request waiting for the host's answer, with the project it
+    // is for, or `null`.
+    syncing: null,
   };
 
   function render() {
@@ -151,7 +155,8 @@ export function createProject({ elements, request, picks = null, onSelect = () =
     elements.counts.textContent = counts ?? "";
     elements.counts.hidden = !counts;
     renderStatus(projectSyncLine(project), project?.sync?.tone);
-    const isSyncing = state.isRequesting || Boolean(project?.sync?.isRunning);
+    const isRequesting = state.syncing !== null && state.syncing.projectId === state.projectId;
+    const isSyncing = isRequesting || Boolean(project?.sync?.isRunning);
     elements.sync.hidden = !project || !offersProjectSync(state.capabilities);
     elements.sync.disabled = isSyncing || !state.isConnected;
     elements.sync.setAttribute("aria-busy", String(isSyncing));
@@ -188,41 +193,60 @@ export function createProject({ elements, request, picks = null, onSelect = () =
     }
   }
 
+  // The sync waits for the host for the project it was sent for; its
+  // answer shows only while the line still shows that project.
   async function sync() {
-    state.isRequesting = true;
+    const syncing = { projectId: state.projectId };
+    state.syncing = syncing;
     elements.error.textContent = "";
     render();
     const body = { method: "sync_project" };
-    if (state.projectId !== null) {
-      body.project_id = state.projectId;
+    if (syncing.projectId !== null) {
+      body.project_id = syncing.projectId;
     }
     try {
       await request(body);
     } catch (error) {
-      elements.error.textContent = error.message;
+      if (state.projectId === syncing.projectId) {
+        elements.error.textContent = error.message;
+      }
     }
-    state.isRequesting = false;
+    if (state.syncing === syncing) {
+      state.syncing = null;
+    }
     render();
   }
 
   // Keeps to the project this device shows while the host lists it. The
   // first list starts on the project picked here last, or else the
   // terminal's; when the project shown or picked drops out of the list,
-  // the line falls back to the terminal's and says so.
+  // the line falls back to the terminal's and says so, and forgets a pick
+  // that is gone.
   function setProjects(projects) {
     if (!offersProjects(state.capabilities)) {
       forgetProjects();
 
       return;
     }
-    const wanted = state.projectId ?? picks?.load() ?? null;
+    const stored = picks?.load() ?? null;
+    const wanted = state.projectId ?? stored;
     state.isListed = true;
     state.projects = projects;
     state.projectId = pickProject(projects, wanted);
     if (wanted !== null && state.projectId !== wanted) {
-      picks?.save(null);
+      if (stored === wanted) {
+        picks?.save(null);
+      }
       elements.error.textContent = FALLBACK_NOTE;
     }
+    render();
+  }
+
+  // The host could not list its projects: the line keeps the project it
+  // shows, the terminal's until one was listed, and says why.
+  function listFailed(message) {
+    state.isListed = true;
+    elements.error.textContent = "Could not list the projects: " + message;
     render();
   }
 
@@ -259,6 +283,7 @@ export function createProject({ elements, request, picks = null, onSelect = () =
 
   return {
     awaitsProjects: () => offersProjects(state.capabilities) && !state.isListed,
+    listFailed: listFailed,
     projectId: () => state.projectId,
     setCapabilities: (capabilities) => {
       state.capabilities = capabilities;

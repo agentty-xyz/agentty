@@ -389,59 +389,26 @@ async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> 
     server.revisions_tx.send(2)?;
     let pinned = app.next_step().await?;
     let picked = app.next_step().await?;
+    server.backend.name_listed_projects(false);
+    server.revisions_tx.send(3)?;
+    let unnamed = app.next_step().await?;
+    server.backend.name_listed_projects(true);
+    server.revisions_tx.send(4)?;
     let created = app.next_step().await?;
     server.backend.switch_to(1);
     server.backend.hide(2);
-    server.revisions_tx.send(3)?;
+    server.revisions_tx.send(5)?;
     let fell_back = app.next_step().await?;
     let succeeded = app.succeeded().await?;
 
     // Assert
-    let agentty = |options: Value| {
-        json!({
-            "branch": "main",
-            "countsHidden": false,
-            "error": "",
-            "name": null,
-            "options": options,
-            "selected": "1",
-        })
-    };
+    assert_kept_then_picked(&listed, &pinned, &picked);
+    // A listing that does not say it is `website`'s is not shown as one.
     assert_eq!(
-        listed,
+        unnamed,
         json!({
-            "step": "listed",
-            "eyebrow": "New session · agentty · base main",
-            "project": agentty(json!(["agentty · terminal", "website"])),
-            "rows": ["session-1", "session-2"],
-        })
-    );
-    // The terminal moved to `website`; the page stays on `agentty`.
-    assert_eq!(
-        pinned,
-        json!({
-            "step": "pinned",
-            "eyebrow": "New session · agentty · base main",
-            "project": agentty(json!(["agentty", "website · terminal"])),
-            "rows": ["session-1", "session-2"],
-        })
-    );
-    // The host has not compared `website` with its upstream, so its branch
-    // shows without counts.
-    assert_eq!(
-        picked,
-        json!({
-            "step": "picked",
-            "eyebrow": "New session · website · base site",
-            "picks": "{\"\":\"2\"}",
-            "project": {
-                "branch": "site",
-                "countsHidden": true,
-                "error": "",
-                "name": null,
-                "options": ["agentty", "website · terminal"],
-                "selected": "2",
-            },
+            "step": "unnamed",
+            "error": "Agentty listed another project than the one picked here",
             "rows": ["session-3"],
         })
     );
@@ -462,7 +429,7 @@ async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> 
             "project": {
                 "branch": "main",
                 "countsHidden": false,
-                "error": "The project picked here is no longer listed, so this shows the \
+                "error": "The project shown here is no longer listed, so this shows the \
                           terminal's project.",
                 "name": "agentty",
                 "options": null,
@@ -481,6 +448,59 @@ async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> 
     }
 
     Ok(())
+}
+
+/// Checks the steps where the page starts on the terminal's `agentty`,
+/// stays on it when the terminal moves to `website`, and then picks
+/// `website`.
+fn assert_kept_then_picked(listed: &Value, pinned: &Value, picked: &Value) {
+    let agentty = |options: Value| {
+        json!({
+            "branch": "main",
+            "countsHidden": false,
+            "error": "",
+            "name": null,
+            "options": options,
+            "selected": "1",
+        })
+    };
+    assert_eq!(
+        listed,
+        &json!({
+            "step": "listed",
+            "eyebrow": "New session · agentty · base main",
+            "project": agentty(json!(["agentty · terminal", "website"])),
+            "rows": ["session-1", "session-2"],
+        })
+    );
+    assert_eq!(
+        pinned,
+        &json!({
+            "step": "pinned",
+            "eyebrow": "New session · agentty · base main",
+            "project": agentty(json!(["agentty", "website · terminal"])),
+            "rows": ["session-1", "session-2"],
+        })
+    );
+    // The host has not compared `website` with its upstream, so its branch
+    // shows without counts.
+    assert_eq!(
+        picked,
+        &json!({
+            "step": "picked",
+            "eyebrow": "New session · website · base site",
+            "picks": "{\"\":\"2\"}",
+            "project": {
+                "branch": "site",
+                "countsHidden": true,
+                "error": "",
+                "name": null,
+                "options": ["agentty", "website · terminal"],
+                "selected": "2",
+            },
+            "rows": ["session-3"],
+        })
+    );
 }
 
 #[tokio::test]

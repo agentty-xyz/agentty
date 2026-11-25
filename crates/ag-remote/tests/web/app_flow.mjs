@@ -27,8 +27,10 @@
 // In `projects` mode the test server lists two projects, `agentty`, which
 // the terminal has open, and `website`. After `listed` the Rust test
 // switches the terminal to `website`, and the page keeps to `agentty`.
-// The page then picks `website`, lists its session, and creates one there
-// from home. After `created` the Rust test switches the terminal back and
+// The page then picks `website` and lists its session. After `picked` the
+// Rust test makes one listing leave out its project, which the page does
+// not show, and then name it again; the page creates a session in
+// `website` from home. After `created` the Rust test switches the terminal back and
 // stops listing `website`, and the page falls back to `agentty`.
 //
 // The script prints one JSON line per step. Any wait that runs out ends
@@ -571,6 +573,13 @@ async function projectsFlow() {
     project: projectLine(),
     rows: rowIds(),
   });
+
+  // The Rust test makes listings leave out the project they read; the page
+  // keeps `website`'s rows and says why, until listings name it again.
+  const listError = () => byId("sessions").querySelector('[data-part="error"]').textContent;
+  await waitFor("the unnamed listing", () => listError() !== "");
+  report({ step: "unnamed", error: listError(), rows: rowIds() });
+  await waitFor("a named listing", () => listError() === "");
 
   byId("home-message").value = "Fix the docs";
   byId("home-message").dispatchEvent(new FakeEvent("input"));

@@ -193,7 +193,8 @@ pub enum RemoteRequest {
     },
     /// Lists the projects the host lists, in its project switcher's order:
     /// its active project and every other one the switcher offers. Offered
-    /// through the `projects` capability.
+    /// through the `projects` capability, which a server lists only when its
+    /// host also reports project status, so a listing names its project.
     ListProjects,
     /// Lists the names of the files and directories in a session's worktree,
     /// directories first, without their contents. A session without a

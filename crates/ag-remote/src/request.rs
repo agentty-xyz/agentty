@@ -41,6 +41,12 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::MessageImages, "images"),
     (SessionOperation::Projects, "projects"),
 ];
+/// Operations a capability's operation also needs before the capability is
+/// offered. A page that picks a project knows a listing is that project's
+/// only from the `id` of the project status the listing carries, so
+/// `projects` needs the host to report project status.
+const PREREQUISITES: &[(SessionOperation, SessionOperation)] =
+    &[(SessionOperation::Projects, SessionOperation::ProjectStatus)];
 /// Capabilities that extend the request another one offers, each listed
 /// with it: `settings_agent` says `set_session_settings` takes an `agent`.
 const EXTENSIONS: &[(&str, &str)] = &[("settings", "settings_agent")];
@@ -76,11 +82,18 @@ const FILE_NOT_IN_DIFF: &str = "File is not in the session diff";
 ///
 /// Requests added after the first protocol version are offered only through
 /// this list, so a client never sends one to a server that lacks it. Each
-/// is listed only when the host serves its operation.
+/// is listed only when the host serves its operation and the
+/// [`PREREQUISITES`] of that operation.
 pub(crate) fn capabilities(sessions: &SessionService) -> Vec<String> {
     CAPABILITIES
         .iter()
-        .filter(|(operation, _)| sessions.supports(*operation))
+        .filter(|(operation, _)| {
+            sessions.supports(*operation)
+                && PREREQUISITES
+                    .iter()
+                    .filter(|(dependent, _)| dependent == operation)
+                    .all(|(_, prerequisite)| sessions.supports(*prerequisite))
+        })
         .flat_map(|(_, capability)| {
             let extensions = EXTENSIONS
                 .iter()
@@ -468,14 +481,15 @@ fn decode_images(images: Vec<RemoteImage>) -> Result<Vec<MessageImage>, SessionE
         .collect()
 }
 
-/// Creates a session in the project of `scope`, as the host describes it,
-/// and only in a mode the host serves there now.
+/// Creates a session in the project of `scope`, the listed project a
+/// request named or the active one as the host describes it, and only in a
+/// mode the host serves there now.
 ///
 /// The mode rule belongs to the remote surface and is stricter than the
 /// host, which also creates drafts. It reads the served modes and the
-/// project from `host_context_for`, which the `create_session` capability
-/// does not require the host to serve: a host that creates sessions without
-/// describing its project answers its own `host_context` error here.
+/// active project from `host_context_for`, which the `create_session`
+/// capability does not require the host to serve: a host that creates sessions
+/// without describing its project answers its own `host_context` error here.
 async fn create_session(
     sessions: &SessionService,
     scope: ProjectScope,
@@ -492,11 +506,16 @@ async fn create_session(
             UNAVAILABLE_SESSION_MODE.to_string(),
         ));
     }
+    // A named project is the listed one, whatever the description says.
+    let project_id = match scope {
+        ProjectScope::Active => host.project_id,
+        ProjectScope::Project(id) => id,
+    };
     let session_id = sessions
         .create_session(CreateSessionRequest {
             inherit_from_session_id: None,
             mode,
-            project_id: host.project_id,
+            project_id,
         })
         .await?;
 

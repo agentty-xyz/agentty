@@ -5,7 +5,7 @@ use ag_session::{SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, Sessi
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
-use super::execute;
+use super::{capabilities, execute};
 use crate::connection::{MessageOutcome, handle_incoming};
 use crate::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteGraphAction,
@@ -1164,4 +1164,23 @@ async fn list_sessions_describes_the_project_when_the_host_reports_it() {
         })
     );
     assert_eq!(reporting.backend.calls(), ["list", "project"]);
+}
+
+#[test]
+fn projects_are_offered_only_by_a_host_that_also_reports_project_status() {
+    // Arrange
+    let without_status =
+        StateFixture::supporting(MemoryDeviceStore::default(), &[SessionOperation::Projects]);
+    let with_status = StateFixture::supporting(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::Projects, SessionOperation::ProjectStatus],
+    );
+
+    // Act
+    let offered_without = capabilities(without_status.state.sessions());
+    let offered_with = capabilities(with_status.state.sessions());
+
+    // Assert: a page tells a project's listing apart only by its status.
+    assert_eq!(offered_without, Vec::<String>::new());
+    assert_eq!(offered_with, ["projects"]);
 }

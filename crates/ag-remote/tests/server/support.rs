@@ -460,6 +460,9 @@ pub(crate) struct RecordingBackend {
     /// Ids of the projects the backend no longer lists, as when the
     /// catalog hides them.
     hidden: Mutex<Vec<i64>>,
+    /// Whether listings leave out the project they read, as a host that
+    /// reads the sessions and the status apart does.
+    is_unnamed: Mutex<bool>,
     released: watch::Sender<bool>,
     /// Whether the backend serves [`SessionOperation::Projects`].
     serves_projects: bool,
@@ -498,6 +501,12 @@ impl RecordingBackend {
     /// Stops listing project `id`, and serving it and its sessions.
     pub(crate) fn hide(&self, id: i64) {
         locked(&self.hidden).push(id);
+    }
+
+    /// Makes listings name the project they read, or with `false` leave it
+    /// out.
+    pub(crate) fn name_listed_projects(&self, names: bool) {
+        *locked(&self.is_unnamed) = !names;
     }
 
     fn record(&self, call: String) {
@@ -638,7 +647,8 @@ impl SessionBackend for RecordingBackend {
     // syncing once a sync was requested for it. `session-2` comes with the
     // figures of a running turn two commits ahead of its base, every other
     // session without figures, as an older host lists them. A backend that
-    // serves projects names the project it listed.
+    // serves projects names the project it listed, unless told not to by
+    // [`RecordingBackend::name_listed_projects`].
     async fn project_sessions(&self, scope: ProjectScope) -> Result<ProjectSessions, SessionError> {
         let project = self.scoped("list", scope)?;
         let is_syncing = locked(&self.syncing).contains(&project.id);
@@ -667,7 +677,7 @@ impl SessionBackend for RecordingBackend {
 
         Ok(ProjectSessions {
             entries,
-            project_id: self.serves_projects.then_some(project.id),
+            project_id: (self.serves_projects && !*locked(&self.is_unnamed)).then_some(project.id),
             status: Some(HostProjectStatus {
                 ahead_behind: project.has_counts.then_some((0, 2)),
                 branch: Some(project.branch.to_string()),

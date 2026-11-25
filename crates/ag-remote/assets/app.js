@@ -266,6 +266,9 @@ const state = {
   homeId: null,
   // The Agentty home describes; see `describeHome`.
   homeTarget: null,
+  // Whether home was asked to describe its host again while it created a
+  // session, as when the user picked another project meanwhile.
+  isHomeStale: false,
   // Every Agentty in the sidebar, in the order they were paired. Without a
   // relay, the one behind this page's listener, with the id "".
   instances: [],
@@ -950,15 +953,22 @@ async function loadSessions(instance) {
 // With the `projects` capability, reads the projects `instance` lists
 // again and returns the id of the one this device shows, `null` without
 // the capability. When it changes, as when the one shown is no longer
-// listed, home describes it again: new sessions start there.
+// listed, or home waited for the first answer, home describes it again:
+// new sessions start there. A listing that fails keeps the project shown,
+// the terminal's until one was listed, so its sessions still load.
 async function listProjects(instance) {
   if (!offersProjects(instance.connection.capabilities())) {
     return null;
   }
   const before = instance.project.projectId();
-  instance.project.setProjects(parseProjects(await instance.connection.request({ method: "list_projects" })));
+  const wasAwaiting = instance.project.awaitsProjects();
+  try {
+    instance.project.setProjects(parseProjects(await instance.connection.request({ method: "list_projects" })));
+  } catch (error) {
+    instance.project.listFailed(error.message);
+  }
   const projectId = instance.project.projectId();
-  if (projectId !== before && instance === state.homeTarget) {
+  if ((projectId !== before || wasAwaiting) && instance === state.homeTarget) {
     void describeHome(true);
   }
 
@@ -1082,8 +1092,12 @@ function homeInstance() {
 // where it is.
 async function describeHome(force = false) {
   if (home.isCreating()) {
+    // Described again once the session exists; see `onCreated`.
+    state.isHomeStale = true;
+
     return;
   }
+  state.isHomeStale = false;
   const target = homeInstance();
   if (target === state.homeTarget && !force) {
     return;
@@ -1214,8 +1228,13 @@ function onPairingLost(instance) {
     "Could not reach Agentty. Check that remote control is on, then try again.";
 }
 
-// Forgets the credential `instance` connects with.
+// Forgets the credential `instance` connects with, and the project picked
+// on it.
 function forgetCredential(instance) {
+  const picks = projectPicks(storage, instance.id);
+  if (picks.load() !== null) {
+    picks.save(null);
+  }
   if (usesRelay) {
     state.pairings = forgetPairing(storage, state.pairings, instance.id);
   } else {
@@ -1476,6 +1495,9 @@ const home = createHome({
         chat.keepDraft(sessionId, failure.draft, failure.images);
       }
       instance.refreshGate.request(true);
+    }
+    if (state.isHomeStale) {
+      void describeHome(true);
     }
   },
   onHost: (host) => {
