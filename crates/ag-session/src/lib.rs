@@ -88,10 +88,11 @@ pub use review::{
 };
 pub use service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    DurableMessageVisibility, HostContext, HostProjectStatus, HostProjectSync,
-    HostProjectSyncPhase, HostSessionMode, MessageImage, MessageImageFormat, QuestionAnswer,
-    SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, SessionOperation,
-    SessionService, SessionSettingsChange, StartExecutionGraphRequest,
+    DurableMessageVisibility, HostContext, HostProject, HostProjectStatus, HostProjectSync,
+    HostProjectSyncPhase, HostSessionMode, MessageImage, MessageImageFormat, ProjectScope,
+    ProjectSessions, QuestionAnswer, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
+    SessionFileEntry, SessionOperation, SessionService, SessionSettingsChange,
+    StartExecutionGraphRequest,
 };
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};

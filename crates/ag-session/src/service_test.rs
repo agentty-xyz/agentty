@@ -6,6 +6,9 @@ mod delegation;
 #[path = "service_test/error_test.rs"]
 mod error;
 
+#[path = "service_test/project_test.rs"]
+mod project;
+
 #[path = "service_test/support_test.rs"]
 mod support;
 
