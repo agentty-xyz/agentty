@@ -27,10 +27,12 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
+tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 ag-relay.workspace = true
 ag-session = { workspace = true, features = ["test-utils"] }
+rcgen.workspace = true
 tokio = { workspace = true, features = ["net", "test-util"] }

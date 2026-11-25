@@ -1,8 +1,11 @@
 //! Crate-wide fixtures for source tests: entropy, device store, and session
-//! backend doubles plus server state builders.
+//! backend doubles, server state builders, loopback listeners, and TLS
+//! settings.
 
 use std::collections::BTreeSet;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
@@ -14,7 +17,12 @@ use ag_session::{
     SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
+use rustls::crypto::ring;
+use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::{ClientConfig, ConfigBuilder, RootCertStore, ServerConfig, WantsVerifier};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tokio_rustls::TlsAcceptor;
 
 use crate::device::{DeviceStore, DeviceStoreError, NewRemoteDevice, RemoteDevice};
 use crate::entropy::Entropy;
@@ -623,4 +631,85 @@ impl StateFixture {
             Arc::new(ReplayEntropy::new(vec![0])),
         )
     }
+}
+
+/// First byte of every TLS handshake record, such as a `ClientHello`.
+pub(crate) const TLS_HANDSHAKE_RECORD: u8 = 0x16;
+
+/// Longest real wait for a loopback peer to connect or answer before a
+/// test fails. Passing tests never wait for it.
+pub(crate) const LOOPBACK_GUARD: Duration = Duration::from_secs(5);
+
+/// Binds a listener on a free loopback port and returns it with its
+/// address.
+pub(crate) async fn loopback_listener() -> (TcpListener, SocketAddr) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener should have an address");
+
+    (listener, address)
+}
+
+/// Names the [`TlsFixture`] certificate is valid for.
+pub(crate) const TLS_FIXTURE_NAMES: [&str; 2] = ["relay.example", "127.0.0.1"];
+
+/// Client TLS settings that trust no certificate, for dials whose TLS
+/// handshake a test stalls or refuses. Skips the slow system trust store.
+pub(crate) fn untrusting_tls_config() -> Arc<ClientConfig> {
+    Arc::new(
+        client_config_builder()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth(),
+    )
+}
+
+/// Matching TLS settings for a loopback server and its clients, around a
+/// self-signed certificate for [`TLS_FIXTURE_NAMES`] generated per fixture.
+pub(crate) struct TlsFixture {
+    /// Server that presents the fixture certificate.
+    pub(crate) acceptor: TlsAcceptor,
+    /// Client settings that trust only the fixture certificate.
+    pub(crate) client: Arc<ClientConfig>,
+}
+
+impl TlsFixture {
+    /// Generates a certificate and builds both sides' settings.
+    pub(crate) fn new() -> Self {
+        let certified = rcgen::generate_simple_self_signed(TLS_FIXTURE_NAMES.map(String::from))
+            .expect("certificate should generate");
+        let certificate = certified.cert.der().clone();
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+            certified.signing_key.serialize_der(),
+        ));
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(certificate.clone())
+            .expect("certificate should be a valid root");
+        let server = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("ring should support the default protocol versions")
+            .with_no_client_auth()
+            .with_single_cert(vec![certificate], key)
+            .expect("certificate and key should match");
+
+        Self {
+            acceptor: TlsAcceptor::from(Arc::new(server)),
+            client: Arc::new(
+                client_config_builder()
+                    .with_root_certificates(roots)
+                    .with_no_client_auth(),
+            ),
+        }
+    }
+}
+
+/// Client settings builder on the `ring` provider, which the crate's TLS
+/// settings use.
+fn client_config_builder() -> ConfigBuilder<ClientConfig, WantsVerifier> {
+    ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .expect("ring should support the default protocol versions")
 }
