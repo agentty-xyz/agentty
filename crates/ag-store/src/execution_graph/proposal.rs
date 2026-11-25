@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use sqlx::{Row, SqliteConnection};
 
 use crate::DbError;
-use crate::connection::begin_write;
+use crate::connection::{begin_read, begin_write};
 use crate::execution_graph::{GraphProposalReplyRecord, SqliteGraphRepository};
 
 /// Narrow persistence boundary; querying never generates or dispatches work.
@@ -239,7 +239,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
     }
 
     async fn list(&self, session_id: &str) -> Result<Vec<GraphProposalState>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "list graph proposals").await?;
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT id FROM graph_proposal WHERE session_id = ? ORDER BY rowid")
                 .bind(session_id)
@@ -257,7 +257,7 @@ impl GraphProposalRepository for SqliteGraphRepository {
     }
 
     async fn latest(&self, session_id: &str) -> Result<Option<GraphProposalState>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "load latest graph proposal").await?;
         let id: Option<String> = sqlx::query_scalar(
             "SELECT id FROM graph_proposal WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
         )

@@ -12,7 +12,7 @@ use sqlx::SqliteConnection;
 
 use super::{GraphExecutionRecord, GraphNodeHistory, SqliteGraphRepository};
 use crate::DbError;
-use crate::connection::begin_write;
+use crate::connection::{begin_read, begin_write};
 
 type HistoryRow = (
     i64,
@@ -356,7 +356,7 @@ impl SqliteGraphRepository {
         &self,
         execution: &GraphExecutionRef,
     ) -> Result<Option<GraphNodeHistory>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "load graph node history").await?;
         let Some((current_id, record)) = Self::execution(&mut transaction, execution).await? else {
             return Ok(None);
         };

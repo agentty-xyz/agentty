@@ -1,0 +1,9 @@
+id: sqlite-transaction-helpers
+valid:
+  - 'async fn write(pool: &SqlitePool) { let transaction = ag_sqlite::begin_write(pool).await; }'
+  - 'async fn read(pool: &SqlitePool) { let transaction = begin_read(pool, "load task").await; }'
+  - 'fn start(range: Range<usize>) -> usize { range.begin }'
+invalid:
+  - 'async fn read(&self) { let transaction = self.pool.begin().await; }'
+  - 'async fn write(pool: &SqlitePool) { let transaction = pool.begin_with("BEGIN IMMEDIATE").await; }'
+  - 'async fn read(pool: &SqlitePool) { let transaction = pool.try_begin().await; }'

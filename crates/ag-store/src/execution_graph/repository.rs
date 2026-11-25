@@ -12,7 +12,7 @@ use super::{
     GraphEvidence, GraphExecutionRecord, GraphNodeHistory, GraphOutputReplyRecord,
     StoredGraphResult,
 };
-use crate::connection::begin_write;
+use crate::connection::{begin_read, begin_write};
 use crate::{DbError, TimestampSource};
 
 /// Persistence only: no dispatch, capacity allocation, or automatic replay.
@@ -496,7 +496,7 @@ impl GraphRepository for SqliteGraphRepository {
         &self,
         execution: &GraphExecutionRef,
     ) -> Result<Option<GraphExecutionRecord>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "load graph execution").await?;
         let record = Self::execution(&mut transaction, execution).await?;
         transaction.commit().await?;
 
@@ -509,7 +509,7 @@ impl GraphRepository for SqliteGraphRepository {
         revision: NonZeroU64,
     ) -> Result<Vec<GraphExecutionRecord>, DbError> {
         let revision = Self::integer(revision)?;
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "list graph executions").await?;
         let rows = sqlx::query!(
             "SELECT reference FROM execution_graph_execution WHERE execution_graph_id = ? AND \
              revision = ? ORDER BY id",
@@ -551,7 +551,7 @@ impl GraphRepository for SqliteGraphRepository {
     }
 
     async fn load_result(&self, result_id: &str) -> Result<Option<StoredGraphResult>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "load graph result").await?;
         let result = Self::result(&mut transaction, result_id).await?;
         transaction.commit().await?;
 
@@ -564,7 +564,7 @@ impl GraphRepository for SqliteGraphRepository {
         node_id: &str,
         output_name: &str,
     ) -> Result<Vec<StoredGraphResult>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "list graph results").await?;
         let rows = sqlx::query!(
             "SELECT id, reference, body FROM execution_graph_result WHERE execution_graph_id = ? \
              AND node_id = ? AND output_name = ? ORDER BY version",

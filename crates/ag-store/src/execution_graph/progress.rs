@@ -10,13 +10,14 @@ use sqlx::SqliteConnection;
 
 use super::SqliteGraphRepository;
 use crate::DbError;
+use crate::connection::begin_read;
 
 impl SqliteGraphRepository {
     pub(super) async fn graph_progress(
         &self,
         graph_id: &str,
     ) -> Result<Option<ExecutionGraphProgress>, DbError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = begin_read(&self.pool, "load graph progress").await?;
         let Some(graph) = Self::graph(&mut transaction, graph_id, None).await? else {
             return Ok(None);
         };

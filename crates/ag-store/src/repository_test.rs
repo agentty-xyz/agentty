@@ -229,7 +229,7 @@ async fn repository_parts_support_focused_adapter_injection() {
 #[tokio::test]
 async fn snapshot_fixtures_match_the_migrated_schema_and_stay_isolated() {
     // Arrange
-    let migrated = open_in_memory_pool(1)
+    let migrated = open_in_memory_pool()
         .await
         .expect("failed to open migrated db");
     let database = Database::in_memory()
