@@ -1,36 +1,8 @@
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex, PoisonError};
 
 use super::{Osc52Clipboard, TerminalClipboard, TmuxAwareClipboard};
 use crate::infra::tmux;
-
-/// Writer that keeps everything written in a shared buffer.
-#[derive(Clone, Default)]
-struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
-
-impl SharedBuffer {
-    /// Returns everything written so far as text.
-    fn text(&self) -> String {
-        let bytes = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-
-        String::from_utf8_lossy(&bytes).into_owned()
-    }
-}
-
-impl Write for SharedBuffer {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(buffer);
-
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
+use crate::test_support::SharedBuffer;
 
 /// Writer that refuses every write.
 struct FailingWriter;

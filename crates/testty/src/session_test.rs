@@ -238,23 +238,63 @@ fn capture_frame_hides_output_of_an_unfinished_synchronized_update() {
 }
 
 #[test]
-fn capture_frame_shows_output_of_a_finished_synchronized_update() {
+fn displayed_output_keeps_output_without_synchronized_updates() {
     // Arrange
-    let mut session = PtySessionBuilder::new("/bin/sh")
-        .args([
-            "-c",
-            "printf '\\033[?2026hfirst\\n\\033[?2026l\\033[?2026hsecond\\n\\033[?2026l'; sleep 60",
-        ])
-        .spawn()
-        .expect("failed to spawn shell script");
+    let output = b"plain \x1b[1moutput";
 
     // Act
-    let frame = session.capture_frame();
+    let displayed = PtySession::displayed_output(output);
 
     // Assert
-    let text = frame.all_text();
-    assert!(text.contains("first"), "got: '{text}'");
-    assert!(text.contains("second"), "got: '{text}'");
+    assert_eq!(displayed, output);
+}
+
+#[test]
+fn displayed_output_keeps_finished_synchronized_updates() {
+    // Arrange
+    let output = b"\x1b[?2026hfirst\x1b[?2026l\x1b[?2026hsecond\x1b[?2026l";
+
+    // Act
+    let displayed = PtySession::displayed_output(output);
+
+    // Assert
+    assert_eq!(displayed, output);
+}
+
+#[test]
+fn displayed_output_hides_an_open_update_from_its_first_begin() {
+    // Arrange — the repeated begin inside the open update changes nothing.
+    let output = b"shown\x1b[?2026l\x1b[?2026hfirst\x1b[?2026hsecond";
+
+    // Act
+    let displayed = PtySession::displayed_output(output);
+
+    // Assert
+    assert_eq!(displayed, b"shown\x1b[?2026l");
+}
+
+#[test]
+fn displayed_output_ignores_a_begin_marker_that_arrived_in_part() {
+    // Arrange
+    let output = b"shown\x1b[?20";
+
+    // Act
+    let displayed = PtySession::displayed_output(output);
+
+    // Assert
+    assert_eq!(displayed, output);
+}
+
+#[test]
+fn displayed_output_keeps_an_update_open_until_its_end_arrives_whole() {
+    // Arrange
+    let output = b"shown\x1b[?2026hpending\x1b[?20";
+
+    // Act
+    let displayed = PtySession::displayed_output(output);
+
+    // Assert
+    assert_eq!(displayed, b"shown");
 }
 
 /// Verifies that `wait_for_stable_frame` times out when the spawned

@@ -515,18 +515,30 @@ impl PtySession {
     /// that arrived only in part. Output without synchronized updates is
     /// parsed in full.
     fn displayed_frame(&self) -> TerminalFrame {
-        let output = self.output_buffer.as_slice();
-        let open_update_start = output
-            .windows(SYNCHRONIZED_UPDATE_BEGIN.len())
-            .rposition(|window| window == SYNCHRONIZED_UPDATE_BEGIN)
-            .filter(|&start| {
-                !output[start..]
-                    .windows(SYNCHRONIZED_UPDATE_END.len())
-                    .any(|window| window == SYNCHRONIZED_UPDATE_END)
-            });
-        let displayed_output = open_update_start.map_or(output, |start| &output[..start]);
+        TerminalFrame::new(
+            self.cols,
+            self.rows,
+            Self::displayed_output(&self.output_buffer),
+        )
+    }
 
-        TerminalFrame::new(self.cols, self.rows, displayed_output)
+    /// Returns the prefix of `output` a terminal would display.
+    ///
+    /// The update that is still open began at the first
+    /// [`SYNCHRONIZED_UPDATE_BEGIN`] after the last
+    /// [`SYNCHRONIZED_UPDATE_END`]; a repeated begin inside an open update
+    /// changes nothing. A marker that has only partly arrived is not yet a
+    /// marker, so it neither opens nor closes an update.
+    fn displayed_output(output: &[u8]) -> &[u8] {
+        let after_last_end = output
+            .windows(SYNCHRONIZED_UPDATE_END.len())
+            .rposition(|window| window == SYNCHRONIZED_UPDATE_END)
+            .map_or(0, |end| end + SYNCHRONIZED_UPDATE_END.len());
+        let open_update_start = output[after_last_end..]
+            .windows(SYNCHRONIZED_UPDATE_BEGIN.len())
+            .position(|window| window == SYNCHRONIZED_UPDATE_BEGIN);
+
+        open_update_start.map_or(output, |start| &output[..after_last_end + start])
     }
 
     /// Block until new PTY output arrives or `deadline` passes.

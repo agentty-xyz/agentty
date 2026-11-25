@@ -17,7 +17,7 @@ use crate::app::{App, AppError, spawn};
 use crate::infra::clock::{self, Clock};
 use crate::runtime::latency::CycleTiming;
 use crate::runtime::screen_selection::ScreenAction;
-use crate::runtime::synchronized_writer::SynchronizedWriter;
+use crate::runtime::synchronized_writer::{FrameHold, SynchronizedWriter};
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 use crate::ui::component::nerpa_greeting::NerpaGreeting;
 use crate::ui::style;
@@ -103,8 +103,9 @@ impl EventReaderTask {
 /// fails afterward.
 pub async fn run(app: &mut App) -> Result<(), AppError> {
     let terminal_guard = terminal::TerminalGuard::new();
-    let mut terminal =
-        terminal::setup_terminal(&terminal_guard).map_err(AppError::TerminalSetup)?;
+    let frame_hold = FrameHold::default();
+    let mut terminal = terminal::setup_terminal(&terminal_guard, frame_hold.clone())
+        .map_err(AppError::TerminalSetup)?;
 
     // Spawn a dedicated thread for crossterm event reading so the main async
     // loop can yield to tokio between iterations.
@@ -114,7 +115,7 @@ pub async fn run(app: &mut App) -> Result<(), AppError> {
     let mut tick = tokio::time::interval(FRAME_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let run_result = run_main_loop(app, &mut terminal, &mut event_rx, &mut tick).await;
+    let run_result = run_main_loop(app, &mut terminal, frame_hold, &mut event_rx, &mut tick).await;
     let reader_shutdown_result = event_reader_task.shutdown().await;
     app.wait_for_background_cleanup_tasks().await;
     let cursor_result = terminal.show_cursor().map_err(backend_err);
@@ -145,7 +146,7 @@ where
     let mut tick = tokio::time::interval(FRAME_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let run_result = run_main_loop(app, terminal, event_rx, &mut tick).await;
+    let run_result = run_main_loop(app, terminal, FrameHold::default(), event_rx, &mut tick).await;
     app.wait_for_background_cleanup_tasks().await;
 
     run_result
@@ -156,9 +157,13 @@ where
 /// Reads the runtime clock from `app.services.clock()` so render-throttle
 /// timing is sourced through the same `Clock` trait used by session refresh
 /// logic, keeping `runtime` free of direct `Instant::now()` calls.
+///
+/// `frame_hold` is shared with the terminal's writer, if it has one, so each
+/// frame reaches the terminal as one synchronized update.
 async fn run_main_loop<B: Backend, Message: event::TerminalEventMessage>(
     app: &mut App,
     terminal: &mut Terminal<B>,
+    frame_hold: FrameHold,
     event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
 ) -> io::Result<()>
@@ -172,6 +177,7 @@ where
         app,
         clock,
         event_rx,
+        frame_hold,
         last_draw,
         presentation: Rc::new(PresentationState::default()),
         terminal,
@@ -181,13 +187,7 @@ where
     // Draw before applying queued background results so the first screen
     // appears immediately and never depends on how quickly startup work, such
     // as agent CLI version checks, finishes.
-    render_frame(
-        main_loop_state.app,
-        main_loop_state.terminal,
-        main_loop_state.clock.as_ref(),
-        &mut main_loop_state.last_draw,
-        main_loop_state.presentation.as_ref(),
-    )?;
+    main_loop_state.render()?;
 
     run_until_quit(&mut main_loop_state, |state| Box::pin(state.run_cycle())).await
 }
@@ -217,6 +217,7 @@ struct MainLoopState<'a, B: Backend, Message> {
     app: &'a mut App,
     clock: Arc<dyn Clock>,
     event_rx: &'a mut mpsc::UnboundedReceiver<Message>,
+    frame_hold: FrameHold,
     last_draw: DrawStamp,
     presentation: Rc<PresentationState>,
     terminal: &'a mut Terminal<B>,
@@ -259,13 +260,7 @@ where
             reduce_started_at,
         ));
         let render_started_at = self.clock.now_instant();
-        render_frame(
-            self.app,
-            self.terminal,
-            self.clock.as_ref(),
-            &mut self.last_draw,
-            self.presentation.as_ref(),
-        )?;
+        self.render()?;
         self.timing.record_render(CycleTiming::elapsed_since(
             self.clock.as_ref(),
             render_started_at,
@@ -281,6 +276,27 @@ where
             &mut self.timing,
         )
         .await
+    }
+
+    /// Renders one frame as a single synchronized update.
+    ///
+    /// Clearing for a new page, Ratatui's resize clear, and cursor placement
+    /// each flush the backend, so the frame hold keeps the update open until
+    /// the frame is complete. The flush afterwards presents it, even when
+    /// rendering failed partway.
+    fn render(&mut self) -> io::Result<()> {
+        let held_frame = self.frame_hold.hold();
+        let render_result = render_frame(
+            self.app,
+            self.terminal,
+            self.clock.as_ref(),
+            &mut self.last_draw,
+            self.presentation.as_ref(),
+        );
+        drop(held_frame);
+        self.terminal.backend_mut().flush().map_err(backend_err)?;
+
+        render_result
     }
 }
 
