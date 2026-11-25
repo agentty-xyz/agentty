@@ -300,9 +300,16 @@ impl<'a> SessionChatPage<'a> {
             output = output.active_progress(active_progress);
         }
         output.render(frame, layout_plan.areas.output_area);
+        let mut readout_in_status_line = false;
         if let Some(area) = layout_plan.turn_status_area
             && let Some(snapshot) = session.live_timeline()
         {
+            // While the turn runs, its usage readout fills the status line's
+            // right slot instead of the composer border.
+            readout_in_status_line = true;
+            let telemetry = self.usage_readout.and_then(|usage_readout| {
+                usage_readout.line(usize::from(turn_status::telemetry_max_width(area.width)))
+            });
             let status_line = turn_status::turn_status_line(
                 TurnStatusInput {
                     current: snapshot.current.as_ref(),
@@ -312,7 +319,7 @@ impl<'a> SessionChatPage<'a> {
                     turn_seconds: session
                         .in_progress_duration_seconds(self.frame_time.unix_seconds()),
                 },
-                None,
+                telemetry,
                 area.width,
             );
             frame.render_widget(Paragraph::new(status_line), area);
@@ -338,6 +345,7 @@ impl<'a> SessionChatPage<'a> {
                 .bottom_area
                 .width
                 .saturating_sub(timing_padding),
+            readout_in_status_line,
         );
         self.render_bottom_panel(frame, session, &layout_plan, &timing);
         Self::render_session_header(
@@ -349,9 +357,16 @@ impl<'a> SessionChatPage<'a> {
 
     /// Fits the timing label and the live usage readout into `width`
     /// columns. The timer keeps priority over the readout, which keeps
-    /// priority over the session age.
-    fn timing_footer(&self, session: &Session, width: u16) -> TimingFooter {
-        let readout = self.usage_readout.and_then(|usage_readout| {
+    /// priority over the session age. The border leaves the readout out
+    /// while the turn status line shows it.
+    fn timing_footer(
+        &self,
+        session: &Session,
+        width: u16,
+        readout_in_status_line: bool,
+    ) -> TimingFooter {
+        let border_readout = self.usage_readout.filter(|_| !readout_in_status_line);
+        let readout = border_readout.and_then(|usage_readout| {
             let timer_width = session_format::session_timing_label(session, self.frame_time, 0)
                 .width()
                 + chat_input::FOOTER_SEPARATOR.width();
