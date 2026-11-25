@@ -4,10 +4,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ag_contracts::{
-    AgentError, AgentRequestKind, ContextCompaction, MockAgentChannel, PermissionMode, TurnRequest,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, ContextCompaction,
+    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest,
 };
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem};
@@ -1063,6 +1064,51 @@ async fn implementer_projects_diff_before_commit_finishes_and_refreshes_afterwar
 }
 
 #[tokio::test]
+async fn implementer_with_a_reported_edit_reuses_the_relay_refresh_before_its_answer() {
+    // Arrange
+    let (mut context, _pool) = execution_context().await;
+    let request = accepted_implementation(&context, request("plan")).await;
+    let mut git = MockGitClient::new();
+    git.expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some("wt/sess".to_string()) }));
+    git.expect_main_checkout_working_tree()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    // One refresh from the event relay and one during finalization; the
+    // implementer's own pre-answer refresh is skipped.
+    git.expect_diff_stats().times(2).returning(|_, _| {
+        Box::pin(async {
+            Ok(DiffStats {
+                added_lines: 1,
+                deleted_lines: 0,
+                has_changes: true,
+            })
+        })
+    });
+    git.expect_is_worktree_clean()
+        .once()
+        .returning(|_| Box::pin(async { Ok(true) }));
+    context.git_client = Arc::new(git);
+    let (request_tx, _request_rx) = mpsc::unbounded_channel();
+    let cancellation = CancellationToken::new();
+    let factory = implementation_factory("reported-edit", request_tx, &cancellation);
+
+    // Act
+    let result = task_turn::run(
+        &context,
+        Arc::new(MockRunClient::new()),
+        &request,
+        &factory,
+        cancellation,
+    )
+    .await;
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[tokio::test]
 async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_context() {
     for scenario in [
         "writable",
@@ -1262,8 +1308,22 @@ fn implementation_factory(
         channel
             .expect_run_turn()
             .once()
-            .returning(move |_, turn, _| {
+            .returning(move |_, turn, events| {
                 request_tx.send(turn).expect("observe");
+                if scenario == "reported-edit" {
+                    let _ = events.send(TurnEvent::Activity(ActivityEvent {
+                        attempt_id: "attempt".into(),
+                        exit_code: None,
+                        id: "edit".into(),
+                        input: None,
+                        kind: ActivityKind::FileChange,
+                        name: "write".into(),
+                        observed_at: SystemTime::UNIX_EPOCH,
+                        output: None,
+                        parent_id: None,
+                        status: ActivityStatus::Completed,
+                    }));
+                }
                 Box::pin(async move {
                     let mut result = successful_turn_result("Implemented accepted scope");
                     result.context_reset = true;

@@ -16,6 +16,7 @@ use tracing::debug;
 
 use super::base_branch::{BaseBranchScope, BaseBranchSnapshot};
 use super::lifecycle::SessionTitleGenerationTaskInput;
+use super::live_diff_stats::LiveDiffStats;
 use super::post_turn::PostTurnContext;
 use super::sandbox::SandboxNoticeTarget;
 use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
@@ -174,7 +175,8 @@ impl MainCheckoutSnapshot {
 /// Start and resume turns transition to `InProgress` before provider work.
 /// Saved preparation prompts first record a durable execution marker. They
 /// schedule detached title generation while the current title remains
-/// provisional. Progress events update the UI indicator; `PidUpdate` events
+/// provisional. Finished tool calls refresh the session's diff stats while the
+/// turn runs. Progress events update the UI indicator; `PidUpdate` events
 /// update the shared PID slot used for accounting and CLI cancellation. If the
 /// turn fails, the error is appended to session output before transitioning to
 /// `Review`; user-stopped turns skip that fallback so the UI cancellation path
@@ -259,10 +261,10 @@ pub(super) async fn run_channel_turn(
     )
     .await;
 
-    let sandbox_notices = sandbox_notice_target(context);
-    let (turn_result, ()) = tokio::join!(
+    let permission_mode = prepared.request.permission_mode;
+    let (turn_result, _) = tokio::join!(
         run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx),
-        sandbox_notices.relay(relayed_rx, relay_tx),
+        relay_turn_events(context, permission_mode, relayed_rx, relay_tx),
     );
     SessionManager::cleanup_prompt_attachment_paths(
         context.fs_client.clone(),
@@ -783,15 +785,43 @@ pub(super) fn base_branch_scope(context: &SessionWorkerContext) -> BaseBranchSco
     }
 }
 
-/// Returns the session transcript that receives a turn's sandbox notices.
-pub(super) fn sandbox_notice_target(context: &SessionWorkerContext) -> SandboxNoticeTarget<'_> {
-    SandboxNoticeTarget {
+/// Relays a turn's provider events to its consumer until the provider stops
+/// sending them.
+///
+/// Sandbox notices go to the session transcript as they arrive. Unless the
+/// turn is read-only, finished tool calls also refresh the session's diff
+/// stats, and a refresh still pending when the events end runs before this
+/// returns, so post-turn effects start from current totals.
+///
+/// Returns whether any refresh ran, which means the persisted totals already
+/// include every edit the turn reported.
+pub(super) async fn relay_turn_events(
+    context: &SessionWorkerContext,
+    permission_mode: PermissionMode,
+    provider_events: mpsc::UnboundedReceiver<TurnEvent>,
+    consumer: mpsc::UnboundedSender<TurnEvent>,
+) -> bool {
+    let sandbox_notices = SandboxNoticeTarget {
         app_event_tx: &context.app_event_tx,
         db: &context.db,
         session_id: &context.session_id,
         session_update_versions: &context.session_update_versions,
         transcript: &context.transcript,
+    };
+    if permission_mode == PermissionMode::ReadOnly {
+        sandbox_notices.relay(provider_events, consumer).await;
+
+        return false;
     }
+
+    let (sandbox_tx, diff_rx) = mpsc::unbounded_channel();
+    let live_diff_stats = LiveDiffStats::start(context);
+    tokio::join!(
+        sandbox_notices.relay(provider_events, sandbox_tx),
+        live_diff_stats.relay(diff_rx, consumer),
+    );
+
+    live_diff_stats.finish().await
 }
 
 /// Appends one turn notice, such as a main-checkout warning, to the live and

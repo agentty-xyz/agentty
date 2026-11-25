@@ -159,6 +159,10 @@ once per turn when a command may have been blocked; provider replay leaves them 
 `agentty` binary dispatches the native sandbox helper before it starts any runtime, so a
 harness can start the same executable as its helper.
 
+Unless the turn is read-only, the same relay refreshes the session's diff stats when a
+tool call that may edit files finishes, at most once per throttle interval. A refresh
+still pending when the turn's events end runs before post-turn effects start.
+
 Session chat also routes replies for
 [execution graphs](@/docs/architecture/execution-graphs.md). While a graph proposal is
 pending, a chat message is a reply to it, whether it comes from the composer or a
@@ -304,6 +308,7 @@ work; it does not submit an empty reply.
 | Archived worktree sweep             | Startup                                   |
 | File indexing and image capture     | Composer interaction                      |
 | Full diff and Markdown preview      | Inspection request; every 10 s while open |
+| Session size and line totals        | Finished tool calls, at most every 3 s    |
 | Process resource sampling           | Foreground ticks, rate-limited            |
 | Title and commit-message generation | Session input and changed turns           |
 | Focused review                      | Eligible changed diff or manual request   |

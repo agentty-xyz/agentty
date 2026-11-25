@@ -3,12 +3,13 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, TurnEvent, TurnNotice,
-    TurnResult,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentDefinitionPrompt, AgentError,
+    AgentRequestKind, MockAgentChannel, TurnEvent, TurnNotice, TurnResult,
 };
-use ag_git::{GitError, MockGitClient};
+use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_protocol::AgentResponse;
 use ag_session::{EnvId, ResolvedEnv, SessionStats, test_support as model_fixture};
 use ag_worker::SessionRunClient;
@@ -19,8 +20,9 @@ use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
     MainCheckoutSnapshot, add_main_checkout_warning, consume_turn_events, fresh_turn_cancel_token,
     live_transcript_source, load_session_response_style, load_title_reasoning_level,
-    prepare_turn_request, sandbox_notice_target,
+    prepare_turn_request, relay_turn_events,
 };
+use crate::app::AppEvent;
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
@@ -384,16 +386,18 @@ async fn sandbox_notices_reach_the_transcript_as_they_arrive_and_other_events_pa
 
     // Act
     let mut forwarded = Vec::new();
-    for events in turns {
+    // Edit-capable and read-only turns relay sandbox notices the same way.
+    for (events, permission_mode) in turns
+        .into_iter()
+        .zip([PermissionMode::AutoEdit, PermissionMode::ReadOnly])
+    {
         let (event_tx, relayed_rx) = mpsc::unbounded_channel();
         let (relay_tx, mut event_rx) = mpsc::unbounded_channel();
         for event in events {
             event_tx.send(event).expect("queued event");
         }
         drop(event_tx);
-        sandbox_notice_target(&context)
-            .relay(relayed_rx, relay_tx)
-            .await;
+        relay_turn_events(&context, permission_mode, relayed_rx, relay_tx).await;
         while let Ok(event) = event_rx.try_recv() {
             forwarded.push(event);
         }
@@ -460,6 +464,66 @@ async fn fresh_turn_cancel_token_rejects_a_poisoned_token_slot() {
             .to_string()
             .contains("cancel token lock poisoned")
     );
+}
+
+#[tokio::test]
+async fn only_edit_capable_turns_refresh_diff_stats_after_a_finished_edit() {
+    for (permission_mode, expected_added_lines) in
+        [(PermissionMode::ReadOnly, 0), (PermissionMode::AutoEdit, 9)]
+    {
+        // Arrange
+        let (mut context, project_id) = persisted_turn_test_context().await;
+        let mut fs_client = crate::infra::fs::MockFsClient::new();
+        fs_client.expect_is_dir().return_const(true);
+        let mut git_client = MockGitClient::new();
+        git_client.expect_diff_stats().returning(|_, _| {
+            Box::pin(async {
+                Ok(DiffStats {
+                    added_lines: 9,
+                    deleted_lines: 0,
+                    has_changes: true,
+                })
+            })
+        });
+        context.fs_client = Arc::new(fs_client);
+        context.git_client = Arc::new(git_client);
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
+        let (event_tx, relayed_rx) = mpsc::unbounded_channel();
+        let (relay_tx, mut event_rx) = mpsc::unbounded_channel();
+        event_tx
+            .send(TurnEvent::Activity(ActivityEvent {
+                attempt_id: "attempt".into(),
+                exit_code: None,
+                id: "edit".into(),
+                input: None,
+                kind: ActivityKind::Tool,
+                name: "Edit".into(),
+                observed_at: SystemTime::UNIX_EPOCH,
+                output: None,
+                parent_id: None,
+                status: ActivityStatus::Completed,
+            }))
+            .expect("queued event");
+        drop(event_tx);
+
+        // Act
+        let refreshed = relay_turn_events(&context, permission_mode, relayed_rx, relay_tx).await;
+        let sessions = context
+            .db
+            .sessions()
+            .load_sessions_for_project(project_id)
+            .await
+            .expect("sessions");
+
+        // Assert
+        assert!(matches!(event_rx.try_recv(), Ok(TurnEvent::Activity(_))));
+        assert_eq!(sessions[0].added_lines, expected_added_lines);
+        let projected = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::SessionDiffStatsUpdated { .. }));
+        assert_eq!(projected, expected_added_lines > 0);
+        assert_eq!(refreshed, expected_added_lines > 0);
+    }
 }
 
 /// Request preparation needs persisted state but no filesystem or worker

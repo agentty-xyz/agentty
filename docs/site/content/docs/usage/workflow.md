@@ -457,7 +457,8 @@ this activity. Provider failures show a short error and captured output where av
 
 ## Session Sizes
 
-<a id="usage-session-size"></a> Sizes reflect changed lines and refresh after each turn:
+<a id="usage-session-size"></a> Sizes reflect lines changed against the base branch,
+committed or not, and refresh while a turn edits files:
 
 | Size    | Changed lines |
 | ------- | ------------- |

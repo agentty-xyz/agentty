@@ -100,10 +100,9 @@ async fn execute(
         history.context.context.assignment.agent.kind(),
     )
     .await?;
-    let sandbox_notices = turn::sandbox_notice_target(context);
-    let (result, ()) = tokio::join!(
+    let (result, diff_stats_current) = tokio::join!(
         client.submit(prepared, event_tx, cancellation.clone()),
-        sandbox_notices.relay(relayed_rx, relay_tx),
+        turn::relay_turn_events(context, permission_mode, relayed_rx, relay_tx),
     );
     let cleanup = client.shutdown().await;
     let activity = consumer.await.unwrap_or_default();
@@ -137,10 +136,11 @@ async fn execute(
             },
         )
         .await?;
-    if assignment.role == TaskAgentRole::Implementer {
+    if assignment.role == TaskAgentRole::Implementer && !diff_stats_current {
         // The answer can be visible while commit hooks and publishing still
-        // run. Project its changes before exposing that answer, then refresh
-        // again during finalization to include any post-turn edits.
+        // run. Project its changes before exposing that answer, unless the
+        // event relay already did, then refresh again during finalization to
+        // include any post-turn edits.
         post_turn::refresh_channel_diff_stats(&TurnFinalizerContext::from_worker(context)).await;
     }
     // Task questions are retained in task history; they never replace the
