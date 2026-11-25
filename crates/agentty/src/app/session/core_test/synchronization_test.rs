@@ -7,11 +7,12 @@ use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
 use ag_telemetry::KeyValue;
+use mockall::predicate::eq;
 use opentelemetry::trace::SpanId;
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
-use super::super::SessionManager;
+use super::super::{SessionManager, session_folder};
 use super::support::{
     add_manual_session, allow_detect_git_info, assert_sync_waits_without_canceling_turn,
     create_default_mock_git_client, create_mock_git_client_for_successful_noop_merges,
@@ -22,8 +23,8 @@ use super::support::{
     wait_for_output_contains, wait_for_output_contains_after_events,
     wait_for_second_merge_to_start, wait_for_status_with_retries,
 };
-use crate::app::App;
 use crate::app::test_support::{SyncSessionStartError, TestSessionRunFactory};
+use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
@@ -888,6 +889,105 @@ async fn test_merge_session_queue_processes_sessions_in_fifo_order() {
     let second_status = session_status_or_done(&app, &second_session_id);
     assert_eq!(first_status, Status::Done);
     assert_eq!(second_status, Status::Done);
+}
+
+/// Verifies a project switch neither advances the merge queue while its merge
+/// runs nor keeps the next queued merge from starting in its own project's
+/// checkout once that merge finishes.
+#[tokio::test]
+async fn test_merge_queue_waits_across_project_switch_and_merges_in_session_project() {
+    // Arrange
+    let first_project_dir = tempdir().expect("failed to create first project dir");
+    let second_project_dir = tempdir().expect("failed to create second project dir");
+    std::fs::create_dir_all(second_project_dir.path().join(".git"))
+        .expect("failed to mark second repository");
+    let mut app = new_test_app_with_git(first_project_dir.path()).await;
+    let first_project_id = app.active_project_id();
+    let first_project_path = app.projects.working_dir().to_path_buf();
+    let second_project_id = app
+        .services
+        .db()
+        .projects()
+        .upsert_project(&second_project_dir.path().to_string_lossy(), None)
+        .await
+        .expect("failed to insert second project");
+    let merge_statuses = [
+        ("merging-session", Status::Merging),
+        ("queued-session", Status::Queued),
+    ];
+    for (session_id, _) in merge_statuses {
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                session_id,
+                "gemini-3.8-flash",
+                "main",
+                &Status::Review.to_string(),
+                first_project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        std::fs::create_dir_all(session_folder(app.services.base_path(), session_id))
+            .expect("failed to create session folder");
+    }
+    app.refresh_sessions_now().await;
+    for (session_id, status) in merge_statuses {
+        crate::test_support::set_session_status_for_test(&mut app, session_id, status);
+    }
+    app.merge_queue.set_active("merging-session".into());
+    app.merge_queue.enqueue("queued-session".into());
+    app.switch_project(second_project_id)
+        .await
+        .expect("failed to switch to the second project");
+    let mut mock_git_client = git::MockGitClient::new();
+    mock_git_client
+        .expect_find_git_repo_root()
+        .with(eq(first_project_path.clone()))
+        .times(1)
+        .returning(|path| Box::pin(async move { Some(path) }));
+    mock_git_client
+        .expect_is_worktree_clean()
+        .with(eq(first_project_path))
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(false) }));
+    app.sessions.git_client = Arc::new(mock_git_client);
+
+    // Act
+    app.apply_app_events(AppEvent::SessionUpdated {
+        session_id: "merging-session".into(),
+        version: 1,
+    })
+    .await;
+    let waits_for_running_merge = app.merge_queue.active_session_id() == Some("merging-session")
+        && app.merge_queue.is_queued_or_active("queued-session");
+    crate::test_support::set_session_status_for_test(&mut app, "merging-session", Status::Done);
+    app.apply_app_events(AppEvent::SessionUpdated {
+        session_id: "merging-session".into(),
+        version: 2,
+    })
+    .await;
+
+    // Assert
+    assert!(waits_for_running_merge);
+    assert!(!app.merge_queue.has_work());
+    let queued_handles = app
+        .sessions
+        .session_handles_or_err("queued-session")
+        .expect("queued session handles should outlive the project switch");
+    assert_eq!(
+        *queued_handles.status.lock().expect("status lock poisoned"),
+        Status::Review
+    );
+    assert!(
+        queued_handles
+            .transcript
+            .lock()
+            .expect("transcript lock poisoned")
+            .messages()
+            .iter()
+            .any(|message| message.content.contains("`main` has uncommitted changes"))
+    );
 }
 
 #[tokio::test]

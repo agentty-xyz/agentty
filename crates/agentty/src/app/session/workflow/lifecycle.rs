@@ -3431,13 +3431,16 @@ impl SessionManager {
     }
 
     /// Appends text to a specific session output stream.
+    ///
+    /// Writes through the session's live handle, so a session whose project
+    /// the terminal no longer shows still records the text.
     pub(crate) async fn append_output_for_session(
         &self,
         services: &AppServices,
         session_id: &str,
         output: &str,
     ) {
-        let Ok((session, handles)) = self.session_and_handles_or_err(session_id) else {
+        let Ok(handles) = self.session_handles_or_err(session_id) else {
             return;
         };
         let app_event_tx = services.event_sender();
@@ -3447,7 +3450,7 @@ impl SessionManager {
             services.db(),
             &app_event_tx,
             &services.session_update_versions(),
-            &session.id,
+            session_id,
             output,
         )
         .await;

@@ -13,6 +13,14 @@ pub(crate) enum MergeQueueProgress {
     StartNext,
 }
 
+/// Outcome of trying to start the merge at the queue head.
+pub(crate) enum MergeQueueStart {
+    /// The head session's project is synchronizing, so the head waits.
+    CheckoutBusy,
+    /// The head session's merge started.
+    Started,
+}
+
 /// Stores FIFO merge queue state and active merge tracking.
 #[derive(Default)]
 pub(crate) struct MergeQueue {
@@ -47,6 +55,11 @@ impl MergeQueue {
         self.has_active() || !self.queued_session_ids.is_empty()
     }
 
+    /// Returns the queue head without removing it.
+    pub(crate) fn peek_next(&self) -> Option<&SessionId> {
+        self.queued_session_ids.front()
+    }
+
     /// Pops the next queued session id from the queue head.
     pub(crate) fn pop_next(&mut self) -> Option<SessionId> {
         self.queued_session_ids.pop_front()
@@ -59,11 +72,16 @@ impl MergeQueue {
 
     /// Resolves queue progression for one reduced app-event batch.
     ///
+    /// `current_active_status` is the active merge's live status, which does
+    /// not depend on the project the terminal shows; `None` means the session
+    /// no longer exists. `previous_session_states` holds no entry for a
+    /// session outside the loaded session list.
+    ///
     /// This clears an active merge once it transitions away from `Merging`.
     /// It returns `StartNext` when the active merge either:
     /// - Transitions from `Merging` to any other state, or
     /// - Is touched in a reducer batch while already no longer `Merging`, or
-    /// - Disappears from the session list after processing.
+    /// - No longer exists after processing.
     pub(crate) fn progress_from_status_updates(
         &mut self,
         current_active_status: Option<Status>,

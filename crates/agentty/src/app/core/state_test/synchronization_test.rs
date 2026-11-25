@@ -268,29 +268,26 @@ async fn merge_queue_drain_skips_failed_entries_when_not_stopping_on_failure() {
     assert!(!app.merge_queue.is_queued_or_active("unmergeable"));
 }
 
+/// Verifies the queue follows the active merge's live handle, which outlives
+/// the session list when the terminal shows another project.
 #[tokio::test]
-async fn merge_queue_progress_reads_the_active_session_status_from_the_snapshot() {
+async fn merge_queue_progress_reads_the_active_session_status_from_its_live_handle() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    for (session_id, status) in [("other", Status::Review), ("active-merge", Status::Merging)] {
-        app.sessions.push_session(
-            crate::test_support::SessionFixtureBuilder::new()
-                .id(session_id)
-                .status(status)
-                .build(),
-        );
-    }
+    app.sessions.session_handles_mut().insert(
+        SessionId::from("active-merge"),
+        SessionHandles::new(Status::Merging),
+    );
     app.merge_queue.set_active("active-merge".into());
     let session_ids = HashSet::from([SessionId::from("active-merge")]);
-    let previous_session_states =
-        HashMap::from([(SessionId::from("active-merge"), Status::Merging)]);
+    let unloaded_previous_session_states = HashMap::new();
 
     // Act
-    app.handle_merge_queue_progress(&session_ids, &previous_session_states)
+    app.handle_merge_queue_progress(&session_ids, &unloaded_previous_session_states)
         .await;
     let still_merging = app.merge_queue.is_queued_or_active("active-merge");
     crate::test_support::set_session_status_for_test(&mut app, "active-merge", Status::Review);
-    app.handle_merge_queue_progress(&session_ids, &previous_session_states)
+    app.handle_merge_queue_progress(&session_ids, &unloaded_previous_session_states)
         .await;
 
     // Assert
@@ -1193,6 +1190,69 @@ async fn merge_queue_drain_waits_for_active_project_sync() {
     assert!(result.is_ok());
     assert!(app.merge_queue.is_queued_or_active("pending-merge"));
     assert!(!app.merge_queue.has_active());
+}
+
+/// Verifies merge and rebase admission waits for the sync of the session's
+/// own project, not the sync of the project the terminal shows.
+#[tokio::test]
+async fn base_checkout_work_waits_for_the_session_project_sync() {
+    for is_session_project_syncing in [true, false] {
+        // Arrange
+        let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
+        let session_project_id = app
+            .services
+            .db()
+            .projects()
+            .upsert_project("/tmp/session-project", None)
+            .await
+            .expect("failed to insert session project");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(
+                "other-project-session",
+                "gemini-3.8-flash",
+                "main",
+                &Status::Queued.to_string(),
+                session_project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let syncing_project_id = if is_session_project_syncing {
+            session_project_id
+        } else {
+            app.active_project_id()
+        };
+        app.set_project_sync_status(sync::ProjectSyncStatus {
+            context: sync::ProjectSyncContext {
+                default_branch: "main".to_string(),
+                operation_id: 1,
+                project_id: syncing_project_id,
+                project_name: "syncing-project".to_string(),
+            },
+            phase: sync::ProjectSyncPhase::Running,
+        });
+        app.merge_queue.enqueue("other-project-session".into());
+
+        // Act
+        let drain_result = app.start_next_merge_from_queue(false).await;
+        let is_still_queued = app.merge_queue.is_queued_or_active("other-project-session");
+        let merge_result = app.merge_session("other-project-session").await;
+        let rebase_result = app.rebase_session("other-project-session").await;
+
+        // Assert
+        assert!(drain_result.is_ok());
+        assert_eq!(is_still_queued, is_session_project_syncing);
+        for result in [merge_result, rebase_result] {
+            assert_eq!(
+                matches!(
+                    result,
+                    Err(AppError::Workflow(message)) if message.contains("is synchronizing `main`")
+                ),
+                is_session_project_syncing,
+            );
+        }
+    }
 }
 
 #[tokio::test]
