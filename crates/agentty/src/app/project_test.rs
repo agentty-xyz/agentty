@@ -135,3 +135,26 @@ fn test_update_active_project_context_replaces_upstream_reference() {
     assert_eq!(manager.working_dir(), Path::new("/tmp/service"));
     assert_eq!(manager.render_parts().git_status, None);
 }
+
+#[test]
+fn update_active_project_context_drops_previous_project_git_status() {
+    // Arrange
+    let mut manager = project_manager_fixture();
+    manager.set_git_status(Some((2, 1)));
+    let reported_status = manager.render_parts().git_status;
+
+    // Act
+    manager.update_active_project_context(
+        2,
+        "service".to_string(),
+        Some("main".to_string()),
+        None,
+        PathBuf::from("/tmp/service"),
+    );
+
+    // Assert
+    assert_eq!(reported_status, Some((2, 1)));
+    assert_eq!(manager.render_parts().git_status, None);
+    assert_eq!(manager.render_parts().active_project_id, 2);
+    assert_eq!(manager.selected_project_id(), Some(2));
+}

@@ -27,18 +27,16 @@ pub(crate) struct ProjectRenderParts<'a> {
 
 /// Project domain state and git status tracking for the active project.
 pub struct ProjectManager {
-    active_project_id: i64,
-    active_project_name: String,
-    git_branch: Option<String>,
-    git_status: Option<(u32, u32)>,
-    git_upstream_ref: Option<String>,
+    /// Context of the project the terminal shows.
+    active: ProjectContext,
     /// Most-recently-opened order over `project_items`, cached so the switcher
     /// popup never re-sorts on the render or key-input path. Rebuilt whenever
     /// `project_items` is replaced.
     mru_project_order: Vec<usize>,
+    /// Projects the switcher offers: saved projects that are not session
+    /// worktrees and that the project catalog shows.
     project_items: Vec<ProjectListItem>,
     table_state: SelectionState,
-    working_dir: PathBuf,
 }
 
 impl ProjectManager {
@@ -52,15 +50,16 @@ impl ProjectManager {
         working_dir: PathBuf,
     ) -> Self {
         let mut manager = Self {
-            active_project_id,
-            active_project_name,
-            git_branch,
-            git_status: None,
-            git_upstream_ref,
+            active: ProjectContext::new(
+                active_project_id,
+                active_project_name,
+                git_branch,
+                git_upstream_ref,
+                working_dir,
+            ),
             mru_project_order: mru_project_order(&project_items),
             project_items,
             table_state: SelectionState::default(),
-            working_dir,
         };
         manager.select_active_project_row();
 
@@ -75,46 +74,46 @@ impl ProjectManager {
     /// render hot path while runtime retains the concrete table viewport.
     pub(crate) fn render_parts(&self) -> ProjectRenderParts<'_> {
         ProjectRenderParts {
-            active_project_id: self.active_project_id,
-            git_branch: self.git_branch.as_deref(),
-            git_status: self.git_status,
-            git_upstream_ref: self.git_upstream_ref.as_deref(),
+            active_project_id: self.active.id,
+            git_branch: self.active.git_branch.as_deref(),
+            git_status: self.active.git_status,
+            git_upstream_ref: self.active.git_upstream_ref.as_deref(),
             mru_project_order: &self.mru_project_order,
             project_items: &self.project_items,
             selected_index: self.table_state.selected(),
-            working_dir: self.working_dir.as_path(),
+            working_dir: self.active.working_dir.as_path(),
         }
     }
 
     /// Returns the active project identifier.
     pub(crate) fn active_project_id(&self) -> i64 {
-        self.active_project_id
+        self.active.id
     }
 
     /// Returns the active project display name.
     pub(crate) fn project_name(&self) -> &str {
-        &self.active_project_name
+        &self.active.name
     }
 
     /// Returns the git branch of the active project, when available.
     pub(crate) fn git_branch(&self) -> Option<&str> {
-        self.git_branch.as_deref()
+        self.active.git_branch.as_deref()
     }
 
     /// Returns the upstream reference tracked by the active project branch,
     /// when available.
     pub(crate) fn git_upstream_ref(&self) -> Option<&str> {
-        self.git_upstream_ref.as_deref()
+        self.active.git_upstream_ref.as_deref()
     }
 
     /// Returns whether a git branch is configured for the active project.
     pub(crate) fn has_git_branch(&self) -> bool {
-        self.git_branch.is_some()
+        self.active.git_branch.is_some()
     }
 
     /// Returns the active project working directory.
     pub(crate) fn working_dir(&self) -> &Path {
-        self.working_dir.as_path()
+        self.active.working_dir.as_path()
     }
 
     /// Returns project rows ordered most-recently-opened first for the
@@ -181,12 +180,13 @@ impl ProjectManager {
         git_upstream_ref: Option<String>,
         working_dir: PathBuf,
     ) {
-        self.active_project_id = active_project_id;
-        self.active_project_name = active_project_name;
-        self.git_branch = git_branch;
-        self.git_status = None;
-        self.git_upstream_ref = git_upstream_ref;
-        self.working_dir = working_dir;
+        self.active = ProjectContext::new(
+            active_project_id,
+            active_project_name,
+            git_branch,
+            git_upstream_ref,
+            working_dir,
+        );
         self.select_active_project_row();
     }
 
@@ -218,7 +218,7 @@ impl ProjectManager {
 
     /// Updates the last known git status.
     pub(crate) fn set_git_status(&mut self, git_status: Option<(u32, u32)>) {
-        self.git_status = git_status;
+        self.active.git_status = git_status;
     }
 
     /// Re-selects active project row in the projects list when present.
@@ -232,9 +232,45 @@ impl ProjectManager {
         let selected_index = self
             .project_items
             .iter()
-            .position(|project_item| project_item.project.id == self.active_project_id)
+            .position(|project_item| project_item.project.id == self.active.id)
             .unwrap_or(0);
         self.table_state.select(Some(selected_index));
+    }
+}
+
+/// One project's identity, checkout, and Git state, as the host holds it.
+struct ProjectContext {
+    /// Current local branch name, when one is detected.
+    git_branch: Option<String>,
+    /// Latest ahead/behind counts of `git_branch` from the background fetch.
+    git_status: Option<(u32, u32)>,
+    /// Upstream reference tracked by `git_branch`, when one is configured.
+    git_upstream_ref: Option<String>,
+    /// Persisted project identifier.
+    id: i64,
+    /// Display name.
+    name: String,
+    /// Checkout directory the project's sessions start from.
+    working_dir: PathBuf,
+}
+
+impl ProjectContext {
+    /// Creates a context with no ahead/behind counts until the next fetch.
+    fn new(
+        id: i64,
+        name: String,
+        git_branch: Option<String>,
+        git_upstream_ref: Option<String>,
+        working_dir: PathBuf,
+    ) -> Self {
+        Self {
+            git_branch,
+            git_status: None,
+            git_upstream_ref,
+            id,
+            name,
+            working_dir,
+        }
     }
 }
 
