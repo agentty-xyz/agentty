@@ -289,9 +289,9 @@ Agentty's own Git commands run no other hooks: `commit-msg`, `prepare-commit-msg
 `post-commit` hooks are skipped, and pushes skip `pre-push` hooks, so run
 `git lfs push <remote> <branch>` yourself if the project stores files with Git LFS. Hook
 tools keep their caches in the sandbox's temporary directory, so a session's first
-commit and each squash merge set up hook environments again. The sandbox scoped to your
-checkout keeps its Git metadata read-only, so hooks that stage or stash changes fail
-there.
+commit and each squash merge set up hook environments again. Both sandboxes keep the
+repository's Git metadata read-only, so hooks that stage or stash changes fail; files a
+hook rewrites are staged by Agentty when it retries the commit.
 
 For an unlinked session, `m` queues a local squash merge using the session commit
 message, followed by the titles of any commits added after publishing. The target
