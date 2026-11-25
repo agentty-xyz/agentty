@@ -42,6 +42,7 @@ function mountHome({
   const requests = [];
   const hosts = [];
   const created = [];
+  const settled = [];
   const request = async (body) => {
     requests.push(body);
     if (body.method === "get_host") {
@@ -69,6 +70,8 @@ function mountHome({
     },
     onCreated: (sessionId, failure) => created.push([sessionId, failure]),
     onHost: (described) => hosts.push(described),
+    // Each creation that ended, as the sessions opened by then.
+    onSettled: () => settled.push(created.length),
     request: request,
     settings: createSettings({
       document: document,
@@ -92,7 +95,7 @@ function mountHome({
   });
   home.setConnected(isConnected);
 
-  return { byId, created, document, home, hosts, requests, window };
+  return { byId, created, document, home, hosts, requests, settled, window };
 }
 
 function type(page, text) {
@@ -246,6 +249,8 @@ test("sending creates the session, sends the first message, then opens it", asyn
     { method: "send_message", message: "Fix the relay\nand test it", session_id: "new" },
   ]);
   assert.deepEqual(page.created, [["new", null]]);
+  // The creation ends after the new session opened.
+  assert.deepEqual(page.settled, [1]);
   assert.equal(page.byId("home-message").value, "");
   assert.equal(page.byId("home-message").rows, 1);
   assert.equal(sessionStorage.getItem(DRAFT_KEY_PREFIX + HOME_DRAFT_ID), null);
@@ -309,6 +314,8 @@ test("a refused creation keeps the text on home and says why", async () => {
   await settle();
 
   assert.deepEqual(page.created, []);
+  // The refused creation still ends, so the page can describe home again.
+  assert.deepEqual(page.settled, [0]);
   assert.equal(page.byId("home-message").value, "Fix the relay");
   assert.equal(page.byId("home-error").textContent, "No active project");
   assert.equal(page.byId("home-send").disabled, false);

@@ -468,6 +468,12 @@ test("a failed listing keeps the project shown and stops waiting for one", () =>
   assert.equal(fresh.byId("project-error").textContent, "Could not list the projects: Host is busy");
   assert.equal(picking.project.projectId(), "2");
   assert.equal(picking.byId("project-select").hidden, false);
+  // The next listing that goes through clears the note, and only that one.
+  fresh.project.setProjects(PROJECTS);
+  assert.equal(fresh.byId("project-error").textContent, "");
+  picking.byId("project-error").textContent = "Sync is blocked";
+  picking.project.setProjects(PROJECTS);
+  assert.equal(picking.byId("project-error").textContent, "Sync is blocked");
 });
 
 test("a sync belongs to the project it was sent for", async () => {

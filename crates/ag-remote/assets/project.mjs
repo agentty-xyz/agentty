@@ -129,6 +129,9 @@ export function createProject({ elements, request, picks = null, onSelect = () =
     // Whether the host listed its projects, or failed to, since it offered
     // `projects`.
     isListed: false,
+    // What the line says about the last listing that failed, until one
+    // goes through.
+    listError: null,
     project: null,
     // The id of the project this device shows, once the host listed its
     // projects; `null` follows the terminal's.
@@ -230,6 +233,11 @@ export function createProject({ elements, request, picks = null, onSelect = () =
     }
     const stored = picks?.load() ?? null;
     const wanted = state.projectId ?? stored;
+    // A listing that went through replaces the earlier failure's note.
+    if (state.listError !== null && elements.error.textContent === state.listError) {
+      elements.error.textContent = "";
+    }
+    state.listError = null;
     state.isListed = true;
     state.projects = projects;
     state.projectId = pickProject(projects, wanted);
@@ -246,7 +254,8 @@ export function createProject({ elements, request, picks = null, onSelect = () =
   // shows, the terminal's until one was listed, and says why.
   function listFailed(message) {
     state.isListed = true;
-    elements.error.textContent = "Could not list the projects: " + message;
+    state.listError = "Could not list the projects: " + message;
+    elements.error.textContent = state.listError;
     render();
   }
 

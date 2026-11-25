@@ -504,6 +504,33 @@ async fn a_request_whose_operations_the_host_does_not_all_serve_reaches_nothing(
 }
 
 #[tokio::test]
+async fn a_request_about_projects_reaches_nothing_on_a_host_without_project_status() {
+    // Arrange: `projects` is served only with project status, which tells
+    // a page which project a listing is.
+    let served: Vec<SessionOperation> = every_operation()
+        .into_iter()
+        .filter(|served| *served != SessionOperation::ProjectStatus)
+        .collect();
+    let about_projects = cases()
+        .into_iter()
+        .filter(|case| case.requires.contains(&SessionOperation::Projects));
+
+    for case in about_projects {
+        // Act
+        let (result, calls) = run(case.sample.clone(), &served).await;
+
+        // Assert
+        assert_eq!(
+            result,
+            RemoteResult::Error("Unsupported request".to_string()),
+            "{:?}",
+            case.sample
+        );
+        assert_eq!(calls, Vec::<String>::new(), "{:?}", case.sample);
+    }
+}
+
+#[tokio::test]
 async fn a_request_for_an_unlisted_session_or_project_reaches_only_the_listing() {
     for case in cases() {
         // Arrange

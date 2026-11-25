@@ -1092,7 +1092,7 @@ function homeInstance() {
 // where it is.
 async function describeHome(force = false) {
   if (home.isCreating()) {
-    // Described again once the session exists; see `onCreated`.
+    // Described again once the creation ends; see `onSettled`.
     state.isHomeStale = true;
 
     return;
@@ -1496,6 +1496,10 @@ const home = createHome({
       }
       instance.refreshGate.request(true);
     }
+  },
+  // A host description asked for while a session was created runs now,
+  // whether or not the creation went through.
+  onSettled: () => {
     if (state.isHomeStale) {
       void describeHome(true);
     }
@@ -1813,6 +1817,7 @@ async function startThroughRelay() {
     if (deviceKey.origin === "created") {
       for (const pairing of state.pairings) {
         state.pairings = forgetPairing(storage, state.pairings, pairing.instanceId);
+        projectPicks(storage, pairing.instanceId).save(null);
       }
     } else if (!hasLink) {
       elements["pair-error"].textContent =

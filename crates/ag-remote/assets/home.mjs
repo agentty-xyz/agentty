@@ -133,7 +133,8 @@ export function modeLabel(mode) {
 // `onCreated(sessionId, failure)` opens a new session; `failure` is `null`
 // when the first message went through, and otherwise
 // `{ draft, error, images }` with the text and images to keep and why it
-// failed.
+// failed. `onSettled()` runs once a creation ends, whether or not it
+// created a session.
 //
 // Returns `setCapabilities(list, scope, projectId)`, which loads the host
 // when it is offered, `setConnected(isConnected)`, `focus()`, and `host()`.
@@ -144,6 +145,7 @@ export function createHome({
   request,
   onHost,
   onCreated,
+  onSettled = () => {},
   settings = null,
 }) {
   const state = {
@@ -328,6 +330,7 @@ export function createHome({
       elements.error.textContent = error.message;
       state.isCreating = false;
       render();
+      onSettled();
 
       return;
     }
@@ -362,6 +365,7 @@ export function createHome({
     state.isCreating = false;
     render();
     onCreated(sessionId, failure);
+    onSettled();
   }
 
   composer.load(HOME_DRAFT_ID);

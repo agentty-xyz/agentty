@@ -87,13 +87,7 @@ const FILE_NOT_IN_DIFF: &str = "File is not in the session diff";
 pub(crate) fn capabilities(sessions: &SessionService) -> Vec<String> {
     CAPABILITIES
         .iter()
-        .filter(|(operation, _)| {
-            sessions.supports(*operation)
-                && PREREQUISITES
-                    .iter()
-                    .filter(|(dependent, _)| dependent == operation)
-                    .all(|(_, prerequisite)| sessions.supports(*prerequisite))
-        })
+        .filter(|(operation, _)| serves(sessions, *operation))
         .flat_map(|(_, capability)| {
             let extensions = EXTENSIONS
                 .iter()
@@ -104,6 +98,16 @@ pub(crate) fn capabilities(sessions: &SessionService) -> Vec<String> {
         })
         .map(str::to_string)
         .collect()
+}
+
+/// Whether this server serves `operation`: the host supports it and the
+/// [`PREREQUISITES`] it has.
+fn serves(sessions: &SessionService, operation: SessionOperation) -> bool {
+    sessions.supports(operation)
+        && PREREQUISITES
+            .iter()
+            .filter(|(dependent, _)| *dependent == operation)
+            .all(|(_, prerequisite)| sessions.supports(*prerequisite))
 }
 
 /// Runs one request against the session service, drawing the identities it
@@ -255,7 +259,7 @@ impl<'request> RequestPolicy<'request> {
         if !self
             .requires
             .iter()
-            .all(|operation| sessions.supports(*operation))
+            .all(|operation| serves(sessions, *operation))
         {
             return Err(SessionError::Operation(UNSUPPORTED_REQUEST.to_string()));
         }
