@@ -40,7 +40,7 @@ use crate::app::sync::SyncMainEventContext;
 use crate::app::test_support::purpose_recording_run_worker;
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
-use crate::domain::session::{PublishedBranchSyncStatus, Status};
+use crate::domain::session::{PublishedBranchSyncStatus, SessionHandles, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::enable_tracing_log_fallback;
@@ -2191,12 +2191,71 @@ async fn test_merge_session_rejects_linked_review_request_before_workflow_start(
         // Act
         let result = app
             .sessions
-            .merge_session("session-id", &app.projects, &app.services)
+            .merge_session("session-id", app.projects.working_dir(), &app.services)
             .await;
 
         // Assert
         let error = result.expect_err("merge workflow should not start");
         assert_eq!(error.to_string(), expected_error);
+    }
+}
+
+/// Verifies a merge of a session outside the loaded list validates the
+/// stored review request and the live handle's status before starting.
+#[tokio::test]
+async fn test_merge_session_validates_an_unloaded_session_from_store_and_handle() {
+    let cases = [
+        (false, None, Some(Status::Queued), "Session not found"),
+        (true, None, None, "Session handles not found"),
+        (
+            true,
+            None,
+            Some(Status::InProgress),
+            "Session must be in review or queued status",
+        ),
+        (
+            true,
+            Some(linked_github_review_request()),
+            Some(Status::Queued),
+            "Merge cannot run for linked review requests",
+        ),
+    ];
+
+    for (is_stored, review_request, handle_status, expected_error) in cases {
+        // Arrange
+        let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+        let db = app.services.db().clone();
+        if is_stored {
+            db.sessions()
+                .insert_session(
+                    "session-id",
+                    model_fixture::CODEX_MODEL_ID,
+                    "main",
+                    "Queued",
+                    app.active_project_id(),
+                )
+                .await
+                .expect("failed to insert session");
+            db.reviews()
+                .update_session_review_request("session-id", review_request)
+                .await
+                .expect("failed to persist review request");
+        }
+        if let Some(handle_status) = handle_status {
+            app.sessions
+                .session_handles_mut()
+                .insert("session-id".into(), SessionHandles::new(handle_status));
+        }
+
+        // Act
+        let result = app
+            .sessions
+            .merge_session("session-id", app.projects.working_dir(), &app.services)
+            .await;
+
+        // Assert
+        let error = result.expect_err("merge workflow should not start");
+        assert_eq!(error.to_string(), expected_error, "{expected_error}");
     }
 }
 

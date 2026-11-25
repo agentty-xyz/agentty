@@ -17,7 +17,7 @@ use tracing::warn;
 
 use super::published_branch::{self, PublishedBranchAutoPushInput};
 use super::worker::{SessionCommand, has_unfinished_rebase_operation};
-use super::{SessionTaskService, StatusTransition, session_branch};
+use super::{SessionTaskService, StatusTransition, session_branch, session_folder};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
@@ -26,8 +26,10 @@ use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::{HarnessModels, SessionUpdateVersionMap};
 use crate::app::session::{Clock, SessionError};
 use crate::app::sync::SyncMainEventContext;
-use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, spawn};
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
+use crate::app::{AppEvent, AppServices, SessionManager, spawn};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, ReasoningLevel, parse_persisted_session_agent_model,
+};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -101,6 +103,66 @@ pub(super) enum RebaseAssistMode {
     ExistingSession(Arc<dyn ExistingSessionRebaseAssistClient>),
     /// Submit through the historical isolated one-shot utility prompt.
     OneShot,
+}
+
+/// Session facts a merge start validates and runs with.
+///
+/// A queued merge can start while the terminal shows another project, so a
+/// session outside the loaded list is read from the store and its live
+/// handle instead.
+struct MergeCandidate {
+    /// Agent that resolves rebase conflicts during the merge.
+    agent: AgentSelection,
+    /// Session worktree folder.
+    folder: PathBuf,
+    /// Whether a forge review request is linked to the session.
+    has_review_request: bool,
+    /// Current session lifecycle status.
+    status: Status,
+}
+
+impl MergeCandidate {
+    /// Resolves one session from the loaded list, or from the store and its
+    /// live handle when its project is not the one loaded.
+    ///
+    /// # Errors
+    /// Returns an error when the session is neither loaded nor stored, or
+    /// when an unloaded session has no live handle.
+    async fn resolve(
+        manager: &SessionManager,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<Self, SessionError> {
+        if let Some(session) = manager.session_for_id(session_id) {
+            return Ok(Self {
+                agent: session.agent,
+                folder: session.folder.clone(),
+                has_review_request: session.has_review_request(),
+                status: session.status,
+            });
+        }
+
+        let row = services
+            .db()
+            .sessions()
+            .load_session(session_id)
+            .await?
+            .ok_or(SessionError::NotFound)?;
+        let status = manager
+            .session_handles_or_err(session_id)?
+            .status
+            .lock()
+            .ok()
+            .map(|status| *status)
+            .ok_or(SessionError::HandlesNotFound)?;
+
+        Ok(Self {
+            agent: parse_persisted_session_agent_model(Some(&row.agent), &row.model),
+            folder: session_folder(services.base_path(), session_id),
+            has_review_request: row.review_request.is_some(),
+            status,
+        })
+    }
 }
 
 /// Shared context needed to restore a failed merge-start attempt back to
@@ -658,6 +720,9 @@ impl SessionMergeService {
     /// Starts a squash merge for a review-ready or queued session branch in
     /// the background.
     ///
+    /// `working_dir` is the checkout of the session's own project, whichever
+    /// project the terminal shows.
+    ///
     /// # Errors
     /// Returns an error if the session is invalid for merge, required git
     /// metadata is missing, or the status transition to `Merging` fails.
@@ -665,17 +730,17 @@ impl SessionMergeService {
         &self,
         manager: &SessionManager,
         session_id: &str,
-        projects: &ProjectManager,
+        working_dir: &Path,
         services: &AppServices,
     ) -> Result<(), SessionError> {
-        let session = manager.session_or_err(session_id)?;
+        let session = MergeCandidate::resolve(manager, services, session_id).await?;
         let environment = services.try_environment_write(session_id)?;
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
             return Err(SessionError::Workflow(
                 "Session must be in review or queued status".to_string(),
             ));
         }
-        if session.has_review_request() {
+        if session.has_review_request {
             return Err(SessionError::Workflow(
                 "Merge cannot run for linked review requests".to_string(),
             ));
@@ -683,8 +748,8 @@ impl SessionMergeService {
 
         let (db, folder, id, session_agent) = (
             services.db().clone(),
-            session.folder.clone(),
-            session.id.clone(),
+            session.folder,
+            SessionId::from(session_id),
             session.agent,
         );
         let (app_event_tx, clock, fs_client, git_client, session_update_versions) = (
@@ -721,7 +786,7 @@ impl SessionMergeService {
         let base_branch = Self::load_merge_base_branch(&restore_context).await?;
         let repo_root = Self::find_merge_repo_root(
             git_client.as_ref(),
-            projects.working_dir().to_path_buf(),
+            working_dir.to_path_buf(),
             &restore_context,
         )
         .await?;
@@ -985,17 +1050,20 @@ impl SessionManager {
     /// Starts a squash merge for a review-ready or queued session branch in
     /// the background.
     ///
+    /// `working_dir` is the checkout of the session's own project, whichever
+    /// project the terminal shows.
+    ///
     /// # Errors
     /// Returns an error if the session is invalid for merge, required git
     /// metadata is missing, or the status transition to `Merging` fails.
     pub async fn merge_session(
         &self,
         session_id: &str,
-        projects: &ProjectManager,
+        working_dir: &Path,
         services: &AppServices,
     ) -> Result<(), SessionError> {
         self.merge_service()
-            .merge_session(self, session_id, projects, services)
+            .merge_session(self, session_id, working_dir, services)
             .await
     }
 

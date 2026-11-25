@@ -15,7 +15,7 @@ use app::branch_publish::{
     run_branch_publish_action,
 };
 use app::command_gateway::ReviewRequestCommand;
-use app::merge_queue::{MergeQueue, MergeQueueProgress};
+use app::merge_queue::{MergeQueue, MergeQueueProgress, MergeQueueStart};
 use app::project::ProjectManager;
 use app::review::{
     FocusedReviewPersistence, ReviewCacheEntry, mark_session_agent_review, review_failure_message,
@@ -1797,13 +1797,14 @@ impl App {
     /// Returns an error if session is not mergeable, queueing fails, or
     /// immediate merge start fails while the queue is idle.
     pub async fn merge_session(&mut self, session_id: &str) -> Result<(), AppError> {
-        self.ensure_project_checkout_available(self.projects.active_project_id())?;
+        let session_project_id = self.session_project_id(session_id).await?;
+        self.ensure_project_checkout_available(session_project_id)?;
         if self.merge_queue.is_queued_or_active(session_id) {
             return Ok(());
         }
 
         self.validate_merge_request(session_id)?;
-        if self.merge_queue.has_active() {
+        if self.merge_queue.has_work() {
             self.mark_session_as_queued_for_merge(session_id).await?;
             self.merge_queue.enqueue(SessionId::from(session_id));
 
@@ -1823,7 +1824,8 @@ impl App {
     /// # Errors
     /// Returns an error if session sync cannot be admitted.
     pub async fn rebase_session(&mut self, session_id: &str) -> Result<(), AppError> {
-        self.ensure_project_checkout_available(self.projects.active_project_id())?;
+        let session_project_id = self.session_project_id(session_id).await?;
+        self.ensure_project_checkout_available(session_project_id)?;
         self.sessions
             .rebase_session(&self.services, session_id)
             .await?;
@@ -1971,6 +1973,39 @@ impl App {
             "Project `{}` is synchronizing `{}`; try this base-branch operation again after sync",
             sync_status.context.project_name, sync_status.context.default_branch,
         )))
+    }
+
+    /// Returns the project that owns one session, which can differ from the
+    /// project the terminal shows.
+    ///
+    /// A session the store does not know belongs to the active project.
+    ///
+    /// # Errors
+    /// Returns an error when the session's project cannot be loaded.
+    async fn session_project_id(&self, session_id: &str) -> Result<i64, AppError> {
+        let session_project_id = self
+            .services
+            .db()
+            .sessions()
+            .load_session_project_id(session_id)
+            .await?;
+
+        Ok(session_project_id.unwrap_or(self.projects.active_project_id()))
+    }
+
+    /// Returns the checkout directory of one project.
+    ///
+    /// # Errors
+    /// Returns an error when the project cannot be loaded.
+    async fn project_working_dir(&self, project_id: i64) -> Result<PathBuf, AppError> {
+        if project_id == self.projects.active_project_id() {
+            return Ok(self.projects.working_dir().to_path_buf());
+        }
+
+        Ok(self
+            .sessions
+            .load_project_path(&self.services, project_id)
+            .await?)
     }
 
     /// Starts review assist generation for one session using the
@@ -2567,18 +2602,21 @@ impl App {
     }
 
     /// Restores a queued session to `Review` if merge start fails.
+    ///
+    /// Reads the live handle, so a session whose project the terminal no
+    /// longer shows is restored too.
     async fn restore_queued_session_to_review(&self, session_id: &str) {
-        let session_status = self
-            .sessions
-            .session_or_err(session_id)
-            .map(|session| session.status);
-        if !matches!(session_status, Ok(Status::Queued)) {
-            return;
-        }
-
         let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
             return;
         };
+        if !handles
+            .status
+            .lock()
+            .is_ok_and(|status| *status == Status::Queued)
+        {
+            return;
+        }
+
         // Best-effort: status transition failure is non-critical.
         let status_transition =
             StatusTransition::from_services(&self.services, handles, session_id);
@@ -2587,6 +2625,8 @@ impl App {
 
     /// Starts the next pending merge request when no merge is currently active.
     ///
+    /// Each merge runs in its own project's checkout, whichever project the
+    /// terminal shows, and the queue waits while that project synchronizes.
     /// When `stop_on_failure` is `true`, returns the first start error.
     /// Otherwise, failed entries are skipped and the queue continues.
     ///
@@ -2597,25 +2637,18 @@ impl App {
         if self.merge_queue.has_active() {
             return Ok(());
         }
-        if self
-            .ensure_project_checkout_available(self.projects.active_project_id())
-            .is_err()
-        {
-            return Ok(());
-        }
 
-        while let Some(next_session_id) = self.merge_queue.pop_next() {
-            match self
-                .sessions
-                .merge_session(&next_session_id, &self.projects, &self.services)
-                .await
-            {
-                Ok(()) => {
+        while let Some(next_session_id) = self.merge_queue.peek_next().cloned() {
+            match self.start_queued_merge(&next_session_id).await {
+                Ok(MergeQueueStart::CheckoutBusy) => return Ok(()),
+                Ok(MergeQueueStart::Started) => {
+                    self.merge_queue.pop_next();
                     self.merge_queue.set_active(next_session_id);
 
                     return Ok(());
                 }
                 Err(error) => {
+                    self.merge_queue.pop_next();
                     self.restore_queued_session_to_review(&next_session_id)
                         .await;
 
@@ -2624,7 +2657,7 @@ impl App {
                         .await;
 
                     if stop_on_failure {
-                        return Err(error.into());
+                        return Err(error);
                     }
                 }
             }
@@ -2633,10 +2666,35 @@ impl App {
         Ok(())
     }
 
+    /// Starts one queued merge in its session's project checkout unless that
+    /// project is synchronizing.
+    ///
+    /// # Errors
+    /// Returns an error when the session's project cannot be resolved or the
+    /// merge cannot start.
+    async fn start_queued_merge(&self, session_id: &str) -> Result<MergeQueueStart, AppError> {
+        let session_project_id = self.session_project_id(session_id).await?;
+        if self
+            .ensure_project_checkout_available(session_project_id)
+            .is_err()
+        {
+            return Ok(MergeQueueStart::CheckoutBusy);
+        }
+
+        let working_dir = self.project_working_dir(session_project_id).await?;
+        self.sessions
+            .merge_session(session_id, &working_dir, &self.services)
+            .await?;
+
+        Ok(MergeQueueStart::Started)
+    }
+
     /// Advances queue state after reducer-applied status changes.
     ///
-    /// The queue advances when the active merge session transitions away from
-    /// `Merging` or disappears from the refreshed session list.
+    /// The queue follows the active merge's live handle rather than the loaded
+    /// session list, so a project switch neither advances nor stalls it. It
+    /// advances when the active merge transitions away from `Merging` or the
+    /// session no longer exists.
     pub(super) async fn handle_merge_queue_progress(
         &mut self,
         session_ids: &HashSet<SessionId>,
@@ -2646,12 +2704,9 @@ impl App {
             .merge_queue
             .active_session_id()
             .and_then(|active_session_id| {
-                self.sessions
-                    .sessions()
-                    .iter()
-                    .find(|session| session.id == active_session_id)
-                    .map(|session| session.status)
-            });
+                self.sessions.session_handles_or_err(active_session_id).ok()
+            })
+            .and_then(|handles| handles.status.lock().ok().map(|status| *status));
         let progress = self.merge_queue.progress_from_status_updates(
             current_status,
             session_ids,
