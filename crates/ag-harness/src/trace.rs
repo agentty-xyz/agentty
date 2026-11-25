@@ -6,6 +6,7 @@ use std::sync::{Mutex, PoisonError};
 use opentelemetry::trace::{SpanKind, Status, TraceContextExt, Tracer};
 use opentelemetry::{Array, Context, KeyValue, StringValue, Value, global};
 
+use crate::bash::CommandExit;
 use crate::lifecycle::{
     LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleOperationGuard,
 };
@@ -20,6 +21,14 @@ const SPAN_CONTEXT_SUMMARY: &str = "agent.compaction";
 
 /// Why a context summary was requested.
 const ATTRIBUTE_SUMMARY_TRIGGER: &str = "agentty.compaction.trigger";
+
+/// Exit code of a `bash` command's shell (OpenTelemetry process
+/// semantic conventions).
+const ATTRIBUTE_PROCESS_EXIT_CODE: &str = "process.exit.code";
+
+/// Exit statuses of each stage of a `bash` command's final pipeline, as an
+/// integer array, first stage first, when it had several.
+const ATTRIBUTE_PIPELINE_EXIT_CODES: &str = "agentty.tool.exit_code.pipeline";
 
 /// Projects one ordered harness lifecycle stream to OpenTelemetry `GenAI`
 /// spans.
@@ -179,9 +188,9 @@ impl TraceState {
                 tool_call_id,
                 turn_id,
             } => self.start_tool(*tool_call_id, *turn_id),
-            LifecycleEventKind::ToolCompleted { tool_call_id, .. } => {
-                finish_span(self.tool_spans.remove(tool_call_id), None, Vec::new());
-            }
+            LifecycleEventKind::ToolCompleted {
+                exit, tool_call_id, ..
+            } => self.finish_tool(*tool_call_id, exit.as_ref()),
             LifecycleEventKind::ToolDenied { tool_call_id, .. } => {
                 self.pending_tools.remove(tool_call_id);
             }
@@ -219,6 +228,29 @@ impl TraceState {
             Some(error_type.to_string()),
             Vec::new(),
         );
+    }
+
+    /// Closes a completed tool call's span with a `bash` command's exit
+    /// code and, when its final pipeline had several stages, their
+    /// statuses. A nonzero exit is an ordinary answer to the model, such as
+    /// `grep` finding nothing, so it leaves the span's status unset, as the
+    /// duration metric records it.
+    fn finish_tool(&mut self, tool_call_id: LifecycleId, exit: Option<&CommandExit>) {
+        let mut attributes = Vec::new();
+        if let Some(exit_code) = exit.and_then(|exit| exit.exit_code) {
+            attributes.push(KeyValue::new(
+                ATTRIBUTE_PROCESS_EXIT_CODE,
+                i64::from(exit_code),
+            ));
+        }
+        if let Some(exit) = exit.filter(|exit| exit.pipe_status.len() > 1) {
+            let statuses = exit.pipe_status.iter().copied().map(i64::from).collect();
+            attributes.push(KeyValue::new(
+                ATTRIBUTE_PIPELINE_EXIT_CODES,
+                Value::Array(Array::I64(statuses)),
+            ));
+        }
+        finish_span(self.tool_spans.remove(&tool_call_id), None, attributes);
     }
 
     /// Forgets a failed tool call and closes its span, if it started, with

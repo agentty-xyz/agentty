@@ -291,7 +291,7 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
         .outcome
         .as_ref()
         .expect("outcome after expired lease");
-    assert_eq!(outcome.termination, CommandTermination::Cancelled);
+    assert_eq!(outcome.exit.termination, CommandTermination::Cancelled);
     assert!(!outcome.cleanup_failed);
     assert!(!records[0].blocks_admission());
 }

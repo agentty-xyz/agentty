@@ -94,10 +94,17 @@ pub fn ag_harness::bash::CommandTermination::clone(&self) -> Self
 impl core::cmp::Eq for ag_harness::bash::CommandTermination
 impl core::cmp::PartialEq for ag_harness::bash::CommandTermination
 pub fn ag_harness::bash::CommandTermination::eq(&self, &Self) -> bool
+impl core::default::Default for ag_harness::bash::CommandTermination
+pub fn ag_harness::bash::CommandTermination::default() -> Self
 impl core::fmt::Debug for ag_harness::bash::CommandTermination
 pub fn ag_harness::bash::CommandTermination::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ag_harness::bash::CommandTermination
 impl core::marker::StructuralPartialEq for ag_harness::bash::CommandTermination
+impl schemars::JsonSchema for ag_harness::bash::CommandTermination
+pub fn ag_harness::bash::CommandTermination::inline_schema() -> bool
+pub fn ag_harness::bash::CommandTermination::json_schema(&mut schemars::generate::SchemaGenerator) -> schemars::schema::Schema
+pub fn ag_harness::bash::CommandTermination::schema_id() -> alloc::borrow::Cow<'static, str>
+pub fn ag_harness::bash::CommandTermination::schema_name() -> alloc::borrow::Cow<'static, str>
 impl serde_core::ser::Serialize for ag_harness::bash::CommandTermination
 pub fn ag_harness::bash::CommandTermination::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ag_harness::bash::CommandTermination
@@ -224,6 +231,36 @@ impl core::cmp::PartialEq for ag_harness::bash::BashConfig
 pub fn ag_harness::bash::BashConfig::eq(&self, &Self) -> bool
 impl core::fmt::Debug for ag_harness::bash::BashConfig
 pub fn ag_harness::bash::BashConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct ag_harness::bash::CommandExit
+pub ag_harness::bash::CommandExit::exit_code: core::option::Option<i32>
+pub ag_harness::bash::CommandExit::pipe_status: alloc::vec::Vec<i32>
+pub ag_harness::bash::CommandExit::signal: core::option::Option<i32>
+pub ag_harness::bash::CommandExit::termination: ag_harness::bash::CommandTermination
+impl ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::new(core::option::Option<i32>, core::option::Option<i32>) -> Self
+pub fn ag_harness::bash::CommandExit::with_pipe_status(self, alloc::vec::Vec<i32>) -> Self
+pub fn ag_harness::bash::CommandExit::with_termination(self, ag_harness::bash::CommandTermination) -> Self
+impl core::clone::Clone for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::clone(&self) -> Self
+impl core::cmp::Eq for ag_harness::bash::CommandExit
+impl core::cmp::PartialEq for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::eq(&self, &Self) -> bool
+impl core::default::Default for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::default() -> Self
+impl core::fmt::Debug for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_harness::bash::CommandExit
+impl schemars::JsonSchema for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::inline_schema() -> bool
+pub fn ag_harness::bash::CommandExit::json_schema(&mut schemars::generate::SchemaGenerator) -> schemars::schema::Schema
+pub fn ag_harness::bash::CommandExit::schema_id() -> alloc::borrow::Cow<'static, str>
+pub fn ag_harness::bash::CommandExit::schema_name() -> alloc::borrow::Cow<'static, str>
+impl serde_core::ser::Serialize for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ag_harness::bash::CommandExit
+pub fn ag_harness::bash::CommandExit::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub struct ag_harness::bash::CommandIntent
 pub ag_harness::bash::CommandIntent::call_id: alloc::string::String
 pub ag_harness::bash::CommandIntent::command: alloc::string::String
@@ -245,15 +282,13 @@ pub fn ag_harness::bash::CommandIntent::deserialize<__D>(__D) -> core::result::R
 pub ag_harness::bash::CommandOutcome::cleanup_failed: bool
 pub ag_harness::bash::CommandOutcome::cleanup_scope: ag_harness::bash::CommandCleanupScope
 pub ag_harness::bash::CommandOutcome::execution_failure: core::option::Option<ag_harness::bash::BashError>
-pub ag_harness::bash::CommandOutcome::exit_code: core::option::Option<i32>
-pub ag_harness::bash::CommandOutcome::signal: core::option::Option<i32>
+pub ag_harness::bash::CommandOutcome::exit: ag_harness::bash::CommandExit
 pub ag_harness::bash::CommandOutcome::stderr: alloc::string::String
 pub ag_harness::bash::CommandOutcome::stderr_omitted_bytes: u64
 pub ag_harness::bash::CommandOutcome::stderr_tail: alloc::string::String
 pub ag_harness::bash::CommandOutcome::stdout: alloc::string::String
 pub ag_harness::bash::CommandOutcome::stdout_omitted_bytes: u64
 pub ag_harness::bash::CommandOutcome::stdout_tail: alloc::string::String
-pub ag_harness::bash::CommandOutcome::termination: ag_harness::bash::CommandTermination
 pub ag_harness::bash::CommandOutcome::truncated: bool
 impl core::clone::Clone for ag_harness::bash::CommandOutcome
 pub fn ag_harness::bash::CommandOutcome::clone(&self) -> Self
@@ -797,6 +832,11 @@ pub ag_harness::event::RunEventKind::SandboxUnavailable(ag_harness::sandbox::San
 pub ag_harness::event::RunEventKind::Started::model: core::option::Option<ag_harness::catalog::ModelId>
 pub ag_harness::event::RunEventKind::Started::session: ag_harness::event::SessionId
 pub ag_harness::event::RunEventKind::Started::turn: ag_harness::event::TurnIndex
+#[non_exhaustive] pub ag_harness::event::RunEventKind::ToolCallRequested
+pub ag_harness::event::RunEventKind::ToolCallRequested::arguments: alloc::string::String
+pub ag_harness::event::RunEventKind::ToolCallRequested::call_id: alloc::string::String
+pub ag_harness::event::RunEventKind::ToolCallRequested::id: ag_harness::event::ItemId
+pub ag_harness::event::RunEventKind::ToolCallRequested::name: alloc::string::String
 impl core::clone::Clone for ag_harness::event::RunEventKind
 pub fn ag_harness::event::RunEventKind::clone(&self) -> Self
 impl core::cmp::Eq for ag_harness::event::RunEventKind
@@ -814,6 +854,28 @@ impl serde_core::ser::Serialize for ag_harness::event::RunEventKind
 pub fn ag_harness::event::RunEventKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ag_harness::event::RunEventKind
 pub fn ag_harness::event::RunEventKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ag_harness::event::ToolCallOutcome
+pub ag_harness::event::ToolCallOutcome::Command(ag_harness::bash::CommandExit)
+#[non_exhaustive] pub ag_harness::event::ToolCallOutcome::Write
+pub ag_harness::event::ToolCallOutcome::Write::lines_added: u64
+pub ag_harness::event::ToolCallOutcome::Write::lines_removed: u64
+impl core::clone::Clone for ag_harness::event::ToolCallOutcome
+pub fn ag_harness::event::ToolCallOutcome::clone(&self) -> Self
+impl core::cmp::Eq for ag_harness::event::ToolCallOutcome
+impl core::cmp::PartialEq for ag_harness::event::ToolCallOutcome
+pub fn ag_harness::event::ToolCallOutcome::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ag_harness::event::ToolCallOutcome
+pub fn ag_harness::event::ToolCallOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ag_harness::event::ToolCallOutcome
+impl schemars::JsonSchema for ag_harness::event::ToolCallOutcome
+pub fn ag_harness::event::ToolCallOutcome::inline_schema() -> bool
+pub fn ag_harness::event::ToolCallOutcome::json_schema(&mut schemars::generate::SchemaGenerator) -> schemars::schema::Schema
+pub fn ag_harness::event::ToolCallOutcome::schema_id() -> alloc::borrow::Cow<'static, str>
+pub fn ag_harness::event::ToolCallOutcome::schema_name() -> alloc::borrow::Cow<'static, str>
+impl serde_core::ser::Serialize for ag_harness::event::ToolCallOutcome
+pub fn ag_harness::event::ToolCallOutcome::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ag_harness::event::ToolCallOutcome
+pub fn ag_harness::event::ToolCallOutcome::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub enum ag_harness::event::ToolCallStatus
 pub ag_harness::event::ToolCallStatus::Answered
 pub ag_harness::event::ToolCallStatus::Completed
@@ -1006,8 +1068,10 @@ pub fn ag_harness::event::SessionId::deserialize<__D>(__D) -> core::result::Resu
 #[non_exhaustive] pub struct ag_harness::event::ToolCallItem
 pub ag_harness::event::ToolCallItem::arguments: alloc::string::String
 pub ag_harness::event::ToolCallItem::call_id: alloc::string::String
+pub ag_harness::event::ToolCallItem::duration: core::option::Option<core::time::Duration>
 pub ag_harness::event::ToolCallItem::likely_sandbox_denial: bool
 pub ag_harness::event::ToolCallItem::name: alloc::string::String
+pub ag_harness::event::ToolCallItem::outcome: core::option::Option<ag_harness::event::ToolCallOutcome>
 pub ag_harness::event::ToolCallItem::output: alloc::string::String
 pub ag_harness::event::ToolCallItem::status: ag_harness::event::ToolCallStatus
 pub ag_harness::event::ToolCallItem::summary: alloc::string::String
@@ -1132,6 +1196,7 @@ pub ag_harness::lifecycle::LifecycleEventKind::ToolCallsRepeated::tool_name: all
 pub ag_harness::lifecycle::LifecycleEventKind::ToolCallsRepeated::turn_id: ag_harness::lifecycle::LifecycleId
 #[non_exhaustive] pub ag_harness::lifecycle::LifecycleEventKind::ToolCompleted
 pub ag_harness::lifecycle::LifecycleEventKind::ToolCompleted::duration: core::time::Duration
+pub ag_harness::lifecycle::LifecycleEventKind::ToolCompleted::exit: core::option::Option<ag_harness::bash::CommandExit>
 pub ag_harness::lifecycle::LifecycleEventKind::ToolCompleted::tool_call_id: ag_harness::lifecycle::LifecycleId
 pub ag_harness::lifecycle::LifecycleEventKind::ToolCompleted::turn_id: ag_harness::lifecycle::LifecycleId
 #[non_exhaustive] pub ag_harness::lifecycle::LifecycleEventKind::ToolDenied
@@ -3041,8 +3106,10 @@ impl core::marker::StructuralPartialEq for ag_harness::turn::SettlementPhase
 #[non_exhaustive] pub enum ag_harness::turn::ToolActivity
 #[non_exhaustive] pub ag_harness::turn::ToolActivity::Bash
 pub ag_harness::turn::ToolActivity::Bash::duration: core::time::Duration
+pub ag_harness::turn::ToolActivity::Bash::exit: ag_harness::bash::CommandExit
 #[non_exhaustive] pub ag_harness::turn::ToolActivity::BashLikelySandboxDenial
 pub ag_harness::turn::ToolActivity::BashLikelySandboxDenial::duration: core::time::Duration
+pub ag_harness::turn::ToolActivity::BashLikelySandboxDenial::exit: ag_harness::bash::CommandExit
 #[non_exhaustive] pub ag_harness::turn::ToolActivity::Host
 pub ag_harness::turn::ToolActivity::Host::duration: core::time::Duration
 pub ag_harness::turn::ToolActivity::Host::outcome: ag_harness::turn::HostToolOutcome
@@ -3084,11 +3151,14 @@ pub ag_harness::turn::ToolActivity::Unavailable::tool: alloc::string::String
 #[non_exhaustive] pub ag_harness::turn::ToolActivity::Write
 pub ag_harness::turn::ToolActivity::Write::bytes_written: usize
 pub ag_harness::turn::ToolActivity::Write::duration: core::time::Duration
+pub ag_harness::turn::ToolActivity::Write::lines_added: u64
+pub ag_harness::turn::ToolActivity::Write::lines_removed: u64
 pub ag_harness::turn::ToolActivity::Write::path: alloc::string::String
 #[non_exhaustive] pub ag_harness::turn::ToolActivity::WriteRejected
 pub ag_harness::turn::ToolActivity::WriteRejected::duration: core::time::Duration
 pub ag_harness::turn::ToolActivity::WriteRejected::path: alloc::string::String
 impl ag_harness::turn::ToolActivity
+pub fn ag_harness::turn::ToolActivity::command_exit(&self) -> core::option::Option<&ag_harness::bash::CommandExit>
 pub fn ag_harness::turn::ToolActivity::duration(&self) -> core::time::Duration
 pub fn ag_harness::turn::ToolActivity::name(&self) -> &str
 pub fn ag_harness::turn::ToolActivity::path(&self) -> &str
@@ -3648,6 +3718,11 @@ pub ag_harness::RunEventKind::SandboxUnavailable(ag_harness::sandbox::SandboxWar
 pub ag_harness::RunEventKind::Started::model: core::option::Option<ag_harness::catalog::ModelId>
 pub ag_harness::RunEventKind::Started::session: ag_harness::event::SessionId
 pub ag_harness::RunEventKind::Started::turn: ag_harness::event::TurnIndex
+#[non_exhaustive] pub ag_harness::RunEventKind::ToolCallRequested
+pub ag_harness::RunEventKind::ToolCallRequested::arguments: alloc::string::String
+pub ag_harness::RunEventKind::ToolCallRequested::call_id: alloc::string::String
+pub ag_harness::RunEventKind::ToolCallRequested::id: ag_harness::event::ItemId
+pub ag_harness::RunEventKind::ToolCallRequested::name: alloc::string::String
 impl core::clone::Clone for ag_harness::event::RunEventKind
 pub fn ag_harness::event::RunEventKind::clone(&self) -> Self
 impl core::cmp::Eq for ag_harness::event::RunEventKind

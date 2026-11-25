@@ -2338,8 +2338,8 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
 
     // Assert
     assert_eq!(result.stdout, "scripted");
-    assert_eq!(result.exit_code, Some(0));
-    assert_eq!(result.termination, CommandTermination::Completed);
+    assert_eq!(result.exit.exit_code, Some(0));
+    assert_eq!(result.exit.termination, CommandTermination::Completed);
     assert_eq!(
         result.cleanup_scope,
         CommandCleanupScope::PidNamespace,

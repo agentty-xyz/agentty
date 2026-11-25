@@ -27,7 +27,7 @@ fn emit_tool_terminal_events(emitter: &LifecycleEmitter, turn_id: LifecycleId) {
         )
         .expect("tool should be observed");
     completed_tool.started();
-    completed_tool.completed();
+    completed_tool.completed(None);
     emitter
         .request_tool(
             "provider-denied".to_string(),
@@ -528,7 +528,7 @@ fn starts_tool_execution_timer_after_started_observer() {
     // Act
     tool.started();
     let execution_started_at = tool.started_at;
-    tool.completed();
+    tool.completed(None);
 
     // Assert
     let observer_time = observer_time

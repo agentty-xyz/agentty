@@ -36,7 +36,7 @@ async fn native_linux_denies_keyrings_and_nested_user_namespaces() {
     let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(
         result.cleanup_scope,
         ag_harness::bash::CommandCleanupScope::PidNamespace
@@ -82,7 +82,7 @@ async fn native_linux_denies_writes_links_and_renames_outside_grants() {
     let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "confined", "{result:?}");
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("output/file")).expect("granted write"),
@@ -129,7 +129,7 @@ async fn native_linux_protects_existing_metadata_and_permits_new_repositories_in
     let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(
         std::fs::read_to_string(root.join("output/.git/config")).expect("grant config"),
         "protected"
@@ -164,7 +164,7 @@ async fn native_positive_controls_and_filesystem_network_denials() {
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(result.stdout, "input-valueconfined");
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("input")).expect("input"),
@@ -216,7 +216,7 @@ async fn native_denied_tool_never_executes_and_workspace_links_grant_only_their_
         denied.output()["error"],
         "tool `bash` is not available in this turn"
     );
-    assert_eq!(linked.exit_code, Some(0), "{linked:?}");
+    assert_eq!(linked.exit.exit_code, Some(0), "{linked:?}");
     assert_eq!(linked.stdout, "input-value", "{linked:?}");
     assert!(!workspace.path().join("output/escaped").exists());
     assert!(!outside.path().join("escaped").exists());
@@ -282,7 +282,7 @@ async fn native_runs_beside_hard_links_and_host_sockets_but_never_with_an_untrus
         } else {
             let outcome: CommandOutcome =
                 serde_json::from_value(result.expect("turn").into_output()).expect("outcome");
-            assert_eq!(outcome.exit_code, Some(0), "{kind}: {outcome:?}");
+            assert_eq!(outcome.exit.exit_code, Some(0), "{kind}: {outcome:?}");
             assert!(workspace.path().join("output/written").exists(), "{kind}");
         }
         drop(socket);
@@ -331,9 +331,9 @@ async fn native_external_contents_require_a_read_grant_and_precancel_never_spawn
     // Assert
     assert!(matches!(cancelled, Err(TurnError::Cancelled)));
     assert!(!workspace.path().join("output/escaped").exists());
-    assert_ne!(denied.exit_code, Some(0));
+    assert_ne!(denied.exit.exit_code, Some(0));
     assert_eq!(denied.stdout, "");
-    assert_eq!(permitted.exit_code, Some(0), "{permitted:?}");
+    assert_eq!(permitted.exit.exit_code, Some(0), "{permitted:?}");
     assert_eq!(permitted.stdout, "read-positive-control", "{permitted:?}");
 }
 
@@ -358,7 +358,7 @@ async fn native_linked_worktree_administration_stays_read_only_inside_a_write_gr
         .await;
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert_eq!(
         std::fs::read_to_string(root.join("output/common/config")).expect("config"),
         "protected"
@@ -473,7 +473,7 @@ async fn native_loader_environment_applies_only_after_isolation() {
     let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
 
     // Assert
-    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
     assert!(!forbidden.exists(), "loader must inherit isolation");
     // The read-only Linux policy leaves the marker unwritable, so the
     // constructor reports through captured stdout instead.
@@ -544,8 +544,8 @@ async fn native_metadata_denials_include_new_names_and_nested_repository_scope()
         serde_json::from_value(nested_result.into_output()).expect("nested outcome");
 
     // Assert
-    assert_eq!(outcome.exit_code, Some(0), "{outcome:?}");
-    assert_eq!(nested_result.exit_code, Some(0), "{nested_result:?}");
+    assert_eq!(outcome.exit.exit_code, Some(0), "{outcome:?}");
+    assert_eq!(nested_result.exit.exit_code, Some(0), "{nested_result:?}");
     assert_eq!(
         std::fs::read_to_string(root.join("output/nested/.git/config")).expect("config"),
         "protected"
@@ -651,7 +651,7 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
     let attacker: CommandOutcome =
         serde_json::from_value(attacker.into_output()).expect("attacker outcome");
     assert_eq!(
-        attacker.exit_code,
+        attacker.exit.exit_code,
         Some(0),
         "alias positive control: {attacker:?}"
     );

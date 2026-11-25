@@ -28,9 +28,9 @@ async fn main_exit_waits_for_attached_descendants_and_keeps_each_stream_head_and
         let result: CommandOutcome = serde_json::from_value(output.into_output()).expect("outcome");
 
         // Assert
-        assert_eq!(result.exit_code, Some(7), "{selected:?}: {result:?}");
+        assert_eq!(result.exit.exit_code, Some(7), "{selected:?}: {result:?}");
         assert_eq!(
-            result.termination,
+            result.exit.termination,
             CommandTermination::Completed,
             "{selected:?}: {result:?}"
         );
@@ -100,7 +100,7 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
 
         // Assert
         assert_eq!(
-            timeout.termination,
+            timeout.exit.termination,
             CommandTermination::Deadline,
             "{selected:?}: {timeout:?}"
         );
@@ -157,7 +157,7 @@ async fn native_detached_fork_and_posix_spawn_keep_access_confinement_and_report
         drop(descendant);
 
         // Assert
-        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        assert_eq!(result.exit.exit_code, Some(0), "{result:?}");
         assert!(!forbidden.exists());
         assert_eq!(
             std::fs::read_to_string(workspace.path().join("output/result")).expect("result"),
@@ -225,7 +225,7 @@ async fn flood_until_deadline(
     let result = result.expect("successful command");
     let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
     assert_eq!(
-        result.termination,
+        result.exit.termination,
         CommandTermination::Deadline,
         "{selected:?}: {result:?}"
     );

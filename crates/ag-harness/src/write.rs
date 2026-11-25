@@ -55,6 +55,9 @@ pub struct WriteOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     adjusted_hunks: Vec<HunkAdjustment>,
     bytes_written: usize,
+    /// Reported in the activity only; the model's result stays unchanged.
+    #[serde(skip)]
+    line_changes: LineChanges,
     path: String,
     status: &'static str,
 }
@@ -70,14 +73,31 @@ impl WriteOutput {
         &self.path
     }
 
+    /// Returns the lines the write added, as `ToolActivity::Write` reports.
+    pub(crate) fn lines_added(&self) -> u64 {
+        self.line_changes.added
+    }
+
+    /// Returns the lines the write removed, as `ToolActivity::Write`
+    /// reports.
+    pub(crate) fn lines_removed(&self) -> u64 {
+        self.line_changes.removed
+    }
+
     pub(crate) fn to_tool_result(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
     }
 
-    fn new(path: String, bytes_written: usize, adjusted_hunks: Vec<HunkAdjustment>) -> Self {
+    fn new(
+        path: String,
+        bytes_written: usize,
+        line_changes: LineChanges,
+        adjusted_hunks: Vec<HunkAdjustment>,
+    ) -> Self {
         Self {
             adjusted_hunks,
             bytes_written,
+            line_changes,
             path,
             status: "applied",
         }
@@ -276,6 +296,7 @@ impl WriteTool {
         let PatchedText {
             adjusted_hunks,
             content: result,
+            line_changes,
         } = apply_unified_diff(arguments.path(), current.as_deref(), arguments.patch())?;
         if result.len() > MAX_FILE_BYTES {
             return Err(WriteError::TargetTooLarge {
@@ -338,7 +359,12 @@ impl WriteTool {
                 source,
             })?;
 
-            Ok(WriteOutput::new(path, bytes_written, adjusted_hunks))
+            Ok(WriteOutput::new(
+                path,
+                bytes_written,
+                line_changes,
+                adjusted_hunks,
+            ))
         };
         // Retain the tool context even after cancellation ends its lifecycle
         // span.
@@ -398,6 +424,34 @@ pub(crate) fn header_target(patch: &str) -> Option<&str> {
         .filter(|path| !path.is_empty() && *path != "/dev/null")
 }
 
+/// Lines a write added and removed: the addition and removal lines of the
+/// hunks it applied, as `git apply --numstat` counts them. Relocation and
+/// whitespace-tolerant matching change where a hunk applies, not which
+/// lines it adds or removes, and a created file is all additions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LineChanges {
+    added: u64,
+    removed: u64,
+}
+
+impl LineChanges {
+    /// Counts the addition and removal lines of `hunks`.
+    fn of(hunks: &[Hunk]) -> Self {
+        let count = |kind| {
+            hunks
+                .iter()
+                .flat_map(|hunk| &hunk.lines)
+                .filter(|line| line.kind == kind)
+                .count() as u64
+        };
+
+        Self {
+            added: count(PatchLineKind::Addition),
+            removed: count(PatchLineKind::Removal),
+        }
+    }
+}
+
 /// Hunk that applied away from its header line or only after ignoring
 /// trailing whitespace. Line numbers are one-based in the original file.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -431,11 +485,13 @@ impl LineMatch {
     }
 }
 
-/// Patched file bytes plus the hunks that needed relocation.
+/// Patched file bytes plus the hunks that needed relocation and the lines
+/// the patch added and removed.
 #[derive(Debug)]
 struct PatchedText {
     adjusted_hunks: Vec<HunkAdjustment>,
     content: Vec<u8>,
+    line_changes: LineChanges,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -599,7 +655,11 @@ impl<'a> HunkApplier<'a> {
         Ok(())
     }
 
-    fn finish(self, line_ending: &str) -> Result<PatchedText, WriteError> {
+    fn finish(
+        self,
+        line_ending: &str,
+        line_changes: LineChanges,
+    ) -> Result<PatchedText, WriteError> {
         if self.new_side_terminated && self.source_index < self.source_lines.len() {
             return Err(patch_error(
                 "newline marker must terminate its affected file side",
@@ -624,6 +684,7 @@ impl<'a> HunkApplier<'a> {
         Ok(PatchedText {
             adjusted_hunks: self.adjusted_hunks,
             content: output.into_bytes(),
+            line_changes,
         })
     }
 
@@ -1499,7 +1560,7 @@ fn apply_hunks(
         applier.apply_hunk(index + 1, hunk)?;
     }
 
-    applier.finish(line_ending)
+    applier.finish(line_ending, LineChanges::of(hunks))
 }
 
 /// Converts the one-based start of a non-empty hunk side to a line index.

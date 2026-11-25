@@ -9,8 +9,8 @@ use serde_json::json;
 
 use super::*;
 use crate::bash::{
-    BashConfig, BashExecutor, BashProcess, CommandCleanupScope, Enforcement, ExecutionCommand,
-    ExecutionError, ExecutionPolicy, ProcessEvent, UnsandboxedExecutor,
+    BashConfig, BashExecutor, BashProcess, CommandCleanupScope, CommandExit, Enforcement,
+    ExecutionCommand, ExecutionError, ExecutionPolicy, ProcessEvent, UnsandboxedExecutor,
 };
 use crate::command_settlement::Commands;
 use crate::file_system::LocalFileSystem;
@@ -221,15 +221,13 @@ fn only_an_unstarted_command_without_cleanup_debt_counts_as_refused() {
         cleanup_failed: false,
         cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
         execution_failure: Some(BashError::Unavailable),
-        exit_code: None,
-        signal: None,
+        exit: CommandExit::default().with_termination(CommandTermination::Failed),
         stderr: String::new(),
         stderr_omitted_bytes: 0,
         stderr_tail: String::new(),
         stdout: String::new(),
         stdout_omitted_bytes: 0,
         stdout_tail: String::new(),
-        termination: CommandTermination::Failed,
         truncated: false,
     };
 
@@ -240,7 +238,7 @@ fn only_an_unstarted_command_without_cleanup_debt_counts_as_refused() {
         ..refused_outcome.clone()
     }));
     assert!(!refused(&CommandOutcome {
-        termination: CommandTermination::Cancelled,
+        exit: CommandExit::default().with_termination(CommandTermination::Cancelled),
         ..refused_outcome.clone()
     }));
     assert!(!refused(&CommandOutcome {
@@ -498,6 +496,285 @@ async fn a_sandboxed_failure_that_reads_like_a_denial_is_flagged_as_advisory() {
     assert!(matches!(activity, Some(ToolActivity::Bash { .. })));
 }
 
+/// Returns a `bash` handler that runs real `/bin/bash` unsandboxed in
+/// `root`'s `workspace`, with `root`'s `tmp` as its temporary directory,
+/// keeping `capture_bytes` of output.
+fn real_bash_handler(root: &std::path::Path, capture_bytes: usize) -> BashHandler {
+    let root = root.canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    let temporary = root.join("tmp");
+    for directory in [&workspace, &temporary] {
+        std::fs::create_dir_all(directory).expect("test directory");
+    }
+    let configuration = BashConfig::for_executor(
+        Arc::new(UnsandboxedExecutor::without_isolation()),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(5),
+        capture_bytes,
+    )
+    .expect("configuration")
+    .with_host_information()
+    .with_temporary_directory(temporary)
+    .expect("temporary directory grant");
+
+    BashHandler {
+        definition: ToolDefinition::bash(Enforcement::None),
+        tool: BashTool::new(configuration, workspace, Commands::default(), None)
+            .expect("bash tool"),
+    }
+}
+
+/// One piped command case: the command, its exit code, the stages
+/// reported, and its exact standard output and error, or `None` where they
+/// vary by Bash version.
+type PipeCase = (
+    &'static str,
+    i32,
+    &'static [i32],
+    Option<(&'static str, &'static str)>,
+);
+
+#[tokio::test]
+async fn a_command_ending_in_a_pipeline_reports_each_stage_without_changing_its_result() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let handler = real_bash_handler(root.path(), 4096);
+    let cases: [PipeCase; 13] = [
+        // The command's own failure, hidden by `tail`, is reported.
+        (
+            "echo out; echo err >&2; (exit 101) | tail -1",
+            0,
+            &[101, 0],
+            Some(("out\n", "err\n")),
+        ),
+        // The command's own redirections never carry the status.
+        (
+            "exec 2>&1; echo err >&2; false | true",
+            0,
+            &[1, 0],
+            Some(("err\n", "")),
+        ),
+        ("exec 2>log.txt; false | true", 0, &[1, 0], Some(("", ""))),
+        ("exec 2>&-; false | true", 0, &[1, 0], Some(("", ""))),
+        // The stages trace concurrently, in either order; see
+        // `tracing_traces_only_the_command_not_the_probe`.
+        ("set -x; false | true", 0, &[1, 0], None),
+        ("set -e; true | false", 1, &[0, 1], Some(("", ""))),
+        ("set -o pipefail; false | true", 1, &[1, 0], Some(("", ""))),
+        ("! true | true", 1, &[0, 0], Some(("", ""))),
+        // A signal that kills the final stage.
+        ("true | sh -c 'kill -9 $$'", 137, &[0, 137], None),
+        // `exit` after a pipeline is not that pipeline's status.
+        ("false | true; exit 5", 5, &[], Some(("", ""))),
+        // The command replaced or cleared the trap.
+        (
+            "trap 'echo mine' EXIT; false | true",
+            0,
+            &[],
+            Some(("mine\n", "")),
+        ),
+        ("trap - EXIT; false | true", 0, &[], Some(("", ""))),
+        // A changed `TMPDIR` does not move the status file.
+        (
+            "TMPDIR=/nonexistent; false | true",
+            0,
+            &[1, 0],
+            Some(("", "")),
+        ),
+    ];
+
+    for (index, (command, exit_code, pipe_status, streams)) in cases.into_iter().enumerate() {
+        // Act
+        let output = handler
+            .call(
+                json!({"command": command}),
+                ToolContext::new(format!("bash_{index}")),
+            )
+            .await
+            .expect("command result");
+
+        // Assert
+        let (content, activity) = output.into_parts();
+        let result: Value = serde_json::from_str(&content).expect("JSON result");
+        assert_eq!(result["exit_code"], exit_code, "{command}");
+        assert!(!content.contains("agentty_pipe"), "{content}");
+        if pipe_status.is_empty() {
+            assert!(result.get("pipe_status").is_none(), "{content}");
+        } else {
+            assert_eq!(result["pipe_status"], json!(pipe_status), "{content}");
+        }
+        if let Some((stdout, stderr)) = streams {
+            assert_eq!(
+                (&result["stdout"], &result["stderr"]),
+                (&json!(stdout), &json!(stderr)),
+                "{command}"
+            );
+        }
+        let Some(ToolActivity::Bash { exit, .. }) = activity else {
+            std::panic::resume_unwind(Box::new(format!("unexpected activity for {command}")));
+        };
+        assert_eq!(
+            exit,
+            CommandExit::new(Some(exit_code), None).with_pipe_status(pipe_status.to_vec()),
+            "{command}"
+        );
+    }
+    let log = std::fs::read(root.path().join("workspace/log.txt")).expect("redirected log");
+    assert_eq!(log, b"", "the status never reaches a redirected file");
+    let leftovers = std::fs::read_dir(root.path().join("tmp"))
+        .expect("temporary directory")
+        .count();
+    assert_eq!(leftovers, 0, "every status file is deleted once read");
+}
+
+#[tokio::test]
+async fn tracing_traces_only_the_command_not_the_probe() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let handler = real_bash_handler(root.path(), 4096);
+
+    // Act
+    let output = handler
+        .call(
+            json!({"command": "set -x; false | true"}),
+            ToolContext::new("traced"),
+        )
+        .await
+        .expect("command result");
+
+    // Assert: pipeline stages trace concurrently, so only the set of lines
+    // is fixed.
+    let (content, _) = output.into_parts();
+    let result: Value = serde_json::from_str(&content).expect("JSON result");
+    let mut traced = result["stderr"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .collect::<Vec<_>>();
+    traced.sort_unstable();
+    assert_eq!(traced, ["+ false", "+ true"], "{content}");
+    assert_eq!(result["stdout"], "");
+}
+
+#[tokio::test]
+async fn a_background_job_that_redirects_its_output_does_not_hold_the_call_open() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let handler = real_bash_handler(root.path(), 4096);
+    let started = std::time::Instant::now();
+
+    // Act
+    let output = handler
+        .call(
+            json!({"command": "sleep 3 >/dev/null 2>&1 & false | true"}),
+            ToolContext::new("background"),
+        )
+        .await
+        .expect("command result");
+
+    // Assert
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the call waited {:?} for the background job",
+        started.elapsed()
+    );
+    let (content, _) = output.into_parts();
+    let result: Value = serde_json::from_str(&content).expect("JSON result");
+    assert_eq!(result["pipe_status"], json!([1, 0]), "{content}");
+}
+
+#[tokio::test]
+async fn a_status_file_the_command_replaced_with_a_fifo_or_link_is_not_read() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let handler = real_bash_handler(root.path(), 4096);
+    let secret = root.path().join("secret");
+    std::fs::write(&secret, "0 1 0\n").expect("linked file");
+    let fifo = "mkfifo \"$__agentty_pipe_status_file\"; trap - EXIT; false | true".to_string();
+    let link = format!(
+        "ln -s '{}' \"$__agentty_pipe_status_file\"; trap - EXIT; false | true",
+        secret.display()
+    );
+
+    for (index, command) in [fifo, link].into_iter().enumerate() {
+        let started = std::time::Instant::now();
+
+        // Act
+        let output = handler
+            .call(
+                json!({"command": command}),
+                ToolContext::new(format!("replaced_{index}")),
+            )
+            .await
+            .expect("command result");
+
+        // Assert
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{command}: waited {:?}",
+            started.elapsed()
+        );
+        let (content, _) = output.into_parts();
+        let result: Value = serde_json::from_str(&content).expect("JSON result");
+        assert_eq!(result["exit_code"], 0, "{content}");
+        assert!(result.get("pipe_status").is_none(), "{content}");
+    }
+    let leftovers = std::fs::read_dir(root.path().join("tmp"))
+        .expect("temporary directory")
+        .count();
+    assert_eq!(leftovers, 0, "the replaced paths are removed");
+    assert_eq!(std::fs::read(&secret).expect("target kept"), b"0 1 0\n");
+}
+
+#[tokio::test]
+async fn a_syntax_error_quoting_a_piped_command_does_not_quote_the_probe() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let handler = real_bash_handler(root.path(), 4096);
+
+    // Act
+    let syntax = handler
+        .call(
+            json!({"command": "echo a | | b"}),
+            ToolContext::new("syntax"),
+        )
+        .await
+        .expect("syntax error result");
+
+    // Assert
+    let (content, _) = syntax.into_parts();
+    let result: Value = serde_json::from_str(&content).expect("JSON result");
+    let stderr = result["stderr"].as_str().unwrap_or_default();
+    assert_eq!(result["exit_code"], 2);
+    assert!(stderr.contains("`echo a | | b'"), "{stderr}");
+    assert!(!stderr.contains("agentty_pipe"), "{stderr}");
+}
+
+#[tokio::test]
+async fn output_that_fills_the_capture_budget_is_not_truncated_by_the_probe() {
+    // Arrange
+    let root = tempfile::tempdir().expect("workspace");
+    let handler = real_bash_handler(root.path(), 64);
+
+    // Act
+    let output = handler
+        .call(
+            json!({"command": "printf '%064d' 0 | cat"}),
+            ToolContext::new("full"),
+        )
+        .await
+        .expect("command result");
+
+    // Assert
+    let (content, _) = output.into_parts();
+    let result: Value = serde_json::from_str(&content).expect("JSON result");
+    assert_eq!(result["stdout"], "0".repeat(64));
+    assert_eq!(result["stderr"], "");
+    assert_eq!(result["truncated"], false);
+    assert_eq!(result["pipe_status"], json!([0, 0]));
+}
+
 /// Which stream of a command outcome a detector case writes.
 #[derive(Clone, Copy, Debug)]
 enum Stream {
@@ -638,15 +915,13 @@ fn the_denial_detector_matches_operating_system_denials_on_stderr() {
             cleanup_failed: false,
             cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
             execution_failure: None,
-            exit_code,
-            signal,
+            exit: CommandExit::new(exit_code, signal),
             stderr: String::new(),
             stderr_omitted_bytes: 0,
             stderr_tail: String::new(),
             stdout: String::new(),
             stdout_omitted_bytes: 0,
             stdout_tail: String::new(),
-            termination: CommandTermination::Completed,
             truncated: false,
         };
         let field = match stream {

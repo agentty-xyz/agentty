@@ -29,6 +29,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::pipe_status::{PipeStatusProbe, StreamFilter};
 use crate::command_journal::CommandCleanupScope;
 
 /// Host-selected Bash execution boundary consumed through `BashConfig`.
@@ -508,6 +509,9 @@ pub enum ExecutionAccess {
 pub(super) struct Limits {
     capture_bytes: usize,
     deadline: Instant,
+    /// Probe whose text the captured output omits, if the command runs
+    /// behind one.
+    pipe_status: Option<PipeStatusProbe>,
 }
 
 impl Limits {
@@ -527,7 +531,16 @@ impl Limits {
         Ok(Self {
             capture_bytes,
             deadline,
+            pipe_status: None,
         })
+    }
+
+    /// Removes copies of `probe`'s prefix from the captured output before
+    /// the budget applies.
+    pub(super) fn with_pipe_status(mut self, probe: Option<PipeStatusProbe>) -> Self {
+        self.pipe_status = probe;
+
+        self
     }
 
     pub(super) fn deadline(self) -> Instant {
@@ -547,7 +560,11 @@ impl Limits {
 pub(super) struct Output {
     capture_bytes: usize,
     stderr: StreamCapture,
+    /// Removes a pipe-status probe's prefix from standard error.
+    stderr_filter: Option<StreamFilter>,
     stdout: StreamCapture,
+    /// Removes a pipe-status probe's prefix from standard output.
+    stdout_filter: Option<StreamFilter>,
 }
 
 impl Output {
@@ -555,16 +572,35 @@ impl Output {
         Self {
             capture_bytes: limits.capture_bytes(),
             stderr: StreamCapture::default(),
+            stderr_filter: limits.pipe_status.map(StreamFilter::new),
             stdout: StreamCapture::default(),
+            stdout_filter: limits.pipe_status.map(StreamFilter::new),
         }
     }
 
     pub(super) fn capture(&mut self, stream: OutputStream, bytes: &[u8]) {
-        let destination = match stream {
-            OutputStream::Stdout => &mut self.stdout,
-            OutputStream::Stderr => &mut self.stderr,
+        let capture_bytes = self.capture_bytes;
+        let (destination, filter) = match stream {
+            OutputStream::Stdout => (&mut self.stdout, &mut self.stdout_filter),
+            OutputStream::Stderr => (&mut self.stderr, &mut self.stderr_filter),
         };
-        destination.capture(bytes, self.capture_bytes);
+        match filter {
+            Some(filter) => filter.push(bytes, |kept| destination.capture(kept, capture_bytes)),
+            None => destination.capture(bytes, capture_bytes),
+        }
+    }
+
+    /// Captures the bytes the filters held back once the streams ended.
+    pub(super) fn finish(&mut self) {
+        let capture_bytes = self.capture_bytes;
+        let stdout = &mut self.stdout;
+        if let Some(filter) = &mut self.stdout_filter {
+            filter.finish(|kept| stdout.capture(kept, capture_bytes));
+        }
+        let stderr = &mut self.stderr;
+        if let Some(filter) = &mut self.stderr_filter {
+            filter.finish(|kept| stderr.capture(kept, capture_bytes));
+        }
     }
 
     pub(super) fn stdout(&self) -> RetainedStream {

@@ -9,30 +9,89 @@ use super::{
     ContextActivity, HistoryActivity, HostToolOutcome, ModelRequestActivity, ModelRequestPurpose,
     ToolActivity, TurnError, TurnOutcome, TurnReport,
 };
+use crate::bash::CommandExit;
 use crate::lifecycle::{ModelResponseType, ToolUnavailableReason, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage};
 use crate::sandbox::SandboxUnavailableReason;
 use crate::tool::ReadAction;
 
 #[test]
-fn bash_activity_exposes_only_its_name_and_duration() {
+fn bash_activity_exposes_only_its_name_duration_and_exit() {
     // Arrange
-    let activity = ToolActivity::Bash {
+    let bash = |exit| ToolActivity::Bash {
         duration: Duration::from_millis(12),
+        exit,
     };
+    let piped = CommandExit::new(Some(0), None).with_pipe_status(vec![101, 0]);
+    let activity = bash(piped.clone());
 
     // Act / Assert
     assert_eq!(activity.name(), "bash");
     assert_eq!(activity.path(), "");
     assert_eq!(activity.duration(), Duration::from_millis(12));
-    assert_eq!(activity.to_string(), "bash (12 ms)");
+    assert_eq!(activity.command_exit(), Some(&piped));
+    assert_eq!(activity.to_string(), "bash, exit 0, pipeline 101 0 (12 ms)");
+    assert_eq!(bash(CommandExit::default()).to_string(), "bash (12 ms)");
     let blocked = ToolActivity::BashLikelySandboxDenial {
         duration: Duration::from_millis(12),
+        exit: CommandExit::new(Some(1), None),
     };
     assert_eq!(blocked.name(), "bash");
     assert_eq!(blocked.path(), "");
     assert_eq!(blocked.duration(), Duration::from_millis(12));
-    assert_eq!(blocked.to_string(), "bash, blocked by the sandbox (12 ms)");
+    assert_eq!(
+        blocked.command_exit(),
+        Some(&CommandExit::new(Some(1), None))
+    );
+    assert_eq!(
+        blocked.to_string(),
+        "bash, exit 1, blocked by the sandbox (12 ms)"
+    );
+}
+
+#[test]
+fn tool_outcomes_default_in_legacy_reports_and_stay_omitted_when_empty() {
+    // Arrange
+    let duration = json!({"secs": 0, "nanos": 12_000_000});
+    let legacy = [
+        json!({"Bash": {"duration": duration}}),
+        json!({"BashLikelySandboxDenial": {"duration": duration}}),
+        json!({"Write": {"bytes_written": 4, "duration": duration, "path": "a.rs"}}),
+    ];
+
+    // Act
+    let decoded = legacy
+        .map(|activity| serde_json::from_value::<ToolActivity>(activity).expect("legacy activity"));
+
+    // Assert
+    assert_eq!(
+        decoded.each_ref().map(ToString::to_string),
+        [
+            "bash (12 ms)",
+            "bash, blocked by the sandbox (12 ms)",
+            "write a.rs (4 bytes; 12 ms)",
+        ]
+    );
+    assert_eq!(decoded[0].command_exit(), Some(&CommandExit::default()));
+    assert_eq!(decoded[2].command_exit(), None);
+    assert!(matches!(
+        &decoded[2],
+        ToolActivity::Write {
+            lines_added: 0,
+            lines_removed: 0,
+            ..
+        }
+    ));
+    let encoded = serde_json::to_value(&decoded[0]).expect("encoded activity");
+    assert_eq!(
+        encoded,
+        json!({"Bash": {
+            "duration": duration,
+            "exit_code": null,
+            "signal": null,
+            "termination": "completed",
+        }})
+    );
 }
 
 #[test]
@@ -131,6 +190,8 @@ fn outcome_exposes_output_and_report() {
     let tool_call = ToolActivity::Write {
         bytes_written: 2,
         duration: Duration::from_millis(1),
+        lines_added: 1,
+        lines_removed: 0,
         path: "output.txt".to_string(),
     };
     let output = json!({"summary": "done"});
@@ -314,6 +375,8 @@ fn tool_activity_display_formats_every_outcome_safely() {
     let write = ToolActivity::Write {
         bytes_written: 4,
         duration: Duration::from_millis(3),
+        lines_added: 2,
+        lines_removed: 1,
         path: "src/lib.rs".to_string(),
     };
     let rejected_write = ToolActivity::WriteRejected {
@@ -353,7 +416,7 @@ fn tool_activity_display_formats_every_outcome_safely() {
             "read list . (completed; 1 ms)",
             "read search needle (rejected; 1 ms)",
             "read missing.rs (rejected; 2 ms)",
-            "write src/lib.rs (4 bytes; 3 ms)",
+            "write src/lib.rs (+2 -1, 4 bytes; 3 ms)",
             "write src/main.rs (rejected; 4 ms)",
             "read file src/lib.rs (repeated; 5 ms)",
             "read search needle (deferred; 6 ms)",

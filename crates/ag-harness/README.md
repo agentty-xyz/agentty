@@ -410,15 +410,16 @@ async fn review(
   run ID before the run starts. Each event has the run ID, a gap-free `seq`, and a
   timestamp in Unix milliseconds. Events report the admitted turn with its session, turn
   index, and catalog model ID, assistant text, reasoning, tool calls with their
-  arguments and results, per-request usage and cost, context reductions, each retry a
-  built-in client sends (`Retrying`, with its attempt, delay, and `ErrorKind`, before
-  the wait), and a successful run's committed `Output` item. A built-in client on any
-  protocol (Responses, Chat Completions, or Anthropic Messages) streams each turn
-  response as `ItemDelta` events (`Delta::Text`, `Delta::Reasoning`, or
-  `Delta::ToolArguments`). Each goes to the response's reasoning, message, or tool-call
-  item, which starts at its first fragment and completes after the response. A streamed
-  final answer's text completes a `Message` item before the validated `Output`. A
-  discarded response, such as an invalid answer that is re-requested, completes its
+  arguments (`ToolCallRequested`, before each call runs) and results with structured
+  outcomes such as a command's exit code, per-request usage and cost, context
+  reductions, each retry a built-in client sends (`Retrying`, with its attempt, delay,
+  and `ErrorKind`, before the wait), and a successful run's committed `Output` item. A
+  built-in client on any protocol (Responses, Chat Completions, or Anthropic Messages)
+  streams each turn response as `ItemDelta` events (`Delta::Text`, `Delta::Reasoning`,
+  or `Delta::ToolArguments`). Each goes to the response's reasoning, message, or
+  tool-call item, which starts at its first fragment and completes after the response. A
+  streamed final answer's text completes a `Message` item before the validated `Output`.
+  A discarded response, such as an invalid answer that is re-requested, completes its
   reasoning and message items with the text it streamed; its tool-call items stay open.
   `Completed` is always the last event, also after a failure or cancellation; items
   still open then were interrupted. It follows settlement, so the transcript then holds

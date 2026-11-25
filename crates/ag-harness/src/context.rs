@@ -151,10 +151,11 @@ const SUPERSEDED_REPEAT_NOTICE: &str = concat!(
 );
 
 /// Outcome fields of a `bash` or `write` result kept in its cleared notice.
-const OUTCOME_KEYS: [&str; 6] = [
+const OUTCOME_KEYS: [&str; 7] = [
     "execution_failure",
     "exit_code",
     "path",
+    "pipe_status",
     "signal",
     "status",
     "termination",
@@ -162,6 +163,10 @@ const OUTCOME_KEYS: [&str; 6] = [
 
 /// Longest outcome string value kept in a cleared notice.
 const MAX_OUTCOME_VALUE_BYTES: usize = 256;
+
+/// Most numbers an outcome array, such as a pipeline's exit statuses, may
+/// hold to be kept in a cleared notice.
+const MAX_OUTCOME_ARRAY_ITEMS: usize = 64;
 
 /// Multiple of the history byte limit up to which a turn too large to load
 /// whole is still weighed in its elided form. A larger turn loads only in
@@ -3602,7 +3607,10 @@ fn cleared_result_notice(
             let short_scalar = match value {
                 Value::Bool(_) | Value::Number(_) => true,
                 Value::String(text) => text.len() <= MAX_OUTCOME_VALUE_BYTES,
-                Value::Array(_) | Value::Null | Value::Object(_) => false,
+                Value::Array(items) => {
+                    items.len() <= MAX_OUTCOME_ARRAY_ITEMS && items.iter().all(Value::is_number)
+                }
+                Value::Null | Value::Object(_) => false,
             };
             if short_scalar {
                 notice.insert(key.to_string(), value.clone());

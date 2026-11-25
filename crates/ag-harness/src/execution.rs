@@ -10,6 +10,7 @@ mod launcher;
 #[cfg(feature = "native-sandbox")]
 mod native;
 mod output;
+mod pipe_status;
 #[cfg(all(feature = "native-sandbox", any(target_os = "linux", test)))]
 mod seccomp;
 mod supervisor;

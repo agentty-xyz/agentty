@@ -301,8 +301,13 @@ async fn a_call_that_changes_state_waits_for_approval_and_a_read_only_call_never
     };
     assert_eq!(request, asked);
     assert!(matches!(
-        kinds[approval - 1],
+        kinds[approval - 2],
         RunEventKind::ItemStarted { id: started, item_kind: ItemKind::ToolCall } if started == id
+    ));
+    assert!(matches!(
+        kinds[approval - 1],
+        RunEventKind::ToolCallRequested { id: requested, call_id, .. }
+            if requested == id && call_id == "deploy_0"
     ));
     assert!(matches!(
         kinds[approval + 1],

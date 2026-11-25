@@ -11,7 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use opentelemetry::baggage::BaggageExt as _;
 use opentelemetry::trace::{FutureExt as _, Span as _, SpanId, SpanKind, Status, Tracer as _};
-use opentelemetry::{Context, KeyValue, global};
+use opentelemetry::{Array, Context, KeyValue, Value, global};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::json;
 use tokio::io::AsyncRead;
@@ -22,6 +22,7 @@ use super::{
     LifecycleTraceObserver, PendingTool, TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES, TraceState,
     finish_span,
 };
+use crate::bash::CommandExit;
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
@@ -148,7 +149,7 @@ fn project_successes(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
         )
         .expect("turn should enable tools");
     successful_tool.started();
-    successful_tool.completed();
+    successful_tool.completed(None);
     successful_turn.completed();
 
     let first_interleaved_turn = emitter.start_turn().expect("observer should enable turns");
@@ -193,8 +194,8 @@ fn project_successes(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
         )
         .expect("turn should enable tools");
     second_interleaved_tool.started();
-    second_interleaved_tool.completed();
-    first_interleaved_tool.completed();
+    second_interleaved_tool.completed(None);
+    first_interleaved_tool.completed(None);
     second_interleaved_turn.completed();
     first_interleaved_turn.completed();
 }
@@ -729,7 +730,7 @@ async fn omits_oversized_tool_call_id_attribute() {
         )
         .expect("turn should enable tools");
     tool.started();
-    tool.completed();
+    tool.completed(None);
     turn.completed();
     provider
         .force_flush()
@@ -741,6 +742,80 @@ async fn omits_oversized_tool_call_id_attribute() {
     // Assert
     let tool_span = find_span(&spans, "execute_tool read", None);
     assert!(!attributes(tool_span).contains_key(telemetry::ATTRIBUTE_TOOL_CALL_ID));
+
+    provider.shutdown().expect("test provider should shut down");
+}
+
+#[tokio::test]
+async fn bash_tool_spans_report_exit_codes_without_failing_on_a_nonzero_exit() {
+    // Arrange
+    let _trace_provider_guard = TRACE_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider.clone());
+    let emitter = LifecycleEmitter::new(LifecycleTraceObserver::new());
+    let turn = emitter.start_turn().expect("observer should enable turns");
+    let turn_id = turn.id();
+
+    // Act
+    for (call_id, exit) in [
+        (
+            "piped",
+            Some(CommandExit::new(Some(0), None).with_pipe_status(vec![101, 0])),
+        ),
+        ("failed", Some(CommandExit::new(Some(101), None))),
+        ("killed", Some(CommandExit::new(None, Some(9)))),
+        ("read", None),
+    ] {
+        let mut tool = emitter
+            .request_tool(call_id.to_string(), "bash".to_string(), Some(turn_id))
+            .expect("turn should enable tools");
+        tool.started();
+        tool.completed(exit);
+    }
+    turn.completed();
+    provider
+        .force_flush()
+        .expect("finished spans should flush to memory");
+    let spans = exporter
+        .get_finished_spans()
+        .expect("finished spans should be readable");
+
+    // Assert
+    let span = |call_id: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                attributes(span)
+                    .get(telemetry::ATTRIBUTE_TOOL_CALL_ID)
+                    .map(String::as_str)
+                    == Some(call_id)
+            })
+            .expect("tool span should be exported")
+    };
+    let value = |call_id: &str, key: &str| {
+        span(call_id)
+            .attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == key)
+            .map(|attribute| attribute.value.clone())
+    };
+    assert_eq!(value("piped", "process.exit.code"), Some(Value::I64(0)));
+    assert_eq!(
+        value("piped", "agentty.tool.exit_code.pipeline"),
+        Some(Value::Array(Array::I64(vec![101, 0])))
+    );
+    assert_eq!(value("failed", "process.exit.code"), Some(Value::I64(101)));
+    assert_eq!(value("failed", "agentty.tool.exit_code.pipeline"), None);
+    assert_eq!(value("killed", "process.exit.code"), None);
+    assert_eq!(value("read", "process.exit.code"), None);
+    // A nonzero exit is an ordinary answer, not a failed tool call.
+    for call_id in ["piped", "failed", "killed", "read"] {
+        assert_eq!(span(call_id).status, Status::Unset, "{call_id}");
+        assert_eq!(value(call_id, telemetry::ATTRIBUTE_ERROR_TYPE), None);
+    }
 
     provider.shutdown().expect("test provider should shut down");
 }
@@ -777,7 +852,7 @@ async fn tool_spans_repeat_attributes_derived_from_the_turn_context() {
         .request_tool("call-1".to_string(), "read".to_string(), Some(turn_id))
         .expect("turn should enable tools");
     tool.started();
-    tool.completed();
+    tool.completed(None);
     turn.completed();
     provider
         .force_flush()

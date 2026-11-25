@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::bash::{BashError, CommandCleanupScope, CommandOutcome, CommandTermination};
+use crate::bash::{BashError, CommandCleanupScope, CommandExit, CommandOutcome};
 use crate::error::{ErrorKind, ErrorKindName, ErrorKindWireError, HarnessError, RunError};
 use crate::limit::LimitKind;
 use crate::model::{ModelError, ModelErrorType, ModelRegistryError, ProviderStatus};
@@ -59,15 +59,13 @@ fn command_outcome() -> Box<CommandOutcome> {
         cleanup_failed: false,
         cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
         execution_failure: None,
-        exit_code: Some(1),
-        signal: None,
+        exit: CommandExit::new(Some(1), None),
         stderr: String::new(),
         stderr_omitted_bytes: 0,
         stderr_tail: String::new(),
         stdout: String::new(),
         stdout_omitted_bytes: 0,
         stdout_tail: String::new(),
-        termination: CommandTermination::Completed,
         truncated: false,
     })
 }

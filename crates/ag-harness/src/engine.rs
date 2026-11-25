@@ -610,6 +610,15 @@ impl Engine<'_> {
                 Some(id) => Some(id),
                 None => self.start_item(ItemKind::ToolCall).await,
             };
+            if let Some(id) = item {
+                self.publish(RunEventKind::ToolCallRequested {
+                    arguments: call.arguments_json().unwrap_or_default(),
+                    call_id: call.id().to_string(),
+                    id,
+                    name: call.name().to_string(),
+                })
+                .await;
+            }
             let (mut result, mut activity) = self
                 .execute_tool_call(
                     call,
@@ -1363,7 +1372,7 @@ impl Engine<'_> {
                         ToolCallStatus::Denied => {
                             tool_lifecycle.failed(ToolErrorType::ApprovalDenied);
                         }
-                        _ => tool_lifecycle.completed(),
+                        _ => tool_lifecycle.completed(result.1.command_exit().cloned()),
                     }
                 }
 

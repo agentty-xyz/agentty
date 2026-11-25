@@ -271,8 +271,15 @@ control only holds a weak reference to it, so dropping the run ends the stream. 
 settlement the run sends a successful run's committed `Output` item and `Completed`
 through slots reserved when the channel was created, so cancellation resolves a run
 whose stream is full and unread, and then closes the sink, so no engine event can follow
-it. Run events carry content. The content-free `LifecycleObserver` and its OpenTelemetry
-projections are unchanged.
+it. Each tool call emits `ToolCallRequested` with its name and arguments after the
+call's `ItemStarted` and before it runs, under the same item `id`, so a consumer can
+show the call in order while it runs. Its completed `ToolCall` item adds its duration
+and a tagged `outcome`: a command's `CommandExit` (termination, exit code, signal, and
+pipeline statuses, so a timed-out command does not read as a success) or a write's line
+counts, absent in transcript items. Run events carry content. The `LifecycleObserver`
+stays content-free: its `ToolCompleted` adds only a command's `CommandExit`, whose exit
+code and pipeline statuses `execute_tool` spans report without marking a nonzero exit as
+an error.
 
 ## Permissions and tools
 
@@ -306,7 +313,8 @@ still describes the call by the model's arguments. A denial answers the model wi
   `*** Begin Patch` envelope, and Codex's `apply_patch` format for one added or updated
   file. Codex hunks carry no line numbers: one after an `@@` line applies at the first
   match after it, as in Codex, and any other must match exactly one place after the
-  previous hunk. A missing `path` is taken from the patch headers. `bash` likewise
+  previous hunk. A missing `path` is taken from the patch headers. The activity counts
+  the applied hunks' added and removed lines, in every patch form. `bash` likewise
   accepts and ignores a `timeout` or `timeout_ms` argument; the host sets the deadline.
 - Comparisons (`diff`, `show(base)`) additionally require a host-pinned `ComparisonBase`
   commit; no base is ever chosen implicitly.
@@ -337,7 +345,14 @@ still describes the call by the model's arguments. A denial answers the model wi
   executor reports its `Enforcement` (none, filesystem, or filesystem and network), and
   the model-facing `bash` description states exactly that and names the excluded
   programs, so an unsandboxed command is never presented as sandboxed. Output is
-  captured within one bounded budget.
+  captured within one bounded budget. A command whose source ends in a pipeline runs
+  behind an `EXIT` trap that writes Bash's `PIPESTATUS` to a randomly named file in the
+  turn's temporary directory, which the harness reads and deletes once the command
+  settles. No descriptor outlives the shell, and the command's output never carries the
+  status, so the result's `pipe_status` names the failing stage of `cargo test | tail`
+  without `pipefail` or any change to the exit status or output. A turn without a
+  temporary directory reports no stages. The command can forge or suppress the value, so
+  it is display-only.
 - Native sandbox availability — the harness's `Sandbox` choice decides what a native
   configuration does where the sandbox cannot run (missing helper or `bwrap`, user
   namespaces disabled, no usable Seatbelt, or another platform). The harness checks

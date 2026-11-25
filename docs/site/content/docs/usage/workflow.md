@@ -770,7 +770,10 @@ Provider operations depend on the CLI version and are not necessarily individual
 requests. `agentty.timing.source` is `lifecycle` for paired events, `provider` for
 intervals reconstructed from a reported duration, or `completion` for observations
 without a start. Harness `invoke_agent`, `chat <model>`, and `execute_tool <tool>` spans
-nest beneath `agent.run` and time each model request exactly.
+nest beneath `agent.run` and time each model request exactly. A `bash` tool span carries
+`process.exit.code` and, when the command ended in a pipeline, each stage's status as
+the integer array `agentty.tool.exit_code.pipeline`. A nonzero exit is not marked as an
+error, since commands such as `grep` exit nonzero as an ordinary answer.
 
 Git and forge CLI work inside a traced workflow appears as content-free spans:
 
