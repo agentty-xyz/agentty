@@ -261,7 +261,6 @@ fn development_grants_are_explicit_and_the_temporary_directory_is_writable() {
     // Arrange
     let plain = policy(Grants::default());
     let granted = policy(Grants {
-        git_branch: Some("wt/session".into()),
         network: true,
         temporary_directory: Some("/private/tmp/session".into()),
         ..Grants::default()
@@ -269,12 +268,8 @@ fn development_grants_are_explicit_and_the_temporary_directory_is_writable() {
 
     // Act / Assert
     assert!(!plain.allows_network());
-    assert!(!plain.allows_git_writes());
-    assert_eq!(plain.git_writes_branch(), None);
     assert_eq!(plain.temporary_directory(), None);
     assert!(granted.allows_network());
-    assert!(granted.allows_git_writes());
-    assert_eq!(granted.git_writes_branch(), Some("wt/session"));
     assert_eq!(
         granted.temporary_directory(),
         Some(Path::new("/private/tmp/session"))

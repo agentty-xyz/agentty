@@ -327,10 +327,6 @@ pub struct TurnRequest {
     pub request_kind: AgentRequestKind,
     /// Preferred amount of detail in user-facing session responses.
     pub response_style: ResponseStyle,
-    /// Branch checked out in [`Self::folder`] that the turn's commands may
-    /// commit to, when the host owns one. The native harness sandbox keeps
-    /// every other reference read-only and grants no Git writes without it.
-    pub session_branch: Option<String>,
     /// Response-speed preference for the turn.
     pub speed_mode: SpeedMode,
 }

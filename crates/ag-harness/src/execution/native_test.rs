@@ -15,8 +15,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use super::{
-    Access, GitDirectories, Host, Inspection, LocalInspection, Native, NativeLaunch, NativeProcess,
-    allowed_root, bounded_bytes, git_directories, pointer, probe, resolve_access, resolve_hidden,
+    Access, Host, Inspection, LocalInspection, Native, NativeLaunch, NativeProcess, allowed_root,
+    bounded_bytes, git_directories, pointer, probe, resolve_access, resolve_hidden,
     validate_executable,
 };
 use crate::bash::BashConfig;
@@ -25,7 +25,7 @@ use crate::execution::contract::{
     BashExecutor, BashProcess, Enforcement, ExecutionCommand, ExecutionError, ExecutionPolicy,
     Grants, MainExit, ProcessEvent, ReadScope,
 };
-use crate::execution::wire::{GitWrites, Notice};
+use crate::execution::wire::Notice;
 use crate::sandbox::SandboxUnavailableReason;
 
 #[test]
@@ -307,70 +307,6 @@ async fn git_pointers_reject_invalid_oversized_or_missing_targets() {
     );
 }
 
-#[tokio::test]
-async fn git_writes_refuse_per_worktree_configuration_the_worktree_lacks() {
-    // Arrange
-    let directory = tempfile::tempdir().expect("directory");
-    let root = directory.path().canonicalize().expect("canonical");
-    let common = root.join("common");
-    let admin = common.join("worktrees/session");
-    std::fs::create_dir_all(&admin).expect("worktree administration");
-    let linked = || GitDirectories {
-        admin: admin.clone(),
-        common: common.clone(),
-    };
-
-    // Act / Assert
-    assert_eq!(
-        GitDirectories {
-            admin: common.clone(),
-            common: common.clone(),
-        }
-        .writes(&LocalInspection, "wt/session".into())
-        .await,
-        Ok(GitWrites {
-            admin: None,
-            branch: "wt/session".into(),
-            common: common.clone(),
-        })
-    );
-    assert_eq!(
-        linked().writes(&LocalInspection, "wt/session".into()).await,
-        Err(ExecutionError::Setup),
-        "a repository without configuration"
-    );
-    std::fs::write(common.join("config"), "[core]\n\tbare = false\n").expect("configuration");
-    let expected = Ok(GitWrites {
-        admin: Some(admin.clone()),
-        branch: "wt/session".into(),
-        common: common.clone(),
-    });
-    assert_eq!(
-        linked().writes(&LocalInspection, "wt/session".into()).await,
-        expected
-    );
-    std::fs::write(
-        common.join("config"),
-        "[extensions]\n\tworktreeConfig = true\n",
-    )
-    .expect("per-worktree configuration");
-    assert_eq!(
-        linked().writes(&LocalInspection, "wt/session".into()).await,
-        Err(ExecutionError::Unsupported)
-    );
-    assert_eq!(
-        linked()
-            .writes(&FailingInspection::new("exists", 1), "wt/session".into())
-            .await,
-        Err(ExecutionError::Setup)
-    );
-    std::fs::write(admin.join("config.worktree"), "").expect("worktree configuration");
-    assert_eq!(
-        linked().writes(&LocalInspection, "wt/session".into()).await,
-        expected
-    );
-}
-
 /// A workspace with a linked worktree's `.git` pointer beside its common
 /// directory, an outside directory, and a temporary directory.
 struct AccessFixture {
@@ -401,7 +337,6 @@ impl AccessFixture {
         )
         .expect("gitdir pointer");
         std::fs::write(admin.join("commondir"), "../..\n").expect("common pointer");
-        std::fs::write(common.join("config"), "").expect("configuration");
 
         Self {
             _directory: directory,
@@ -424,13 +359,12 @@ impl AccessFixture {
 }
 
 #[tokio::test]
-async fn access_resolves_grants_by_path_and_opens_the_repository_git_directories() {
+async fn access_resolves_grants_by_path_and_keeps_the_repository_git_directories_read_only() {
     // Arrange
     let fixture = AccessFixture::new();
     symlink(&fixture.outside, fixture.temporary.join("alias")).expect("read alias");
     let policy = fixture.policy(Grants {
         external_reads: vec![fixture.outside.clone(), fixture.temporary.join("alias")],
-        git_branch: Some("wt/session".into()),
         temporary_directory: Some(fixture.temporary.clone()),
         workspace_writes: vec!["output".into()],
         ..Grants::default()
@@ -466,13 +400,27 @@ async fn access_resolves_grants_by_path_and_opens_the_repository_git_directories
         [fixture.workspace.join("output"), fixture.temporary.clone()]
     );
     assert_eq!(access.write_nodes.len(), 2);
+}
+
+#[tokio::test]
+async fn access_in_a_workspace_without_a_repository_protects_only_its_git_name() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("repository-free workspace");
+    let workspace = directory.path().canonicalize().expect("canonical");
+    let policy = ExecutionPolicy::new(
+        workspace.clone(),
+        vec![workspace.join(".git")],
+        Grants::default(),
+    )
+    .expect("policy");
+
+    // Act
+    let access = resolve_access(&LocalInspection, &policy).await;
+
+    // Assert
     assert_eq!(
-        access.git_writes,
-        Some(GitWrites {
-            admin: Some(fixture.admin.clone()),
-            branch: "wt/session".into(),
-            common: fixture.common.clone(),
-        })
+        access.map(|access| access.git_metadata),
+        Ok(vec![workspace.join(".git")])
     );
 }
 
@@ -487,8 +435,6 @@ async fn access_refuses_grants_the_sandbox_cannot_honor() {
     )
     .expect("write alias");
     std::fs::write(fixture.workspace.join("file"), "file").expect("file");
-    let unrelated = tempfile::tempdir().expect("repository-free workspace");
-    let unrelated = unrelated.path().canonicalize().expect("canonical");
     let cases = [
         Grants {
             external_reads: vec![fixture.outside.join("missing")],
@@ -534,21 +480,6 @@ async fn access_refuses_grants_the_sandbox_cannot_honor() {
             Err(ExecutionError::Unsupported)
         );
     }
-    let without_repository = ExecutionPolicy::new(
-        unrelated.clone(),
-        vec![unrelated.join(".git")],
-        Grants {
-            git_branch: Some("wt/session".into()),
-            ..Grants::default()
-        },
-    )
-    .expect("policy");
-    assert_eq!(
-        resolve_access(&LocalInspection, &without_repository)
-            .await
-            .map(|_| ()),
-        Err(ExecutionError::Unsupported)
-    );
     assert_eq!(
         resolve_access(
             &FailingInspection::new("metadata", 1),
@@ -1230,7 +1161,6 @@ async fn probe_reports_the_first_missing_native_sandbox_piece() {
         .clone()
         .with_temporary_directory(fixture.tools.clone())
         .expect("temporary directory");
-    let git = failing.clone().with_git_writes("wt".into()).expect("Git");
     let inside = fixture.workspace.join("helper");
     std::fs::copy(&fixture.helper, &inside).expect("helper inside workspace");
     let missing_seatbelt = fixture.tools.join("missing-sandbox-exec");
@@ -1274,13 +1204,6 @@ async fn probe_reports_the_first_missing_native_sandbox_piece() {
         )
         .await,
         probe(
-            &git,
-            Some(&fixture.helper),
-            &fixture.workspace,
-            host("linux", false, &missing_seatbelt),
-        )
-        .await,
-        probe(
             &missing,
             Some(&fixture.helper),
             &fixture.workspace,
@@ -1317,7 +1240,6 @@ async fn probe_reports_the_first_missing_native_sandbox_piece() {
             Err(SandboxUnavailableReason::UnsupportedPlatform),
             Err(SandboxUnavailableReason::HelperMissing),
             Err(SandboxUnavailableReason::HelperUntrusted),
-            Err(SandboxUnavailableReason::LandlockUnavailable),
             Err(SandboxUnavailableReason::LandlockUnavailable),
             Err(SandboxUnavailableReason::LandlockUnavailable),
             Err(SandboxUnavailableReason::BubblewrapMissing),

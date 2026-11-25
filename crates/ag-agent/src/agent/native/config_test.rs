@@ -1046,8 +1046,8 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
     assert_eq!(granted.len(), 102);
 }
 
-/// Returns a session turn request for `folder` on `session_branch`.
-fn session_request(folder: &Path, session_branch: Option<&str>) -> TurnRequest {
+/// Returns a session turn request for `folder`.
+fn session_request(folder: &Path) -> TurnRequest {
     TurnRequest {
         context_compaction: ContextCompaction::Off,
         provider_call_budget: None,
@@ -1062,22 +1062,20 @@ fn session_request(folder: &Path, session_branch: Option<&str>) -> TurnRequest {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
-        session_branch: session_branch.map(str::to_string),
         speed_mode: SpeedMode::default(),
     }
 }
 
 #[tokio::test]
 /// Gives each session one stable temporary directory beside its harness
-/// database, grants Git writes only for the request's session branch, and
-/// rejects invalid session ids.
+/// database, and rejects invalid session ids.
 async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     // Arrange
     let data_root = tempfile::tempdir().expect("data root");
     let workspace = tempfile::tempdir().expect("workspace");
     let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
     let environment = BTreeMap::new();
-    let request = session_request(workspace.path(), Some("wt/session"));
+    let request = session_request(workspace.path());
 
     // Act
     let first = config
@@ -1088,13 +1086,6 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
         .await;
     let other = config
         .session_sandbox("session-2", &request, &environment)
-        .await;
-    let without_branch = config
-        .session_sandbox(
-            "session-1",
-            &session_request(workspace.path(), None),
-            &environment,
-        )
         .await;
     let invalid = config.session_sandbox("a/b", &request, &environment).await;
 
@@ -1112,10 +1103,6 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     let first = policy(first.expect("first sandbox"));
     assert_eq!(first, policy(second.expect("second sandbox")));
     assert_ne!(first, policy(other.expect("other session sandbox")));
-    assert_ne!(
-        first,
-        policy(without_branch.expect("sandbox without a branch"))
-    );
     assert!(data_root.path().join("session-1/tmp/cargo").is_dir());
     assert!(invalid.is_err());
 }
@@ -1181,7 +1168,7 @@ async fn session_sandbox_reports_temporary_directory_failures() {
     let failure = config
         .session_sandbox(
             "session-1",
-            &session_request(workspace.path(), None),
+            &session_request(workspace.path()),
             &BTreeMap::new(),
         )
         .await;
@@ -1230,7 +1217,7 @@ async fn session_sandbox_copies_from_the_project_cargo_cache() {
         .with_trusted_cargo_cache(cache_root.path().to_path_buf());
     let environment = BTreeMap::new();
     let copy = data_root.path().join("session-1/tmp/cargo").join(archive);
-    let mut request = session_request(workspace.path(), None);
+    let mut request = session_request(workspace.path());
     request.main_checkout_root = Some(main_checkout.to_path_buf());
 
     // Act

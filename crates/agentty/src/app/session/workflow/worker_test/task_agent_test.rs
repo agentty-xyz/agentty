@@ -1607,17 +1607,8 @@ fn execution_git_client(commit_failure: bool) -> MockGitClient {
     git.expect_ref_hash()
         .withf(|_, reference| reference == "main")
         .returning(|_, _| Box::pin(async { Ok("base-1".to_string()) }));
-    expect_session_head(&mut git);
 
     git
-}
-
-/// Lets `git` report a detached worktree `HEAD`, which Harness turns accept
-/// before and after they run like the session branch, whatever the
-/// session's id.
-fn expect_session_head(git: &mut MockGitClient) {
-    git.expect_head_reference()
-        .returning(|_| Box::pin(async { Ok("HEAD".to_string()) }));
 }
 
 /// Returns an execution Git client whose base branch moves after the first
@@ -1633,7 +1624,6 @@ fn moved_base_git_client() -> MockGitClient {
 
             Box::pin(async move { Ok(commit.to_string()) })
         });
-    expect_session_head(&mut git);
 
     git
 }

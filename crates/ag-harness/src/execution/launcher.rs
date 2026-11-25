@@ -36,8 +36,6 @@ use rustix::stdio::stdin;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::contract::ReadScope;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use super::wire::GitWrites;
 use super::wire::{Launch, Notice};
 
 /// First argument of every helper invocation: the harness starts the helper
@@ -96,9 +94,6 @@ fn launch() -> io::Result<()> {
     let configuration = configuration()?;
     #[cfg(target_os = "macos")]
     {
-        if let Some(git) = &configuration.git_writes {
-            prepare_branch_directories(git)?;
-        }
         verify_write_identities(&configuration)?;
         let profile = seatbelt(&configuration)?;
         let mut command = Command::new("/usr/bin/sandbox-exec");
@@ -290,50 +285,6 @@ fn group_finished() -> io::Result<bool> {
     Ok(true)
 }
 
-/// Creates the directories of the common Git directory that hold the
-/// Git-writes grant's branch reference and its reflog when they are
-/// missing, and returns them, so Git can write the branch without creating
-/// directories and Linux has a directory to grant. A directory reached through
-/// a link, or blocked by a file such as the `refs/heads` file of a `reftable`
-/// repository, is left out and its branch stays read-only.
-///
-/// # Errors
-/// Returns an error when a missing directory cannot be created.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(super) fn prepare_branch_directories(git: &GitWrites) -> io::Result<Vec<std::path::PathBuf>> {
-    let parent = git.branch.rsplit_once('/').map(|(parent, _)| parent);
-    let mut directories = Vec::new();
-    for store in ["refs/heads", "logs/refs/heads"] {
-        let mut directory = git.common.clone();
-        let mut is_real = true;
-        for component in std::path::Path::new(store).components().chain(
-            parent
-                .iter()
-                .flat_map(|parent| std::path::Path::new(parent).components()),
-        ) {
-            directory.push(component);
-            let metadata = match std::fs::symlink_metadata(&directory) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    // Another process may create it meanwhile; the check
-                    // below decides either way.
-                    let _ = std::fs::create_dir(&directory);
-                    std::fs::symlink_metadata(&directory)?
-                }
-                result => result?,
-            };
-            if !metadata.is_dir() {
-                is_real = false;
-                break;
-            }
-        }
-        if is_real {
-            directories.push(directory);
-        }
-    }
-
-    Ok(directories)
-}
-
 /// Checks that each write grant of `configuration` is still the directory
 /// preparation validated, itself rather than a link put in its place, so
 /// one swapped meanwhile cannot redirect the grant; Linux checks the same
@@ -356,9 +307,7 @@ fn verify_write_identities(configuration: &Launch) -> io::Result<()> {
 /// Builds the Seatbelt profile for `configuration`. Seatbelt checks every
 /// access against the resolved path, so links grant nothing beyond their
 /// targets, and the last matching rule decides: Git metadata denials follow
-/// the write grants, and the Git-writes grant reopens the worktree's own
-/// Git administration, the object store, and the branch reference after
-/// them, minus what Git would execute or follow.
+/// the write grants.
 #[cfg(target_os = "macos")]
 fn seatbelt(configuration: &Launch) -> io::Result<String> {
     let mut profile = String::from(
@@ -389,65 +338,20 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
     for path in &configuration.writes {
         rule(&mut profile, "allow file-read* file-write*", path)?;
     }
+    // Each Git metadata path, and everything beneath it, stays read-only
+    // whether or not it exists yet, so a missing `.git` at the top of a
+    // write grant cannot be created either. Names match case-insensitively,
+    // as the default macOS file systems resolve them: `.GIT` would otherwise
+    // be a writable alias of `.git`. A repository deeper inside a grant,
+    // such as one `git init` creates in the temporary directory, is
+    // writable.
     for path in &configuration.git_metadata {
-        rule(&mut profile, "deny file-write*", path)?;
-    }
-    profile.push_str("(deny file-write* (regex #\"(^|/)[.][gG][iI][tT](/|$)\"))\n");
-    if let Some(git) = &configuration.git_writes {
-        let common = pattern(&git.common)?;
-        match &git.admin {
-            Some(admin) => rule(&mut profile, "allow file-write*", admin)?,
-            // A main worktree keeps its index, `HEAD`, and other state files
-            // at the top of its Git directory, and its own reflog and
-            // per-worktree references beneath it.
-            None => writeln!(
-                profile,
-                "(allow file-write* (regex \
-                 #\"^{common}/(({GIT_WORKTREE_STATE})([.]lock)?|logs/HEAD|refs/\
-                 (bisect|worktree|rewritten)(/.*)?)$\"))"
-            )
-            .map_err(io::Error::other)?,
-        }
-        rule(
-            &mut profile,
-            "allow file-write*",
-            &git.common.join("objects"),
-        )?;
-        // The branch reference and its reflog, and the lock files Git
-        // replaces them through; every other reference stays read-only.
         writeln!(
             profile,
-            "(allow file-write* (regex #\"^{common}/(logs/)?refs/heads/{}([.]lock)?$\"))",
-            pattern(std::path::Path::new(&git.branch))?
+            "(deny file-write* (regex #\"^{}(/|$)\"))",
+            caseless_pattern(path)?
         )
         .map_err(io::Error::other)?;
-        writeln!(
-            profile,
-            "(deny file-write* (regex \
-             #\"^{common}/((config|hooks|modules|{GIT_REFERENCE_PROTECTED}|\
-             {GIT_HISTORY_PROTECTED}|{GIT_WORKTREE_PROTECTED})|worktrees/[^/]+/\
-             ({GIT_WORKTREE_PROTECTED}))(/|$)\"))"
-        )
-        .map_err(io::Error::other)?;
-        // Path rules follow names, so the directories holding protected
-        // entries must not move either: a command could otherwise move one
-        // aside, or build a replacement under another name and move it into
-        // place.
-        writeln!(
-            profile,
-            "(deny file-write* (regex \
-             #\"^{common}(/(worktrees(/[^/]+)?|refs|objects(/info)?))?$\"))"
-        )
-        .map_err(io::Error::other)?;
-        if let Some(admin) = &git.admin {
-            writeln!(
-                profile,
-                "(deny file-write* (regex #\"^{admin}/({GIT_WORKTREE_PROTECTED})(/|$)\"))\n(deny \
-                 file-write* (regex #\"^{admin}$\"))",
-                admin = pattern(admin)?
-            )
-            .map_err(io::Error::other)?;
-        }
     }
     pin_write_grants(&mut profile, &configuration.writes)?;
     if configuration.network {
@@ -487,44 +391,6 @@ fn pin_write_grants(profile: &mut String, writes: &[std::path::PathBuf]) -> io::
     Ok(())
 }
 
-/// Entries of a worktree's Git administration that stay read-only under the
-/// Git-writes grant, as a Seatbelt pattern: Git follows `commondir` and
-/// `gitdir` to find the repository, reads `config.worktree` as
-/// configuration, and resumes a rebase or cherry-pick from its state
-/// directories, whose to-do lists can run commands.
-#[cfg(target_os = "macos")]
-const GIT_WORKTREE_PROTECTED: &str =
-    "config[.]worktree|commondir|gitdir|rebase-merge|rebase-apply|sequencer";
-
-/// State files at the top of a main worktree's Git directory that the
-/// Git-writes grant opens, as a Seatbelt pattern: the index, the temporary
-/// index of a commit naming paths, `HEAD`, and the files merges,
-/// cherry-picks, reverts, commits, and bisection leave there.
-/// Every other top-level entry stays read-only, so commands cannot rename a
-/// directory of their own onto `logs` or a legacy `remotes` directory, or
-/// hold a lock file that blocks the host's next Git command.
-#[cfg(target_os = "macos")]
-const GIT_WORKTREE_STATE: &str = "index|next-index-[0-9]+|sharedindex[.][0-9a-f]+|HEAD|ORIG_HEAD|FETCH_HEAD|\
-                                  MERGE_HEAD|MERGE_MSG|MERGE_MODE|MERGE_RR|MERGE_AUTOSTASH|\
-                                  AUTO_MERGE|CHERRY_PICK_HEAD|REVERT_HEAD|COMMIT_EDITMSG|\
-                                  SQUASH_MSG|TAG_EDITMSG|BISECT_[A-Z_]+";
-
-/// Reference stores at the top of the common Git directory that stay
-/// read-only under the Git-writes grant, as a Seatbelt pattern, whatever
-/// else opens: packed references and the `reftable` stack hold every
-/// branch, not only the granted one.
-#[cfg(target_os = "macos")]
-const GIT_REFERENCE_PROTECTED: &str = "packed-refs|reftable";
-
-/// Entries of the common Git directory that stay read-only under the
-/// Git-writes grant, as a Seatbelt pattern, because they change the history
-/// Git run later outside the sandbox shows without changing the objects it
-/// pushes: replacement refs, grafts and other `info` files, the shallow
-/// boundary, and the object store's `info` directory with its alternates
-/// and commit-graph files.
-#[cfg(target_os = "macos")]
-const GIT_HISTORY_PROTECTED: &str = "info|shallow|refs/replace|objects/info";
-
 /// Network rules of the network grant: IP connections and listeners, the
 /// system resolver, and the services that resolve names and verify TLS
 /// certificates, including the trust evaluation agent Apple's `LibreSSL`,
@@ -557,9 +423,10 @@ fn rule(profile: &mut String, action: &str, path: &std::path::Path) -> io::Resul
     .map_err(io::Error::other)
 }
 
-/// Returns `path` as a Seatbelt regular expression matching it literally.
+/// Returns `path` as a Seatbelt regular expression matching it literally,
+/// except that ASCII letters match in either case.
 #[cfg(target_os = "macos")]
-fn pattern(path: &std::path::Path) -> io::Result<String> {
+fn caseless_pattern(path: &std::path::Path) -> io::Result<String> {
     let path = path
         .to_str()
         .filter(|path| !path.contains(['"', '\n']))
@@ -571,6 +438,11 @@ fn pattern(path: &std::path::Path) -> io::Result<String> {
             '.' | '*' | '+' | '?' | '(' | ')' | '{' | '}' | '|' | '$' => format!("[{character}]"),
             // `[`, `\`, `]`, and `^`.
             '['..='^' => format!("\\{character}"),
+            letter if letter.is_ascii_alphabetic() => format!(
+                "[{}{}]",
+                letter.to_ascii_lowercase(),
+                letter.to_ascii_uppercase()
+            ),
             other => other.to_string(),
         })
         .collect())
@@ -647,21 +519,6 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
             command.arg("--ro-bind").arg(path).arg(path);
         }
     }
-    if let Some(git) = &configuration.git_writes {
-        // Landlock confines these writable mounts to the object store, the
-        // directories holding the branch reference and its reflog, and the
-        // worktree's own administration: its reference and log stores and
-        // the files at its top, whose links stay mounted read-only.
-        command.arg("--bind").arg(&git.common).arg(&git.common);
-        protect_git_history(&mut command, &git.common)?;
-        if let Some(admin) = &git.admin {
-            command.arg("--bind").arg(admin).arg(admin);
-            for name in super::landlock::GIT_ADMIN_PROTECTED {
-                let path = admin.join(name);
-                command.arg("--ro-bind-try").arg(&path).arg(&path);
-            }
-        }
-    }
     for path in hidden_directories {
         command.arg("--remount-ro").arg(path);
     }
@@ -680,26 +537,6 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         .args([HELPER_ARGUMENT, "--namespace-init"]);
 
     Err(command.exec())
-}
-
-/// Mounts the object store's `info` directory of `common` read-only over the
-/// writable Git mount: its alternates and commit-graph files lie inside the
-/// writable object store but change the history Git run outside the sandbox
-/// shows without changing the objects it pushes. A mount point cannot be
-/// renamed or removed, so a command cannot move the directory aside and
-/// recreate it either, and `objects` itself lies outside the write grant.
-/// Replacement refs, grafts, and the shallow boundary lie outside the
-/// writable directories already.
-///
-/// # Errors
-/// Returns an error when a missing `objects/info` cannot be created.
-#[cfg(target_os = "linux")]
-fn protect_git_history(command: &mut Command, common: &std::path::Path) -> io::Result<()> {
-    let object_info = common.join("objects/info");
-    std::fs::create_dir_all(&object_info)?;
-    command.arg("--ro-bind").arg(&object_info).arg(&object_info);
-
-    Ok(())
 }
 
 #[cfg(test)]

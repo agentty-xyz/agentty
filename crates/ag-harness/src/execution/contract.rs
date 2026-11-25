@@ -12,11 +12,10 @@
 //! write grant before launch are files of that grant, and commands cannot
 //! create new ones that reach outside it. Lexical validation is not
 //! enforcement. Git metadata includes `.git` entries, resolved Git
-//! directories, common directories, and linked-worktree administration; only
-//! the explicit Git-writes grant permits mutation, and never of Git
-//! configuration, hooks, worktree links, submodule metadata, or rebase and
-//! cherry-pick state. Applied
-//! workspace writes survive cancellation and failure; there is no rollback.
+//! directories, common directories, and linked-worktree administration, and
+//! no grant permits mutating it: the host commits what commands change.
+//! Applied workspace writes survive cancellation and failure; there is no
+//! rollback.
 //! Aggregate memory, process-count, and disk quotas are outside this
 //! contract.
 
@@ -199,8 +198,6 @@ impl ExecutionCommand {
 pub(super) struct Grants {
     pub(super) environment: Vec<(OsString, OsString)>,
     pub(super) external_reads: Vec<PathBuf>,
-    /// The branch the Git-writes grant opens; `None` grants no Git writes.
-    pub(super) git_branch: Option<String>,
     pub(super) host_information: bool,
     pub(super) hidden_paths: Vec<PathBuf>,
     pub(super) network: bool,
@@ -231,7 +228,6 @@ pub(super) enum ReadScope {
 pub struct ExecutionPolicy {
     environment: BTreeMap<OsString, OsString>,
     external_reads: Vec<PathBuf>,
-    git_branch: Option<String>,
     git_metadata: Vec<PathBuf>,
     hidden_paths: Vec<PathBuf>,
     host_information: bool,
@@ -334,7 +330,6 @@ impl ExecutionPolicy {
         Ok(Self {
             environment,
             external_reads: grants.external_reads,
-            git_branch: grants.git_branch,
             git_metadata,
             hidden_paths: grants.hidden_paths,
             host_information: grants.host_information,
@@ -353,8 +348,7 @@ impl ExecutionPolicy {
         &self.workspace
     }
 
-    /// Known Git administration roots that no grant but
-    /// [`Self::allows_git_writes`] permits mutating.
+    /// Known Git administration roots that no grant permits mutating.
     pub fn git_metadata(&self) -> &[PathBuf] {
         &self.git_metadata
     }
@@ -429,26 +423,11 @@ impl ExecutionPolicy {
         &self.unix_sockets
     }
 
-    /// Whether the host granted the Git writes that committing to
-    /// [`Self::git_writes_branch`] needs. Every other reference stays
-    /// read-only, as do the entries `BashConfig::with_git_writes` lists: Git
-    /// configuration, hooks, worktree links, submodule metadata, and rebase
-    /// and cherry-pick state. An executor that cannot keep those read-only
-    /// must refuse a policy granting Git writes.
-    pub fn allows_git_writes(&self) -> bool {
-        self.git_branch.is_some()
-    }
-
-    /// The branch whose reference and reflog the Git-writes grant opens,
-    /// when [`Self::allows_git_writes`].
-    pub fn git_writes_branch(&self) -> Option<&str> {
-        self.git_branch.as_deref()
-    }
-
     /// Reports lexical intent only; never use this as a filesystem access
     /// check. Protected metadata can be read only where a read grant
-    /// already exists, and Git metadata reports read-only even under the
-    /// Git-writes grant, whose exceptions are not lexical. Relative, empty,
+    /// already exists, and every path with a `.git` component reports
+    /// read-only, conservatively including a nested repository inside a
+    /// grant that commands may write. Relative, empty,
     /// traversing, and NUL-containing paths report
     /// [`ExecutionAccess::Denied`].
     pub fn requested_access(&self, path: &Path) -> ExecutionAccess {

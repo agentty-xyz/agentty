@@ -98,7 +98,6 @@ fn request() -> TurnRequest {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
-        session_branch: None,
         speed_mode: SpeedMode::default(),
     }
 }

@@ -19,7 +19,7 @@ use super::contract::{
     ExecutionPolicy, MainExit, ProcessEvent,
 };
 use super::output;
-use super::wire::{GitWrites, Launch, Notice};
+use super::wire::{Launch, Notice};
 use crate::bash::{BashConfig, Capability};
 use crate::command_journal::CommandCleanupScope;
 use crate::sandbox::SandboxUnavailableReason;
@@ -160,8 +160,7 @@ pub(crate) async fn probe(
     let snapshot = &configuration.snapshot;
     let writes = !snapshot.workspace_writes.is_empty()
         || !snapshot.writable_roots.is_empty()
-        || snapshot.temporary_directory.is_some()
-        || snapshot.git_branch.is_some();
+        || snapshot.temporary_directory.is_some();
     if !host.landlock && writes {
         return Err(SandboxUnavailableReason::LandlockUnavailable);
     }
@@ -243,7 +242,6 @@ struct NativeProcess {
 struct Access {
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
-    git_writes: Option<GitWrites>,
     /// Resolved hidden paths, the built-in ones included.
     hidden_paths: Vec<PathBuf>,
     /// Unix-domain sockets, resolved when configured.
@@ -285,7 +283,6 @@ impl NativeProcess {
             executable: command.executable().to_path_buf(),
             external_reads: access.external_reads,
             git_metadata: access.git_metadata,
-            git_writes: access.git_writes,
             host_information: policy.exposes_host_information(),
             launcher: self
                 .configuration
@@ -317,8 +314,7 @@ impl NativeProcess {
 /// grant that is not a directory under its own name, a temporary directory
 /// or writable root overlapping the workspace or its Git metadata, a
 /// writable root that is `/` or contains the home directory, a hidden path
-/// containing the workspace, a Unix-socket grant naming something else, or
-/// Git writes the repository cannot confine.
+/// containing the workspace, or a Unix-socket grant naming something else.
 async fn resolve_access(
     files: &dyn Inspection,
     policy: &ExecutionPolicy,
@@ -363,8 +359,8 @@ async fn resolve_access(
         if canonical != path {
             return Err(ExecutionError::Unsupported);
         }
-        // Linux protects Git metadata by mounting it read-only, so it
-        // protects a repository at the top of each write grant too.
+        // Both platforms keep a repository at the top of each write grant
+        // read-only; macOS also keeps a missing one from being created.
         access.git_metadata.push(canonical.join(".git"));
         access.writes.push(canonical);
         access.write_nodes.push(node);
@@ -384,24 +380,6 @@ async fn resolve_access(
         access.write_nodes.push(node);
     }
     resolve_outside_grants(files, policy, &mut access).await?;
-    if let Some(branch) = policy.git_writes_branch() {
-        let repository = repository.ok_or(ExecutionError::Unsupported)?;
-        let git_writes = repository.writes(files, branch.to_string()).await?;
-        // A Landlock rule covers everything beneath its directory, and the
-        // writable Git mounts replace the read-only ones, so a write grant
-        // around a Git directory would open its configuration and hooks.
-        #[cfg(target_os = "linux")]
-        if access.writes.iter().any(|write| {
-            git_writes
-                .admin
-                .iter()
-                .chain(std::iter::once(&git_writes.common))
-                .any(|git| overlaps(write, git))
-        }) {
-            return Err(ExecutionError::Unsupported);
-        }
-        access.git_writes = Some(git_writes);
-    }
 
     Ok(access)
 }
@@ -804,55 +782,6 @@ struct GitDirectories {
     common: PathBuf,
 }
 
-impl GitDirectories {
-    /// Returns the directories the Git-writes grant opens for `branch`.
-    ///
-    /// # Errors
-    /// Returns [`ExecutionError::Unsupported`] for a linked worktree whose
-    /// repository enables per-worktree configuration while the worktree has
-    /// no `config.worktree`: the Linux sandbox could not keep a command from
-    /// creating one that Git run later outside the sandbox would read.
-    async fn writes(
-        self,
-        files: &dyn Inspection,
-        branch: String,
-    ) -> Result<GitWrites, ExecutionError> {
-        if self.admin == self.common {
-            return Ok(GitWrites {
-                admin: None,
-                branch,
-                common: self.common,
-            });
-        }
-        let configuration =
-            bounded_bytes(&self.common.join("config"), MAX_GIT_CONFIGURATION_BYTES).await?;
-        let per_worktree = configuration
-            .to_ascii_lowercase()
-            .windows(WORKTREE_CONFIGURATION.len())
-            .any(|window| window == WORKTREE_CONFIGURATION);
-        if per_worktree
-            && !files
-                .try_exists(&self.admin.join("config.worktree"))
-                .await
-                .map_err(|_| ExecutionError::Setup)?
-        {
-            return Err(ExecutionError::Unsupported);
-        }
-
-        Ok(GitWrites {
-            admin: Some(self.admin),
-            branch,
-            common: self.common,
-        })
-    }
-}
-
-/// Lowercase name of the `extensions.worktreeConfig` setting.
-const WORKTREE_CONFIGURATION: &[u8] = b"worktreeconfig";
-
-/// Largest Git configuration the Git-writes check reads.
-const MAX_GIT_CONFIGURATION_BYTES: u64 = 1024 * 1024;
-
 /// Largest `.git` or `commondir` pointer file read.
 const MAX_GIT_POINTER_BYTES: u64 = 4096;
 
@@ -1172,7 +1101,6 @@ fn write_grants(policy: &ExecutionPolicy) -> usize {
     policy.workspace_writes().len()
         + policy.writable_roots().len()
         + usize::from(policy.temporary_directory().is_some())
-        + usize::from(policy.allows_git_writes())
 }
 
 /// Reads one Git pointer file, such as a `.git` file or `commondir`.

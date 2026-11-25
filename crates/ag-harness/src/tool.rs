@@ -35,6 +35,12 @@ const BASH_FILE_SYSTEM_SANDBOX: &str = "Run Bash inside a host filesystem sandbo
 /// `bash` isolation clause when filesystem and network policy are enforced.
 const BASH_FULL_SANDBOX: &str = "Run Bash inside the host sandbox. Workspace reads are allowed; \
                                  writes require host grants. Network access is denied.";
+/// `bash` clause on the repository's Git metadata, which every enforcing
+/// executor keeps read-only.
+const BASH_READ_ONLY_GIT: &str = "Git metadata is read-only: `git status`, `git diff`, and `git \
+                                  log` work, but staging, committing, stashing, and creating or \
+                                  switching branches fail. Do not retry them; the host commits \
+                                  your changes after the turn.";
 /// Start of the `bash` clause naming programs excluded from the sandbox.
 const BASH_EXCLUDED_PREFIX: &str = "Programs excluded from the sandbox:";
 /// End of the `bash` clause naming programs excluded from the sandbox.
@@ -175,12 +181,16 @@ impl ToolDefinition {
     }
 
     /// Defines shell source; the host fixes executable, grants, and limits.
-    /// The description states exactly the isolation `enforcement` provides.
+    /// The description states exactly the isolation `enforcement` provides,
+    /// including, for an enforcing executor, that Git metadata is read-only
+    /// and the host commits.
     pub fn bash(enforcement: Enforcement) -> Self {
         let isolation = match enforcement {
-            Enforcement::None => BASH_UNSANDBOXED,
-            Enforcement::FileSystem => BASH_FILE_SYSTEM_SANDBOX,
-            Enforcement::FileSystemAndNetwork => BASH_FULL_SANDBOX,
+            Enforcement::None => BASH_UNSANDBOXED.to_string(),
+            Enforcement::FileSystem => format!("{BASH_FILE_SYSTEM_SANDBOX} {BASH_READ_ONLY_GIT}"),
+            Enforcement::FileSystemAndNetwork => {
+                format!("{BASH_FULL_SANDBOX} {BASH_READ_ONLY_GIT}")
+            }
         };
 
         Self {

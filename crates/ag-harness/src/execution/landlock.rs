@@ -1,16 +1,13 @@
 //! Landlock write enforcement for Linux write grants: workspace
-//! directories, the temporary directory, and the Git-writes grant.
+//! directories, the temporary directory, and writable roots.
 //!
 //! Bubblewrap mounts keep the workspace read-only and Git metadata that
 //! exists at launch immutable, and mount boundaries reject cross-mount hard
 //! links and renames on their own; Landlock additionally confines every
-//! write of the shell and its descendants to the granted directories, and
-//! the Git-writes grant to the object store, the directories holding the
-//! branch reference and its reflog, and a linked worktree's reference and
-//! log stores and the files at the top of its administration directory, so
-//! the remaining mount-writable paths — the sandbox-private tmpfs root, the
-//! rest of the common Git directory, even through symlinks — stay
-//! unreachable and rename and link rights stay scoped to each grant.
+//! write of the shell and its descendants to the granted directories, so
+//! the remaining mount-writable paths — the sandbox-private tmpfs root,
+//! even through symlinks — stay unreachable and rename and link rights stay
+//! scoped to each grant.
 //! Enforcement requires ABI 3 (Linux 6.2): earlier kernels cannot restrict
 //! `truncate`, so write grants fail closed there.
 //! The kernel API has no libc wrapper, so this module owns the workspace's
@@ -63,41 +60,6 @@ const GRANT_ACCESS: u64 = ACCESS_WRITE_FILE
 /// Non-directory rights for the bound `/dev/null` device.
 const DEVICE_ACCESS: u64 = ACCESS_WRITE_FILE | ACCESS_TRUNCATE;
 
-/// Rights at the top of a linked worktree's administration directory under
-/// the Git-writes grant: enough to replace its index, `HEAD`, and other
-/// state files through lock files, but not to create directories or links,
-/// so a `hooks` directory cannot appear there.
-const GIT_ADMIN_ACCESS: u64 =
-    ACCESS_WRITE_FILE | ACCESS_TRUNCATE | ACCESS_MAKE_REG | ACCESS_REMOVE_FILE;
-
-/// Stores of a linked worktree's administration directory that the
-/// Git-writes grant opens fully: its per-worktree references, such as
-/// `refs/bisect`, and its logs, such as the `HEAD` reflog. In the common
-/// directory only the object store and the directories holding the branch
-/// reference and its reflog are writable, so other branches outside the
-/// branch's own directory, tags, `refs/stash`, and `packed-refs` stay
-/// read-only.
-#[cfg(target_os = "linux")]
-const GIT_ADMIN_STORES: [&str; 2] = ["refs", "logs"];
-
-/// Entries of a linked worktree's administration directory that stay
-/// mounted read-only under the Git-writes grant: Git follows `commondir`
-/// and `gitdir` to find the repository, reads `config.worktree` as
-/// configuration, and resumes a rebase or cherry-pick from its state
-/// directories, whose to-do lists can run commands. A missing state
-/// directory cannot appear, because the grant creates no directories there;
-/// a missing `config.worktree` is read only where the repository's
-/// protected configuration enables it, which preparation refuses.
-#[cfg(target_os = "linux")]
-pub(super) const GIT_ADMIN_PROTECTED: [&str; 6] = [
-    "commondir",
-    "gitdir",
-    "config.worktree",
-    "rebase-merge",
-    "rebase-apply",
-    "sequencer",
-];
-
 #[cfg(target_os = "linux")]
 const RULE_PATH_BENEATH: u32 = 1;
 
@@ -120,7 +82,7 @@ pub(super) fn validate_write_grants(grants: usize, abi: i64) -> Result<(), Execu
 /// read-only policy and no ruleset is installed.
 #[cfg(target_os = "linux")]
 pub(super) fn confine(configuration: &Launch) -> io::Result<()> {
-    if configuration.writes.is_empty() && configuration.git_writes.is_none() {
+    if configuration.writes.is_empty() {
         return Ok(());
     }
     let ruleset = ruleset(ruleset_access(abi())?)?;
@@ -132,25 +94,6 @@ pub(super) fn confine(configuration: &Launch) -> io::Result<()> {
             (stat.st_dev, stat.st_ino),
         )?;
         add_rule(&ruleset, &grant, GRANT_ACCESS)?;
-    }
-    if let Some(git) = &configuration.git_writes {
-        let admin_stores = git
-            .admin
-            .iter()
-            .flat_map(|admin| GIT_ADMIN_STORES.map(|store| admin.join(store)));
-        let stores = std::iter::once(git.common.join("objects"))
-            .chain(admin_stores)
-            .chain(super::launcher::prepare_branch_directories(git)?);
-        for store in stores {
-            match directory(&store) {
-                Ok(store) => add_rule(&ruleset, &store, GRANT_ACCESS)?,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-        }
-        if let Some(admin) = &git.admin {
-            add_rule(&ruleset, &directory(admin)?, GIT_ADMIN_ACCESS)?;
-        }
     }
     let device = rustix::fs::open("/dev/null", OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?;
     add_rule(&ruleset, &device, DEVICE_ACCESS)?;

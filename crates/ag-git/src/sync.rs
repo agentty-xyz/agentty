@@ -319,30 +319,8 @@ pub(crate) async fn ref_hash(repo_path: PathBuf, reference: String) -> Result<St
     parse_resolved_hash(&output, &error_context)
 }
 
-/// Returns the full name of the branch `HEAD` finally resolves to, following
-/// every symbolic reference on the way, such as `refs/heads/main` for a
-/// `HEAD` naming a branch that itself names `main`, or `HEAD` when detached.
-///
-/// # Errors
-/// Returns a [`GitError`] if `HEAD` cannot be resolved.
-pub(crate) async fn head_reference(repo_path: PathBuf) -> Result<String, GitError> {
-    let error_context = "Failed to resolve the HEAD reference";
-    let output = run_git_command(
-        repo_path,
-        vec![
-            "rev-parse".to_string(),
-            "--symbolic-full-name".to_string(),
-            "HEAD".to_string(),
-        ],
-        error_context.to_string(),
-    )
-    .await?;
-
-    parse_resolved_hash(&output, error_context)
-}
-
-/// Returns the trimmed name or hash printed by `git rev-parse`, rejecting
-/// empty output with `error_context`.
+/// Returns the trimmed hash printed by `git rev-parse`, rejecting empty
+/// output with `error_context`.
 fn parse_resolved_hash(output: &str, error_context: &str) -> Result<String, GitError> {
     let hash = output.trim();
     if hash.is_empty() {

@@ -286,7 +286,6 @@ impl BashTool {
                 )
                 .collect(),
             external_reads: self.external_reads.clone(),
-            git_branch: configuration.git_branch.clone(),
             host_information: configuration.host_information,
             network: configuration.grants(Capability::Network),
             hidden_paths: configuration.hidden_paths.clone(),
