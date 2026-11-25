@@ -234,14 +234,18 @@ async fn runtime_backend_lists_sessions_with_their_list_stats() {
         });
         session.published_upstream_ref = Some("origin/wt/branch".to_string());
     }
-    app.sessions.replace_session_git_statuses(HashMap::from([(
-        session_id.clone(),
-        SessionGitStatus {
-            base_status: Some((2, 1)),
-            has_merge_conflict: Some(true),
-            remote_status: Some((0, 3)),
-        },
-    )]));
+    let project_id = app.active_project_id();
+    app.sessions.replace_session_git_statuses(
+        project_id,
+        HashMap::from([(
+            session_id.clone(),
+            SessionGitStatus {
+                base_status: Some((2, 1)),
+                has_merge_conflict: Some(true),
+                remote_status: Some((0, 3)),
+            },
+        )]),
+    );
     let model = app.sessions.sessions()[0].agent.model();
 
     // Act

@@ -981,14 +981,15 @@ impl SessionManager {
         self.prune_expired_at_mention_indexes();
     }
 
-    /// Replaces cached session git-status snapshots from the latest
-    /// background poll.
+    /// Replaces the cached session git-status snapshots of `project_id`'s
+    /// loaded page from the latest background poll of that project.
     pub(crate) fn replace_session_git_statuses(
         &mut self,
+        project_id: i64,
         session_git_statuses: HashMap<SessionId, SessionGitStatus>,
     ) {
         self.state
-            .replace_session_git_statuses(session_git_statuses);
+            .replace_session_git_statuses(project_id, session_git_statuses);
     }
 
     /// Removes expired `@`-mention indexes so unused lookup roots do not

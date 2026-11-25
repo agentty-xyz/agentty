@@ -78,8 +78,9 @@ impl SessionManager {
     ///
     /// The page holds the project's first archive page with worktree
     /// availability and detected branch names, as the active page does, but
-    /// no activity history, selection, or git statuses. A reload keeps the
-    /// page's lease and its sessions' transient rows. Returns whether the
+    /// no activity history or selection; its git statuses come from the
+    /// project's background poll. A reload keeps the page's lease, its
+    /// sessions' transient rows, and its git statuses. Returns whether the
     /// page loaded; a failed load keeps the previous page, or none.
     pub(crate) async fn load_viewed_page(
         &mut self,

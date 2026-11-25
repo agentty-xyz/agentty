@@ -116,10 +116,12 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
     },
     /// Indicates the latest project-branch and session-branch ahead/behind
-    /// information from the git status worker.
+    /// information of one polled project from the git status worker.
     GitStatusUpdated {
         /// Sync-context generation used to reject stale completions.
         generation: u64,
+        /// Project whose branch and loaded sessions the snapshot describes.
+        project_id: i64,
         session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     },
@@ -386,13 +388,16 @@ pub(super) struct SessionReviewCommentSnapshotUpdate {
     pub(super) session_id: SessionId,
 }
 
-/// Optional aggregate git status payload from the latest status event in one
-/// reducer batch.
+/// Git status payload of one project from the newest status event for that
+/// project in one reducer batch.
 pub(super) struct GitStatusBatchUpdate {
     /// Sync-context generation that produced this status snapshot.
-    generation: u64,
-    /// Main worktree added/deleted line counts, when available.
-    status: Option<(u32, u32)>,
+    pub(super) generation: u64,
+    /// Ahead/behind snapshots of the project's loaded sessions.
+    pub(super) session_statuses: HashMap<SessionId, SessionGitStatus>,
+    /// Ahead/behind counts of the project branch against its upstream, when
+    /// available.
+    pub(super) status: Option<(u32, u32)>,
 }
 
 /// Optional version-availability payload from the latest updater event in one
@@ -439,7 +444,8 @@ pub(super) struct AppEventBatch {
         Vec<crate::app::session_diff::DeferredAutoReviewPersistenceRetry>,
     pub(super) diff_preview_updates: Vec<DiffPreviewUpdate>,
     pub(super) focused_review_persistence_retries: Vec<FocusedReviewPersistenceRetry>,
-    pub(super) git_status_update: Option<GitStatusBatchUpdate>,
+    /// Newest git status of each polled project, keyed by project id.
+    pub(super) git_status_updates: HashMap<i64, GitStatusBatchUpdate>,
     /// Retains every Implementer success, including duplicates, so ownership
     /// matching decides which completion may start review.
     pub(super) implementer_attempt_successes: Vec<(SessionId, String)>,
@@ -468,7 +474,6 @@ pub(super) struct AppEventBatch {
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
     pub(super) session_diff_updates: Vec<crate::app::SessionDiffUpdate>,
     pub(super) session_generated_turn_updates: Vec<(SessionId, GeneratedTurnUpdate)>,
-    pub(super) session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
@@ -539,7 +544,7 @@ impl AppEventBatch {
             || self.agent_cli_updates.is_some()
             || self.harness_model_updates.is_some()
             || !self.chatgpt_sign_in_updates.is_empty()
-            || self.git_status_update.is_some()
+            || !self.git_status_updates.is_empty()
             || self.latest_available_version_update.is_some()
             || self.remote_control_status.is_some()
             || self.remote_link_copy.is_some()
@@ -639,9 +644,10 @@ impl AppEventBatch {
             }
             AppEvent::GitStatusUpdated {
                 generation,
+                project_id,
                 session_statuses,
                 status,
-            } => self.collect_git_status_updated(generation, session_statuses, status),
+            } => self.collect_git_status_updated(project_id, generation, session_statuses, status),
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
@@ -975,20 +981,29 @@ impl AppEventBatch {
             .push(notice);
     }
 
-    /// Stores the latest git status event for this reducer batch.
+    /// Stores the newest git status event of `project_id` for this reducer
+    /// batch, keeping the newest one of every other project too.
     fn collect_git_status_updated(
         &mut self,
+        project_id: i64,
         generation: u64,
         session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     ) {
-        if self
-            .git_status_update
-            .as_ref()
-            .is_none_or(|batched_update| generation >= batched_update.generation)
-        {
-            self.git_status_update = Some(GitStatusBatchUpdate { generation, status });
-            self.session_git_status_updates = session_statuses;
+        let update = GitStatusBatchUpdate {
+            generation,
+            session_statuses,
+            status,
+        };
+        match self.git_status_updates.entry(project_id) {
+            Entry::Occupied(mut batched_update) => {
+                if update.generation >= batched_update.get().generation {
+                    batched_update.insert(update);
+                }
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(update);
+            }
         }
     }
 
@@ -1779,12 +1794,8 @@ impl App {
             self.services.replace_harness_model_options(options);
         }
 
-        if let Some(git_status_update) = &event_batch.git_status_update
-            && git_status_update.generation == self.sync_handle.current_generation()
-        {
-            self.projects.set_git_status(git_status_update.status);
-            self.sessions
-                .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
+        for (project_id, git_status_update) in std::mem::take(&mut event_batch.git_status_updates) {
+            self.apply_git_status_update(project_id, git_status_update);
         }
 
         for diff_preview_update in std::mem::take(&mut event_batch.diff_preview_updates) {
@@ -1813,6 +1824,25 @@ impl App {
             event_batch.latest_available_version_update.as_ref(),
             event_batch.update_status.take(),
         );
+    }
+
+    /// Applies one project's git status to that project's context and its
+    /// loaded page, and to nothing else, when the status comes from the
+    /// context the host currently polls the project with.
+    ///
+    /// A status computed before the project's polling inputs changed, or
+    /// for its earlier role as the active or a viewed project, carries a
+    /// generation the project's current context does not have and is
+    /// dropped; a project without a loaded page has no context or page to
+    /// change.
+    fn apply_git_status_update(&mut self, project_id: i64, update: GitStatusBatchUpdate) {
+        if self.sync_handle.generation_for(project_id) != Some(update.generation) {
+            return;
+        }
+
+        self.projects.set_git_status(project_id, update.status);
+        self.sessions
+            .replace_session_git_statuses(project_id, update.session_statuses);
     }
 
     /// Applies a worktree read only to its still-loading diff selection.

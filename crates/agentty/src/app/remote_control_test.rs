@@ -952,6 +952,7 @@ impl ReportedChange {
     /// Returns the reducer event that makes the change, when one does.
     fn app_event(self, app: &App) -> Option<AppEvent> {
         let generation = app.sync_handle.current_generation();
+        let project_id = app.active_project_id();
         let session_id = SessionId::from("session-1");
         let event = match self {
             Self::DiffStats => AppEvent::SessionDiffStatsUpdated {
@@ -965,6 +966,7 @@ impl ReportedChange {
             },
             Self::GitStatus => AppEvent::GitStatusUpdated {
                 generation,
+                project_id,
                 session_statuses: HashMap::new(),
                 status: Some((0, 2)),
             },
@@ -990,6 +992,7 @@ impl ReportedChange {
             },
             Self::SessionGitStatus => AppEvent::GitStatusUpdated {
                 generation,
+                project_id,
                 session_statuses: HashMap::from([(
                     SessionId::from("session-2"),
                     SessionGitStatus {

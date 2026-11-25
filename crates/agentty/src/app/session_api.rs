@@ -1014,9 +1014,9 @@ impl App {
 
     /// Reports the status of the project `context` describes, the active
     /// project or one whose page is loaded: its branch, its ahead and behind
-    /// counts, and its latest explicit sync. A viewed project reports the
-    /// branch detected when its page loaded and no counts, which only the
-    /// active project's background fetch reports.
+    /// counts from the latest background fetch, and its latest explicit sync.
+    /// A viewed project reports the branch detected when its page last
+    /// loaded, and no counts until its first poll finishes.
     pub(super) fn api_project_status_for(&self, context: &ProjectContext) -> HostProjectStatus {
         HostProjectStatus {
             ahead_behind: context.git_status(),
@@ -1947,8 +1947,9 @@ struct InheritedCreationSettings {
 
 /// Summarizes the sessions on one loaded page in their display order, with
 /// the diff size, model, timer, branch, and review figures the session list
-/// and the session footer show. A viewed page holds no git statuses, so its
-/// entries report no branch distances or merge conflicts.
+/// and the session footer show. Branch distances and merge conflicts come
+/// from the page's latest background poll, and are absent until one
+/// finishes.
 pub(super) fn api_session_entries(page: &SessionPage) -> Vec<ag_session::SessionListEntry> {
     let git_statuses = page.session_git_statuses();
 

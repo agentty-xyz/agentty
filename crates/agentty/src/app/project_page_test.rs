@@ -3,14 +3,16 @@
 //! switch, and the workflows that serve a viewed page's sessions from their
 //! own project.
 
+use std::collections::HashMap;
 use std::fs;
 use std::time::Duration;
 
-use ag_session::{SessionError as ApiSessionError, test_support as model_fixture};
+use ag_session::{SessionError as ApiSessionError, SessionId, test_support as model_fixture};
 use tempfile::TempDir;
 
 use crate::app::project::ProjectContext;
-use crate::app::session::session_folder;
+use crate::app::session::{SessionGitStatus, session_folder};
+use crate::app::sync::{SyncHandle, SyncOrchestrator};
 use crate::app::test_support::{ProjectSyncContext, SyncMainCompletion, SyncMainOutcome};
 use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
 use crate::domain::session::{
@@ -59,6 +61,60 @@ pub(crate) async fn insert_loadable_session(
         .expect("session should persist");
     fs::create_dir_all(session_folder(app.services.base_path(), session_id))
         .expect("session folder");
+}
+
+/// Gives `app` a sync handle whose orchestrator never runs, so no
+/// background poll reports git statuses and a test applies its own. The
+/// caller keeps the returned orchestrator, whose receivers let the handle
+/// publish.
+///
+/// Use it with an app whose active project has no git branch, which the
+/// orchestrator started with the app never polls.
+#[must_use = "the handle publishes only while the orchestrator lives"]
+pub(crate) fn hold_background_polls(app: &mut App) -> SyncOrchestrator {
+    let context = App::sync_context_for(&app.projects, &app.services, &app.sessions);
+    let (sync_handle, orchestrator) = SyncHandle::unstarted(app.services.event_sender(), context);
+    app.sync_handle = sync_handle;
+
+    orchestrator
+}
+
+/// Builds the git-status event of `project_id` at `generation`, reporting
+/// `status` for the project branch and `session_status` for `session_id`.
+pub(crate) fn git_status_updated(
+    project_id: i64,
+    generation: u64,
+    status: Option<(u32, u32)>,
+    session_id: &str,
+    session_status: SessionGitStatus,
+) -> AppEvent {
+    AppEvent::GitStatusUpdated {
+        generation,
+        project_id,
+        session_statuses: HashMap::from([(SessionId::from(session_id), session_status)]),
+        status,
+    }
+}
+
+/// Returns the ahead/behind counts the context of `project_id` holds.
+fn project_git_status(app: &App, project_id: i64) -> Option<(u32, u32)> {
+    app.projects
+        .context(project_id)
+        .and_then(ProjectContext::git_status)
+}
+
+/// Returns the ids of the sessions with a git status on `project_id`'s
+/// loaded page.
+fn page_git_status_ids(app: &App, project_id: i64) -> Option<Vec<String>> {
+    app.sessions
+        .state()
+        .page_for_project(project_id)
+        .map(|page| {
+            page.session_git_statuses()
+                .keys()
+                .map(ToString::to_string)
+                .collect()
+        })
 }
 
 /// Hides `project_id` in the project catalog and reloads the list.
@@ -196,6 +252,7 @@ async fn a_terminal_switch_promotes_the_viewed_page_and_demotes_a_leased_one() {
     for is_active_page_leased in [true, false] {
         // Arrange
         let (mut app, directory) = new_test_app().await;
+        let _held_orchestrator = hold_background_polls(&mut app);
         let previous_project_id = add_listed_project(&mut app, &directory, "previous").await;
         insert_loadable_session(&app, "active1", Status::Review, previous_project_id).await;
         app.switch_project(previous_project_id)
@@ -211,14 +268,63 @@ async fn a_terminal_switch_promotes_the_viewed_page_and_demotes_a_leased_one() {
                 .await
                 .expect("active page is listed");
         }
+        // Each project's poll reports counts in its role before the switch.
+        let active_update = git_status_updated(
+            previous_project_id,
+            app.sync_handle.current_generation(),
+            Some((1, 1)),
+            "active1",
+            SessionGitStatus::default(),
+        );
+        let viewed_update = git_status_updated(
+            other_project_id,
+            app.sync_handle
+                .generation_for(other_project_id)
+                .expect("a loaded page is polled"),
+            Some((2, 2)),
+            "viewed1",
+            SessionGitStatus::default(),
+        );
+        for update in [active_update.clone(), viewed_update.clone()] {
+            app.apply_single_app_event(update).await;
+        }
+        let before_switch = [
+            project_git_status(&app, previous_project_id),
+            project_git_status(&app, other_project_id),
+        ];
 
         // Act
         app.switch_project(other_project_id)
             .await
             .expect("project switch");
+        // Results computed for either project's earlier role arrive late.
+        for update in [active_update, viewed_update] {
+            app.apply_single_app_event(update).await;
+        }
 
         // Assert
         let label = format!("leased: {is_active_page_leased}");
+        assert_eq!(before_switch, [Some((1, 1)), Some((2, 2))], "{label}");
+        // Neither project shows counts from its earlier role; each waits for
+        // the poll of its new one, which a demoted page keeps.
+        assert_eq!(project_git_status(&app, other_project_id), None, "{label}");
+        assert_eq!(
+            page_git_status_ids(&app, other_project_id),
+            Some(Vec::new()),
+            "{label}"
+        );
+        assert_eq!(
+            page_git_status_ids(&app, previous_project_id),
+            is_active_page_leased.then(Vec::new),
+            "{label}"
+        );
+        assert_eq!(
+            app.sync_handle
+                .generation_for(previous_project_id)
+                .is_some(),
+            is_active_page_leased,
+            "{label}"
+        );
         assert_eq!(app.active_project_id(), other_project_id, "{label}");
         assert!(app.sessions.is_in_active_page("viewed1"), "{label}");
         assert!(app.sessions.state().viewed_page(other_project_id).is_none());
@@ -240,6 +346,83 @@ async fn a_terminal_switch_promotes_the_viewed_page_and_demotes_a_leased_one() {
             "{label}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_viewed_pages_git_status_is_polled_while_loaded_and_kept_across_reloads() {
+    // Arrange
+    let (mut app, directory) = new_test_app().await;
+    let _held_orchestrator = hold_background_polls(&mut app);
+    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    insert_loadable_session(&app, "viewed1", Status::Review, other_project_id).await;
+    insert_loadable_session(&app, "finished1", Status::Done, other_project_id).await;
+    let conflict = SessionGitStatus {
+        base_status: Some((1, 1)),
+        has_merge_conflict: Some(true),
+        remote_status: None,
+    };
+
+    // Act
+    app.ensure_project_page(other_project_id)
+        .await
+        .expect("listed page should load");
+    let polled_contexts = app.viewed_sync_contexts();
+    let loaded_generation = app.sync_handle.generation_for(other_project_id);
+    app.apply_single_app_event(git_status_updated(
+        other_project_id,
+        loaded_generation.expect("a loaded page is polled"),
+        Some((2, 3)),
+        "viewed1",
+        conflict,
+    ))
+    .await;
+    app.services
+        .db()
+        .sessions()
+        .update_session_updated_at("viewed1", 9_999_999_999)
+        .await
+        .expect("update should persist");
+    let reloaded = app.refresh_viewed_pages().await;
+    let reloaded_generation = app.sync_handle.generation_for(other_project_id);
+    let reloaded_status = project_git_status(&app, other_project_id);
+    let reloaded_session_statuses = page_git_status_ids(&app, other_project_id);
+    let now = app.services.clock().now_instant();
+    app.evict_idle_viewed_pages(now + Duration::from_mins(11));
+    app.apply_single_app_event(git_status_updated(
+        other_project_id,
+        loaded_generation.expect("a loaded page is polled"),
+        Some((4, 4)),
+        "viewed1",
+        conflict,
+    ))
+    .await;
+
+    // Assert
+    // The page's project is polled from its own checkout and branch, for
+    // its unfinished sessions, without review requests.
+    assert_eq!(polled_contexts.len(), 1);
+    let polled_context = &polled_contexts[0];
+    assert_eq!(polled_context.project_id, other_project_id);
+    assert_eq!(polled_context.project_branch_name.as_deref(), Some("main"));
+    assert_eq!(polled_context.working_dir, directory.path().join("other"));
+    assert_eq!(polled_context.review_request_sync_targets.len(), 0);
+    assert_eq!(
+        polled_context
+            .session_git_status_targets
+            .iter()
+            .map(|target| (target.session_id.as_str(), target.base_branch.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("viewed1", "main")]
+    );
+    // A reload with the same targets keeps the poll and what it reported.
+    assert!(reloaded);
+    assert_eq!(reloaded_generation, loaded_generation);
+    assert_eq!(reloaded_status, Some((2, 3)));
+    assert_eq!(reloaded_session_statuses, Some(vec!["viewed1".to_string()]));
+    // Dropping the page stops its poll, and a late result changes nothing.
+    assert_eq!(app.sync_handle.generation_for(other_project_id), None);
+    assert!(app.viewed_sync_contexts().is_empty());
+    assert!(app.projects.context(other_project_id).is_none());
 }
 
 #[tokio::test]

@@ -91,12 +91,28 @@ page, while the terminal's list, selection, and automation that applies the acti
 project's settings stay on the active page; a session on a viewed page takes the paths
 that serve projects the terminal does not show, such as an automatic review with its own
 project's agent. A viewed page holds its project's first archive page and its branch as
-detected when it loads, without ahead/behind counts or per-session git status, which
-only the active project's background poll reports. A session-API caller can also create
-sessions in a viewed project and sync it. Both start from that project's own checkout,
-the branch checked out there at the time of the request, and that project's stored
-defaults. A new session joins its project's page, not the terminal's list, and a sync
-reports its progress and result in that project's status.
+detected when it loads. A session-API caller can also create sessions in a viewed
+project and sync it. Both start from that project's own checkout, the branch checked out
+there at the time of the request, and that project's stored defaults. A new session
+joins its project's page, not the terminal's list, and a sync reports its progress and
+result in that project's status.
+
+<a id="architecture-runtime-flow-git-status"></a> The sync orchestrator polls git status
+for exactly the loaded pages. Each pass fetches the active project's remote and reads
+its branch and session statuses in the orchestrator's own loop, and starts a pass for
+each viewed project in a task of its own, at most one per project at a time, so a slow
+or failing project never delays the active one. Viewed projects are fetched once per
+periodic pass; a requested refresh rereads their branches against the refs fetched last.
+Every project keeps its own fetch backoff, and two fetches or a fetch and a sync of one
+project never overlap; two saved projects that share a repository are not kept apart. A
+newly loaded page is polled at once, and a dropped page is no longer polled. Each polled
+project has its own versioned context, and a result applies only to the project and page
+that its context still describes, so a result from before a reload, after a drop, or
+from the project's role before a terminal switch is discarded; a switch clears both
+pages' git statuses until the poll of their new role reports. The background
+review-request refresh still covers the active project only, so a viewed page's linked
+review requests and watched sessions wait for their project to become active, or for its
+sync, which refreshes them.
 
 <a id="architecture-runtime-flow-remote-control"></a> The
 [remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
@@ -521,12 +537,15 @@ Host work outside turns has its own roots. Export starts after the database open
 as `agentty.db.open_ms`, and ends once the `App` is assembled, before the runtime loop;
 its phases are `project.load`, `agents.detect`, `runs.recover`, `sessions.load`, and
 `review_watch.resume`. Each sync orchestrator pass is one `sync.refresh` with
-`git.fetch`, `sync.branch_status`, and `sync.review_requests` phases; failed fetches and
-tracking queries fail their phase while the best-effort snapshot is still emitted, and
-superseded passes end canceled. A failed `git.fetch` records a content-free `error.type`
-of `auth`, `network`, `timeout`, or `other` with its consecutive failure count, and
-further fetches for that project back off exponentially; a pass that skips its fetch
-records `agentty.sync.fetch_backed_off` instead of a `git.fetch` phase.
+`git.fetch`, `sync.branch_status`, and `sync.review_requests` phases, and each viewed
+project's pass is its own `sync.refresh`, marked `agentty.sync.viewed_project`, without
+review requests; failed fetches and tracking queries fail their phase while the
+best-effort snapshot is still emitted, and superseded passes end canceled. A failed
+`git.fetch` records a content-free `error.type` of `auth`, `network`, `timeout`, or
+`other` with its consecutive failure count, and further fetches for that project back
+off exponentially; a pass that skips its fetch records `agentty.sync.fetch_backed_off`,
+or `agentty.sync.fetch_deferred_for_sync` or `agentty.sync.fetch_deferred_for_pass`
+while the project's sync or another pass of it runs, instead of a `git.fetch` phase.
 `sync.branch_status` reuses a session's ahead/behind and conflict comparison while its
 branch and base tips are unchanged. Manual sync runs under `project.sync_main`, which
 parents its review refresh and conflict-assistance utilities. The foreground loop

@@ -164,17 +164,35 @@ impl ProjectManager {
     }
 
     /// Records the context of a viewed project other than the active one,
-    /// replacing an earlier one, with no ahead/behind counts or upstream
-    /// reference, which only the active project's status tracking keeps.
+    /// replacing an earlier one, with no upstream reference, which only the
+    /// terminal's footer shows.
+    ///
+    /// A reload of the same project on the same branch keeps the counts the
+    /// background poll last reported for it; any other context starts with
+    /// none until the project's next poll, so a demoted active project never
+    /// shows counts from its earlier role.
     pub(crate) fn set_viewed_context(&mut self, context: ProjectContext) {
+        let git_status = self
+            .viewed
+            .get(&context.id)
+            .filter(|previous_context| previous_context.git_branch == context.git_branch)
+            .and_then(|previous_context| previous_context.git_status);
         self.viewed.insert(
             context.id,
             ProjectContext {
-                git_status: None,
+                git_status,
                 git_upstream_ref: None,
                 ..context
             },
         );
+    }
+
+    /// Returns whether the active project or a viewed project has a git
+    /// branch, so the background poll has a project to follow.
+    pub(crate) fn has_polled_git_branch(&self) -> bool {
+        std::iter::once(&self.active)
+            .chain(self.viewed.values())
+            .any(|context| context.git_branch.is_some())
     }
 
     /// Keeps only the viewed contexts of `project_ids`, the projects whose
@@ -286,9 +304,18 @@ impl ProjectManager {
         self.select_active_project_row();
     }
 
-    /// Updates the last known git status.
-    pub(crate) fn set_git_status(&mut self, git_status: Option<(u32, u32)>) {
-        self.active.git_status = git_status;
+    /// Updates the last known ahead/behind counts of `project_id`, the
+    /// active project or a viewed one, and changes nothing for a project
+    /// with no context.
+    pub(crate) fn set_git_status(&mut self, project_id: i64, git_status: Option<(u32, u32)>) {
+        let context = if project_id == self.active.id {
+            Some(&mut self.active)
+        } else {
+            self.viewed.get_mut(&project_id)
+        };
+        if let Some(context) = context {
+            context.git_status = git_status;
+        }
     }
 
     /// Re-selects active project row in the projects list when present.
@@ -311,7 +338,8 @@ impl ProjectManager {
 /// One project's identity, checkout, and Git state, as the host holds it.
 ///
 /// A viewed project's context holds its branch as detected when its page
-/// loaded, and no ahead/behind counts or upstream reference.
+/// last loaded, the ahead/behind counts its background poll reports, and no
+/// upstream reference.
 pub(crate) struct ProjectContext {
     /// Current local branch name, when one is detected.
     git_branch: Option<String>,
@@ -351,8 +379,8 @@ impl ProjectContext {
         self.git_branch.as_deref()
     }
 
-    /// Returns the latest ahead/behind counts of the branch, which only the
-    /// active project's background fetch reports.
+    /// Returns the latest ahead/behind counts of the branch that the
+    /// background fetch reported for the project.
     pub(crate) fn git_status(&self) -> Option<(u32, u32)> {
         self.git_status
     }

@@ -161,12 +161,7 @@ impl SessionState {
 
     /// Renews the lease of `project_id`'s loaded page at `now`.
     pub(crate) fn renew_project_page(&mut self, project_id: i64, now: Instant) {
-        let page = if self.active.project_id == project_id {
-            Some(&mut self.active)
-        } else {
-            self.viewed.get_mut(&project_id)
-        };
-        if let Some(page) = page {
+        if let Some(page) = self.page_for_project_mut(project_id) {
             page.last_requested_at = Some(now);
         }
     }
@@ -253,18 +248,20 @@ impl SessionState {
     /// lease; otherwise the active page starts empty for the reload that
     /// follows. The previous active page is demoted while its lease is live
     /// at `now` and its archive window is on its first page, since a viewed
-    /// page keeps that window, and it drops its git statuses, which only the
-    /// active project's poll keeps current. Otherwise it is dropped.
-    /// Switching to the active project changes nothing.
+    /// page keeps that window. Otherwise it is dropped. Both pages drop their
+    /// git statuses, which the poll of the project's new role reports next,
+    /// so neither shows statuses from its earlier role. Switching to the
+    /// active project changes nothing.
     pub(crate) fn switch_active_page(&mut self, project_id: i64, now: Instant) -> bool {
         if self.active.project_id == project_id {
             return false;
         }
 
-        let next_page = self
+        let mut next_page = self
             .viewed
             .remove(&project_id)
             .unwrap_or_else(|| SessionPage::new(project_id, Vec::new(), 0, 0));
+        next_page.session_git_statuses.clear();
         let mut previous_page = std::mem::replace(&mut self.active, next_page);
         let is_demoted = previous_page.is_leased_at(now) && !previous_page.is_archive_expanded();
         if is_demoted {
@@ -604,13 +601,17 @@ impl SessionState {
         follow_up_task.launched_session_id = launched_session_id;
     }
 
-    /// Replaces the active page's cached session git-status snapshots with
-    /// one fresh poll result of the active project.
+    /// Replaces the cached session git-status snapshots of `project_id`'s
+    /// loaded page with one fresh poll result of that project, and changes
+    /// nothing when no page of the project is loaded.
     pub(crate) fn replace_session_git_statuses(
         &mut self,
+        project_id: i64,
         session_git_statuses: HashMap<SessionId, SessionGitStatus>,
     ) {
-        self.active.session_git_statuses = session_git_statuses;
+        if let Some(page) = self.page_for_project_mut(project_id) {
+            page.session_git_statuses = session_git_statuses;
+        }
     }
 
     /// Replaces the active page's cached worktree-availability snapshots
@@ -788,6 +789,16 @@ impl SessionState {
         let (mut pages, _) = self.pages_and_runtime_mut();
 
         pages.find_map(|page| page.session_mut_for_id(session_id))
+    }
+
+    /// Returns mutable access to the loaded page of `project_id`, as
+    /// [`Self::page_for_project`] finds it.
+    fn page_for_project_mut(&mut self, project_id: i64) -> Option<&mut SessionPage> {
+        if self.active.project_id == project_id {
+            return Some(&mut self.active);
+        }
+
+        self.viewed.get_mut(&project_id)
     }
 
     /// Returns the loaded page that holds `session_id`.

@@ -531,6 +531,7 @@ async fn apply_app_events_git_status_updated_updates_project_and_session_state()
     // Act
     app.apply_app_events(AppEvent::GitStatusUpdated {
         generation: app.sync_handle.current_generation(),
+        project_id: app.active_project_id(),
         session_statuses: HashMap::from([(
             SessionId::from("session-1"),
             SessionGitStatus {
@@ -573,6 +574,7 @@ async fn apply_app_events_git_status_updated_ignores_stale_generation() {
     // Act
     app.apply_app_events(AppEvent::GitStatusUpdated {
         generation: stale_generation,
+        project_id: app.active_project_id(),
         session_statuses: HashMap::new(),
         status: Some((9, 9)),
     })
@@ -655,6 +657,7 @@ async fn apply_app_events_refresh_git_status_requests_orchestrator_refresh() {
     assert!(
         observed_events.contains(&AppEvent::GitStatusUpdated {
             generation: app.sync_handle.current_generation(),
+            project_id: app.active_project_id(),
             session_statuses: HashMap::new(),
             status: Some((2, 1)),
         }),

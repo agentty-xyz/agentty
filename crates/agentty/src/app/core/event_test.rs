@@ -557,7 +557,7 @@ fn test_refresh_projects_batch_sets_only_project_reload_scope() {
 }
 
 #[test]
-fn test_git_status_batch_keeps_newest_generation_when_older_arrives_later() {
+fn test_git_status_batch_keeps_each_projects_newest_generation_in_any_order() {
     // Arrange
     let mut event_batch = AppEventBatch::default();
     let newer_session_statuses = HashMap::from([(
@@ -568,29 +568,39 @@ fn test_git_status_batch_keeps_newest_generation_when_older_arrives_later() {
             remote_status: None,
         },
     )]);
+    let update = |project_id, generation, status| AppEvent::GitStatusUpdated {
+        generation,
+        project_id,
+        session_statuses: if status == Some((3, 4)) {
+            newer_session_statuses.clone()
+        } else {
+            HashMap::new()
+        },
+        status,
+    };
 
     // Act
-    event_batch.collect_event(AppEvent::GitStatusUpdated {
-        generation: 2,
-        session_statuses: newer_session_statuses.clone(),
-        status: Some((3, 4)),
-    });
-    event_batch.collect_event(AppEvent::GitStatusUpdated {
-        generation: 1,
-        session_statuses: HashMap::new(),
-        status: Some((9, 9)),
-    });
+    // Project 1 hears its newer status first, project 2 last.
+    event_batch.collect_event(update(1, 2, Some((3, 4))));
+    event_batch.collect_event(update(2, 1, Some((5, 5))));
+    event_batch.collect_event(update(1, 1, Some((9, 9))));
+    event_batch.collect_event(update(2, 3, Some((6, 0))));
 
     // Assert
-    let git_status_update = event_batch
-        .git_status_update
-        .as_ref()
-        .expect("newest git status should remain batched");
-    assert_eq!(git_status_update.generation, 2);
-    assert_eq!(git_status_update.status, Some((3, 4)));
+    let batched = |project_id: i64| {
+        event_batch
+            .git_status_updates
+            .get(&project_id)
+            .map(|update| (update.generation, update.status))
+    };
+    assert_eq!(batched(1), Some((2, Some((3, 4)))));
+    assert_eq!(batched(2), Some((3, Some((6, 0)))));
     assert_eq!(
-        event_batch.session_git_status_updates,
-        newer_session_statuses
+        event_batch
+            .git_status_updates
+            .get(&1)
+            .map(|update| &update.session_statuses),
+        Some(&newer_session_statuses)
     );
 }
 
