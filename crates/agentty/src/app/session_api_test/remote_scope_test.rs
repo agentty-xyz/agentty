@@ -12,8 +12,8 @@ use ag_session::test_support::graph_proposal_state;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, CreateTaskRequest,
     DurableMessageRequest, DurableMessageVisibility, GenerateGraphProposalRequest,
-    GraphProposalState, MessageImage, SessionError as ApiSessionError, SessionGraphAction,
-    SessionGraphActionRequest, SessionGraphsRequest, SessionId, SessionService,
+    GraphProposalState, MessageImage, ProjectScope, SessionError as ApiSessionError,
+    SessionGraphAction, SessionGraphActionRequest, SessionGraphsRequest, SessionId, SessionService,
     SessionSettingsChange, StartExecutionGraphRequest, test_support as model_fixture,
 };
 use ag_store::MockGraphRepository;
@@ -21,6 +21,7 @@ use tempfile::TempDir;
 
 use crate::app::App;
 use crate::app::execution_graph::tests::graph;
+use crate::app::test_support::{add_listed_project, insert_loadable_session};
 use crate::domain::session::Status;
 use crate::test_support::{new_test_app, session_fixture};
 
@@ -31,9 +32,10 @@ type Request = Pin<Box<dyn Future<Output = Result<bool, ApiSessionError>> + Send
 type RequestCall = fn(SessionService, SessionId) -> Request;
 
 /// Requests whose own handler answers a session the host has not loaded as
-/// missing before it reads or changes anything else. The host lists exactly
-/// its loaded sessions, so no unlisted session can tell the scope check
-/// apart from these handlers.
+/// missing before it reads or changes anything else. A paired device is
+/// listed exactly the active page's sessions, so no session off every page
+/// can tell the scope check apart from these handlers; a session on a viewed
+/// page gets past them.
 const ANSWERED_AS_MISSING_BY_THEIR_HANDLER: [&str; 10] = [
     "read diff",
     "read files",
@@ -53,8 +55,10 @@ const PROPOSAL_ID: &str = "remote-proposal";
 /// Task of the graph proposal request each table sends.
 const PROPOSAL_TASK: &str = "Plan it";
 
-/// Where the stored session `hidden` sits so that the host does not list it.
-const UNLISTED_PLACEMENTS: [&str; 2] = ["other project", "not loaded"];
+/// Where the stored session `hidden` sits so that the host does not list it
+/// to a paired device: in another project, on no page, or on the page of a
+/// listed project that a session-API caller views.
+const UNLISTED_PLACEMENTS: [&str; 3] = ["other project", "not loaded", "viewed page"];
 
 #[tokio::test]
 async fn remote_requests_for_an_unlisted_session_answer_as_missing_and_change_nothing() {
@@ -121,7 +125,9 @@ async fn only_the_scope_check_keeps_remote_requests_from_the_unlisted_session() 
             // The same request from the session API, which the scope does
             // not limit, gets past the answer the remote request gets,
             // except where its own handler serves only loaded sessions.
-            if ANSWERED_AS_MISSING_BY_THEIR_HANDLER.contains(&operation) {
+            if placement != "viewed page"
+                && ANSWERED_AS_MISSING_BY_THEIR_HANDLER.contains(&operation)
+            {
                 assert_eq!(result, missing(operation), "{placement}: {operation}");
             } else {
                 assert_ne!(result, missing(operation), "{placement}: {operation}");
@@ -226,29 +232,129 @@ async fn remote_control_is_refused_reads_and_mutations_it_does_not_serve() {
 }
 
 #[tokio::test]
-async fn remote_creation_reaches_the_host_without_naming_a_session() {
+async fn remote_creation_reaches_the_host_only_for_the_active_project() {
     // Arrange
-    let (mut app, _directory) = new_test_app().await;
+    let (mut app, directory) = new_test_app().await;
+    let listed_project_id = add_listed_project(&mut app, &directory, "listed").await;
     let remote = app.remote_session_service();
-    let request = CreateSessionRequest {
+    let request = |project_id| CreateSessionRequest {
         inherit_from_session_id: None,
         mode: CreateSessionMode::Regular,
-        project_id: 999,
+        project_id,
     };
 
     // Act
-    let created = app
-        .drive_session_request(remote.create_session(request))
+    let in_listed = app
+        .drive_session_request(remote.create_session(request(listed_project_id)))
+        .await;
+    let in_unknown = app
+        .drive_session_request(remote.create_session(request(999)))
+        .await;
+    let in_active = app
+        .drive_session_request(remote.create_session(request(app.active_project_id())))
         .await;
 
     // Assert
-    // The host's own validation answers, so the scope check let it through.
     assert_eq!(
-        created,
+        in_listed,
+        Err(ApiSessionError::Operation(format!(
+            "Project `{listed_project_id}` is not active"
+        )))
+    );
+    assert_eq!(
+        in_unknown,
         Err(ApiSessionError::Operation(
             "Project `999` is not active".to_string()
         ))
     );
+    // The host's own checks answer, so the scope check let it through.
+    assert_eq!(
+        in_active,
+        Err(ApiSessionError::Operation(
+            "Git branch is required to create a session".to_string()
+        ))
+    );
+    assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
+}
+
+#[tokio::test]
+async fn remote_project_reads_reach_only_the_active_project_and_load_no_page() {
+    // Arrange
+    let (mut app, directory) = new_test_app().await;
+    let home_project_id = add_listed_project(&mut app, &directory, "home").await;
+    let viewed_project_id = add_listed_project(&mut app, &directory, "viewed").await;
+    let unloaded_project_id = add_listed_project(&mut app, &directory, "unloaded").await;
+    insert_loadable_session(&app, "sess", Status::Review, home_project_id).await;
+    insert_loadable_session(&app, "viewed1", Status::Review, viewed_project_id).await;
+    insert_loadable_session(&app, "unload1", Status::Review, unloaded_project_id).await;
+    app.switch_project(home_project_id)
+        .await
+        .expect("project switch");
+    app.ensure_project_page(viewed_project_id)
+        .await
+        .expect("listed page should load");
+    let remote = app.remote_session_service();
+    let viewed = ProjectScope::Project(viewed_project_id);
+    let inactive = Err(ApiSessionError::Operation(format!(
+        "Project `{viewed_project_id}` is not active"
+    )));
+
+    // Act
+    let projects = app.drive_session_request(remote.list_projects()).await;
+    let viewed_sessions = app
+        .drive_session_request(remote.project_sessions(viewed))
+        .await;
+    let viewed_host = app
+        .drive_session_request(remote.host_context_for(viewed))
+        .await;
+    let viewed_files = app
+        .drive_session_request(remote.list_project_files_for(viewed))
+        .await;
+    let active_sessions = app
+        .drive_session_request(remote.project_sessions(ProjectScope::Active))
+        .await
+        .expect("active project should list");
+    let mut listed = Vec::new();
+    for session_id in ["sess", "viewed1", "unload1"] {
+        let session_id = SessionId::from(session_id);
+        listed.push(
+            app.drive_session_request(remote.is_session_listed(&session_id))
+                .await,
+        );
+    }
+    let loaded_after_reads = app.sessions.state().viewed_project_ids();
+    app.switch_project(viewed_project_id)
+        .await
+        .expect("project switch");
+
+    // Assert
+    // The terminal reaches only loaded pages, so it loads no other page.
+    assert_eq!(
+        app.drive_session_request(
+            app.session_view_service()
+                .project_sessions(ProjectScope::Project(unloaded_project_id))
+        )
+        .await,
+        Err(ApiSessionError::NotFound)
+    );
+    assert_eq!(projects, Err(not_served().expect_err("refusal")));
+    assert_eq!(viewed_sessions.map(|_| ()), inactive);
+    assert_eq!(viewed_host.map(|_| ()), inactive);
+    assert_eq!(viewed_files.map(|_| ()), inactive);
+    assert_eq!(active_sessions.project_id, Some(home_project_id));
+    assert_eq!(
+        active_sessions
+            .entries
+            .iter()
+            .map(|entry| entry.summary.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["sess"]
+    );
+    assert_eq!(listed, vec![Ok(true), Ok(false), Ok(false)]);
+    // A paired device loads no page of another project, and its reads of
+    // the active project lease no page, so a switch drops that page.
+    assert_eq!(loaded_after_reads, vec![viewed_project_id]);
+    assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
 }
 
 #[tokio::test]
@@ -570,13 +676,22 @@ fn graphs_request(session_id: &str) -> SessionGraphsRequest {
 /// The session already stores the graph proposal the tables ask for, which
 /// its handler acknowledges by identity before it looks for the session.
 async fn unlisted_session_app(placement: &str) -> (App, TempDir) {
-    let (app, directory) = new_test_app().await;
-    let project_id = if placement == "other project" {
-        add_project(&app, &directory, "other").await
-    } else {
-        app.active_project_id()
-    };
-    insert_session(&app, "hidden", project_id).await;
+    let (mut app, directory) = new_test_app().await;
+    match placement {
+        "other project" => {
+            let project_id = add_project(&app, &directory, "other").await;
+            insert_session(&app, "hidden", project_id).await;
+        }
+        "viewed page" => {
+            let project_id = add_listed_project(&mut app, &directory, "viewed").await;
+            insert_loadable_session(&app, "hidden", Status::Review, project_id).await;
+            app.ensure_project_page(project_id)
+                .await
+                .expect("listed page should load");
+            assert!(app.sessions.session_for_id("hidden").is_some());
+        }
+        _ => insert_session(&app, "hidden", app.active_project_id()).await,
+    }
     app.services
         .db()
         .graph_proposals()

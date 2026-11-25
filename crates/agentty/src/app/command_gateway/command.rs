@@ -2,7 +2,7 @@
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, MessageImage,
-    ReviewRequest, SessionError, SessionId,
+    ProjectScope, ReviewRequest, SessionError, SessionId,
 };
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -93,15 +93,15 @@ impl CommandDelivery {
     }
 
     /// Classifies the delivery for a paired device: creation reaches the
-    /// active project and the session it inherits from, if any;
+    /// project it names and the session it inherits from, if any;
     /// publication reaches its session under the branch name the host
     /// chooses, and a device may not name one.
     pub(super) fn remote_scope(&self) -> RemoteScope<'_> {
         match self {
-            Self::Create { request, .. } => request
-                .inherit_from_session_id
-                .as_ref()
-                .map_or(RemoteScope::Project, RemoteScope::Session),
+            Self::Create { request, .. } => request.inherit_from_session_id.as_ref().map_or(
+                RemoteScope::Project(ProjectScope::Project(request.project_id)),
+                RemoteScope::Session,
+            ),
             Self::Admission { request, .. } => request.remote_scope(),
             Self::Review { request, .. } if request.remote_branch_name.is_some() => {
                 RemoteScope::NotServed
@@ -318,7 +318,7 @@ impl SessionMutation {
             | Self::Rebase { session_id }
             | Self::UpdateSettings { session_id, .. }
             | Self::Merge { session_id } => RemoteScope::Session(session_id),
-            Self::SyncProject => RemoteScope::Project,
+            Self::SyncProject => RemoteScope::Project(ProjectScope::Active),
             Self::GraphProposal {
                 command: GraphProposalCommand::Generate(_) | GraphProposalCommand::Act { .. },
             }
@@ -363,9 +363,11 @@ impl SessionMutation {
 pub(crate) enum RemoteScope<'a> {
     /// Remote control does not serve the request.
     NotServed,
-    /// The request reaches the active project, not a named session.
-    Project,
-    /// The request reaches this session, only while the host lists it.
+    /// The request reaches the project this scope names, not a named
+    /// session; a paired device reaches only the active project.
+    Project(ProjectScope),
+    /// The request reaches this session, only while the host lists it for
+    /// the active project.
     Session(&'a SessionId),
 }
 

@@ -9,7 +9,7 @@ use ag_session::{
     ContinueGraphNodeRequest, CreateSessionMode, CreateSessionRequest, CreateTaskRequest,
     DurableMessageRequest, DurableMessageVisibility, ExtendGraphBudgetRequest,
     GenerateGraphProposalRequest, GraphControlRequest, GraphNodeContinuation, GraphProposalAction,
-    GraphResultRef, ResumeExecutionGraphRequest, SessionError, SessionGraphAction,
+    GraphResultRef, ProjectScope, ResumeExecutionGraphRequest, SessionError, SessionGraphAction,
     SessionGraphActionRequest, SessionId, SessionSettingsChange, StartExecutionGraphRequest,
     SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
@@ -41,7 +41,10 @@ fn remote_control_is_served_exactly_the_mutations_the_owner_approved() {
         (rebase(), served),
         (update_settings(), served),
         (merge(), served),
-        (SessionMutation::SyncProject, RemoteScope::Project),
+        (
+            SessionMutation::SyncProject,
+            RemoteScope::Project(ProjectScope::Active),
+        ),
         (act_on_graph_proposal(), RemoteScope::NotServed),
         (cancel_execution_graph(), RemoteScope::NotServed),
         (resume_execution_graph(), RemoteScope::NotServed),
@@ -156,7 +159,7 @@ fn remote_creation_reaches_the_project_and_publication_its_session() {
     assert_eq!(
         scopes,
         [
-            RemoteScope::Project,
+            RemoteScope::Project(ProjectScope::Project(1)),
             RemoteScope::Session(&session_id),
             RemoteScope::Session(&session_id),
             RemoteScope::NotServed,

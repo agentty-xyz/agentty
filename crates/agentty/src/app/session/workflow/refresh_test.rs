@@ -1317,6 +1317,87 @@ async fn archive_fixture() -> ArchiveFixture {
 }
 
 #[tokio::test]
+async fn viewed_pages_keep_the_first_archive_page_and_survive_failed_reloads() {
+    // Arrange
+    let ArchiveFixture {
+        _temp_dir,
+        mut manager,
+        mode: _,
+        pool,
+        projects: _,
+        services,
+    } = archive_fixture().await;
+    let viewed_project_id = services
+        .db()
+        .projects()
+        .upsert_project("viewed-project", None)
+        .await
+        .expect("project");
+    for index in 0..12 {
+        let id = format!("viewed-{index:02}");
+        services
+            .db()
+            .sessions()
+            .insert_session(&id, "gpt-5.6-sol", "main", "Done", viewed_project_id)
+            .await
+            .expect("archive");
+        services
+            .db()
+            .sessions()
+            .update_session_updated_at(&id, 100 - index)
+            .await
+            .expect("timestamp");
+    }
+    let working_dir = PathBuf::from("/projects/viewed-project");
+    let now = Instant::now();
+
+    // Act
+    let loaded = manager
+        .load_viewed_page(&services, viewed_project_id, &working_dir)
+        .await;
+    manager.state.renew_project_page(viewed_project_id, now);
+    let reloaded = manager
+        .load_viewed_page(&services, viewed_project_id, &working_dir)
+        .await;
+    manager
+        .state
+        .session_mut_for_id("viewed-00")
+        .expect("viewed session should be loaded")
+        .transcript = Some(crate::test_support::assistant_transcript("kept"));
+    pool.close().await;
+    let failed = manager
+        .load_viewed_page(&services, viewed_project_id, &working_dir)
+        .await;
+    manager.state.evict_idle_viewed_pages(now);
+
+    // Assert
+    assert_eq!([loaded, reloaded, failed], [true, true, false]);
+    let page = manager
+        .state
+        .viewed_page(viewed_project_id)
+        .expect("a reload keeps the page and its lease");
+    // A viewed page keeps the first archive page; the terminal's archive
+    // window is the active page's alone.
+    assert_eq!(page.sessions().len(), 10);
+    assert!(page.has_more_archived_sessions);
+    assert_eq!(page.archived_session_count(), 12);
+    assert_eq!(page.sessions()[0].project_name, "viewed-project");
+    assert!(
+        manager
+            .state
+            .session_for_id("viewed-00")
+            .is_some_and(|session| session.transcript.is_some())
+    );
+    assert_eq!(manager.sessions().len(), 10);
+    assert!(
+        manager
+            .sessions()
+            .iter()
+            .all(|session| session.id.starts_with("archive-"))
+    );
+}
+
+#[tokio::test]
 async fn archive_pages_survive_refresh_and_retry_failed_reads() {
     // Arrange
     let ArchiveFixture {

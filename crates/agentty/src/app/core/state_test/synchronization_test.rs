@@ -155,7 +155,7 @@ async fn superseded_project_sync_completions_do_not_reconcile_session_state() {
     .await;
     app.pending_project_sync_completions
         .insert(project_id, stale_completion);
-    app.apply_pending_project_sync_completion().await;
+    app.apply_pending_project_sync_completion(project_id).await;
 
     // Assert
     let session = app

@@ -1,6 +1,6 @@
 //! Foreground dispatch preserving each workflow's admission and reply policy.
 
-use ag_session::{CreateSessionRequest, ReviewRequest, SessionError, SessionId};
+use ag_session::{CreateSessionRequest, ProjectScope, ReviewRequest, SessionError, SessionId};
 use tokio::sync::oneshot;
 
 use super::{
@@ -47,6 +47,9 @@ impl App {
         if let Some(refusal) = self.remote_refusal(initiator, delivery.remote_scope()) {
             return delivery.refuse(refusal);
         }
+        if let Some(session_id) = session_id.cloned() {
+            self.renew_session_page_lease(initiator, &session_id);
+        }
         match delivery {
             CommandDelivery::Create {
                 request,
@@ -86,8 +89,10 @@ impl App {
     /// reaches `scope`, checked in the foreground turn that serves it.
     ///
     /// Only a paired device is limited: it reaches the operations remote
-    /// control serves, and a session only while the host lists it for the
-    /// active project, which it otherwise answers as missing.
+    /// control serves, only the active project, which it otherwise answers
+    /// as inactive, and a session only while the host lists it for the
+    /// active project, which it otherwise answers as missing. A session on
+    /// a page that session-API callers view is outside its reach.
     pub(crate) fn remote_refusal(
         &self,
         initiator: CommandInitiator,
@@ -99,7 +104,10 @@ impl App {
 
         match scope {
             RemoteScope::NotServed => Some(SessionError::Operation(REMOTE_NOT_SERVED.to_string())),
-            RemoteScope::Project => None,
+            RemoteScope::Project(ProjectScope::Active) => None,
+            RemoteScope::Project(ProjectScope::Project(project_id)) => (project_id
+                != self.active_project_id())
+            .then(|| SessionError::Operation(format!("Project `{project_id}` is not active"))),
             RemoteScope::Session(session_id) => {
                 (!self.sessions.is_in_active_page(session_id)).then_some(SessionError::NotFound)
             }

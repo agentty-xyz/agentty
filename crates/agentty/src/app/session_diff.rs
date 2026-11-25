@@ -800,9 +800,7 @@ impl App {
     fn session_diff_task_target(&self, session: &Session) -> (PathBuf, SessionDiffTaskSource) {
         let has_worktree = self
             .sessions
-            .session_worktree_availability()
-            .get(&session.id)
-            .copied()
+            .session_worktree_available(&session.id)
             .unwrap_or(false);
         let source = if matches!(session.status, Status::Done | Status::Canceled) {
             SessionDiffTaskSource::Archived {

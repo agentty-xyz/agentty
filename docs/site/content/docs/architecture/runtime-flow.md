@@ -47,9 +47,9 @@ of application and terminal events, renders an immutable snapshot, and waits for
 work. Each frame reaches the terminal as one synchronized update, so terminals that
 support it never show a partly drawn frame. It owns presentation state and render
 caches. Event-driven refresh is primary; periodic polling recovers from missed updates.
-The poll reloads only when the total session count or the active project's latest
-session update changes, and a reload reads saved transcripts only into live handles that
-are not yet hydrated.
+The poll reloads a loaded project page only when the total session count or that
+project's latest session update changes, and a reload reads saved transcripts only into
+live handles that are not yet hydrated.
 
 Session creation reserves an identity and captures project settings before opening the
 composer; background setup prepares the worktree without blocking input. Saved prompts
@@ -79,33 +79,50 @@ checkouts are validated when opened.
 Workers and handles survive project switches; project reloads replace display snapshots,
 not execution ownership.
 
+<a id="architecture-runtime-flow-project-pages"></a> The host holds the session page of
+the terminal's project and, beside it, a viewed page for each other listed project, one
+the project switcher offers, that a session-API caller names. A request that names such
+a project, or a session on its page, loads the page in the turn that serves it and
+renews its lease. A viewed page is dropped once its lease is idle for ten minutes, when
+more than four are held, when its project leaves the list, or when the last paired
+device disconnects. A terminal switch promotes the target's viewed page and keeps the
+previous page loaded while its lease is live. Lookups by session id reach every loaded
+page, while the terminal's list, selection, and automation that applies the active
+project's settings stay on the active page; a session on a viewed page takes the paths
+that serve projects the terminal does not show, such as an automatic review with its own
+project's agent. A viewed page holds its project's first archive page and its branch as
+detected when it loads, without ahead/behind counts or per-session git status, which
+only the active project's background poll reports. Session creation and project sync
+still serve only the active project.
+
 <a id="architecture-runtime-flow-remote-control"></a> The
 [remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
 runtime's Tokio executor but owns no application state. It calls the session API through
 the mailbox like any programmatic caller, under the remote initiator: the foreground
-turn that serves each of its requests answers a session the host does not list as
-missing and refuses any operation remote control does not serve. While a device is
-connected, the session-change revision follows a fingerprint of what the session API
-reports from memory, built from the same helpers the API reads: each loaded session's
-list entry and live details, the project status, the host's model choices, the graph
-replies being decided, and what live graph drivers add to stored graph progress. Each
-foreground cycle, and each step of a foreground request that drives the mailbox itself,
-compares the fingerprint once and advances the revision when it differs, however the
-change was made. A device reads as soon as it authenticates, before the host hears of
-the connection, so the first connection takes a new baseline and advances the revision
-once. The fingerprint reads no clock and no database, so it stays unchanged while
-nothing a device reads changes. Explicit publishes remain only for state the database
-alone holds: session updates, which carry transcripts, reloads, mailbox mutations, and
-admitted graph mutations, which write graph tables without a session event. A graph
-driver reports a session update each time a node settles, so remote views follow a pass
-that runs wave after wave, and graph questions change only with one of these. Creation
-defaults of the host context come from stored settings and are not followed. Connected
-clients then fetch the list and the open session again, so remote views converge on
-durable state instead of replaying events. A session diff query captures its diff source
-in the mailbox and runs Git in a detached task that answers the caller directly, so it
-adds no reducer event. A session file listing works the same way: the mailbox captures
-the worktree folder, or answers from the `@`-mention index cache, and a blocking worker
-walks the worktree.
+turn that serves each of its requests answers a session outside the active project's
+page as missing, a project other than the active one as inactive, and refuses any
+operation remote control does not serve, so a device neither reaches nor loads a viewed
+page. While a device is connected, the session-change revision follows a fingerprint of
+what the session API reports from memory, built from the same helpers the API reads:
+each loaded page's sessions with their list entries and live details and its project
+status, the project list, the host's model choices, the graph replies being decided, and
+what live graph drivers add to stored graph progress. Each foreground cycle, and each
+step of a foreground request that drives the mailbox itself, compares the fingerprint
+once and advances the revision when it differs, however the change was made. A device
+reads as soon as it authenticates, before the host hears of the connection, so the first
+connection takes a new baseline and advances the revision once. The fingerprint reads no
+clock and no database, so it stays unchanged while nothing a device reads changes.
+Explicit publishes remain only for state the database alone holds: session updates,
+which carry transcripts, reloads, mailbox mutations, and admitted graph mutations, which
+write graph tables without a session event. A graph driver reports a session update each
+time a node settles, so remote views follow a pass that runs wave after wave, and graph
+questions change only with one of these. Creation defaults of the host context come from
+stored settings and are not followed. Connected clients then fetch the list and the open
+session again, so remote views converge on durable state instead of replaying events. A
+session diff query captures its diff source in the mailbox and runs Git in a detached
+task that answers the caller directly, so it adds no reducer event. A session file
+listing works the same way: the mailbox captures the worktree folder, or answers from
+the `@`-mention index cache, and a blocking worker walks the worktree.
 
 ## App Event Reducer
 

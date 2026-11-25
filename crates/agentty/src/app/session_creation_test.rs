@@ -404,9 +404,23 @@ async fn workspace_preparation_refresh_tracks_unloaded_sessions_and_ignores_read
         .await;
 
     // Assert
-    let availability = app.sessions.session_worktree_availability();
-    assert_eq!(availability.get("unloaded-session"), Some(&false));
-    assert_eq!(availability.get("unreadable-session"), None);
+    // The active page keeps what it learned for sessions it loads later.
+    for session_id in ["unloaded-session", "unreadable-session"] {
+        app.sessions
+            .push_session(crate::test_support::session_fixture(
+                session_id,
+                crate::domain::session::Status::Draft,
+            ));
+    }
+    assert_eq!(
+        app.sessions.session_worktree_available("unloaded-session"),
+        Some(false)
+    );
+    assert_eq!(
+        app.sessions
+            .session_worktree_available("unreadable-session"),
+        None
+    );
 }
 
 #[tokio::test]

@@ -67,6 +67,17 @@ pub(crate) type LoadedSessionPage = (
     ArchivePageInfo,
 );
 
+/// One project's loaded snapshots, worktree availability, and archive
+/// pagination, without the global activity history.
+pub(super) struct LoadedProjectSessions {
+    /// Archive pagination of the loaded window.
+    pub(super) archive_page: ArchivePageInfo,
+    /// Worktree availability keyed by session id.
+    pub(super) session_worktree_availability: HashMap<SessionId, bool>,
+    /// Loaded snapshots in list order.
+    pub(super) sessions: Vec<Session>,
+}
+
 /// Mutable context threaded through the per-row session-load helper.
 ///
 /// Keeps the per-row helper signature short while still letting it append
@@ -321,12 +332,45 @@ impl SessionManager {
         handles: &mut HashMap<SessionId, SessionHandles>,
         previous_transcripts: &mut HashMap<SessionId, SessionTranscript>,
     ) -> Result<LoadedSessionPage, DbError> {
+        let clock = input.clock;
+        let db = input.db;
+        let LoadedProjectSessions {
+            archive_page,
+            session_worktree_availability,
+            sessions,
+        } = Self::try_load_project_sessions(input, handles, previous_transcripts).await?;
+        let activity_timestamps = db
+            .activity()
+            .load_session_activity_timestamps()
+            .await
+            .unwrap_or_default();
+        let stats_activity = Self::daily_activity_from_timestamps(activity_timestamps, clock);
+
+        Ok((
+            sessions,
+            stats_activity,
+            session_worktree_availability,
+            archive_page,
+        ))
+    }
+
+    /// Loads one project's session snapshots, worktree availability, and
+    /// archive pagination without the global activity history, as
+    /// [`Self::try_load_sessions_with_fs_client`] loads them.
+    ///
+    /// # Errors
+    /// Returns an error when the project's session rows cannot be loaded.
+    pub(super) async fn try_load_project_sessions(
+        input: SessionLoadInput<'_>,
+        handles: &mut HashMap<SessionId, SessionHandles>,
+        previous_transcripts: &mut HashMap<SessionId, SessionTranscript>,
+    ) -> Result<LoadedProjectSessions, DbError> {
         let SessionLoadInput {
             active_project_id,
             active_session_id,
             archive_limit,
             base,
-            clock,
+            clock: _,
             db,
             fs_client,
             working_dir,
@@ -349,12 +393,6 @@ impl SessionManager {
             .sessions()
             .load_archived_session_count(active_project_id)
             .await?;
-        let activity_timestamps = db
-            .activity()
-            .load_session_activity_timestamps()
-            .await
-            .unwrap_or_default();
-        let stats_activity = Self::daily_activity_from_timestamps(activity_timestamps, clock);
         let mut sessions: Vec<Session> = Vec::new();
         let mut session_worktree_availability = HashMap::new();
 
@@ -381,16 +419,15 @@ impl SessionManager {
             Self::push_loaded_session_row(&mut load_context, row).await;
         }
 
-        Ok((
-            sessions,
-            stats_activity,
-            session_worktree_availability,
-            ArchivePageInfo {
+        Ok(LoadedProjectSessions {
+            archive_page: ArchivePageInfo {
                 archived_session_count: usize::try_from(archived_session_count)
                     .unwrap_or(usize::MAX),
                 has_more_archived_sessions,
             },
-        ))
+            session_worktree_availability,
+            sessions,
+        })
     }
 
     /// Aggregates persisted activity timestamps using the clock-provided

@@ -1,12 +1,14 @@
 //! Session runtime handle tests covering availability after drops, graph
-//! handoffs, and request cancellation when the consumer stops.
+//! handoffs, request cancellation when the consumer stops, and refused
+//! project reads.
 
 use std::time::Duration;
 
-use ag_session::{SessionError, SessionId};
+use ag_session::{ProjectScope, SessionError, SessionId};
+use tokio::sync::oneshot;
 
 use super::{
-    SESSION_RUNTIME_COMMAND_CAPACITY, SESSION_RUNTIME_UNAVAILABLE, SessionRuntime,
+    ProjectQuery, SESSION_RUNTIME_COMMAND_CAPACITY, SESSION_RUNTIME_UNAVAILABLE, SessionRuntime,
     SessionRuntimeHandle,
 };
 
@@ -285,4 +287,53 @@ async fn pending_send_stops_waiting_when_consumer_stops() {
         blocked_error,
         SessionError::Operation(SESSION_RUNTIME_UNAVAILABLE.to_string())
     );
+}
+
+#[tokio::test]
+async fn refused_project_reads_answer_with_the_refusal_or_as_not_listed() {
+    // Arrange
+    let refusal = || SessionError::Operation("refused".to_string());
+    let (host_tx, host_rx) = oneshot::channel();
+    let (list_tx, list_rx) = oneshot::channel();
+    let (files_tx, files_rx) = oneshot::channel();
+    let (projects_tx, projects_rx) = oneshot::channel();
+    let (status_tx, status_rx) = oneshot::channel();
+    let (listed_tx, listed_rx) = oneshot::channel();
+    let queries = [
+        ProjectQuery::HostContext {
+            response_tx: host_tx,
+            scope: ProjectScope::Active,
+        },
+        ProjectQuery::List {
+            response_tx: list_tx,
+            scope: ProjectScope::Active,
+        },
+        ProjectQuery::ListProjectFiles {
+            response_tx: files_tx,
+            scope: ProjectScope::Active,
+        },
+        ProjectQuery::ListProjects {
+            response_tx: projects_tx,
+        },
+        ProjectQuery::ProjectStatus {
+            response_tx: status_tx,
+        },
+        ProjectQuery::SessionListed {
+            response_tx: listed_tx,
+            session_id: SessionId::from("session"),
+        },
+    ];
+
+    // Act
+    for query in queries {
+        query.refuse(refusal());
+    }
+
+    // Assert
+    assert_eq!(host_rx.await.expect("answered"), Err(refusal()));
+    assert_eq!(list_rx.await.expect("answered"), Err(refusal()));
+    assert_eq!(files_rx.await.expect("answered"), Err(refusal()));
+    assert_eq!(projects_rx.await.expect("answered"), Err(refusal()));
+    assert_eq!(status_rx.await.expect("answered"), Err(refusal()));
+    assert_eq!(listed_rx.await.expect("answered"), Ok(false));
 }

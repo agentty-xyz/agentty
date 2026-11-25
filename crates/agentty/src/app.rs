@@ -35,6 +35,7 @@ mod message_admission;
 pub(crate) mod platform;
 mod project;
 mod project_catalog;
+mod project_page;
 pub(crate) mod prompt_intent;
 mod reducer;
 mod remote_control;

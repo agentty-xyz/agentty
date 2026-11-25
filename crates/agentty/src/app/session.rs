@@ -18,8 +18,8 @@ pub(crate) use core::{
 };
 
 pub use error::SessionError;
-pub(crate) use state::SessionGitStatus;
 pub use state::SessionState;
+pub(crate) use state::{SessionGitStatus, SessionPage};
 pub(crate) use workflow::load::{
     SessionLoadInput, load_session_transcript, migrate_active_sessions_off_retired_models,
     migrate_session_off_retired_model,

@@ -624,13 +624,23 @@ impl App {
             .touch_project_last_opened(project.id)
             .await;
 
-        self.projects.update_active_project_context(
+        // A page session-API callers view becomes the active page, and the
+        // previous one stays loaded for them while its lease is live.
+        let now = self.services.clock().now_instant();
+        let is_previous_page_viewed = self
+            .sessions
+            .state_mut()
+            .switch_active_page(project.id, now);
+        let previous_context = self.projects.update_active_project_context(
             project.id,
             project.display_label(),
             git_branch,
             git_upstream_ref,
             project.path,
         );
+        if is_previous_page_viewed {
+            self.projects.set_viewed_context(previous_context);
+        }
         self.settings = SettingsManager::from_repositories(
             self.services.db().clone(),
             self.services.available_agent_kinds(),
@@ -647,17 +657,11 @@ impl App {
         .await;
         self.sessions
             .set_default_session_model(default_session_model);
-        for (session_id, persisted_review) in
-            Self::load_focused_review_cache(self.services.db(), project.id).await
-        {
-            self.review_cache
-                .entry(session_id)
-                .or_insert(persisted_review);
-        }
+        self.hydrate_focused_review_cache(project.id).await;
         self.reload_projects().await;
         self.sessions.reset_archive_page();
         self.refresh_sessions_now().await;
-        self.apply_pending_project_sync_completion().await;
+        self.apply_pending_project_sync_completion(project.id).await;
         self.resume_deferred_auto_reviews(recoverable_focused_review_session_ids)
             .await;
         self.recover_graph_proposal_replies().await;
@@ -889,7 +893,8 @@ impl App {
             .session_for_id(session_id)
             .is_some_and(Session::is_draft_session)
         {
-            self.ensure_project_checkout_available(self.projects.active_project_id())?;
+            let session_project_id = self.session_project_id(session_id).await?;
+            self.ensure_project_checkout_available(session_project_id)?;
         }
         self.clear_review_output(session_id);
         self.services
@@ -955,7 +960,8 @@ impl App {
                 .retry_workspace_preparation(session_id, "session.create")
                 .await;
         }
-        self.ensure_project_checkout_available(self.projects.active_project_id())?;
+        let session_project_id = self.session_project_id(session_id).await?;
+        self.ensure_project_checkout_available(session_project_id)?;
         let session = self
             .sessions
             .session_for_id(session_id)
@@ -2087,17 +2093,29 @@ impl App {
     /// question panel for the viewed session's pending graph questions, and
     /// schedules the open Diff page's live re-read.
     ///
+    /// On the same schedule, each viewed page reloads when its own
+    /// fingerprint changed, and viewed pages whose lease went idle are
+    /// dropped.
+    ///
     /// Returns `true` when the fallback poll refreshed render-visible session
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
-        self.start_open_diff_refresh_if_due(self.services.clock().now_instant());
+        let now = self.services.clock().now_instant();
+        self.start_open_diff_refresh_if_due(now);
         let graph_refreshed = self.refresh_graph_chat_if_needed().await;
         let graph_questions_opened = self.reconcile_graph_question_mode().await;
         let resources_refreshed = self.sessions.refresh_resources().await;
-        let refreshed = self
+        let is_refresh_due = self.sessions.is_session_refresh_due();
+        let active_refreshed = self
             .sessions
             .refresh_sessions_if_needed(&mut self.mode, &self.projects, &self.services)
             .await;
+        let mut viewed_refreshed = false;
+        if is_refresh_due {
+            self.evict_idle_viewed_pages(now);
+            viewed_refreshed = self.refresh_viewed_pages().await;
+        }
+        let refreshed = active_refreshed || viewed_refreshed;
         if refreshed {
             // A reload follows stored changes, which may include transcript
             // rows that the foreground fingerprint does not hold.
@@ -2113,11 +2131,13 @@ impl App {
         refreshed || resources_refreshed || graph_refreshed || graph_questions_opened
     }
 
-    /// Forces immediate session list reload.
+    /// Forces immediate reload of the active page, and reloads each viewed
+    /// page whose own fingerprint changed.
     pub(crate) async fn refresh_sessions_now(&mut self) {
         self.sessions
             .refresh_sessions_now(&mut self.mode, &self.projects, &self.services)
             .await;
+        self.refresh_viewed_pages().await;
         self.publish_session_change();
         app::review::prune_review_cache(
             &mut self.review_cache,
@@ -2129,10 +2149,12 @@ impl App {
         self.resume_ready_workspace_prompts().await;
     }
 
-    /// Reloads project list snapshots from persistence.
+    /// Reloads project list snapshots from persistence, and drops the viewed
+    /// pages of projects that left the list.
     pub(in crate::app) async fn reload_projects(&mut self) {
         let project_items = Self::load_project_items(self.services.db()).await;
         self.projects.replace_project_items(project_items);
+        self.drop_unlisted_viewed_pages();
     }
 
     /// Publishes the current project/session sync context and requests an
@@ -2217,9 +2239,7 @@ impl App {
     ) -> bool {
         !session.is_draft_session()
             || sessions
-                .session_worktree_availability()
-                .get(&session.id)
-                .copied()
+                .session_worktree_available(&session.id)
                 .unwrap_or(false)
     }
 

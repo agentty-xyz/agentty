@@ -6,6 +6,7 @@ use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
 use ag_worker::RunRepository;
 
 pub(crate) use super::core::test_support::AppClients;
+pub(crate) use super::project_page::tests::{add_listed_project, insert_loadable_session};
 pub(crate) use super::remote_control::tests::start_fake_listener;
 pub(crate) use super::review::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
 pub(crate) use super::service::test_support::{SteerableSessionChannel, TestSessionRunFactory};

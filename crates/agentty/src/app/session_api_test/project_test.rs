@@ -1,24 +1,30 @@
 //! Session API project tests covering retired-model migration, rejection
-//! of cross-project inheritance, and the active project's status and sync.
+//! of cross-project inheritance, the active project's status and sync, and
+//! the listed projects a session-API caller lists and reads, each from its
+//! own session page.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use ag_session::{
-    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest, HostProjectStatus,
-    HostProjectSync, HostProjectSyncPhase, SessionError as ApiSessionError, SessionId,
-    SessionOperation, test_support as model_fixture,
+    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest, HostProject, HostProjectStatus,
+    HostProjectSync, HostProjectSyncPhase, ProjectScope, ReasoningLevel,
+    SessionError as ApiSessionError, SessionId, SessionListEntry, SessionOperation,
+    SessionSettingsChange, test_support as model_fixture,
 };
 
 use super::support::{
     request_project_status, request_project_sync, request_session, request_session_creation,
+    request_settings,
 };
 use crate::app::session::SessionGitStatus;
 use crate::app::test_support::{
     MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
-    SyncSessionStartError, start_fake_listener,
+    SyncSessionStartError, add_listed_project, insert_loadable_session, start_fake_listener,
 };
 use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
+use crate::domain::session::Status;
+use crate::domain::setting::SettingName;
 
 /// Lets `app` start project syncs without running Git.
 fn accept_project_syncs(app: &mut App, expected_starts: usize) {
@@ -389,4 +395,364 @@ async fn runtime_backend_rejects_cross_project_inheritance() {
              `{project_id}`"
         ))
     );
+}
+
+/// Hides `project_id` in the project catalog and reloads the list.
+async fn hide_project(app: &mut App, project_id: i64) {
+    app.services
+        .db()
+        .settings()
+        .upsert_project_setting(project_id, SettingName::ProjectCatalogVisible, "false")
+        .await
+        .expect("visibility should persist");
+    app.reload_projects().await;
+}
+
+/// Returns the ids of `entries` in order.
+fn entry_ids(entries: &[SessionListEntry]) -> Vec<&str> {
+    entries
+        .iter()
+        .map(|entry| entry.summary.id.as_str())
+        .collect()
+}
+
+#[tokio::test]
+async fn runtime_backend_lists_projects_in_switcher_order_with_the_active_one_marked() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let active_project_id = app.active_project_id();
+    let active_project_name = app.projects.project_name().to_string();
+    hide_project(&mut app, active_project_id).await;
+    insert_loadable_session(&app, "running", Status::Review, active_project_id).await;
+    insert_loadable_session(&app, "finished", Status::Done, active_project_id).await;
+    app.refresh_sessions_now().await;
+    let alpha_project_id = add_listed_project(&mut app, &directory, "alpha").await;
+    let beta_project_id = add_listed_project(&mut app, &directory, "beta").await;
+    insert_loadable_session(&app, "beta1", Status::Review, beta_project_id).await;
+    app.services
+        .db()
+        .projects()
+        .touch_project_last_opened(beta_project_id)
+        .await
+        .expect("open time should persist");
+    app.reload_projects().await;
+    let service = app.session_service();
+    let project = |id: i64, name: &str, is_active: bool, active_session_count: u32| HostProject {
+        active_session_count,
+        id,
+        is_active,
+        name: name.to_string(),
+    };
+
+    // Act
+    let hidden_active = app.drive_session_request(service.list_projects()).await;
+    app.switch_project(alpha_project_id)
+        .await
+        .expect("project switch");
+    let listed_active = app.drive_session_request(service.list_projects()).await;
+
+    // Assert
+    // An active project the switcher hides comes first, counted from its
+    // loaded page; the others follow, most recently opened first.
+    assert_eq!(
+        hidden_active,
+        Ok(vec![
+            project(active_project_id, &active_project_name, true, 1),
+            project(beta_project_id, "beta", false, 1),
+            project(alpha_project_id, "alpha", false, 0),
+        ])
+    );
+    assert_eq!(
+        listed_active,
+        Ok(vec![
+            project(alpha_project_id, "alpha", true, 0),
+            project(beta_project_id, "beta", false, 1),
+        ])
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_reads_a_viewed_project_with_its_branch_and_no_counts() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let active_project_id = app.active_project_id();
+    app.projects.set_git_status(Some((1, 2)));
+    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    insert_loadable_session(&app, "viewed1", Status::Review, other_project_id).await;
+    std::fs::write(directory.path().join("other/marker.txt"), "marker").expect("marker file");
+    app.services
+        .db()
+        .settings()
+        .upsert_project_settings(
+            other_project_id,
+            vec![
+                (SettingName::DefaultSmartAgent, "claude".to_string()),
+                (
+                    SettingName::DefaultSmartModel,
+                    AgentModel::ClaudeOpus55.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("project settings should persist");
+    let default_model = app.sessions.default_session_model();
+    let service = app.session_service();
+    let other = ProjectScope::Project(other_project_id);
+
+    // Act
+    let viewed = app
+        .drive_session_request(service.project_sessions(other))
+        .await
+        .expect("viewed project should list");
+    let active = app
+        .drive_session_request(service.project_sessions(ProjectScope::Active))
+        .await
+        .expect("active project should list");
+    let host = app
+        .drive_session_request(service.host_context_for(other))
+        .await
+        .expect("viewed project should be described");
+    let files = app
+        .drive_session_request(service.list_project_files_for(other))
+        .await
+        .expect("viewed checkout should list");
+    let active_entries = app
+        .drive_session_request(service.list_session_entries())
+        .await
+        .expect("active sessions should list");
+
+    // Assert
+    assert_eq!(viewed.project_id, Some(other_project_id));
+    assert_eq!(
+        viewed.status,
+        Some(HostProjectStatus {
+            ahead_behind: None,
+            branch: Some("main".to_string()),
+            project_name: "other".to_string(),
+            sync: None,
+        })
+    );
+    assert_eq!(entry_ids(&viewed.entries), vec!["viewed1"]);
+    let stats = viewed.entries[0]
+        .stats
+        .as_ref()
+        .expect("viewed entries have stats");
+    assert_eq!(stats.base_ahead_behind, None);
+    assert_eq!(stats.upstream_ahead_behind, None);
+    assert!(!stats.has_merge_conflict);
+    assert_eq!(active.project_id, Some(active_project_id));
+    assert_eq!(
+        active.status.and_then(|status| status.ahead_behind),
+        Some((1, 2))
+    );
+    assert_eq!(active_entries, Vec::new());
+    assert_eq!(host.project_id, other_project_id);
+    assert_eq!(host.project_name, "other");
+    assert_eq!(host.base_branch, "main");
+    assert_eq!(host.default_model, AgentModel::ClaudeOpus55);
+    // Sessions are created only in the active project for now.
+    assert_eq!(host.session_modes, Vec::new());
+    assert_eq!(app.sessions.default_session_model(), default_model);
+    assert!(files.iter().any(|entry| entry.path == "marker.txt"));
+    assert!(service.supports(SessionOperation::Projects));
+    assert!(
+        !app.remote_session_service()
+            .supports(SessionOperation::Projects)
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_refuses_unlisted_projects_and_keeps_creation_and_sync_active() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    let hidden_project_id = add_listed_project(&mut app, &directory, "hidden").await;
+    hide_project(&mut app, hidden_project_id).await;
+    let service = app.session_service();
+
+    for project_id in [hidden_project_id, hidden_project_id + 100] {
+        let scope = ProjectScope::Project(project_id);
+
+        // Act
+        let sessions = app
+            .drive_session_request(service.project_sessions(scope))
+            .await;
+        let host = app
+            .drive_session_request(service.host_context_for(scope))
+            .await;
+        let files = app
+            .drive_session_request(service.list_project_files_for(scope))
+            .await;
+
+        // Assert
+        assert_eq!(sessions, Err(ApiSessionError::NotFound), "{project_id}");
+        assert_eq!(host, Err(ApiSessionError::NotFound), "{project_id}");
+        assert_eq!(files, Err(ApiSessionError::NotFound), "{project_id}");
+    }
+    let synced = app
+        .drive_session_request(service.sync_project_for(ProjectScope::Project(other_project_id)))
+        .await;
+    let created = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Draft,
+            project_id: other_project_id,
+        },
+    )
+    .await;
+    assert_eq!(
+        synced,
+        Err(ApiSessionError::Operation(
+            "Host serves only its active project".to_string()
+        ))
+    );
+    assert_eq!(
+        created,
+        Err(ApiSessionError::Operation(format!(
+            "Project `{other_project_id}` is not active"
+        )))
+    );
+    assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
+}
+
+#[tokio::test]
+async fn runtime_backend_reports_sessions_listed_on_any_loaded_or_loadable_page() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let active_project_id = app.active_project_id();
+    insert_loadable_session(&app, "active1", Status::Review, active_project_id).await;
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            "folderless",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            active_project_id,
+        )
+        .await
+        .expect("session should persist");
+    app.refresh_sessions_now().await;
+    let viewed_project_id = add_listed_project(&mut app, &directory, "viewed").await;
+    let unloaded_project_id = add_listed_project(&mut app, &directory, "unloaded").await;
+    let hidden_project_id = add_listed_project(&mut app, &directory, "hidden").await;
+    insert_loadable_session(&app, "viewed1", Status::Review, viewed_project_id).await;
+    insert_loadable_session(&app, "unload1", Status::Review, unloaded_project_id).await;
+    insert_loadable_session(&app, "hidden1", Status::Review, hidden_project_id).await;
+    hide_project(&mut app, hidden_project_id).await;
+    app.ensure_project_page(viewed_project_id)
+        .await
+        .expect("listed page should load");
+    let service = app.session_service();
+
+    // Act
+    let mut listed = Vec::new();
+    for session_id in [
+        "active1",
+        "viewed1",
+        "unload1",
+        "hidden1",
+        "folderless",
+        "missing",
+    ] {
+        let session_id = SessionId::from(session_id);
+        listed.push(
+            app.drive_session_request(service.is_session_listed(&session_id))
+                .await,
+        );
+    }
+
+    // Assert
+    assert_eq!(
+        listed,
+        vec![
+            Ok(true),
+            Ok(true),
+            Ok(true),
+            Ok(false),
+            Ok(false),
+            Ok(false)
+        ]
+    );
+    // Asking about a session of a listed project loads that project's page.
+    assert_eq!(
+        app.sessions.state().viewed_project_ids(),
+        vec![viewed_project_id, unloaded_project_id]
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_reports_a_session_project_it_cannot_read_as_an_error() {
+    // Arrange
+    let (mut app, _directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    let service = app.session_service();
+    pool.close().await;
+
+    // Act
+    let listed = app
+        .drive_session_request(service.is_session_listed(&SessionId::from("unloaded")))
+        .await;
+
+    // Assert
+    assert!(
+        matches!(listed, Err(ApiSessionError::Operation(_))),
+        "{listed:?}"
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_changes_a_viewed_session_and_leaves_the_terminals_list_alone() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let active_project_id = app.active_project_id();
+    insert_loadable_session(&app, "active1", Status::Review, active_project_id).await;
+    app.refresh_sessions_now().await;
+    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    insert_loadable_session(&app, "viewed1", Status::Review, other_project_id).await;
+    let service = app.session_service();
+    app.drive_session_request(service.project_sessions(ProjectScope::Project(other_project_id)))
+        .await
+        .expect("viewed project should list");
+    let terminal_sessions = |app: &App| {
+        app.sessions
+            .sessions()
+            .iter()
+            .map(|session| (session.id.to_string(), session.reasoning_level_override))
+            .collect::<Vec<_>>()
+    };
+    let terminal_sessions_before = terminal_sessions(&app);
+
+    // Act
+    let changed = request_settings(
+        &mut app,
+        SessionId::from("viewed1"),
+        SessionSettingsChange {
+            reasoning_level: Some(ReasoningLevel::Low),
+            ..SessionSettingsChange::default()
+        },
+    )
+    .await;
+
+    // Assert
+    assert_eq!(changed, Ok(()));
+    assert_eq!(
+        app.sessions
+            .session_for_id("viewed1")
+            .and_then(|session| session.reasoning_level_override),
+        Some(ReasoningLevel::Low)
+    );
+    assert_eq!(
+        app.services
+            .db()
+            .sessions()
+            .load_session("viewed1")
+            .await
+            .expect("session read")
+            .and_then(|row| row.reasoning_level_override),
+        Some("low".to_string())
+    );
+    assert_eq!(terminal_sessions(&app), terminal_sessions_before);
+    assert_eq!(terminal_sessions_before.len(), 1);
 }

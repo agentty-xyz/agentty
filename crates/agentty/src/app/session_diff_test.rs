@@ -1086,12 +1086,23 @@ async fn unstarted_session_diff_target_uses_worktree_only_once_available() {
     let mut session =
         crate::test_support::session_fixture_with_folder(base_dir.path().to_path_buf());
     session.status = Status::Draft;
+    let session_id = session.id.clone();
+    // A target describes a loaded session, whose page caches its worktree.
+    app.sessions.push_session(session);
+    let target = |app: &App| {
+        let session = app
+            .sessions
+            .session_for_id(&session_id)
+            .expect("session should be loaded");
+
+        app.session_diff_task_target(session)
+    };
 
     // Act
-    let (_, unprepared_source) = app.session_diff_task_target(&session);
+    let (_, unprepared_source) = target(&app);
     app.sessions
-        .set_session_worktree_available(session.id.as_str(), true);
-    let (folder, prepared_source) = app.session_diff_task_target(&session);
+        .set_session_worktree_available(session_id.as_str(), true);
+    let (folder, prepared_source) = target(&app);
 
     // Assert
     assert!(matches!(unprepared_source, SessionDiffTaskSource::Empty));

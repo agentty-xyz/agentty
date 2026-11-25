@@ -23,6 +23,7 @@ use crate::app::command_gateway::{
 use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::session::SessionGitStatus;
 use crate::app::sync::ProjectSyncContext;
+use crate::app::test_support::{add_listed_project, insert_loadable_session};
 use crate::app::{App, AppEvent, AppRuntimeEvent, ProjectSyncPhase, ProjectSyncStatus, Tab};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::session::{
@@ -1047,14 +1048,14 @@ fn review_request() -> ReviewRequest {
 /// `session-2`, with a listener running, and returns the revisions the
 /// listener follows.
 async fn listening_app_with_sessions() -> (App, tempfile::TempDir, watch::Receiver<u64>) {
-    let (mut app, base_dir) = test_support::new_test_app().await;
+    let (mut app, base_dir) = Box::pin(test_support::new_test_app()).await;
     app.sessions.push_session(test_support::session_fixture(
         "session-1",
         Status::InProgress,
     ));
     app.sessions
         .push_session(test_support::session_fixture("session-2", Status::Review));
-    let revisions = start_fake_listener(&mut app).await;
+    let revisions = Box::pin(start_fake_listener(&mut app)).await;
 
     (app, base_dir, revisions)
 }
@@ -1190,6 +1191,71 @@ async fn reported_changes_leave_the_remote_revision_alone_while_no_listener_runs
     // Assert
     assert_eq!(*revisions.borrow(), initial_revision);
     assert!(app.remote_control.reported_state.is_none());
+}
+
+#[tokio::test]
+async fn viewed_page_and_project_list_changes_advance_the_remote_revision_once_each() {
+    // Arrange
+    let (mut app, base_dir, mut revisions) = listening_app_with_sessions().await;
+    let initial_revision = *revisions.borrow_and_update();
+    // Each step ends with the check the foreground cycle makes.
+    let mut revision_after = |app: &mut App| {
+        app.publish_reported_state_changes();
+
+        *revisions.borrow_and_update()
+    };
+
+    // Act
+    let other_project_id = add_listed_project(&mut app, &base_dir, "other").await;
+    let after_listing = revision_after(&mut app);
+    insert_loadable_session(&app, "viewed1", Status::Review, other_project_id).await;
+    app.ensure_project_page(other_project_id)
+        .await
+        .expect("listed page should load");
+    let after_loading = revision_after(&mut app);
+    app.sessions
+        .state_mut()
+        .session_mut_for_id("viewed1")
+        .expect("viewed session should be loaded")
+        .title = Some("Renamed".to_string());
+    let after_viewed_change = revision_after(&mut app);
+    let after_no_change = revision_after(&mut app);
+
+    // Assert
+    assert_eq!(after_listing, initial_revision + 1);
+    assert_eq!(after_loading, after_listing + 1);
+    assert_eq!(after_viewed_change, after_loading + 1);
+    assert_eq!(after_no_change, after_viewed_change);
+}
+
+#[tokio::test]
+async fn the_last_device_leaving_drops_the_viewed_pages() {
+    // Arrange
+    let (mut app, base_dir, _revisions) = listening_app_with_sessions().await;
+    let generation = app.remote_control.generation;
+    let other_project_id = add_listed_project(&mut app, &base_dir, "other").await;
+    app.ensure_project_page(other_project_id)
+        .await
+        .expect("listed page should load");
+    let mut both_connected = connected("phone");
+    both_connected
+        .connections
+        .extend(connected("tablet").connections);
+    app.apply_remote_control_status(generation, both_connected)
+        .await;
+
+    // Act
+    app.apply_remote_control_status(generation, connected("tablet"))
+        .await;
+    let while_one_connected = app.sessions.state().viewed_project_ids();
+    app.apply_remote_control_status(generation, RemoteServerStatus::default())
+        .await;
+
+    // Assert
+    assert_eq!(while_one_connected, vec![other_project_id]);
+    assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
+    assert!(app.projects.context(other_project_id).is_none());
+    assert_eq!(app.sessions.sessions().len(), 2);
 }
 
 #[tokio::test]

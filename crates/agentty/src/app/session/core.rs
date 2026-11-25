@@ -358,6 +358,12 @@ impl SessionManager {
         self.state.is_in_active_page(session_id)
     }
 
+    /// Returns whether `project_id` is the project the active page holds,
+    /// the one the terminal shows.
+    pub(super) fn is_active_project(&self, project_id: i64) -> bool {
+        self.state.active_page().project_id() == project_id
+    }
+
     /// Returns one session snapshot only when it is on the active page.
     ///
     /// See [`SessionState::active_page_session`].
@@ -1005,9 +1011,10 @@ impl SessionManager {
             .replace_session_worktree_availability(session_worktree_availability);
     }
 
-    /// Returns cached worktree availability keyed by session id.
-    pub(crate) fn session_worktree_availability(&self) -> &HashMap<SessionId, bool> {
-        self.state.active_page().session_worktree_availability()
+    /// Returns whether one loaded session's worktree is available, as its
+    /// page caches it.
+    pub(crate) fn session_worktree_available(&self, session_id: &str) -> Option<bool> {
+        self.state.session_worktree_available(session_id)
     }
 
     /// Replaces cached detected session branch names from the latest reload.
@@ -1019,13 +1026,10 @@ impl SessionManager {
             .replace_session_branch_names(session_branch_names);
     }
 
-    /// Returns the cached or derived branch name for one session.
+    /// Returns the cached or derived branch name for one loaded session,
+    /// from the page that holds it.
     pub(crate) fn session_branch_name(&self, session_id: &str) -> Option<&str> {
-        self.state
-            .active_page()
-            .session_branch_names()
-            .get(session_id)
-            .map(String::as_str)
+        self.state.session_branch_name(session_id)
     }
 
     /// Updates cached worktree availability for one session after its
@@ -1047,9 +1051,20 @@ impl SessionManager {
     /// Branch detection runs concurrently so startup and session refresh do
     /// not pay one subprocess round trip per session in series.
     pub(crate) async fn refresh_session_branch_names(&mut self) {
-        let session_inputs = self
-            .state
-            .sessions()
+        let session_branch_names = self
+            .detect_session_branch_names(self.state.sessions())
+            .await;
+
+        self.replace_session_branch_names(session_branch_names);
+    }
+
+    /// Detects the branch of each of `sessions` concurrently, falling back to
+    /// its derived default session branch when detection is unavailable.
+    pub(super) async fn detect_session_branch_names(
+        &self,
+        sessions: &[Session],
+    ) -> HashMap<SessionId, String> {
+        let session_inputs = sessions
             .iter()
             .map(|session| {
                 let session_id = session.id.clone();
@@ -1088,7 +1103,7 @@ impl SessionManager {
             session_branch_names.insert(session_id, branch_name);
         }
 
-        self.replace_session_branch_names(session_branch_names);
+        session_branch_names
     }
 
     /// Returns the selected follow-up task position for one session.
