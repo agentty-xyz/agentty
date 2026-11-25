@@ -909,6 +909,17 @@ fn background_event_labels_preserve_variant_identity() {
         },
         AppEvent::SessionProgressUpdated {
             progress_message: None,
+            session_id: session_id.clone(),
+        },
+        AppEvent::SessionUsageUpdated {
+            key: crate::domain::session_usage::LiveUsageKey {
+                run: crate::domain::session_usage::LiveUsageRun::SessionTurn,
+                session_id: session_id.clone(),
+            },
+            usage: ag_contracts::TurnUsage::default(),
+        },
+        AppEvent::SessionUsageRecorded {
+            run: None,
             session_id,
         },
         AppEvent::SyncMainCompleted {

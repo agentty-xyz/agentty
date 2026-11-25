@@ -52,6 +52,25 @@ fn read_frame_time_uses_current_wall_clock_and_offset() {
 }
 
 #[test]
+fn visible_review_session_id_includes_the_usage_panel_session() {
+    // Arrange
+    let mode = AppMode::Usage(Box::new(crate::presentation::app_mode::UsagePanel {
+        restore: crate::presentation::app_mode::UsageRestore::View(ConfirmationViewMode {
+            scroll_offset: None,
+            session_id: "usage-session".into(),
+        }),
+        scroll_offset: 0,
+        usage: crate::domain::session_usage::SessionUsage::default(),
+    }));
+
+    // Act
+    let session_id = visible_review_session_id(&mode);
+
+    // Assert
+    assert_eq!(session_id, Some("usage-session"));
+}
+
+#[test]
 fn visible_review_session_id_includes_diff_comments() {
     // Arrange
     let mode = AppMode::Diff {

@@ -125,13 +125,9 @@ impl App {
             &clients,
         )
         .await?;
-        Self::recover_startup_operations(
-            repositories.clone(),
-            base_path,
-            services.git_client(),
-            clock,
-        )
-        .await?;
+        let git_client = services.git_client();
+        Self::recover_startup_operations(repositories.clone(), base_path, git_client, clock)
+            .await?;
         let settings =
             Self::load_settings(&repositories, &services, startup.active_project_id).await;
         let (sessions, review_cache, recoverable, review_watch) =
@@ -194,6 +190,7 @@ impl App {
             open_diff_refresh: crate::app::session_diff::OpenDiffRefresh::default(),
             project_sync_status_expirations: std::collections::HashMap::new(),
             project_sync_statuses: std::collections::HashMap::new(),
+            session_live_usage: std::collections::HashMap::new(),
             session_progress_messages: std::collections::HashMap::new(),
             update_status: None,
             // Build the runner before `sync_handle` moves into the struct.

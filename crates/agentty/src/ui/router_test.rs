@@ -138,6 +138,7 @@ fn render_list_tab_with_optional_tabs(
         projects: &projects,
         remote_control,
         session_git_statuses: &HashMap::new(),
+        session_live_usage: &HashMap::new(),
         sessions: &sessions,
         settings_screen,
         stats_activity: &stats_activity,
@@ -159,6 +160,14 @@ fn render_list_tab_with_optional_tabs(
 
 /// Renders one list-backed mode through the production router.
 fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
+    render_list_backed_mode_with_live_usage(mode, &HashMap::new())
+}
+
+/// Renders one list-backed mode with running turns' `live_usage`.
+fn render_list_backed_mode_with_live_usage(
+    mode: &AppMode,
+    live_usage: &HashMap<crate::domain::session_usage::LiveUsageKey, ag_contracts::TurnUsage>,
+) -> (bool, String) {
     let backend = ratatui::backend::TestBackend::new(120, 40);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let mut project_table_state = TableState::default();
@@ -181,6 +190,7 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
         projects: &[],
         remote_control: None,
         session_git_statuses: &HashMap::new(),
+        session_live_usage: live_usage,
         sessions: &sessions,
         settings_screen: None,
         stats_activity: &[],
@@ -646,6 +656,7 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
         projects: &[],
         remote_control: None,
         session_git_statuses: &HashMap::new(),
+        session_live_usage: &HashMap::new(),
         sessions: &sessions,
         settings_screen: None,
         stats_activity: &[],
@@ -688,6 +699,57 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
     // Assert
     assert!(handled);
     assert!(buffer_text(terminal.backend().buffer()).contains("Keybindings"));
+}
+
+#[test]
+fn render_usage_panel_above_its_session_view() {
+    // Arrange
+    let mode = AppMode::Usage(Box::new(crate::presentation::app_mode::UsagePanel {
+        restore: crate::presentation::app_mode::UsageRestore::View(ConfirmationViewMode {
+            scroll_offset: None,
+            session_id: "session-overlay".into(),
+        }),
+        scroll_offset: 0,
+        usage: crate::domain::session_usage::SessionUsage {
+            context: None,
+            records: vec![crate::domain::session_usage::UsageRecord::from_model_usage(
+                ag_contracts::UsagePurpose::Turn,
+                &ag_contracts::ModelUsage {
+                    input_tokens: 1_200,
+                    output_tokens: 300,
+                    requests: 1,
+                    ..ag_contracts::ModelUsage::new("model-a")
+                },
+            )],
+            turn_count: 1,
+        },
+    }));
+
+    let live_turn = |session_id: &str, model: &str| {
+        (
+            crate::domain::session_usage::LiveUsageKey {
+                run: crate::domain::session_usage::LiveUsageRun::Rebase,
+                session_id: session_id.into(),
+            },
+            ag_contracts::test_support::token_usage(model, 10, 1),
+        )
+    };
+    let live_usage = HashMap::from([
+        live_turn("session-overlay", "model-live"),
+        live_turn("other-session", "model-elsewhere"),
+    ]);
+
+    // Act
+    let (handled, text) = render_list_backed_mode_with_live_usage(&mode, &live_usage);
+
+    // Assert
+    assert!(handled);
+    assert_eq!(surface_for_mode(&mode).kind(), SurfaceKind::Session);
+    assert!(text.contains("Usage · Router Session"));
+    assert!(text.contains("model-a"));
+    assert!(text.contains("model-live rebase"));
+    assert!(!text.contains("model-elsewhere"));
+    assert!(text.contains("Session total"));
 }
 
 #[test]

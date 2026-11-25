@@ -1258,6 +1258,7 @@ async fn session_help_cues_scrolling_to_hidden_shortcuts() -> E2eResult {
                     .press_key("j")
                     .press_key("j")
                     .press_key("j")
+                    .press_key("j")
                     .wait_for_text("r: Sync", 5000)
             },
             |frame, report| {

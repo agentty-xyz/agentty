@@ -20,4 +20,5 @@ mod review_request;
 mod setting;
 mod sync;
 mod telemetry;
+mod usage;
 mod worktree;

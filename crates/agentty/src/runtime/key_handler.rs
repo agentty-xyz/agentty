@@ -107,6 +107,13 @@ where
             Ok(result)
         }
         AppMode::Help { .. } => Ok(mode::help::handle(&mut app.mode, key)),
+        AppMode::Usage(_) => {
+            let size = terminal.size().map_err(backend_err)?;
+            let content_area = content_area_for_terminal(Rect::new(0, 0, size.width, size.height));
+            let max_scroll_offset = mode::usage::max_scroll_offset(app, content_area);
+
+            Ok(mode::usage::handle(&mut app.mode, max_scroll_offset, key))
+        }
     };
 
     if result.is_ok() {

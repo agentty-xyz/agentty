@@ -16,6 +16,7 @@ use super::prompt::{
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, SessionId};
+use crate::domain::session_usage::SessionUsage;
 
 /// Side of a unified diff that owns one selected changed line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -690,6 +691,53 @@ impl PromptModeSnapshot {
     }
 }
 
+/// State of the per-session usage panel.
+pub struct UsagePanel {
+    /// Page restored when the panel closes.
+    pub restore: UsageRestore,
+    /// Vertical panel-content scroll offset.
+    pub scroll_offset: u16,
+    /// Recorded usage loaded when the panel opened or the store last
+    /// recorded usage for the session; running turns' live usage is folded
+    /// in at render time.
+    pub usage: SessionUsage,
+}
+
+/// Session page restored when the usage panel closes.
+pub enum UsageRestore {
+    /// Restore the prompt composer that ran `/usage`.
+    Prompt(Box<PromptModeSnapshot>),
+    /// Restore the session view that pressed `u`.
+    View(ConfirmationViewMode),
+}
+
+impl UsageRestore {
+    /// Returns the session whose usage the panel shows.
+    pub fn session_id(&self) -> &SessionId {
+        match self {
+            Self::Prompt(snapshot) => &snapshot.session_id,
+            Self::View(view) => &view.session_id,
+        }
+    }
+
+    /// Returns the transcript scroll position painted behind the panel.
+    pub fn scroll_offset(&self) -> Option<usize> {
+        match self {
+            Self::Prompt(snapshot) => snapshot.scroll_offset,
+            Self::View(view) => view.scroll_offset,
+        }
+    }
+
+    /// Restores the originating page.
+    #[must_use]
+    pub fn into_mode(self) -> AppMode {
+        match self {
+            Self::Prompt(snapshot) => snapshot.into_prompt_mode(),
+            Self::View(view) => view.into_view_mode(),
+        }
+    }
+}
+
 /// Originating mode restored when leaving a diff preview.
 ///
 /// A diff preview replaces the whole page, so the composer or question state it
@@ -949,6 +997,10 @@ pub enum AppMode {
         /// options. `None` means free-text input is active.
         selected_option_index: Option<usize>,
     },
+
+    /// Displays one session's token usage and estimated cost above the
+    /// session page that opened it.
+    Usage(Box<UsagePanel>),
 
     /// Displays context-sensitive keybindings above the originating page.
     Help {

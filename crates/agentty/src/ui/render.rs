@@ -103,6 +103,9 @@ pub struct RenderContext<'a> {
     pub session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cached session list positions keyed by stable session id.
     pub session_index_by_id: &'a HashMap<SessionId, usize>,
+    /// Cumulative usage of each running turn.
+    pub session_live_usage:
+        &'a HashMap<crate::domain::session_usage::LiveUsageKey, ag_contracts::TurnUsage>,
     /// Background thinking messages keyed by session id.
     pub session_progress_messages: &'a HashMap<SessionId, String>,
     /// Focused-review state for the visible session, projected from the app

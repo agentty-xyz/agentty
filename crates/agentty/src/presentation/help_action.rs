@@ -418,6 +418,11 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         "w",
         "Inspect session execution graphs",
     ));
+    actions.push(HelpAction::new(
+        "usage",
+        "u",
+        "Show token usage and estimated cost",
+    ));
 
     append_view_prompt_actions(
         &mut actions,

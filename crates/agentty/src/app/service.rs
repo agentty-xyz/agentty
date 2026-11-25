@@ -19,6 +19,7 @@ use crate::analytics::{Analytics, SessionType, TurnOutcome, TurnSelection};
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::SessionManager;
+use crate::app::session_usage::UsageReportingRunRepository;
 use crate::app::{AppEvent, spawn};
 use crate::db::AppRepositories;
 use crate::domain::agent::{
@@ -104,7 +105,10 @@ impl AppServices {
         });
         let run_worker = Arc::new(RunWorker::new(
             &runtime_config,
-            repositories.runs(),
+            Arc::new(UsageReportingRunRepository::new(
+                repositories.runs(),
+                event_tx.clone(),
+            )),
             Arc::new(ag_worker::HeartbeatClock),
             NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
         ));
@@ -621,6 +625,8 @@ impl AppServices {
             AppEvent::SessionTurnReady { .. } => "SessionTurnReady",
             AppEvent::SessionTurnCleared { .. } => "SessionTurnCleared",
             AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
+            AppEvent::SessionUsageUpdated { .. } => "SessionUsageUpdated",
+            AppEvent::SessionUsageRecorded { .. } => "SessionUsageRecorded",
             AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
             AppEvent::SyncMainConflictResolutionStarted { .. } => {
                 "SyncMainConflictResolutionStarted"

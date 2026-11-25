@@ -46,5 +46,7 @@ pub(crate) mod turn_status;
 pub(crate) mod turn_summary;
 /// Live timeline rows of a running turn.
 pub(crate) mod turn_timeline;
+/// Per-session token usage and estimated cost popup.
+pub mod usage_overlay;
 /// Reusable terminal scrollbar component.
 pub mod vertical_scrollbar;

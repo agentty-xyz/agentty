@@ -21,7 +21,7 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::presentation::app_mode::{
-    AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
+    AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot, UsageRestore,
 };
 use crate::presentation::prompt::{
     PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptGraphState,
@@ -122,6 +122,8 @@ enum PromptEffect {
     },
     /// Starts loading the session diff, restoring `restore` on exit.
     OpenDiff { restore: Option<DiffRestoreTarget> },
+    /// Opens the usage panel above the captured composer.
+    OpenUsage { restore: PromptModeSnapshot },
     /// Lists harness models again for the opened `/model` stage.
     RefreshHarnessModels,
     /// Shows why the selected harness `/model` row cannot run now.
@@ -413,6 +415,10 @@ async fn apply_prompt_effect(app: &mut App, prompt_context: &PromptContext, effe
         } => app.open_chatgpt_sign_in(selected_agent, restore),
         PromptEffect::OpenDiff { restore } => {
             app.start_diff_view_load(session_id, restore, DiffSidebarFocus::Files);
+        }
+        PromptEffect::OpenUsage { restore } => {
+            app.open_usage_panel(UsageRestore::Prompt(Box::new(restore)))
+                .await;
         }
         PromptEffect::RefreshHarnessModels => app.refresh_harness_models(),
         PromptEffect::ReportUnavailableModel(notice) => {
@@ -1028,6 +1034,12 @@ fn reduce_prompt_slash_submit(
         }
         Some(PromptSuggestionSelection::Command("/apply")) => {
             effects.push(PromptEffect::ApplyFocusedReview);
+        }
+        Some(PromptSuggestionSelection::Command("/usage")) => {
+            push_attachment_cleanup(effects, clear_prompt_slash_input(mode));
+            effects.extend(
+                take_prompt_snapshot(mode).map(|restore| PromptEffect::OpenUsage { restore }),
+            );
         }
         Some(PromptSuggestionSelection::Command("/reasoning")) => {
             let selected_index = ReasoningLevel::ALL

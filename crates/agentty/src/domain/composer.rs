@@ -499,8 +499,9 @@ pub enum PromptSlashCommandSet {
     WithApply,
     /// Every command except `/apply`.
     WithoutApply,
-    /// Setting commands only, offered while the session runs a turn or
-    /// rebase; turn-starting `/apply` and `/graph` stay hidden.
+    /// Setting commands and the read-only `/usage`, offered while the
+    /// session runs a turn or rebase; turn-starting `/apply` and `/graph`
+    /// stay hidden.
     SettingsOnly,
 }
 
@@ -1484,6 +1485,7 @@ fn command_description(command: &str) -> &'static str {
         "/reasoning" => "Override the reasoning level for this session.",
         "/style" => "Control how concise or detailed responses are.",
         "/fast" => "Toggle between normal and fast responses for this session.",
+        "/usage" => "Show this session's token usage and estimated cost.",
         _ => "Prompt slash command.",
     }
 }
@@ -1502,6 +1504,7 @@ fn prompt_slash_commands(
         "/reasoning",
         "/style",
         "/fast",
+        "/usage",
     ];
     if command_set != PromptSlashCommandSet::WithApply {
         commands.retain(|command| *command != "/apply");

@@ -63,6 +63,7 @@ pub(crate) fn render_app(
             session_branch_names: snapshot.session_branch_names,
             session_git_statuses: snapshot.session_git_statuses,
             session_index_by_id: snapshot.session_index_by_id,
+            session_live_usage: snapshot.session_live_usage,
             session_progress_messages: snapshot.session_progress_messages,
             session_update_versions: snapshot.session_update_versions,
             settings_screen: snapshot.settings_screen.as_ref(),

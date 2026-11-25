@@ -20,6 +20,7 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus, HelpContext,
+    UsageRestore,
 };
 use crate::presentation::help_action::{self, ViewSessionState};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
@@ -293,6 +294,13 @@ async fn handle_view_key(
             scroll_offset: view_context.scroll_offset,
         })
         .await;
+
+        return false;
+    }
+
+    if key.code == KeyCode::Char('u') && is_insertable_char_key(key) {
+        app.open_usage_panel(UsageRestore::View(confirmation_view_mode(view_context)))
+            .await;
 
         return false;
     }

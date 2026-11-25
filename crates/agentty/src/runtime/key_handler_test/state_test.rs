@@ -54,6 +54,53 @@ async fn graph_keys_preserve_rejected_drafts_and_mark_the_view_for_redraw() {
 }
 
 #[tokio::test]
+async fn usage_key_opens_the_panel_above_the_session_view_and_esc_closes_it() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("sess")
+            .build(),
+    );
+    app.mode = AppMode::View {
+        scroll_offset: Some(2),
+        session_id: "sess".into(),
+    };
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+    let presentation = PresentationState::default();
+
+    // Act
+    let opened = handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
+    )
+    .await;
+    let is_usage_open = matches!(&app.mode, AppMode::Usage(panel)
+        if panel.restore.session_id() == "sess" && panel.restore.scroll_offset() == Some(2));
+    let is_ticking = app.has_visible_tick_driven_ui();
+    let closed = handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(opened, Ok(EventResult::Continue)));
+    assert!(is_usage_open);
+    assert!(!is_ticking);
+    assert!(matches!(closed, Ok(EventResult::Continue)));
+    assert!(matches!(
+        &app.mode,
+        AppMode::View { session_id, scroll_offset: Some(2) } if session_id == "sess"
+    ));
+}
+
+#[tokio::test]
 async fn test_handle_key_event_routes_prompt_history_and_restores_draft() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_test_app().await;

@@ -11,24 +11,62 @@ use crate::connection::begin_write;
 use crate::session::persist_turn_usage;
 use crate::timestamp::TimestampSource;
 
-/// Row returned when loading one model's token usage for one purpose from
-/// the `session_usage` table.
+/// Row returned when loading per-model and per-purpose token usage from the
+/// `session_usage` table.
+///
+/// A `None` detail is unknown: some invocation of the row did not report it.
+/// Invocations recorded before detailed usage count in `invocation_count`
+/// but not in `detailed_invocation_count`, and report no detail.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionUsageRow {
+    /// Accumulated input tokens served from the provider's prompt cache.
+    pub cache_read_tokens: Option<i64>,
+    /// Accumulated input tokens written to the provider's prompt cache.
+    pub cache_write_tokens: Option<i64>,
+    /// Largest request input observed.
+    pub context_peak_tokens: Option<i64>,
+    /// Context window of the model, when known.
+    pub context_window_tokens: Option<i64>,
+    /// Persisted label of the price basis, `mixed` when invocations differ.
+    pub cost_basis: Option<String>,
+    /// Estimated charge of the priced invocations in micro-USD.
+    pub cost_micro_usd: Option<i64>,
     /// Row creation timestamp in Unix seconds.
     pub created_at: i64,
-    /// Accumulated input-token count.
+    /// Invocations recorded with detailed usage.
+    pub detailed_invocation_count: i64,
+    /// Accumulated input-token count, cache included.
     pub input_tokens: i64,
     /// Number of agent invocations included in the totals.
     pub invocation_count: i64,
     /// Provider model identifier.
     pub model: String,
-    /// Accumulated output-token count.
+    /// Accumulated output-token count, reasoning included.
     pub output_tokens: i64,
     /// Persisted label of the work the usage served, as
     /// [`UsagePurpose::as_str`] writes it.
     pub purpose: String,
+    /// Accumulated reasoning tokens.
+    pub reasoning_tokens: Option<i64>,
+    /// Provider requests of the detailed invocations, unreported included.
+    pub request_count: i64,
     /// Owning session identifier, when present.
     pub session_id: Option<String>,
+    /// Detailed invocations that had no price.
+    pub unpriced_invocation_count: i64,
+    /// Requests whose backend reported no input or output count.
+    pub unreported_request_count: i64,
+}
+
+/// Session-level context and turn figures loaded beside its usage rows.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionUsageContextRow {
+    /// Input tokens of the session's latest model request.
+    pub context_tokens: Option<i64>,
+    /// Context window of the model that answered that request.
+    pub context_window_tokens: Option<i64>,
+    /// Prompts that started a user-visible or generated turn.
+    pub turn_count: i64,
 }
 
 /// Session-usage persistence boundary used by app orchestration and tests.
@@ -38,6 +76,13 @@ pub trait UsageRepository: Send + Sync {
     /// Loads a session's token usage rows, one per model and purpose,
     /// ordered by model and purpose.
     async fn load_session_usage(&self, session_id: &str) -> Result<Vec<SessionUsageRow>, DbError>;
+
+    /// Loads the session's latest context fill and its turn count; an
+    /// unknown session reads as empty.
+    async fn load_session_usage_context(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionUsageContextRow, DbError>;
 
     /// Records one invocation's usage of every model under `purpose`, and
     /// adds its tokens to the session's totals.
@@ -73,7 +118,10 @@ impl UsageRepository for SqliteUsageRepository {
         let rows = sqlx::query_as!(
             SessionUsageRow,
             r#"
-SELECT session_id, model, purpose, created_at, input_tokens, invocation_count, output_tokens
+SELECT cache_read_tokens, cache_write_tokens, context_peak_tokens, context_window_tokens,
+       cost_basis, cost_micro_usd, created_at, detailed_invocation_count, input_tokens,
+       invocation_count, model, output_tokens, purpose, reasoning_tokens, request_count,
+       session_id, unpriced_invocation_count, unreported_request_count
 FROM session_usage
 WHERE session_id = ?
 ORDER BY model, purpose
@@ -84,6 +132,32 @@ ORDER BY model, purpose
         .await?;
 
         Ok(rows)
+    }
+
+    async fn load_session_usage_context(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionUsageContextRow, DbError> {
+        let row = sqlx::query_as!(
+            SessionUsageContextRow,
+            r#"
+SELECT session.context_tokens AS "context_tokens?",
+       session.context_window_tokens AS "context_window_tokens?",
+       (
+           SELECT COUNT(*)
+           FROM session_message
+           WHERE session_message.session_id = session.id
+             AND session_message.kind IN ('user_prompt', 'agent_prompt')
+       ) AS "turn_count!: i64"
+FROM session
+WHERE session.id = ?
+            "#,
+            session_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.unwrap_or_default())
     }
 
     async fn upsert_session_usage(
