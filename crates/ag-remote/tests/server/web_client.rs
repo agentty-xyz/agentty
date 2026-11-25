@@ -1029,7 +1029,8 @@ fn assert_first_pairing_by_paste(
                 "headings": ["Pair this device"],
                 "hint": "Start remote control in Agentty's Platform tab and open the pairing \
                          link it shows, or scan its QR code. A pairing link from the Remote \
-                         tab can be pasted here.",
+                         tab can be pasted here. No Agentty yet? Follow the installation \
+                         guide.",
                 "hintsHidden": [true, true, false],
                 "linkHidden": false,
                 "shellHidden": false,

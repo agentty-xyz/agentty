@@ -315,6 +315,12 @@ const FORBIDDEN_TEXT: [&str; 16] = [
     "@import",
 ];
 
+/// Anchors into Agentty's documentation, which a reader follows to leave the
+/// page; they load nothing, so they are the only other-origin addresses a
+/// served file may contain. Matching the anchor tag keeps resource tags such
+/// as `<link>` with the same address forbidden.
+const DOCUMENTATION_LINK: &str = "<a href=\"https://agentty.xyz/docs/";
+
 /// Places where a protocol-relative `//` would load from another origin.
 const OTHER_ORIGIN_REFERENCES: [&str; 7] = [
     "src=\"//",
@@ -343,7 +349,7 @@ async fn served_web_client_files_build_no_markup_from_strings_and_stay_on_their_
         .ok_or("the page is not served")?;
     let mut looked_up = Vec::new();
     for (path, body) in &files {
-        let lowered = body.to_ascii_lowercase();
+        let lowered = body.to_ascii_lowercase().replace(DOCUMENTATION_LINK, "");
         for text in FORBIDDEN_TEXT.iter().chain(&OTHER_ORIGIN_REFERENCES) {
             assert!(!lowered.contains(text), "{path} contains `{text}`");
         }
