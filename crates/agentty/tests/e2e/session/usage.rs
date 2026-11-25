@@ -349,7 +349,7 @@ async fn test_usage_readout_updates_after_each_model_request() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "ctx 14% · $", &full);
                     assertion::assert_text_in_region(frame, SESSION_READOUT, &full);
-                    assertion::assert_not_visible(frame, " turn ·");
+                    assertion::assert_not_visible(frame, "$0.11 turn");
                 })
             },
         )

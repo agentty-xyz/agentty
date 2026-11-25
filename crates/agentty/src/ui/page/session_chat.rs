@@ -306,11 +306,12 @@ impl<'a> SessionChatPage<'a> {
             && let Some(snapshot) = session.live_timeline()
         {
             // While the turn runs, its usage readout fills the status line's
-            // right slot instead of the composer border.
-            readout_in_status_line = true;
+            // right slot instead of the composer border; a pane too narrow
+            // for the slot keeps the session figures in the border.
             let telemetry = self.usage_readout.and_then(|usage_readout| {
                 usage_readout.turn_line(usize::from(turn_status::telemetry_max_width(area.width)))
             });
+            readout_in_status_line = telemetry.is_some();
             let status_line = turn_status::turn_status_line(
                 TurnStatusInput {
                     current: snapshot.current.as_ref(),

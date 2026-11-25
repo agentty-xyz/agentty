@@ -430,6 +430,41 @@ fn test_running_turn_readout_fills_the_status_line_and_leaves_the_border() {
     assert!(!border_row.contains("session"), "{border_row}");
 }
 
+/// A pane too narrow for the status line's readout slot keeps the session
+/// figures in the composer border while the turn runs.
+#[test]
+fn test_running_turn_readout_stays_in_the_border_on_a_narrow_pane() {
+    // Arrange
+    let session = running_timeline_session();
+    let mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+    let readout = running_usage_readout();
+    let mut page =
+        SessionChatPage::new(test_page_input(&session, &mode)).usage_readout(Some(&readout));
+    let backend = ratatui::backend::TestBackend::new(72, 16);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let plan = SessionChatLayoutPlan::new(layout_input(Rect::new(0, 0, 72, 16), &session, &mode));
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw session");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let status_area = plan.turn_status_area.expect("status row");
+    let status_row = buffer_row_text(buffer, status_area.y, 72);
+    assert!(!status_row.contains("ctx"), "{status_row}");
+    let border_row = buffer_row_text(buffer, plan.areas.bottom_area.bottom() - 1, 72);
+    assert!(border_row.contains("$3.27 session"), "{border_row}");
+    assert!(border_row.contains("Timer:"), "{border_row}");
+}
+
 #[test]
 fn test_rendered_output_line_count_counts_wrapped_content() {
     // Arrange

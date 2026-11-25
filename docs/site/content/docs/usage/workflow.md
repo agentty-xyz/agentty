@@ -559,17 +559,17 @@ are never added to charged estimates; a total with both shows them side by side,
 each backend is detected.
 
 <a id="usage-session-usage-readout"></a> A live usage readout follows each turn. While a
-turn runs, the right of its status line shows the turn's input (cache included) and
-output tokens, the latest context fill, and the turn's and session's estimated cost,
-such as `↑412.0k ↓3.1k · ctx ▰▰▱▱▱ 38% · $0.24 turn · $3.27 session`; the status line
-gives it at most 40 columns and none in panes 80 columns wide or narrower. Between
-turns, and after a restart, the composer's bottom border shows `ctx 38% · $3.27 session`
-before the timer. The readout updates after each completed model request, never per
-streamed token. The gauge turns to the warning tone from 75% and the danger tone from
-90%; without a known window the readout shows the prompt size, such as `ctx 71.2k`. It
-uses the panel's marks, reads `$?` for a cost without a price and `local` for a local
-model, and as the terminal narrows drops the session cost, the tokens, the gauge cells,
-and the turn cost in that order.
+turn runs, the right of its status line shows what fits in at most 40 columns of the
+turn's input (cache included) and output tokens, the latest context fill, and the turn's
+estimated cost, such as `ctx ▰▰▱▱▱ 38% · $0.24 turn` once a long prompt's tokens no
+longer fit. Between turns, after a restart, and while a turn runs in a pane 80 columns
+wide or narrower, which leaves the status line no room for it, the composer's bottom
+border shows `ctx 38% · $3.27 session` before the timer. The readout updates after each
+completed model request, never per streamed token. The gauge turns to the warning tone
+from 75% and the danger tone from 90%; without a known window the readout shows the
+prompt size, such as `ctx 71.2k`. It uses the panel's marks, reads `$?` for a cost
+without a price and `local` for a local model, and as space narrows drops the tokens,
+the gauge cells, and the turn cost in that order.
 
 ## Agent Definitions
 
