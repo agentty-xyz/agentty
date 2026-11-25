@@ -878,7 +878,8 @@ async fn test_session_header_stats_refresh_during_turn() -> E2eResult {
                     let running_full = Region::full(running.cols(), running.rows());
                     assertion::assert_text_in_region(&running, "[S] ", &running_full);
                     assertion::assert_text_in_region(&running, "(+12 -0)", &running_full);
-                    assertion::assert_text_in_region(&running, "Working...", &running_full);
+                    // The live status line shows the turn is still running.
+                    assertion::assert_text_in_region(&running, "·  step 1  ·  turn", &running_full);
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "(+12 -0)", &full);
