@@ -1,7 +1,7 @@
 //! Application settings manager and loaders for persisted defaults such as
 //! role models, speed mode, theme, and launch configurations.
 
-use ag_contracts::ContextCompaction;
+use ag_contracts::{ContextCompaction, HostCacheSharing};
 use tracing::warn;
 
 use crate::app::AppServices;
@@ -370,6 +370,9 @@ pub struct SettingsManager {
     available_agent_kinds: Vec<AgentKind>,
     /// Harness models this launch lists; ready ones are Fast-model choices.
     harness_models: Vec<HarnessModelOption>,
+    /// Which dependency caches the active project's sandboxed harness
+    /// sessions use; per session until the user enables sharing.
+    host_caches: HostCacheSharing,
     /// Whether generated session commit messages append the Agentty coauthor
     /// trailer for the active project.
     ///
@@ -473,6 +476,7 @@ impl SettingsManager {
             auto_address_review_comments: toggles.auto_address_review_comments,
             available_agent_kinds,
             harness_models,
+            host_caches: toggles.host_caches,
             include_coauthored_by_agentty: toggles.include_coauthored_by_agentty,
             project_id,
             repositories,
@@ -527,6 +531,7 @@ impl SettingsManager {
                 .filter(|option| option.is_ready())
                 .cloned()
                 .collect(),
+            host_caches: self.host_caches,
             default_fast_reasoning_level: self.default_fast_reasoning_level,
             default_fast_selection: self.default_fast_selection,
             default_fast_speed_mode: self.default_fast_speed_mode,
@@ -599,6 +604,10 @@ impl SettingsManager {
             SettingsOperation::MaxConcurrentSubagents(value) => {
                 self.max_concurrent_subagents = value;
                 self.persist_max_concurrent_subagents_setting().await;
+            }
+            SettingsOperation::ShareHostCaches(value) => {
+                self.host_caches = value;
+                self.persist_share_host_caches_setting().await;
             }
             SettingsOperation::Theme(value) => {
                 self.theme = value;
@@ -812,6 +821,23 @@ impl SettingsManager {
             .await;
     }
 
+    /// Persists the host-cache sharing toggle, which each later turn of the
+    /// project's sessions reads.
+    async fn persist_share_host_caches_setting(&self) {
+        let share_host_caches = self.host_caches.is_shared().to_string();
+
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = self
+            .repositories
+            .settings()
+            .upsert_project_setting(
+                self.project_id,
+                SettingName::ShareHostCaches,
+                &share_host_caches,
+            )
+            .await;
+    }
+
     /// Persists the global subagent concurrency cap.
     async fn persist_max_concurrent_subagents_setting(&self) {
         // Best-effort: settings persistence failure is non-critical.
@@ -839,6 +865,7 @@ impl SettingsManager {
 /// Project-scoped on/off settings loaded together with their defaults.
 struct ProjectToggles {
     auto_address_review_comments: bool,
+    host_caches: HostCacheSharing,
     include_coauthored_by_agentty: bool,
     use_last_used_model_as_default: bool,
 }
@@ -861,6 +888,9 @@ impl ProjectToggles {
             auto_address_review_comments: load(SettingName::AutoAddressReviewComments, true).await,
             include_coauthored_by_agentty: load(SettingName::IncludeCoauthoredByAgentty, false)
                 .await,
+            host_caches: HostCacheSharing::from_enabled(
+                load(SettingName::ShareHostCaches, false).await,
+            ),
             use_last_used_model_as_default: load(SettingName::LastUsedModelAsDefault, false).await,
         }
     }

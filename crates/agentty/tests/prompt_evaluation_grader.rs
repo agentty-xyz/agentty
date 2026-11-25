@@ -2901,6 +2901,7 @@ fn switching_turn(folder: &Path, model: &str, prompt: &str) -> ag_contracts::Tur
         continuation: ag_contracts::TurnContinuation::fresh(),
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         folder: folder.to_path_buf(),
+        host_caches: ag_contracts::HostCacheSharing::PerSession,
         main_checkout_root: None,
         model: model.to_string(),
         permission_mode: PermissionMode::ReadOnly,

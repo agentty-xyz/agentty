@@ -596,13 +596,40 @@ impl SessionTaskService {
         db: &AppRepositories,
         session_id: &str,
     ) -> bool {
+        Self::load_disabled_project_toggle(db, session_id, SettingName::IncludeCoauthoredByAgentty)
+            .await
+    }
+
+    /// Loads the project-scoped toggle that lets the session's sandboxed
+    /// commands use the host's dependency caches instead of per-session
+    /// copies.
+    ///
+    /// It stays disabled until a valid persisted boolean enables it, so a
+    /// failed or invalid read never weakens the sandbox.
+    pub(crate) async fn load_host_cache_sharing(
+        db: &AppRepositories,
+        session_id: &str,
+    ) -> ag_contracts::HostCacheSharing {
+        ag_contracts::HostCacheSharing::from_enabled(
+            Self::load_disabled_project_toggle(db, session_id, SettingName::ShareHostCaches).await,
+        )
+    }
+
+    /// Loads the boolean `setting` of the session's project, `false` unless
+    /// a valid persisted value says otherwise.
+    async fn load_disabled_project_toggle(
+        db: &AppRepositories,
+        session_id: &str,
+        setting: SettingName,
+    ) -> bool {
         let project_id = match db.sessions().load_session_project_id(session_id).await {
             Ok(project_id) => project_id,
             Err(error) => {
                 warn!(
                     session_id = session_id,
+                    setting = %setting,
                     error = %error,
-                    "failed to load session project while reading coauthor setting"
+                    "failed to load session project while reading a project toggle"
                 );
 
                 return false;
@@ -612,17 +639,14 @@ impl SessionTaskService {
             return false;
         };
 
-        let persisted_value = match db
-            .settings()
-            .get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty)
-            .await
-        {
+        let persisted_value = match db.settings().get_project_setting(project_id, setting).await {
             Ok(persisted_value) => persisted_value,
             Err(error) => {
                 warn!(
                     project_id,
+                    setting = %setting,
                     error = %error,
-                    "failed to load include-coauthored-by-agentty setting"
+                    "failed to load a project toggle"
                 );
 
                 return false;
@@ -637,9 +661,10 @@ impl SessionTaskService {
             Err(error) => {
                 warn!(
                     project_id,
+                    setting = %setting,
                     value = setting_value,
                     error = %error,
-                    "failed to parse persisted include-coauthored-by-agentty setting"
+                    "failed to parse a persisted project toggle"
                 );
 
                 false

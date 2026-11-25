@@ -3,8 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, PermissionMode, ReasoningLevel, ResponseStyle,
-    SpeedMode, TurnContinuation, TurnRequest, TurnUsage,
+    AgentDefinitionPrompt, AgentRequestKind, HostCacheSharing, PermissionMode, ReasoningLevel,
+    ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnUsage,
 };
 use ag_protocol::TurnPrompt;
 use ag_session::{
@@ -123,6 +123,7 @@ fn request() -> TurnRequest {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::default(),
     }
 }

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, MockAgentChannel, PermissionMode, ReasoningLevel,
-    ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
+    AgentDefinitionPrompt, AgentRequestKind, HostCacheSharing, MockAgentChannel, PermissionMode,
+    ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
 };
 use ag_worker::test_support::MockAppServerClient;
 use ag_worker::{RuntimeConfig, SessionRunClient};
@@ -223,6 +223,7 @@ fn unexpected_turn_request() -> TurnRequest {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::default(),
     }
 }

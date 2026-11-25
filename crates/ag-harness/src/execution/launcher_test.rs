@@ -133,6 +133,8 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
         system: false,
         unix_sockets: vec![],
         workspace: "/workspace".into(),
+        write_file_nodes: vec![],
+        write_files: vec![],
         write_nodes: vec![],
         writes: vec![],
     };
@@ -155,6 +157,9 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
     configuration.writes.push(invalid.clone().into());
     assert!(seatbelt(&configuration).is_err());
     configuration.writes.clear();
+    configuration.write_files.push(invalid.clone().into());
+    assert!(seatbelt(&configuration).is_err());
+    configuration.write_files.clear();
     for git in [invalid.into(), "/repo/.git\"".into(), "/repo/.git\n".into()] {
         configuration.git_metadata = vec![git];
         assert!(seatbelt(&configuration).is_err());
@@ -184,6 +189,8 @@ fn seatbelt_git_metadata_and_network_rules_follow_the_write_grants() {
         system: false,
         unix_sockets: vec!["/agent.sock".into()],
         workspace: "/workspace".into(),
+        write_file_nodes: vec![],
+        write_files: vec![],
         write_nodes: vec![],
         writes: vec!["/sessions/own".into()],
     };
@@ -254,6 +261,9 @@ fn write_grants_must_keep_their_validated_identity() {
     let directory = tempfile::tempdir().expect("grant");
     let grant = directory.path().canonicalize().expect("canonical");
     let metadata = std::fs::metadata(&grant).expect("metadata");
+    let lock = grant.join(".package-cache");
+    std::fs::write(&lock, "").expect("lock file");
+    let lock_metadata = std::fs::metadata(&lock).expect("lock metadata");
     let mut configuration = Launch {
         arguments: vec![],
         directory: grant.clone(),
@@ -270,16 +280,72 @@ fn write_grants_must_keep_their_validated_identity() {
         system: false,
         unix_sockets: vec![],
         workspace: grant.clone(),
+        write_file_nodes: vec![(lock_metadata.dev(), lock_metadata.ino())],
+        write_files: vec![lock.clone()],
         write_nodes: vec![(metadata.dev(), metadata.ino())],
         writes: vec![grant.clone()],
     };
 
     // Act / Assert
     assert!(super::verify_write_identities(&configuration).is_ok());
+    // Kept under another name, so the replacement cannot reuse its inode.
+    std::fs::rename(&lock, grant.join("moved.lock")).expect("move the lock");
+    std::fs::write(&lock, "").expect("another lock in its place");
+    assert!(super::verify_write_identities(&configuration).is_err());
+    configuration.write_files.clear();
     configuration.write_nodes = vec![(metadata.dev(), metadata.ino().wrapping_add(1))];
     assert!(super::verify_write_identities(&configuration).is_err());
     configuration.writes = vec![grant.join("missing")];
     assert!(super::verify_write_identities(&configuration).is_err());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_host_caches_keep_their_directories_and_lock_files_in_place() {
+    // Arrange
+    let configuration = Launch {
+        arguments: vec![],
+        directory: "/workspace".into(),
+        environment: BTreeMap::new(),
+        executable: "/bin/bash".into(),
+        external_reads: vec![],
+        git_metadata: vec![],
+        hidden_paths: vec![],
+        host_information: false,
+        launcher: "/launcher".into(),
+        linux_bubblewrap: None,
+        network: false,
+        read_scope: ReadScope::Granted,
+        system: false,
+        unix_sockets: vec![],
+        workspace: "/workspace".into(),
+        write_file_nodes: vec![(1, 2)],
+        write_files: vec!["/home/user/.cargo/.package-cache".into()],
+        write_nodes: vec![],
+        writes: vec!["/home/user/.cargo/registry".into()],
+    };
+
+    // Act
+    let profile = seatbelt(&configuration).expect("profile");
+
+    // Assert
+    // A host cache file is opened for its contents only: no unlink,
+    // rename, or creation in its place.
+    assert!(
+        profile.contains(
+            "(allow file-read* file-write-data (literal \"/home/user/.cargo/.package-cache\"))"
+        ),
+        "{profile}"
+    );
+    // Host cache directories cannot be removed, renamed, or replaced with a
+    // link, as for every write grant.
+    let granted = profile
+        .find("(allow file-read* file-write* (subpath \"/home/user/.cargo/registry\"))")
+        .expect("host cache grant");
+    let pinned = profile
+        .find("(deny file-write-unlink file-write-create (literal \"/home/user/.cargo/registry\"))")
+        .expect("host cache root denial");
+    assert!(granted < pinned, "{profile}");
 }
 
 #[cfg(target_os = "macos")]

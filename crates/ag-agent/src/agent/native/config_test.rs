@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, PermissionMode,
-    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
+    AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, HostCacheSharing,
+    PermissionMode, ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
+    TurnRequest,
 };
 use ag_harness::catalog::ModelId;
 use ag_harness::lifecycle::LifecycleEvent;
@@ -1054,6 +1055,7 @@ fn session_request(folder: &Path) -> TurnRequest {
         execution_policy: ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder: folder.to_path_buf(),
+        host_caches: HostCacheSharing::PerSession,
         main_checkout_root: None,
         model: "muse-spark-1.3".to_string(),
         permission_mode: PermissionMode::AutoEdit,
@@ -1074,7 +1076,9 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     let data_root = tempfile::tempdir().expect("data root");
     let workspace = tempfile::tempdir().expect("workspace");
     let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
-    let environment = BTreeMap::new();
+    let host_home = tempfile::tempdir().expect("host home");
+    let environment =
+        BTreeMap::from([("HOME".to_string(), host_home.path().display().to_string())]);
     let request = session_request(workspace.path());
 
     // Act
@@ -1088,6 +1092,13 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
         .session_sandbox("session-2", &request, &environment)
         .await;
     let invalid = config.session_sandbox("a/b", &request, &environment).await;
+    let sharing = TurnRequest {
+        host_caches: HostCacheSharing::Shared,
+        ..session_request(workspace.path())
+    };
+    let shared = config
+        .session_sandbox("session-1", &sharing, &environment)
+        .await;
 
     // Assert
     let policy = |sandbox: CommandSandbox| {
@@ -1105,6 +1116,14 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     assert_ne!(first, policy(other.expect("other session sandbox")));
     assert!(data_root.path().join("session-1/tmp/cargo").is_dir());
     assert!(invalid.is_err());
+    // Sharing the host's caches keeps the directory and changes the
+    // policy revision, since the cache variables name other places.
+    let shared = format!("{:?}", policy(shared.expect("shared sandbox")));
+    assert!(
+        shared.contains("agentty-native-sandbox-1-host-caches"),
+        "{shared}"
+    );
+    assert!(!format!("{first:?}").contains("host-caches"));
 }
 
 #[tokio::test]

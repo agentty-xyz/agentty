@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{env, io};
 
-use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel, TurnRequest};
+use ag_contracts::{
+    HostCacheSharing, PermissionMode, ProviderCallBudget, ReasoningLevel, TurnRequest,
+};
 use ag_harness::bash::BashConfig;
 use ag_harness::catalog::{
     Capabilities, ModelCatalog, ModelHandle, ModelId, ModelSelector, ModelSpec,
@@ -67,6 +69,10 @@ const BASH_EXECUTABLE: &str = "/bin/bash";
 /// grants, the Bash executable, or the `ag-harness` sandbox enforcement
 /// change.
 const BASH_POLICY_REVISION: &str = "agentty-native-sandbox-1";
+/// Policy revision of sessions sharing the host's dependency caches, whose
+/// cache variables name the host's caches instead of the temporary
+/// directory's.
+const HOST_CACHE_POLICY_REVISION: &str = "agentty-native-sandbox-1-host-caches";
 /// Directory beside a session's harness database that its commands use as
 /// `TMPDIR` and for tool caches.
 const SESSION_TEMPORARY_DIRECTORY: &str = "tmp";
@@ -232,8 +238,13 @@ impl NativeHarnessConfig {
     /// `request`, with the session's own temporary directory, which keeps one
     /// path for the session's lifetime because the harness fingerprints it
     /// into the policy, and goes with the session's harness directory. When
-    /// the host keeps Cargo caches and resolved the project's main checkout,
-    /// its `CARGO_HOME` receives copies from that project's cache.
+    /// `request` shares the
+    /// host's caches, commands use the host's dependency caches, Cargo's
+    /// included; otherwise, or where the host's Cargo caches cannot be
+    /// shared, and when the host keeps Cargo caches and resolved the
+    /// project's main checkout, its `CARGO_HOME` receives copies from that
+    /// project's cache. Each turn prepares the directory anew, so the choice
+    /// can change between turns.
     ///
     /// # Errors
     /// Returns an error for an invalid session id or when the directory
@@ -263,15 +274,16 @@ impl NativeHarnessConfig {
             &request.folder,
             environment,
             cargo_cache,
+            request.host_caches,
         )
         .await
     }
 
     /// Returns the sandbox of one utility prompt's commands run in
     /// `workspace`, with a fresh temporary directory removed when the
-    /// returned guard drops. The first call of this process first removes
-    /// the directories earlier processes left behind, which only one process
-    /// per data root can own.
+    /// returned guard drops; utility prompts never share the host's caches. The
+    /// first call of this process first removes the directories earlier
+    /// processes left behind, which only one process per data root can own.
     ///
     /// # Errors
     /// Returns an error when the directory cannot be created or prepared.
@@ -298,6 +310,7 @@ impl NativeHarnessConfig {
             workspace,
             environment,
             None,
+            HostCacheSharing::PerSession,
         )
         .await?;
 
@@ -1126,9 +1139,14 @@ fn bash_config(
     environment: &BTreeMap<String, String>,
     sandbox: &CommandSandbox,
 ) -> Result<BashConfig, String> {
+    let revision = if sandbox.shares_host_caches() {
+        HOST_CACHE_POLICY_REVISION
+    } else {
+        BASH_POLICY_REVISION
+    };
     let mut config = BashConfig::native(
         PathBuf::from(BASH_EXECUTABLE),
-        BASH_POLICY_REVISION.to_string(),
+        revision.to_string(),
         BASH_TIMEOUT,
         BashConfig::DEFAULT_CAPTURE_BYTES,
     )

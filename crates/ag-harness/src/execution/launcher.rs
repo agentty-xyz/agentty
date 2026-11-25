@@ -285,19 +285,25 @@ fn group_finished() -> io::Result<bool> {
     Ok(true)
 }
 
-/// Checks that each write grant of `configuration` is still the directory
-/// preparation validated, itself rather than a link put in its place, so
-/// one swapped meanwhile cannot redirect the grant; Linux checks the same
-/// identities inside its namespace.
+/// Checks that each write grant of `configuration`, directory or host cache
+/// file, is still the entry preparation validated, itself rather than a
+/// link put in its place, so one swapped meanwhile cannot redirect the
+/// grant; Linux checks the same identities inside its namespace.
 ///
 /// # Errors
 /// Returns an error when a grant is missing or no longer matches.
 #[cfg(target_os = "macos")]
 fn verify_write_identities(configuration: &Launch) -> io::Result<()> {
-    for (index, path) in configuration.writes.iter().enumerate() {
-        let metadata = std::fs::symlink_metadata(path)?;
-        if configuration.write_nodes.get(index).copied() != Some((metadata.dev(), metadata.ino())) {
-            return Err(io::Error::other("write grant identity changed"));
+    let grants = [
+        (&configuration.writes, &configuration.write_nodes),
+        (&configuration.write_files, &configuration.write_file_nodes),
+    ];
+    for (paths, nodes) in grants {
+        for (index, path) in paths.iter().enumerate() {
+            let metadata = std::fs::symlink_metadata(path)?;
+            if nodes.get(index).copied() != Some((metadata.dev(), metadata.ino())) {
+                return Err(io::Error::other("write grant identity changed"));
+            }
         }
     }
 
@@ -335,9 +341,7 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
     for path in &configuration.hidden_paths {
         rule(&mut profile, "deny file-read* file-write*", path)?;
     }
-    for path in &configuration.writes {
-        rule(&mut profile, "allow file-read* file-write*", path)?;
-    }
+    write_rules(&mut profile, configuration)?;
     // Each Git metadata path, and everything beneath it, stays read-only
     // whether or not it exists yet, so a missing `.git` at the top of a
     // write grant cannot be created either. Names match case-insensitively,
@@ -418,6 +422,38 @@ fn rule(profile: &mut String, action: &str, path: &std::path::Path) -> io::Resul
     writeln!(
         profile,
         "({action} (subpath {}))",
+        serde_json::to_string(path)?
+    )
+    .map_err(io::Error::other)
+}
+
+/// Appends the write grants of `configuration` to `profile`: the writable
+/// directories, whose own entries [`pin_write_grants`] later keeps in
+/// place, and the contents of the host cache files.
+#[cfg(target_os = "macos")]
+fn write_rules(profile: &mut String, configuration: &Launch) -> io::Result<()> {
+    for path in &configuration.writes {
+        rule(profile, "allow file-read* file-write*", path)?;
+    }
+    // Host cache files: contents only, so a command cannot remove, rename,
+    // or replace them with a link.
+    for path in &configuration.write_files {
+        literal(profile, "allow file-read* file-write-data", path)?;
+    }
+
+    Ok(())
+}
+
+/// Appends `(<action> (literal "<path>"))` to `profile`.
+#[cfg(target_os = "macos")]
+fn literal(profile: &mut String, action: &str, path: &std::path::Path) -> io::Result<()> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| io::Error::other("non-UTF8 grant"))?;
+
+    writeln!(
+        profile,
+        "({action} (literal {}))",
         serde_json::to_string(path)?
     )
     .map_err(io::Error::other)
@@ -512,6 +548,11 @@ fn bubblewrap(configuration: &Launch) -> io::Result<()> {
         command.arg("--tmpfs").arg(path);
     }
     for path in &configuration.writes {
+        command.arg("--bind").arg(path).arg(path);
+    }
+    // A mounted file cannot be removed or renamed; Landlock limits it to
+    // content writes.
+    for path in &configuration.write_files {
         command.arg("--bind").arg(path).arg(path);
     }
     for path in &configuration.git_metadata {

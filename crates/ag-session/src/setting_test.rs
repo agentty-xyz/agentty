@@ -63,6 +63,7 @@ fn test_as_str_returns_persisted_keys() {
         (SettingName::ProjectCatalogVisible, "ProjectCatalogVisible"),
         (SettingName::PlatformSignIn, "PlatformSignIn"),
         (SettingName::RemoteInstanceKey, "RemoteInstanceKey"),
+        (SettingName::ShareHostCaches, "ShareHostCaches"),
         (SettingName::Theme, "Theme"),
     ];
 
@@ -100,6 +101,7 @@ fn test_display_matches_as_str() {
         SettingName::PlatformSignIn,
         SettingName::ProjectCatalogVisible,
         SettingName::RemoteInstanceKey,
+        SettingName::ShareHostCaches,
         SettingName::TelemetryInstallationId,
         SettingName::Theme,
     ];

@@ -247,6 +247,116 @@ async fn native_hidden_paths_inside_writable_directories_are_refused() {
     assert!(workspace.path().join("output/secret").exists());
 }
 
+#[tokio::test]
+async fn native_host_cache_directories_cannot_be_removed_renamed_or_replaced() {
+    // Arrange
+    let workspace = Workspace::new();
+    let outside = Outside::new();
+    let cache = outside.path("npm");
+    std::fs::create_dir_all(cache.join("kept")).expect("cache directory");
+    let options = configuration(&workspace, |configuration| {
+        configuration
+            .with_host_cache_directory(cache.clone())
+            .expect("host cache")
+    });
+    let probe = format!(
+        "cd {parent}; printf entry > npm/entry && rm npm/entry && mkdir npm/made && rmdir \
+         npm/made && echo inside; rmdir npm/kept; rmdir npm 2>/dev/null; echo \"rmdir=$?\"; perl \
+         -e 'rename($ARGV[0], $ARGV[1]) or exit 1' npm {writable}/moved; echo \"move-out=$?\"; \
+         mkdir {writable}/other && perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' \
+         {writable}/other npm; echo \"move-onto=$?\"",
+        parent = quoted(&outside.path("")),
+        writable = quoted(&workspace.path().join("output")),
+    );
+
+    // Act
+    let result = run(&workspace.harness(), &probe, &options).await;
+
+    // Assert
+    let stdout = result["stdout"].as_str().expect("stdout");
+    for expected in ["inside", "rmdir=1", "move-out=1", "move-onto=1"] {
+        assert!(stdout.contains(expected), "{expected}: {result}");
+    }
+    assert!(cache.is_dir() && !cache.is_symlink());
+    assert!(!workspace.path().join("output/moved").exists());
+}
+
+#[tokio::test]
+async fn native_host_caches_share_only_the_cache_and_its_lock() {
+    // Arrange
+    let workspace = Workspace::new();
+    let outside = Outside::new();
+    let cargo = outside.path("cargo");
+    for directory in ["registry", "bin"] {
+        std::fs::create_dir_all(cargo.join(directory)).expect("Cargo directory");
+    }
+    for file in [".package-cache", "config.toml", "credentials.toml"] {
+        std::fs::write(cargo.join(file), "").expect("Cargo file");
+    }
+    let shared = configuration(&workspace, |configuration| {
+        configuration
+            .with_host_cache_directory(cargo.join("registry"))
+            .expect("host cache")
+            .with_host_cache_file(cargo.join(".package-cache"))
+            .expect("host cache lock")
+    });
+    let isolated = configuration(&workspace, |configuration| configuration);
+    let harness = workspace.harness();
+    let probe = format!(
+        "cd {cargo}; printf cached > registry/entry; echo \"registry=$?\"; perl -e 'open(my $f, \
+         \"+<\", $ARGV[0]) or exit 2; flock($f, 2) or exit 3; print $f \"locked\" or exit 4; \
+         close($f) or exit 5' .package-cache; echo \"lock=$?\"; printf x > bin/cargo-planted; \
+         echo \"bin=$?\"; printf x >> config.toml; echo \"config=$?\"; printf x >> \
+         credentials.toml; echo \"credentials=$?\"; rm -f .package-cache; echo \"remove=$?\"",
+        cargo = quoted(&cargo)
+    );
+
+    // Act
+    let granted = run(&harness, &probe, &shared).await;
+    let denied = run(
+        &harness,
+        &format!(
+            "printf x > {}; echo \"registry=$?\"",
+            quoted(&cargo.join("registry/isolated"))
+        ),
+        &isolated,
+    )
+    .await;
+
+    // Assert
+    let stdout = granted["stdout"].as_str().expect("stdout");
+    for expected in [
+        "registry=0",
+        "lock=0",
+        "bin=1",
+        "config=1",
+        "credentials=1",
+        "remove=1",
+    ] {
+        assert!(stdout.contains(expected), "{expected}: {granted}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(cargo.join("registry/entry")).expect("cache entry"),
+        "cached"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cargo.join(".package-cache")).expect("lock file"),
+        "locked"
+    );
+    assert!(!cargo.join("bin/cargo-planted").exists());
+    assert_eq!(
+        std::fs::read_to_string(cargo.join("config.toml")).expect("configuration"),
+        ""
+    );
+    assert!(
+        denied["stdout"]
+            .as_str()
+            .is_some_and(|stdout| stdout.contains("registry=1")),
+        "{denied}"
+    );
+    assert!(!cargo.join("registry/isolated").exists());
+}
+
 /// Approves every call, with `decision` for calls marked to leave the
 /// sandbox, and records the effects and command it was asked about.
 struct Approver {

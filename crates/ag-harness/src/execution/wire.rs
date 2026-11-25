@@ -39,11 +39,20 @@ pub(super) struct Launch {
     #[serde(default)]
     pub(super) unix_sockets: Vec<PathBuf>,
     pub(super) workspace: PathBuf,
+    /// Validated `(device, inode)` identity of each of
+    /// [`Self::write_files`], in grant order.
+    #[serde(default)]
+    pub(super) write_file_nodes: Vec<(u64, u64)>,
+    /// Resolved host cache files whose contents commands may read and
+    /// write, but which they may not remove, rename, or replace.
+    #[serde(default)]
+    pub(super) write_files: Vec<PathBuf>,
     /// Validated `(device, inode)` identity of each write grant, in grant
     /// order; Linux launch fails when a mounted grant no longer matches.
     pub(super) write_nodes: Vec<(u64, u64)>,
     /// Resolved absolute writable directories: the workspace write grants,
-    /// the temporary directory, then the writable roots.
+    /// the temporary directory, the writable roots, then the host cache
+    /// directories.
     pub(super) writes: Vec<PathBuf>,
 }
 

@@ -652,6 +652,58 @@ async fn settings_model_selector_separates_model_and_reasoning() {
         .expect("feature test failed");
 }
 
+/// Verify that host-cache sharing starts disabled and that enabling it in
+/// the settings dropdown shows its risk.
+#[tokio::test]
+async fn settings_share_host_caches_toggle() {
+    // Arrange, Act, Assert
+    FeatureTest::new("settings_share_host_caches")
+        .with_terminal_size(120, 30)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .wait_for_text("Share Host Caches", 5000)
+                    .compose(&common::move_to_settings_row(SettingsRow::ShareHostCaches))
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("disabled", "Host-cache sharing starts disabled")
+                    .press_key("Enter")
+                    .wait_for_text("Select setting value", 3000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text(
+                        "Enabled (sessions can tamper with caches all your builds use)",
+                        3000,
+                    )
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("enabled", "Host-cache sharing enabled with its risk")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    assert_eq!(report.captures.len(), 2, "Expected disabled and enabled");
+                    let disabled = common::frame_from_capture(&report.captures[0]);
+                    let disabled_full = Region::full(disabled.cols(), disabled.rows());
+                    assertion::assert_text_in_region(
+                        &disabled,
+                        "Disabled (per-session caches)",
+                        &disabled_full,
+                    );
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Enabled (sessions can tamper with caches all your builds use)",
+                        &full,
+                    );
+                    assertion::assert_not_visible(frame, "Select setting value");
+                })
+            },
+        )
+        .await
+        .expect("feature test failed");
+}
+
 /// Verify that `Launch Configurations` are edited as discrete list entries.
 ///
 /// Opens the command-list editor, adds one command, edits it, adds another

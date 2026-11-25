@@ -305,6 +305,9 @@ pub struct TurnRequest {
     pub execution_policy: crate::ExecutionPolicy,
     /// Session worktree folder where the agent runs.
     pub folder: PathBuf,
+    /// Which dependency caches sandboxed commands of an in-process harness
+    /// turn use. Agents that run without the native sandbox ignore it.
+    pub host_caches: HostCacheSharing,
     /// Main repository checkout that must remain read-only during the turn,
     /// when Agentty can resolve it.
     pub main_checkout_root: Option<PathBuf>,
@@ -329,6 +332,38 @@ pub struct TurnRequest {
     pub response_style: ResponseStyle,
     /// Response-speed preference for the turn.
     pub speed_mode: SpeedMode,
+}
+
+/// Which dependency caches (Cargo, Go, pip, npm) sandboxed harness commands
+/// use.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HostCacheSharing {
+    /// Copies in the session's own temporary directory, which host tools
+    /// and other sessions never read.
+    #[default]
+    PerSession,
+    /// The host's own caches, which commands can then write, so a session
+    /// could tamper with packages that other sessions and the host's own
+    /// builds later use.
+    Shared,
+}
+
+impl HostCacheSharing {
+    /// Returns the sharing a persisted on/off toggle selects.
+    #[must_use]
+    pub fn from_enabled(enabled: bool) -> Self {
+        if enabled {
+            Self::Shared
+        } else {
+            Self::PerSession
+        }
+    }
+
+    /// Returns whether commands use the host's own caches.
+    #[must_use]
+    pub fn is_shared(self) -> bool {
+        self == Self::Shared
+    }
 }
 
 /// How a turn handles a session context that outgrows the model's window.

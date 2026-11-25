@@ -6,9 +6,25 @@ use tokio::sync::mpsc;
 
 use crate::contract::{
     AgentChannel, AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentError, AgentFuture,
-    AgentRequestKind, SessionRef, StartSessionRequest, TurnContinuation, TurnEvent, TurnRequest,
-    TurnResult, normalize_instruction_conversation_id,
+    AgentRequestKind, HostCacheSharing, SessionRef, StartSessionRequest, TurnContinuation,
+    TurnEvent, TurnRequest, TurnResult, normalize_instruction_conversation_id,
 };
+
+#[test]
+fn test_host_cache_sharing_defaults_to_per_session_caches() {
+    // Arrange, Act, Assert
+    assert_eq!(HostCacheSharing::default(), HostCacheSharing::PerSession);
+    assert_eq!(
+        HostCacheSharing::from_enabled(false),
+        HostCacheSharing::PerSession
+    );
+    assert_eq!(
+        HostCacheSharing::from_enabled(true),
+        HostCacheSharing::Shared
+    );
+    assert!(!HostCacheSharing::PerSession.is_shared());
+    assert!(HostCacheSharing::Shared.is_shared());
+}
 
 #[test]
 fn test_agent_profile_prompt_tracks_active_change_and_clear_state() {

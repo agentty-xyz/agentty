@@ -629,6 +629,8 @@ too:
 | `with_full_disk_read`       | Reads everything except hidden paths, as Claude Code and Codex do; always hides the keychain and other credential stores                                                       |
 | `with_hidden_path`          | Hides one path, such as a project's `.env`, from reads and writes; refused inside a writable directory                                                                         |
 | `with_writable_root`        | Reads and writes one directory outside the workspace, every home directory, and system directories                                                                             |
+| `with_host_cache_directory` | Reads and writes one of the host's own dependency cache directories, such as `~/.cargo/registry`; the user must accept the risk                                                |
+| `with_host_cache_file`      | Reads and writes the contents of one host cache file, such as Cargo's `.package-cache` lock                                                                                    |
 | `with_unix_socket`          | Allows connecting to one Unix-domain socket, such as `ssh-agent`'s, pinned when configured; macOS only, Linux warns                                                            |
 | `with_excluded_command`     | Runs explicitly approved plain commands of one pinned program outside the sandbox, without a shell                                                                             |
 | `with_excluded_environment` | Passes one environment value to excluded commands only                                                                                                                         |
@@ -672,6 +674,15 @@ Coding sessions follow the sandboxes of Claude Code and Codex:
   without re-verifying them. Point tool caches at the session's temporary directory
   through the environment instead (`CARGO_HOME`, `npm_config_cache`, `GOMODCACHE`,
   `GOCACHE`, `PIP_CACHE_DIR`, and similar).
+- `with_host_cache_directory` is the one narrow exception, for a user who explicitly
+  accepts that sessions can tamper with packages every later build on the machine uses.
+  It pins the directory when granted, refuses a link, and refuses commands once the path
+  resolves elsewhere; commands cannot remove or replace the directory itself. It is
+  refused for a home directory or its ancestors, anything overlapping a hidden path or
+  credential store (so `~/.cargo` is refused while `~/.cargo/registry` is allowed), a
+  directory on `PATH` such as `~/.cargo/bin`, the workspace and its Git metadata, other
+  write grants, and system directories. `with_host_cache_file` grants a lock file's
+  contents only, never removing or replacing it.
 - An excluded program runs unsandboxed only when the `ApprovalHandler` decides
   `Decision::AllowUnsandboxed` on a call marked `ToolEffects::ExecutesUnsandboxed`;
   `Allow` keeps it sandboxed. The harness runs the pinned executable directly with the

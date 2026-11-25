@@ -1,7 +1,7 @@
 //! `SettingsManager` tests for settings rows, defaults, persisted values, and
 //! role model selection.
 
-use ag_contracts::ContextCompaction;
+use ag_contracts::{ContextCompaction, HostCacheSharing};
 use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{
@@ -58,7 +58,7 @@ fn settings_rows_include_role_model_coauthor_launch_and_auto_address_options() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows.len(), 9);
+    assert_eq!(rows.len(), 10);
     assert_eq!(rows[0].0, "Theme");
     assert_eq!(rows[1].0, "Max Subagents");
     assert_eq!(rows[2].0, "Default Smart Model");
@@ -68,6 +68,7 @@ fn settings_rows_include_role_model_coauthor_launch_and_auto_address_options() {
     assert_eq!(rows[6].0, "Launch Configurations");
     assert_eq!(rows[7].0, "Default Response Style");
     assert_eq!(rows[8].0, "Auto Address Comments");
+    assert_eq!(rows[9].0, "Share Host Caches");
 }
 
 #[test]
@@ -420,6 +421,81 @@ async fn selector_dropdown_selects_coauthor_setting_and_persists_value() {
             .await
             .expect("failed to load coauthor setting"),
         Some("true".to_string())
+    );
+}
+
+#[tokio::test]
+async fn share_host_caches_starts_disabled_and_persists_each_change() {
+    // Arrange
+    let (services, project_id) = test_services().await;
+    services
+        .db()
+        .settings()
+        .upsert_project_setting(project_id, SettingName::ShareHostCaches, "invalid-bool")
+        .await
+        .expect("failed to persist invalid host-cache flag");
+    let mut manager = settings_manager(&services, project_id).await;
+    let initially = manager.settings().host_caches;
+    let persisted = || async {
+        services
+            .db()
+            .settings()
+            .get_project_setting(project_id, SettingName::ShareHostCaches)
+            .await
+            .expect("failed to load host-cache setting")
+    };
+
+    // Act
+    select_row(&mut manager, "Share Host Caches");
+    manager.handle_enter();
+    manager.next_selector_dropdown_option();
+    manager.select_selector_dropdown_option().await;
+    let enabled = persisted().await;
+    let reloaded = settings_manager(&services, project_id)
+        .await
+        .settings()
+        .host_caches;
+    manager.handle_enter();
+    manager.next_selector_dropdown_option();
+    manager.select_selector_dropdown_option().await;
+    let disabled = persisted().await;
+
+    // Assert
+    assert_eq!(
+        initially,
+        HostCacheSharing::PerSession,
+        "an invalid value never enables sharing"
+    );
+    assert_eq!(enabled, Some("true".to_string()));
+    assert_eq!(reloaded, HostCacheSharing::Shared);
+    assert_eq!(disabled, Some("false".to_string()));
+    assert_eq!(manager.settings().host_caches, HostCacheSharing::PerSession);
+}
+
+#[test]
+fn settings_rows_show_share_host_caches_with_its_risk() {
+    // Arrange
+    let mut manager = new_settings_manager();
+
+    // Act
+    let disabled = manager.settings_rows()[9].clone();
+    manager.fixture_view_mut().host_caches = HostCacheSharing::Shared;
+    let enabled = manager.settings_rows()[9].clone();
+
+    // Assert
+    assert_eq!(
+        disabled,
+        (
+            "Share Host Caches",
+            "Disabled (per-session caches)".to_string()
+        )
+    );
+    assert_eq!(
+        enabled,
+        (
+            "Share Host Caches",
+            "Enabled (sessions can tamper with caches all your builds use)".to_string()
+        )
     );
 }
 

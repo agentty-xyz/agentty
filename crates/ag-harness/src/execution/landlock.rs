@@ -1,5 +1,5 @@
 //! Landlock write enforcement for Linux write grants: workspace
-//! directories, the temporary directory, and writable roots.
+//! directories, the temporary directory, writable roots, and host caches.
 //!
 //! Bubblewrap mounts keep the workspace read-only and Git metadata that
 //! exists at launch immutable, and mount boundaries reject cross-mount hard
@@ -60,6 +60,10 @@ const GRANT_ACCESS: u64 = ACCESS_WRITE_FILE
 /// Non-directory rights for the bound `/dev/null` device.
 const DEVICE_ACCESS: u64 = ACCESS_WRITE_FILE | ACCESS_TRUNCATE;
 
+/// Rights on one host cache file, such as a lock file: its contents only.
+#[cfg(target_os = "linux")]
+const FILE_ACCESS: u64 = ACCESS_WRITE_FILE | ACCESS_TRUNCATE;
+
 #[cfg(target_os = "linux")]
 const RULE_PATH_BENEATH: u32 = 1;
 
@@ -82,7 +86,7 @@ pub(super) fn validate_write_grants(grants: usize, abi: i64) -> Result<(), Execu
 /// read-only policy and no ruleset is installed.
 #[cfg(target_os = "linux")]
 pub(super) fn confine(configuration: &Launch) -> io::Result<()> {
-    if configuration.writes.is_empty() {
+    if configuration.writes.is_empty() && configuration.write_files.is_empty() {
         return Ok(());
     }
     let ruleset = ruleset(ruleset_access(abi())?)?;
@@ -94,6 +98,19 @@ pub(super) fn confine(configuration: &Launch) -> io::Result<()> {
             (stat.st_dev, stat.st_ino),
         )?;
         add_rule(&ruleset, &grant, GRANT_ACCESS)?;
+    }
+    for (index, write) in configuration.write_files.iter().enumerate() {
+        let grant = rustix::fs::open(
+            write,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let stat = rustix::fs::fstat(&grant)?;
+        verify_grant_identity(
+            configuration.write_file_nodes.get(index).copied(),
+            (stat.st_dev, stat.st_ino),
+        )?;
+        add_rule(&ruleset, &grant, FILE_ACCESS)?;
     }
     let device = rustix::fs::open("/dev/null", OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?;
     add_rule(&ruleset, &device, DEVICE_ACCESS)?;

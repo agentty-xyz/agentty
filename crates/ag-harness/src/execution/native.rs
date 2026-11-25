@@ -20,7 +20,7 @@ use super::contract::{
 };
 use super::output;
 use super::wire::{Launch, Notice};
-use crate::bash::{BashConfig, Capability};
+use crate::bash::{BashConfig, Capability, HostCachePin};
 use crate::command_journal::CommandCleanupScope;
 use crate::sandbox::SandboxUnavailableReason;
 
@@ -160,6 +160,8 @@ pub(crate) async fn probe(
     let snapshot = &configuration.snapshot;
     let writes = !snapshot.workspace_writes.is_empty()
         || !snapshot.writable_roots.is_empty()
+        || !snapshot.host_cache_directories.is_empty()
+        || !snapshot.host_cache_files.is_empty()
         || snapshot.temporary_directory.is_some();
     if !host.landlock && writes {
         return Err(SandboxUnavailableReason::LandlockUnavailable);
@@ -246,6 +248,10 @@ struct Access {
     hidden_paths: Vec<PathBuf>,
     /// Unix-domain sockets, resolved when configured.
     unix_sockets: Vec<PathBuf>,
+    /// `(device, inode)` identity of each of [`Self::write_files`].
+    write_file_nodes: Vec<(u64, u64)>,
+    /// Resolved host cache files whose contents commands may write.
+    write_files: Vec<PathBuf>,
     write_nodes: Vec<(u64, u64)>,
     writes: Vec<PathBuf>,
 }
@@ -297,6 +303,8 @@ impl NativeProcess {
             system: self.configuration.snapshot.grants(Capability::SystemReads),
             unix_sockets: access.unix_sockets,
             workspace: policy.workspace().to_path_buf(),
+            write_file_nodes: access.write_file_nodes,
+            write_files: access.write_files,
             write_nodes: access.write_nodes,
             writes: access.writes,
         })
@@ -426,7 +434,10 @@ async fn resolve_outside_grants(
         }
         access.hidden_paths.push(resolved);
     }
-    if policy.allows_full_disk_read() {
+    // The credential stores full-disk reads hide; host caches must stay
+    // clear of them even where reads are narrower.
+    let mut stores = Vec::new();
+    if policy.allows_full_disk_read() || has_host_caches(policy) {
         // A built-in store inside the workspace or a writable directory,
         // such as a `CARGO_HOME` in the temporary directory, belongs to
         // the session.
@@ -441,9 +452,12 @@ async fn resolve_outside_grants(
                     .iter()
                     .any(|write| resolved.starts_with(write));
             if !session_owned {
-                access.hidden_paths.push(resolved);
+                stores.push(resolved);
             }
         }
+    }
+    if policy.allows_full_disk_read() {
+        access.hidden_paths.extend(stores.iter().cloned());
     }
     // Sockets were resolved when configured; one a command could replace
     // would widen the grant.
@@ -455,8 +469,163 @@ async fn resolve_outside_grants(
         }
         access.unix_sockets.push(socket.clone());
     }
+    if has_host_caches(policy) {
+        let protected = access
+            .hidden_paths
+            .iter()
+            .chain(&stores)
+            .cloned()
+            .collect::<Vec<_>>();
+        resolve_host_caches(files, policy, &homes, &protected, access).await?;
+    }
 
     Ok(())
+}
+
+/// Resolves the host cache grants, the narrow exception to keeping writes
+/// out of home directories, after every other grant, so each is checked
+/// against all of them and against `protected`, the hidden paths and
+/// credential stores.
+///
+/// # Errors
+/// Returns [`ExecutionError::Unsupported`] for a host cache that is missing
+/// or of the wrong type, or that [`HostCacheLimits::allows`] refuses.
+async fn resolve_host_caches(
+    files: &dyn Inspection,
+    policy: &ExecutionPolicy,
+    homes: &[PathBuf],
+    protected: &[PathBuf],
+    access: &mut Access,
+) -> Result<(), ExecutionError> {
+    let mut program_directories = Vec::new();
+    for directory in variable_paths(files, policy, "PATH").await {
+        program_directories.push(resolve_hidden(files, &directory).await);
+    }
+    let mut limits = HostCacheLimits {
+        homes,
+        program_directories,
+        protected,
+        taken: std::iter::once(policy.workspace())
+            .chain(access.writes.iter().map(PathBuf::as_path))
+            .chain(access.git_metadata.iter().map(PathBuf::as_path))
+            .chain(access.unix_sockets.iter().map(PathBuf::as_path))
+            .map(Path::to_path_buf)
+            .collect(),
+    };
+    let pins = policy.host_cache_pins();
+    for (index, directory) in policy.host_cache_directories().iter().enumerate() {
+        let (canonical, node) = root_identity(files, directory).await?;
+        // A cache inside a home cannot contain it; the check is for the
+        // home itself and its ancestors, such as `/home`.
+        if !pinned(pins.directories.get(index), &canonical, node)
+            || homes.iter().any(|home| home.starts_with(&canonical))
+            || !limits.claim(&canonical)
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.writes.push(canonical);
+        access.write_nodes.push(node);
+    }
+    for (index, file) in policy.host_cache_files().iter().enumerate() {
+        let canonical = files
+            .canonicalize(file)
+            .await
+            .map_err(|_| ExecutionError::Unsupported)?;
+        let metadata = files
+            .metadata(&canonical)
+            .await
+            .map_err(|_| ExecutionError::Unsupported)?;
+        let node = (metadata.dev(), metadata.ino());
+        // Writing a file with another link would write that name too.
+        if !names_itself(files, file, &canonical).await
+            || !pinned(pins.files.get(index), &canonical, node)
+            || !metadata.is_file()
+            || metadata.nlink() != 1
+            || !limits.claim(&canonical)
+        {
+            return Err(ExecutionError::Unsupported);
+        }
+        access.write_files.push(canonical);
+        access.write_file_nodes.push(node);
+    }
+
+    Ok(())
+}
+
+/// Returns whether a host cache, resolved now to `canonical` with
+/// `(device, inode)` identity `node`, is still what `pin` recorded when it
+/// was granted, so a command that replaced it cannot redirect the grant.
+fn pinned(pin: Option<&HostCachePin>, canonical: &Path, node: (u64, u64)) -> bool {
+    pin.is_some_and(|pin| pin.resolved == canonical && pin.node == node)
+}
+
+/// What a resolved host cache must stay clear of.
+struct HostCacheLimits<'a> {
+    /// The home directories, whose own system-directory overlap is allowed.
+    homes: &'a [PathBuf],
+    /// The resolved directories on the `PATH` of the harness and the
+    /// commands, where planted programs would run.
+    program_directories: Vec<PathBuf>,
+    /// Hidden paths and credential stores.
+    protected: &'a [PathBuf],
+    /// The workspace, its Git metadata, the other write grants, the host
+    /// caches resolved so far, and the granted sockets.
+    taken: Vec<PathBuf>,
+}
+
+impl HostCacheLimits<'_> {
+    /// Returns whether the resolved `cache` may be granted, as
+    /// [`Self::allows`] decides, and, when it may, records it so no later
+    /// host cache overlaps it: only each grant's own path stays in place,
+    /// so the directories between two nested grants could be moved to
+    /// redirect the inner one.
+    fn claim(&mut self, cache: &Path) -> bool {
+        let allowed = self.allows(cache);
+        if allowed {
+            self.taken.push(cache.to_path_buf());
+        }
+
+        allowed
+    }
+
+    /// Returns whether the resolved `cache` overlaps none of the limits, no
+    /// system or toolchain directory unless it lies inside a home
+    /// directory, such as `/root/.cargo/registry`, lies in no home's
+    /// `Library`, which holds the login items and preferences macOS runs
+    /// and reads, and has no Git metadata component.
+    fn allows(&self, cache: &Path) -> bool {
+        let inside_home = self
+            .homes
+            .iter()
+            .any(|home| cache.starts_with(home) && cache != home);
+        let system = SYSTEM_DIRECTORIES
+            .iter()
+            .any(|system| overlaps(cache, Path::new(system)));
+        let library = self
+            .homes
+            .iter()
+            .any(|home| cache.starts_with(home.join("Library")));
+
+        (inside_home || !system)
+            && !library
+            && !has_git_component(cache)
+            && !self
+                .protected
+                .iter()
+                .chain(&self.program_directories)
+                .chain(&self.taken)
+                .any(|limit| overlaps(cache, limit))
+    }
+}
+
+/// Returns whether `path` has a component naming Git metadata, whatever its
+/// case.
+fn has_git_component(path: &Path) -> bool {
+    path.components().any(|part| {
+        part.as_os_str()
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(b".git")
+    })
 }
 
 /// Returns the home directories commands could find credentials in: the
@@ -472,8 +641,7 @@ async fn homes(
     policy: &ExecutionPolicy,
 ) -> Result<Vec<PathBuf>, ExecutionError> {
     let account = files.home().await;
-    if account.is_none() && (policy.allows_full_disk_read() || !policy.writable_roots().is_empty())
-    {
+    if account.is_none() && (policy.allows_full_disk_read() || grants_outside_writes(policy)) {
         return Err(ExecutionError::Unsupported);
     }
     let mut homes = account.into_iter().collect::<Vec<_>>();
@@ -495,6 +663,17 @@ async fn homes(
     }
 
     Ok(homes)
+}
+
+/// Returns whether `policy` grants writes whose checks depend on the home
+/// directories: writable roots or host caches.
+fn grants_outside_writes(policy: &ExecutionPolicy) -> bool {
+    !policy.writable_roots().is_empty() || has_host_caches(policy)
+}
+
+/// Returns whether `policy` shares any of the host's dependency caches.
+fn has_host_caches(policy: &ExecutionPolicy) -> bool {
+    !policy.host_cache_directories().is_empty() || !policy.host_cache_files().is_empty()
 }
 
 /// Returns the absolute paths the variable `name` holds in this process's
@@ -761,16 +940,24 @@ async fn root_identity(
     path: &Path,
 ) -> Result<(PathBuf, (u64, u64)), ExecutionError> {
     let (canonical, node) = directory_identity(files, path).await?;
+    if !names_itself(files, path, &canonical).await {
+        return Err(ExecutionError::Unsupported);
+    }
+
+    Ok((canonical, node))
+}
+
+/// Returns whether `path`, resolved to `canonical`, names the entry itself:
+/// its last component is no link and matches the entry's name on disk,
+/// letter case included.
+async fn names_itself(files: &dyn Inspection, path: &Path, canonical: &Path) -> bool {
     // Policy validation already refuses `/`, the only path without both.
     let parent = files.canonicalize(path.parent().unwrap_or(path)).await.ok();
     let unlinked = parent
         .zip(path.file_name())
         .map(|(parent, name)| parent.join(name));
-    if unlinked.as_ref() != Some(&canonical) {
-        return Err(ExecutionError::Unsupported);
-    }
 
-    Ok((canonical, node))
+    unlinked.as_deref() == Some(canonical)
 }
 
 /// The workspace repository's resolved Git directories.
@@ -1100,6 +1287,8 @@ async fn validate_executable(
 fn write_grants(policy: &ExecutionPolicy) -> usize {
     policy.workspace_writes().len()
         + policy.writable_roots().len()
+        + policy.host_cache_directories().len()
+        + policy.host_cache_files().len()
         + usize::from(policy.temporary_directory().is_some())
 }
 

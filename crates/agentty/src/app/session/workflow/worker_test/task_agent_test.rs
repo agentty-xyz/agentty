@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime};
 
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, ContextCompaction,
-    MockAgentChannel, PermissionMode, TurnEvent, TurnRequest, TurnUsage, UsageCheckpoint,
-    UsagePurpose,
+    HostCacheSharing, MockAgentChannel, PermissionMode, TurnEvent, TurnRequest, TurnUsage,
+    UsageCheckpoint, UsagePurpose,
 };
 use ag_git::{DiffStats, MockGitClient};
 use ag_protocol::{AgentResponse, QuestionItem};
@@ -73,6 +73,25 @@ async fn planner_execution_uses_captured_model_own_history_and_read_only_permiss
         )
         .await
         .expect("ordinary questions");
+    // The project shares host caches, which task turns carry too.
+    let project_id = app
+        .services
+        .db()
+        .sessions()
+        .load_session_project_id(&session_id)
+        .await
+        .expect("project lookup")
+        .expect("session project");
+    app.services
+        .db()
+        .settings()
+        .upsert_project_setting(
+            project_id,
+            crate::domain::setting::SettingName::ShareHostCaches,
+            "true",
+        )
+        .await
+        .expect("host-cache sharing");
     let factory = TestSessionRunFactory::install(&mut app.services);
     let service = app.session_service();
     let before = app
@@ -271,6 +290,7 @@ async fn assert_planner_attempt(
 fn assert_planner_request(turn: &TurnRequest, attempt: &str, expected_kind: &AgentRequestKind) {
     assert_eq!(turn.model, AgentModel::Gpt61Sol.provider_model_str());
     assert_eq!(turn.permission_mode, PermissionMode::ReadOnly);
+    assert_eq!(turn.host_caches, HostCacheSharing::Shared);
     // Task agents never compact, so no hidden notice drops their history.
     assert_eq!(turn.context_compaction, ContextCompaction::Off);
     assert_eq!(&turn.request_kind, expected_kind);

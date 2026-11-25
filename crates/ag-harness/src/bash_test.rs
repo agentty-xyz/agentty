@@ -635,6 +635,104 @@ fn coding_grants_validate_and_record_only_what_they_set() {
 }
 
 #[test]
+fn host_caches_are_pinned_recorded_only_when_granted_and_bounded() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let root = directory.path().canonicalize().expect("canonical fixture");
+    for entry in [
+        "cargo/registry",
+        "repo/.git/objects",
+        "extra",
+        "linked-target",
+    ] {
+        std::fs::create_dir_all(root.join(entry)).expect("fixture directory");
+    }
+    for entry in ["cargo/.package-cache", "extra.lock"] {
+        std::fs::write(root.join(entry), "").expect("fixture file");
+    }
+    std::os::unix::fs::symlink(root.join("linked-target"), root.join("linked"))
+        .expect("linked directory");
+    std::os::unix::fs::symlink(root.join("extra.lock"), root.join("linked.lock"))
+        .expect("linked file");
+    let valid = hiding_configuration();
+    let mut limited = valid.clone();
+    for index in 0..64 {
+        let cache = root.join(format!("cache/{index}"));
+        std::fs::create_dir_all(&cache).expect("cache directory");
+        std::fs::write(cache.join("lock"), "").expect("cache file");
+        limited = limited
+            .with_host_cache_directory(cache.clone())
+            .expect("directory within limit")
+            .with_host_cache_file(cache.join("lock"))
+            .expect("file within limit");
+    }
+
+    // Act
+    let granted = valid
+        .clone()
+        .with_host_cache_directory(root.join("cargo/registry"))
+        .expect("host cache")
+        .with_host_cache_file(root.join("cargo/.package-cache"))
+        .expect("host cache file");
+
+    // Assert
+    // Policies without host caches keep their recorded fingerprints.
+    for name in ["host_cache_directories", "host_cache_files"] {
+        assert!(valid.fingerprint().get(name).is_none(), "{name}");
+    }
+    let fingerprint = granted.fingerprint();
+    assert_eq!(
+        fingerprint["host_cache_directories"],
+        json!([root.join("cargo/registry")])
+    );
+    assert_eq!(
+        fingerprint["host_cache_files"],
+        json!([root.join("cargo/.package-cache")])
+    );
+    assert_eq!(
+        granted.host_cache_pins.directories[0].resolved,
+        root.join("cargo/registry")
+    );
+    assert_eq!(
+        granted.host_cache_pins.files[0].resolved,
+        root.join("cargo/.package-cache")
+    );
+    let decoded: BashPolicySnapshot = serde_json::from_value(fingerprint).expect("snapshot");
+    assert_eq!(decoded, granted.snapshot);
+    for rejected in [
+        valid.clone().with_host_cache_directory("relative".into()),
+        valid.clone().with_host_cache_directory("/".into()),
+        valid
+            .clone()
+            .with_host_cache_directory(root.join("repo/.git/objects")),
+        valid
+            .clone()
+            .with_host_cache_directory(root.join("extra/../cargo")),
+        valid
+            .clone()
+            .with_host_cache_directory(root.join("missing")),
+        valid.clone().with_host_cache_directory(root.join("linked")),
+        valid
+            .clone()
+            .with_host_cache_directory(root.join("extra.lock")),
+        granted
+            .clone()
+            .with_host_cache_directory(root.join("cargo/registry")),
+        limited
+            .clone()
+            .with_host_cache_directory(root.join("extra")),
+        valid.clone().with_host_cache_file("relative.lock".into()),
+        valid.clone().with_host_cache_file("/".into()),
+        valid.clone().with_host_cache_file(root.join("linked.lock")),
+        valid.with_host_cache_file(root.join("extra")),
+        granted.with_host_cache_file(root.join("cargo/.package-cache")),
+        limited.with_host_cache_file(root.join("extra.lock")),
+    ] {
+        assert_eq!(rejected, Err(BashError::InvalidPolicy));
+    }
+}
+
+#[test]
 fn excluded_environment_values_are_validated_and_recorded_by_name() {
     // Arrange
     let valid = hiding_configuration();

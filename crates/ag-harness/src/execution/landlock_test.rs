@@ -74,6 +74,8 @@ mod linux {
             system: false,
             unix_sockets: vec![],
             workspace: workspace.to_path_buf(),
+            write_file_nodes: vec![],
+            write_files: vec![],
             write_nodes: vec![],
             writes: vec![],
         }
@@ -125,5 +127,12 @@ mod linux {
         assert!(confine(&configuration).is_err(), "swapped grant identity");
         configuration.write_nodes = vec![];
         assert!(confine(&configuration).is_err(), "absent grant identity");
+        configuration.writes = vec![];
+        configuration.write_files = vec![workspace.join("missing.lock")];
+        configuration.write_file_nodes = vec![(1, 1)];
+        assert!(confine(&configuration).is_err(), "missing cache file");
+        std::fs::write(workspace.join("cache.lock"), "").expect("cache file");
+        configuration.write_files = vec![workspace.join("cache.lock")];
+        assert!(confine(&configuration).is_err(), "swapped cache file");
     }
 }

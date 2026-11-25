@@ -20,8 +20,9 @@ use ag_agent::{
     NativeHarnessConfig, TrustedCargoCache, create_agent_channel, dispatch_sandbox_helper,
 };
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, PermissionMode,
-    ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
+    AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, HostCacheSharing,
+    PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent,
+    TurnNotice, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
@@ -173,8 +174,20 @@ async fn session_commands_write_a_linked_worktree_but_not_its_git_metadata() -> 
     // Arrange
     let fixture = Fixture::new()?;
     let server = MockServer::start().await;
-    respond(&server, r#""tool_call_id":"call-bash""#, answer("Done"), 1).await;
-    respond(&server, "Commit notes", bash_call(&fixture.command()), 2).await;
+    respond_when(
+        &server,
+        |body| body.contains(r#""tool_call_id":"call-bash""#) && !body.contains("Stop sharing"),
+        answer("Done"),
+        1,
+    )
+    .await;
+    respond(
+        &server,
+        "Commit notes",
+        bash_call(&fixture.command(), "call-bash"),
+        2,
+    )
+    .await;
     let config = fixture.config(&server, BTreeMap::new());
     let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -230,7 +243,135 @@ async fn session_commands_write_a_linked_worktree_but_not_its_git_metadata() -> 
         notices.contains(&TurnNotice::SandboxAvailable),
         "the sandboxed turn must report it: {notices:?}"
     );
-    fixture.assert_effects()
+    fixture.assert_effects()?;
+
+    host_caches_are_shared_only_when_the_turn_asks(&fixture, &server, &config).await
+}
+
+/// Runs a turn of another session sharing the host's caches, whose command
+/// writes the Cargo registry and takes Cargo's cache lock through its
+/// `CARGO_HOME` and tries to write the host Cargo home's programs,
+/// configuration, and credentials.
+async fn host_caches_are_shared_only_when_the_turn_asks(
+    fixture: &Fixture,
+    server: &MockServer,
+    config: &NativeHarnessConfig,
+) -> TestResult {
+    // Arrange
+    respond(
+        server,
+        "Share caches",
+        bash_call(&fixture.cache_command(), "call-bash"),
+        2,
+    )
+    .await;
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(config));
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+    let request = TurnRequest {
+        host_caches: HostCacheSharing::Shared,
+        ..turn_request(&fixture.worktree, None, "Share caches")
+    };
+
+    // Act
+    let result = channel
+        .run_turn("session-shared".to_string(), request, events_tx)
+        .await;
+
+    // Assert
+    assert_eq!(result?.assistant_message.answer, "Done");
+    let mut notices = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        if let TurnEvent::Notice(notice) = event {
+            notices.push(notice);
+        }
+    }
+    assert!(
+        notices.contains(&TurnNotice::HostCachesNotShared {
+            caches: vec!["npm".to_string()],
+        }),
+        "the linked npm cache must be named: {notices:?}"
+    );
+    let bodies = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect::<Vec<_>>();
+    let bash_result = bodies
+        .iter()
+        .rfind(|body| body.contains(r#""tool_call_id":"call-bash""#))
+        .ok_or("bash result should reach the model")?;
+    assert!(
+        bash_result.contains(r#"\"stdout\":\"registry\\nlocked\\n\""#),
+        "{bash_result}"
+    );
+    let cargo = fixture.home.path().join(".cargo");
+    assert_eq!(
+        std::fs::read_to_string(cargo.join("registry/shared"))?,
+        "shared"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cargo.join(".package-cache"))?,
+        "locked"
+    );
+    assert!(!cargo.join("bin/planted").exists());
+    assert_eq!(std::fs::read_to_string(cargo.join("config.toml"))?, "");
+    assert_eq!(std::fs::read_to_string(cargo.join("credentials.toml"))?, "");
+
+    host_caches_stop_being_shared(fixture, server, config).await
+}
+
+/// Runs a turn of the same session after sharing was turned off, whose
+/// command writes the registry through its `CARGO_HOME` and the host's
+/// registry directly; only the session's own registry receives the write.
+async fn host_caches_stop_being_shared(
+    fixture: &Fixture,
+    server: &MockServer,
+    config: &NativeHarnessConfig,
+) -> TestResult {
+    // Arrange
+    let cargo = fixture.home.path().join(".cargo");
+    respond_when(
+        server,
+        |body| body.contains("Stop sharing") && !body.contains("call-off"),
+        bash_call(
+            &format!(
+                "mkdir -p \"$CARGO_HOME/registry\" && printf session > \
+                 \"$CARGO_HOME/registry/after\" && echo own; printf x > '{}/registry/direct' && \
+                 echo host",
+                cargo.display()
+            ),
+            "call-off",
+        ),
+        1,
+    )
+    .await;
+    respond(server, r#""tool_call_id":"call-off""#, answer("Stopped"), 1).await;
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(config));
+    let (events_tx, _events_rx) = mpsc::unbounded_channel();
+
+    // Act
+    let result = channel
+        .run_turn(
+            "session-shared".to_string(),
+            turn_request(&fixture.worktree, None, "Stop sharing"),
+            events_tx,
+        )
+        .await;
+
+    // Assert
+    assert_eq!(result?.assistant_message.answer, "Stopped");
+    let session_cargo = fixture.data_root.path().join("session-shared/tmp/cargo");
+    assert!(!session_cargo.join("registry").is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(session_cargo.join("registry/after"))?,
+        "session"
+    );
+    assert!(!cargo.join("registry/after").exists());
+    assert!(!cargo.join("registry/direct").exists());
+
+    Ok(())
 }
 
 /// Fills the project's trusted Cargo cache through a host `cargo` that
@@ -266,7 +407,13 @@ async fn session_gets_verified_copies_and_cannot_reach_the_cache() -> TestResult
     );
     let server = MockServer::start().await;
     respond(&server, r#""tool_call_id":"call-bash""#, answer("Done"), 1).await;
-    respond(&server, "Use the cache", bash_call(&command), 2).await;
+    respond(
+        &server,
+        "Use the cache",
+        bash_call(&command, "call-bash"),
+        2,
+    )
+    .await;
     let config = fixture
         .config(&server, BTreeMap::new())
         .with_trusted_cargo_cache(cache_root);
@@ -338,6 +485,9 @@ async fn bash_result(server: &MockServer, prompt: &str) -> TestResult<String> {
 struct Fixture {
     agentty_root: TempDir,
     data_root: TempDir,
+    /// The host's home directory, with a Cargo home holding programs,
+    /// configuration, and credentials.
+    home: TempDir,
     outside: TempDir,
     repository: TempDir,
     worktree: PathBuf,
@@ -377,9 +527,19 @@ impl Fixture {
             r#"{"providers":{"muse":{"api_key":"muse-key"}},"version":1}"#,
         )?;
 
+        let home = tempfile::tempdir()?;
+        std::fs::create_dir_all(home.path().join(".cargo/bin"))?;
+        for file in ["config.toml", "credentials.toml"] {
+            std::fs::write(home.path().join(".cargo").join(file), "")?;
+        }
+        // An npm cache moved elsewhere through a link stays per session.
+        std::fs::create_dir(home.path().join("npm-elsewhere"))?;
+        std::os::unix::fs::symlink(home.path().join("npm-elsewhere"), home.path().join(".npm"))?;
+
         Ok(Self {
             agentty_root,
             data_root: tempfile::tempdir()?,
+            home,
             outside: tempfile::tempdir()?,
             repository,
             worktree,
@@ -415,6 +575,22 @@ impl Fixture {
         )
     }
 
+    /// Returns the command a session sharing the host's caches runs: it
+    /// writes the registry and takes the cache lock through `CARGO_HOME`,
+    /// then tries to write the host Cargo home's programs, configuration,
+    /// and credentials, so only the first two markers reach standard
+    /// output.
+    fn cache_command(&self) -> String {
+        format!(
+            "printf shared > \"$CARGO_HOME/registry/shared\" && echo registry; perl -e 'open(my \
+             $f, \"+<\", $ARGV[0]) or exit 2; flock($f, 2) or exit 3; print $f \"locked\" or exit \
+             4; close($f) or exit 5' \"$CARGO_HOME/.package-cache\" && echo locked; printf x > \
+             '{cargo}/bin/planted' && echo bin; printf x >> '{cargo}/config.toml' && echo config; \
+             printf x >> '{cargo}/credentials.toml' && echo credentials",
+            cargo = self.home.path().join(".cargo").display(),
+        )
+    }
+
     /// Returns a harness configuration whose provider is `server`, with the
     /// `extra` host variables.
     fn config(&self, server: &MockServer, extra: BTreeMap<String, String>) -> NativeHarnessConfig {
@@ -423,10 +599,7 @@ impl Fixture {
                 "AGENTTY_ROOT".to_string(),
                 self.agentty_root.path().display().to_string(),
             ),
-            (
-                "HOME".to_string(),
-                std::env::var("HOME").unwrap_or_default(),
-            ),
+            ("HOME".to_string(), self.home.path().display().to_string()),
             ("MODEL_API_BASE_URL".to_string(), server.uri()),
             ("MODEL_API_KEY".to_string(), "muse-key".to_string()),
             (
@@ -626,6 +799,7 @@ fn turn_request(folder: &Path, main_checkout: Option<&Path>, prompt: &str) -> Tu
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::Concise,
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::Normal,
     }
 }
@@ -640,15 +814,15 @@ fn answer(text: &str) -> ResponseTemplate {
     }))
 }
 
-/// Returns one `bash` tool call running `command`.
-fn bash_call(command: &str) -> ResponseTemplate {
+/// Returns one `bash` tool call `id` running `command`.
+fn bash_call(command: &str, id: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({
         "choices": [{
             "finish_reason": "tool_calls",
             "message": {
                 "content": null,
                 "tool_calls": [{
-                    "id": "call-bash",
+                    "id": id,
                     "type": "function",
                     "function": {
                         "name": "bash",
@@ -658,6 +832,22 @@ fn bash_call(command: &str) -> ResponseTemplate {
             }
         }]
     }))
+}
+
+/// Mounts one response for requests whose body `matches`.
+async fn respond_when(
+    server: &MockServer,
+    matches: fn(&str) -> bool,
+    response: ResponseTemplate,
+    priority: u8,
+) {
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(move |request: &wiremock::Request| matches(&String::from_utf8_lossy(&request.body)))
+        .respond_with(response)
+        .with_priority(priority)
+        .mount(server)
+        .await;
 }
 
 /// Mounts one response for requests whose body contains `marker`.

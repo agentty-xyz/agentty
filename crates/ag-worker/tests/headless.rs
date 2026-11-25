@@ -6,8 +6,8 @@ use std::task::Poll;
 
 use ag_contracts::{
     ActivityEvent, ActivityKind, ActivityStatus, AgentDefinitionPrompt, AgentError,
-    AgentRequestKind, MockAgentChannel, PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode,
-    TurnContinuation, TurnEvent, TurnRequest, TurnResult, TurnUsage,
+    AgentRequestKind, HostCacheSharing, MockAgentChannel, PermissionMode, ReasoningLevel,
+    ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnRequest, TurnResult, TurnUsage,
 };
 use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_worker::{
@@ -387,6 +387,7 @@ fn turn_request() -> TurnRequest {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::default(),
     }
 }

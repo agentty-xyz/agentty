@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fs::Metadata;
 use std::io;
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -15,11 +15,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use super::{
-    Access, Host, Inspection, LocalInspection, Native, NativeLaunch, NativeProcess, allowed_root,
-    bounded_bytes, git_directories, pointer, probe, resolve_access, resolve_hidden,
-    validate_executable,
+    Access, Host, HostCacheLimits, Inspection, LocalInspection, Native, NativeLaunch,
+    NativeProcess, allowed_root, bounded_bytes, git_directories, pointer, probe, resolve_access,
+    resolve_hidden, validate_executable,
 };
-use crate::bash::BashConfig;
+use crate::bash::{BashConfig, HostCachePin, HostCachePins};
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
     BashExecutor, BashProcess, Enforcement, ExecutionCommand, ExecutionError, ExecutionPolicy,
@@ -1445,4 +1445,389 @@ fn host(platform: &'static str, landlock: bool, seatbelt: &Path) -> Host {
         platform,
         seatbelt: seatbelt.to_path_buf(),
     }
+}
+
+/// A fake home with Cargo's, npm's, and Go's caches beside Cargo's
+/// credentials and the program directories on `PATH`.
+struct CacheHome {
+    fixture: AccessFixture,
+    home: PathBuf,
+}
+
+impl CacheHome {
+    fn new() -> Self {
+        let fixture = AccessFixture::new();
+        let home = fixture.outside.join("home");
+        for directory in [
+            ".cargo/registry",
+            ".cargo/git",
+            ".cargo/bin",
+            ".npm",
+            "go/bin",
+            "go/pkg/mod",
+            "repository/.git/objects",
+            "sessions/own",
+        ] {
+            std::fs::create_dir_all(home.join(directory)).expect("cache home directory");
+        }
+        for file in [".cargo/.package-cache", ".cargo/credentials.toml"] {
+            std::fs::write(home.join(file), "").expect("cache home file");
+        }
+
+        Self { fixture, home }
+    }
+
+    /// Returns an inspection whose account home and `HOME` are the fake
+    /// home and whose `PATH` holds its program directories.
+    fn files(&self) -> HomeInspection {
+        let mut files = HomeInspection::at(&self.home);
+        let programs =
+            std::env::join_paths([self.home.join(".cargo/bin"), self.home.join("go/bin")])
+                .expect("program path");
+        files.host.push(("PATH", programs.into()));
+
+        files
+    }
+
+    /// Returns the policy of a coding session sharing `directories` and
+    /// `files` of the host's caches.
+    fn policy(&self, directories: Vec<PathBuf>, files: Vec<PathBuf>) -> ExecutionPolicy {
+        self.fixture.policy(Grants {
+            read_scope: ReadScope::FullDisk,
+            temporary_directory: Some(self.home.join("sessions/own")),
+            ..host_cache_grants(directories, files)
+        })
+    }
+}
+
+/// Returns grants sharing the host cache `directories` and `files`, pinned
+/// to what they resolve to now, following links as a pin recorded before a
+/// link appeared would.
+fn host_cache_grants(directories: Vec<PathBuf>, files: Vec<PathBuf>) -> Grants {
+    let pin = |path: &PathBuf| {
+        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let node = std::fs::metadata(&resolved)
+            .map_or((0, 0), |metadata| (metadata.dev(), metadata.ino()));
+
+        HostCachePin { node, resolved }
+    };
+
+    Grants {
+        host_cache_pins: HostCachePins {
+            directories: directories.iter().map(pin).collect(),
+            files: files.iter().map(pin).collect(),
+        },
+        host_cache_directories: directories,
+        host_cache_files: files,
+        ..Grants::default()
+    }
+}
+
+#[tokio::test]
+async fn host_caches_resolve_beside_the_credentials_and_programs_they_exclude() {
+    // Arrange
+    let cache_home = CacheHome::new();
+    let home = &cache_home.home;
+    let directories = vec![home.join(".cargo/registry"), home.join(".npm")];
+    let lock = home.join(".cargo/.package-cache");
+
+    // Act
+    let shared = resolve_access(
+        &cache_home.files(),
+        &cache_home.policy(directories, vec![lock.clone()]),
+    )
+    .await
+    .expect("shared caches");
+    let narrow = resolve_access(
+        &cache_home.files(),
+        &cache_home
+            .fixture
+            .policy(host_cache_grants(vec![home.join("go/pkg/mod")], Vec::new())),
+    )
+    .await
+    .expect("caches without full-disk reads");
+
+    // Assert
+    assert_eq!(
+        shared.writes,
+        [
+            home.join("sessions/own"),
+            home.join(".cargo/registry"),
+            home.join(".npm")
+        ]
+    );
+    assert_eq!(shared.write_nodes.len(), 3);
+    assert_eq!(shared.write_files, [lock]);
+    assert_eq!(shared.write_file_nodes.len(), 1);
+    // Cargo's credentials beside the shared registry stay hidden.
+    assert!(
+        shared
+            .hidden_paths
+            .contains(&home.join(".cargo/credentials.toml"))
+    );
+    assert_eq!(narrow.writes, [home.join("go/pkg/mod")]);
+}
+
+#[tokio::test]
+async fn host_caches_refuse_homes_credentials_programs_and_other_grants() {
+    // Arrange
+    let cache_home = CacheHome::new();
+    let home = cache_home.home.clone();
+    let fixture = &cache_home.fixture;
+    std::fs::hard_link(
+        home.join(".cargo/credentials.toml"),
+        home.join("credentials-link"),
+    )
+    .expect("hard link");
+    std::fs::create_dir_all(home.join(".ssh/cache")).expect("credential store");
+    std::fs::write(home.join(".cargo/bin/.package-cache"), "").expect("program file");
+    symlink(home.join(".cargo"), home.join("cargo-alias")).expect("Cargo alias");
+    symlink(&fixture.workspace, home.join("workspace-alias")).expect("workspace alias");
+    symlink(&fixture.admin, home.join("metadata-alias")).expect("metadata alias");
+    let directories = [
+        // The home directory and its ancestors.
+        home.clone(),
+        fixture.outside.clone(),
+        // Cargo's home holds its credentials and programs; a link, which
+        // could be swapped later; a credential store and anything inside it.
+        home.join(".cargo"),
+        home.join("cargo-alias"),
+        home.join(".ssh"),
+        home.join(".ssh/cache"),
+        // Program directories on `PATH`, and what contains them.
+        home.join(".cargo/bin"),
+        home.join("go"),
+        // Git metadata, the workspace, and the other write grants.
+        home.join("repository/.git/objects"),
+        home.join("workspace-alias"),
+        home.join("metadata-alias"),
+        home.join("sessions/own"),
+        home.join("sessions"),
+        // Missing, not a directory, or a system directory.
+        home.join("missing"),
+        home.join(".cargo/.package-cache"),
+        PathBuf::from("/usr/lib"),
+    ];
+    let files = [
+        home.join(".cargo/credentials.toml"),
+        home.join("credentials-link"),
+        home.join(".cargo/registry"),
+        home.join("missing.lock"),
+        home.join(".cargo/bin/.package-cache"),
+    ];
+
+    // Act / Assert
+    for directory in directories {
+        assert_eq!(
+            resolve_access(
+                &cache_home.files(),
+                &cache_home.policy(vec![directory.clone()], Vec::new())
+            )
+            .await
+            .map(|_| ()),
+            Err(ExecutionError::Unsupported),
+            "{}",
+            directory.display()
+        );
+    }
+    for file in files {
+        assert_eq!(
+            resolve_access(
+                &cache_home.files(),
+                &cache_home.policy(Vec::new(), vec![file.clone()])
+            )
+            .await
+            .map(|_| ()),
+            Err(ExecutionError::Unsupported),
+            "{}",
+            file.display()
+        );
+    }
+}
+
+#[tokio::test]
+async fn host_caches_refuse_a_homes_library_overlapping_caches_and_linked_files() {
+    // Arrange
+    let cache_home = CacheHome::new();
+    let home = &cache_home.home;
+    let library_cache = home.join("Library/Caches/go-build");
+    std::fs::create_dir_all(&library_cache).expect("Library cache");
+    std::fs::create_dir_all(home.join(".cargo/registry/cache")).expect("nested cache");
+    std::fs::write(home.join(".cargo/registry/.lock"), "").expect("lock inside a cache");
+    symlink(
+        home.join(".cargo/.package-cache"),
+        home.join(".cargo/lock-alias"),
+    )
+    .expect("linked lock");
+    let registry = home.join(".cargo/registry");
+    let refused = [
+        cache_home.policy(vec![library_cache], Vec::new()),
+        cache_home.policy(vec![registry.clone(), registry.join("cache")], Vec::new()),
+        cache_home.policy(vec![registry.join("cache"), registry.clone()], Vec::new()),
+        cache_home.policy(vec![registry.clone()], vec![registry.join(".lock")]),
+        cache_home.policy(Vec::new(), vec![home.join(".cargo/lock-alias")]),
+    ];
+    let accepted = cache_home.policy(
+        vec![registry.clone(), home.join(".cargo/git")],
+        vec![home.join(".cargo/.package-cache")],
+    );
+
+    // Act / Assert
+    for policy in refused {
+        assert_eq!(
+            resolve_access(&cache_home.files(), &policy)
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported),
+            "{:?}",
+            policy.host_cache_directories()
+        );
+    }
+    let access = resolve_access(&cache_home.files(), &accepted)
+        .await
+        .expect("disjoint host caches");
+    assert_eq!(access.write_files, [home.join(".cargo/.package-cache")]);
+}
+
+#[tokio::test]
+async fn host_caches_refuse_credential_stores_without_full_disk_reads() {
+    // Arrange
+    let cache_home = CacheHome::new();
+    let home = &cache_home.home;
+    std::fs::create_dir_all(home.join(".ssh/cache")).expect("credential store");
+    // No program directory on `PATH`, so only the credentials conflict.
+    let files = HomeInspection::at(home);
+    let policy = |directory: PathBuf| {
+        cache_home
+            .fixture
+            .policy(host_cache_grants(vec![directory], Vec::new()))
+    };
+
+    // Act / Assert
+    for directory in [
+        home.join(".cargo"),
+        home.join(".ssh"),
+        home.join(".ssh/cache"),
+    ] {
+        assert_eq!(
+            resolve_access(&files, &policy(directory.clone()))
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported),
+            "{}",
+            directory.display()
+        );
+    }
+    let registry = resolve_access(&files, &policy(home.join(".cargo/registry")))
+        .await
+        .expect("the registry beside the credentials");
+    assert_eq!(registry.writes, [home.join(".cargo/registry")]);
+}
+
+#[tokio::test]
+async fn host_caches_refuse_commands_once_the_cache_was_replaced() {
+    // Arrange
+    let cache_home = CacheHome::new();
+    let home = &cache_home.home;
+    let registry = home.join(".cargo/registry");
+    let lock = home.join(".cargo/.package-cache");
+    let directory_pinned = cache_home.policy(vec![registry.clone()], Vec::new());
+    let file_pinned = cache_home.policy(Vec::new(), vec![lock.clone()]);
+    let unpinned = cache_home.fixture.policy(Grants {
+        host_cache_pins: HostCachePins::default(),
+        ..host_cache_grants(vec![registry.clone()], vec![lock.clone()])
+    });
+    let elsewhere = home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("other directory");
+
+    // Act
+    let unchanged = resolve_access(&cache_home.files(), &directory_pinned).await;
+    let without_pins = resolve_access(&cache_home.files(), &unpinned).await;
+    std::fs::rename(&registry, home.join("moved")).expect("move the registry");
+    symlink(&elsewhere, &registry).expect("link in its place");
+    let linked = resolve_access(&cache_home.files(), &directory_pinned).await;
+    std::fs::remove_file(&registry).expect("remove the link");
+    std::fs::create_dir(&registry).expect("another directory in its place");
+    let replaced = resolve_access(&cache_home.files(), &directory_pinned).await;
+    // Kept under another name, so the replacement cannot reuse its inode.
+    std::fs::rename(&lock, home.join("moved.lock")).expect("move the lock");
+    std::fs::write(&lock, "").expect("another lock in its place");
+    let replaced_lock = resolve_access(&cache_home.files(), &file_pinned).await;
+
+    // Assert
+    assert!(unchanged.is_ok());
+    for refused in [without_pins, linked, replaced, replaced_lock] {
+        assert_eq!(refused.map(|_| ()), Err(ExecutionError::Unsupported));
+    }
+}
+
+#[tokio::test]
+async fn host_caches_refuse_hidden_surroundings_sockets_and_unknown_homes() {
+    // Arrange
+    let cache_home = CacheHome::new();
+    let home = cache_home.home.clone();
+    let fixture = &cache_home.fixture;
+    std::fs::create_dir_all(home.join(".npm/_cacache")).expect("npm content cache");
+    // A hidden path around a cache, and a socket inside one.
+    let around = fixture.policy(Grants {
+        hidden_paths: vec![home.join(".npm")],
+        ..host_cache_grants(vec![home.join(".npm/_cacache")], Vec::new())
+    });
+    let socket = fixture.policy(Grants {
+        unix_sockets: vec![home.join(".npm/agent.sock")],
+        ..host_cache_grants(vec![home.join(".npm")], Vec::new())
+    });
+    let lock_only = || {
+        fixture.policy(host_cache_grants(
+            Vec::new(),
+            vec![home.join(".cargo/.package-cache")],
+        ))
+    };
+    let unknown = HomeInspection {
+        account: None,
+        host: Vec::new(),
+    };
+
+    // Act / Assert
+    for policy in [around, socket] {
+        assert_eq!(
+            resolve_access(&cache_home.files(), &policy)
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported)
+        );
+    }
+    // Without an account home nothing protects the home directories, and
+    // inspection failing for a cache file grants nothing.
+    let failing = FailingInspection::new("metadata", 2);
+    for files in [&unknown as &dyn Inspection, &failing] {
+        assert_eq!(
+            resolve_access(files, &lock_only()).await.map(|_| ()),
+            Err(ExecutionError::Unsupported)
+        );
+    }
+    assert!(
+        resolve_access(&cache_home.files(), &lock_only())
+            .await
+            .is_ok()
+    );
+}
+
+#[test]
+fn host_caches_may_overlap_system_directories_only_inside_a_home() {
+    // Arrange
+    let homes = [PathBuf::from("/root")];
+    let limits = HostCacheLimits {
+        homes: &homes,
+        program_directories: vec![PathBuf::from("/root/.cargo/bin")],
+        protected: &[],
+        taken: Vec::new(),
+    };
+
+    // Act / Assert
+    assert!(limits.allows(Path::new("/root/.cargo/registry")));
+    assert!(!limits.allows(Path::new("/root")));
+    assert!(!limits.allows(Path::new("/usr/local/cache")));
+    assert!(!limits.allows(Path::new("/root/.cargo/bin/cache")));
+    assert!(!limits.allows(Path::new("/root/project/.GIT/objects")));
 }

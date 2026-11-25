@@ -19,6 +19,12 @@ const LIKELY_DENIAL_HINT: &str =
      worktree's files and their temporary directory, not its Git metadata, which Agentty commits \
      to after each turn, and cannot read credential stores such as `~/.ssh`. You can run commands \
      that need more access outside the session.";
+/// Start of the notice naming the host caches a session keeps per session
+/// although the project shares host caches.
+const NOT_SHARED_PREFIX: &str = "`Share Host Caches` is on, but these caches stay per session \
+                                 because they are links, lie outside your home directory, in its \
+                                 `Library`, or on `PATH`, overlap the worktree or another cache, \
+                                 or have a hard-linked lock file: ";
 /// Detail of the notice shown when the sandbox runs commands again after a
 /// warning.
 const RESTORED: &str = "Commands run in the sandbox again.";
@@ -47,7 +53,8 @@ impl SandboxNoticeTarget<'_> {
             let TurnEvent::Notice(
                 notice @ (TurnNotice::SandboxUnavailable { .. }
                 | TurnNotice::SandboxAvailable
-                | TurnNotice::LikelySandboxDenial),
+                | TurnNotice::LikelySandboxDenial
+                | TurnNotice::HostCachesNotShared { .. }),
             ) = event
             else {
                 let _ = forward.send(event);
@@ -103,6 +110,16 @@ impl SandboxNotices {
                 .then(|| TranscriptNotice::Sandbox.format(RESTORED)),
             TurnNotice::LikelySandboxDenial => (!std::mem::replace(&mut self.hinted, true))
                 .then(|| TranscriptNotice::Sandbox.format(LIKELY_DENIAL_HINT)),
+            TurnNotice::HostCachesNotShared { caches } => {
+                let text = TranscriptNotice::Sandbox
+                    .format(format_args!("{NOT_SHARED_PREFIX}{}.", caches.join(", ")));
+                let shown = messages.iter().any(|message| {
+                    message.kind == SessionMessageKind::WorkflowNotice
+                        && message.content.trim() == text.trim()
+                });
+
+                (!shown).then_some(text)
+            }
             TurnNotice::ContextCompacted { .. } | TurnNotice::ContextCompactionFailed { .. } => {
                 None
             }

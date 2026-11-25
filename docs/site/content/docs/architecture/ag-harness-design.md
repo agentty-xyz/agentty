@@ -334,7 +334,8 @@ still describes the call by the model's arguments. A denial answers the model wi
   keychain, credential stores, browser profiles, and other sessions' temporary
   directories, and which fail closed without a known home directory; writable roots kept
   out of home and system directories, since host tools would run what commands plant
-  there; a per-path Unix-socket allowlist that only macOS enforces (Linux reports it
+  there, with host dependency caches as the one explicit, narrowly checked exception a
+  host grants only when the user accepts that risk; a per-path Unix-socket allowlist that only macOS enforces (Linux reports it
   through the sandbox warning); and excluded programs whose plain-word commands run
   without a shell, outside the sandbox, only when the `ApprovalHandler` explicitly
   decides `Decision::AllowUnsandboxed` after seeing the exact argument vector; a plain

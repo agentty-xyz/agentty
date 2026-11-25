@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, TurnContinuation, TurnRequest,
-    TurnResult,
+    AgentError, AgentRequestKind, HostCacheSharing, MockAgentChannel, PermissionMode,
+    TurnContinuation, TurnRequest, TurnResult,
 };
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
@@ -42,6 +42,7 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
+use crate::domain::setting::SettingName;
 use crate::infra::db::{AppRepositories, GRAPH_NODE_ACTIVITY_OPERATION_KIND};
 use crate::infra::fs;
 
@@ -584,7 +585,10 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
     let mut mock_channel = MockAgentChannel::new();
     mock_channel
         .expect_run_turn()
-        .withf(|_session_id, request, _events| request.permission_mode == PermissionMode::AutoEdit)
+        .withf(|_session_id, request, _events| {
+            request.permission_mode == PermissionMode::AutoEdit
+                && request.host_caches == HostCacheSharing::PerSession
+        })
         .returning({
             let turn_started = Arc::clone(&turn_started);
 
@@ -703,12 +707,20 @@ async fn test_run_channel_turn_proceeds_after_previous_cancellation() {
         )
         .await
         .expect("failed to insert session");
+    // The project shares host caches, which the session turn carries.
+    db.settings()
+        .upsert_project_setting(project_id, SettingName::ShareHostCaches, "true")
+        .await
+        .expect("failed to persist host-cache sharing");
 
     let mut mock_channel = MockAgentChannel::new();
     mock_channel
         .expect_run_turn()
         .once()
-        .withf(|_session_id, request, _events| request.permission_mode == PermissionMode::AutoEdit)
+        .withf(|_session_id, request, _events| {
+            request.permission_mode == PermissionMode::AutoEdit
+                && request.host_caches == HostCacheSharing::Shared
+        })
         .returning(|_session_id, _req, _events| {
             Box::pin(async {
                 Ok(TurnResult {
@@ -1152,6 +1164,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
         response_style: ag_contracts::ResponseStyle::default(),
+        host_caches: HostCacheSharing::PerSession,
         speed_mode: crate::domain::agent::SpeedMode::default(),
     };
 
@@ -1271,6 +1284,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
             response_style: ag_contracts::ResponseStyle::default(),
+            host_caches: HostCacheSharing::PerSession,
             speed_mode: crate::domain::agent::SpeedMode::default(),
         };
 
