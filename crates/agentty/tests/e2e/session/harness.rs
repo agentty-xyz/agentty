@@ -2373,14 +2373,18 @@ fn assert_live_timeline_report(frame: &testty::frame::TerminalFrame, report: &Pr
     }
     let text = running.all_text();
     // The held turn waits for the model's next response; the pinned clock
-    // keeps both timers at zero.
+    // keeps both timers at zero, and the turn's usage readout fills the
+    // status line's right slot.
     let status_row = text
         .lines()
         .find(|line| line.contains("  ·  step 3"))
         .map(str::trim);
     assert_eq!(
         status_row,
-        Some("⠋ Waiting for muse-spark-1.3 0s  ·  step 3  ·  turn 0s")
+        Some(
+            "⠋ Waiting for muse-spark-1.3 0s  ·  step 3  ·  turn 0s                             \
+             ↑20 ↓4 · ctx ▱▱▱▱▱ 0% · <$0.01 turn"
+        )
     );
     assert!(text.find("Checking the notes") < text.find("Adding beta below"));
     assert!(text.find("✗ Edit") < text.find("✓ Edit"));

@@ -277,11 +277,12 @@ const READOUT_ANSWER: &str = "Wrote both notes.";
 
 /// Context fill the status-line readout shows after the first model
 /// request, with the turn charge that follows it.
-const FIRST_REQUEST_READOUT: &str = "▱ 12% · ≤$";
+const FIRST_REQUEST_READOUT: &str = "▱ 12% · $0.05 turn";
 
 /// Context fill and turn charge the status-line readout shows after the
-/// second model request.
-const SECOND_REQUEST_READOUT: &str = "▱ 13% · ≤$0.34 turn";
+/// second model request: each request's uncached input and output at Muse
+/// Spark's list prices, and its cache reads at the cached-input price.
+const SECOND_REQUEST_READOUT: &str = "▱ 13% · $0.11 turn";
 
 /// Session figures the composer border shows beside the timer.
 const SESSION_READOUT: &str = " session │ Timer:";
@@ -346,7 +347,7 @@ async fn test_usage_readout_updates_after_each_model_request() -> E2eResult {
                         assertion::assert_not_visible(&running, SESSION_READOUT);
                     }
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "ctx 14% · ≤$", &full);
+                    assertion::assert_text_in_region(frame, "ctx 14% · $", &full);
                     assertion::assert_text_in_region(frame, SESSION_READOUT, &full);
                     assertion::assert_not_visible(frame, " turn ·");
                 })
