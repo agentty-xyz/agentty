@@ -1255,6 +1255,62 @@ async fn base_checkout_work_waits_for_the_session_project_sync() {
     }
 }
 
+/// Verifies a merge request behind a queue head that waits for its project's
+/// sync is marked `Queued` instead of waiting while it still shows `Review`.
+#[tokio::test]
+async fn merge_request_behind_a_waiting_queue_head_is_marked_queued() {
+    // Arrange
+    let (mut app, _pool, _base_dir) = new_test_app_with_database_pool().await;
+    let waiting_project_id = app
+        .services
+        .db()
+        .projects()
+        .upsert_project("/tmp/waiting-project", None)
+        .await
+        .expect("failed to insert waiting project");
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            "waiting-session",
+            "gemini-3.8-flash",
+            "main",
+            &Status::Queued.to_string(),
+            waiting_project_id,
+        )
+        .await
+        .expect("failed to insert waiting session");
+    insert_review_session_with_data_dir(&app, "review-session").await;
+    app.refresh_sessions_now().await;
+    app.set_project_sync_status(sync::ProjectSyncStatus {
+        context: sync::ProjectSyncContext {
+            default_branch: "main".to_string(),
+            operation_id: 1,
+            project_id: waiting_project_id,
+            project_name: "waiting-project".to_string(),
+        },
+        phase: sync::ProjectSyncPhase::Running,
+    });
+    app.merge_queue.enqueue("waiting-session".into());
+
+    // Act
+    let result = app.merge_session("review-session").await;
+
+    // Assert
+    assert!(result.is_ok());
+    assert!(!app.merge_queue.has_active());
+    assert!(app.merge_queue.is_queued_or_active("review-session"));
+    assert_eq!(
+        *app.sessions
+            .session_handles_or_err("review-session")
+            .expect("expected session handles")
+            .status
+            .lock()
+            .expect("status lock poisoned"),
+        Status::Queued
+    );
+}
+
 #[tokio::test]
 async fn merge_queue_drain_waits_for_the_active_merge() {
     // Arrange

@@ -937,7 +937,7 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error if the project row does not exist or cannot be loaded.
-    async fn load_project_path(
+    pub(crate) async fn load_project_path(
         &self,
         services: &AppServices,
         project_id: i64,

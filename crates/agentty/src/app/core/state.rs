@@ -1804,7 +1804,7 @@ impl App {
         }
 
         self.validate_merge_request(session_id)?;
-        if self.merge_queue.has_active() {
+        if self.merge_queue.has_work() {
             self.mark_session_as_queued_for_merge(session_id).await?;
             self.merge_queue.enqueue(SessionId::from(session_id));
 
@@ -2002,15 +2002,10 @@ impl App {
             return Ok(self.projects.working_dir().to_path_buf());
         }
 
-        let project = self
-            .services
-            .db()
-            .projects()
-            .get_project(project_id)
-            .await?
-            .ok_or(session::SessionError::NotFound)?;
-
-        Ok(PathBuf::from(project.path))
+        Ok(self
+            .sessions
+            .load_project_path(&self.services, project_id)
+            .await?)
     }
 
     /// Starts review assist generation for one session using the
