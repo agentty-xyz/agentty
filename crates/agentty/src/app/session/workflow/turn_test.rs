@@ -495,6 +495,7 @@ async fn only_edit_capable_turns_refresh_diff_stats_after_a_finished_edit() {
             .send(TurnEvent::Activity(ActivityEvent {
                 attempt_id: "attempt".into(),
                 exit_code: None,
+                facts: Box::default(),
                 id: "edit".into(),
                 input: None,
                 kind: ActivityKind::Tool,
