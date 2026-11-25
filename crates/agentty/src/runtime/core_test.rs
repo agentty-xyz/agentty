@@ -1,5 +1,6 @@
 //! Runtime event loop, event-reader task, and frame-rendering unit tests.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::io;
@@ -13,11 +14,11 @@ use crossterm::event::{
 };
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
-use ratatui::Terminal;
-use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
-use ratatui::layout::{Position, Size};
+use ratatui::layout::{Position, Rect, Size};
 use ratatui::style::Modifier;
+use ratatui::{Terminal, TerminalOptions, Viewport};
 use testty::session::PtySessionBuilder;
 use tokio::sync::mpsc;
 
@@ -35,9 +36,15 @@ use crate::infra::clock::Clock;
 use crate::infra::terminal_clipboard::MockTerminalClipboard;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::latency::{CycleTiming, SLOW_CYCLE_THRESHOLD};
+use crate::runtime::synchronized_writer::{FrameHold, SynchronizedWriter};
 use crate::runtime::{FRAME_INTERVAL, PresentationState};
 use crate::test_support::telemetry::{TRACER_PROVIDER_LOCK, capture_events};
 use crate::test_support::{FixedClock, SessionFixtureBuilder};
+
+/// Starts a synchronized update.
+const SYNCHRONIZED_UPDATE_BEGIN: &[u8] = b"\x1b[?2026h";
+/// Ends a synchronized update.
+const SYNCHRONIZED_UPDATE_END: &[u8] = b"\x1b[?2026l";
 
 /// Environment marker used to distinguish the nested PTY test process.
 const PRODUCTION_RUN_CHILD_ENV: &str = "AGENTTY_TEST_PRODUCTION_RUN_CHILD";
@@ -323,6 +330,111 @@ impl Backend for CountingBackend {
     fn flush(&mut self) -> Result<(), Self::Error> {
         self.inner.flush()
     }
+}
+
+/// Terminal output shared between a test and the writer that fills it.
+#[derive(Clone, Default)]
+struct SharedOutput(Rc<RefCell<Vec<u8>>>);
+
+impl SharedOutput {
+    /// Returns and forgets everything written so far.
+    fn take(&self) -> Vec<u8> {
+        std::mem::take(&mut self.0.borrow_mut())
+    }
+}
+
+impl io::Write for SharedOutput {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(buf);
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Counts the occurrences of `needle` in `output`.
+fn occurrences(output: &[u8], needle: &[u8]) -> usize {
+    output
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+/// Verifies a page change reaches the terminal as one synchronized update:
+/// the clear and the repaint after it are presented together, although
+/// clearing flushes the backend.
+#[tokio::test]
+async fn render_presents_a_page_clear_and_its_repaint_as_one_update() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let output = SharedOutput::default();
+    let frame_hold = FrameHold::default();
+    let backend =
+        CrosstermBackend::new(SynchronizedWriter::new(output.clone(), frame_hold.clone()));
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, 80, 24)),
+        },
+    )
+    .expect("failed to create terminal");
+    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::unix_epoch());
+    let last_draw = DrawStamp::now(clock.as_ref());
+    let mut tick = tokio::time::interval(Duration::from_millis(1));
+    let mut main_loop_state = MainLoopState {
+        app: &mut app,
+        clock,
+        event_rx: &mut event_rx,
+        frame_hold,
+        last_draw,
+        presentation: Rc::new(PresentationState::default()),
+        terminal: &mut terminal,
+        tick: &mut tick,
+        timing: CycleTiming::default(),
+    };
+    main_loop_state.render().expect("list frame should render");
+    main_loop_state.app.mode = AppMode::View {
+        session_id: "missing-session".into(),
+        scroll_offset: None,
+    };
+    main_loop_state.app.mark_dirty();
+    output.take();
+
+    // Act
+    main_loop_state
+        .render()
+        .expect("session frame should render");
+
+    // Assert
+    let written = output.take();
+    let first_update_end = written
+        .windows(SYNCHRONIZED_UPDATE_END.len())
+        .position(|window| window == SYNCHRONIZED_UPDATE_END)
+        .expect("the frame update ends");
+    let frame_update = &written[..first_update_end];
+    assert!(
+        frame_update.starts_with(SYNCHRONIZED_UPDATE_BEGIN),
+        "{written:?}"
+    );
+    assert_eq!(
+        occurrences(frame_update, SYNCHRONIZED_UPDATE_BEGIN),
+        1,
+        "{written:?}"
+    );
+    assert_eq!(occurrences(frame_update, b"\x1b[2J"), 1, "{written:?}");
+    assert!(
+        occurrences(frame_update, b"Agentty") > 0,
+        "the repaint follows the clear inside the update: {written:?}"
+    );
+    assert_eq!(
+        occurrences(&written, SYNCHRONIZED_UPDATE_END),
+        1,
+        "{written:?}"
+    );
 }
 
 /// Verifies base-page transitions clear stale terminal cells while
@@ -943,6 +1055,7 @@ async fn run_cycle_advances_the_remote_revision_once_for_a_reported_change() {
         app: &mut app,
         clock,
         event_rx: &mut event_rx,
+        frame_hold: FrameHold::default(),
         last_draw,
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
@@ -1007,6 +1120,7 @@ async fn run_cycle_advances_the_remote_revision_once_for_a_change_made_by_a_key(
         app: &mut app,
         clock,
         event_rx: &mut event_rx,
+        frame_hold: FrameHold::default(),
         last_draw,
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
@@ -1065,6 +1179,7 @@ async fn run_cycle_skips_idle_redraws_without_tick_driven_ui() {
         app: &mut app,
         clock,
         event_rx: &mut event_rx,
+        frame_hold: FrameHold::default(),
         last_draw,
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
@@ -1170,6 +1285,7 @@ async fn run_cycle_renders_pending_session_update_before_waiting_for_events() {
         app: &mut app,
         clock,
         event_rx: &mut event_rx,
+        frame_hold: FrameHold::default(),
         last_draw,
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
@@ -1229,6 +1345,7 @@ async fn run_cycle_traces_only_cycles_at_or_above_the_slow_threshold() {
         last_draw: DrawStamp::now(fast_clock.as_ref()),
         clock: fast_clock,
         event_rx: &mut event_rx,
+        frame_hold: FrameHold::default(),
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
         tick: &mut tick,
