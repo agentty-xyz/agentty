@@ -20,6 +20,7 @@ use ratatui::backend::CrosstermBackend;
 
 use crate::infra::tmux::{self, TmuxKeyReporting};
 use crate::runtime::TuiTerminal;
+use crate::runtime::synchronized_writer::SynchronizedWriter;
 
 /// Abstraction over terminal transitions so setup/restore paths can be tested
 /// without touching real terminal state.
@@ -333,7 +334,7 @@ impl Drop for TerminalGuard {
 /// Enter keys remain distinguishable over transports like SSH and `tmux`.
 pub(crate) fn setup_terminal(guard: &TerminalGuard) -> io::Result<TuiTerminal> {
     let stdout = prepare_terminal_stdout_with_operation(&CROSSTERM_TERMINAL_OPERATION, guard)?;
-    let backend = CrosstermBackend::new(stdout);
+    let backend = CrosstermBackend::new(SynchronizedWriter::new(stdout));
 
     Terminal::new(backend)
 }

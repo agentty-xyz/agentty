@@ -2,8 +2,12 @@
 //! `tmux`, where Agentty takes mouse reports from the terminal.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use testty::assertion;
+use testty::region::Region;
+use testty::step::Step;
 
 use crate::common;
 use crate::common::FeatureTest;
@@ -78,6 +82,27 @@ fn wait_for_file_text(path: &Path) -> String {
     }
 }
 
+/// Waits until the URL opener stand-in has written `link_file`.
+///
+/// Opening a link changes nothing on screen, so a stable frame does not show
+/// that Agentty handled the click. Ending the scenario stops Agentty, so it
+/// must outlast the opener. The frame only reports the timeout.
+fn wait_for_opened_link(link_file: PathBuf) -> Step {
+    Step::eventually(
+        Duration::from_secs(5),
+        Duration::from_millis(20),
+        move |frame| {
+            if std::fs::read_to_string(&link_file).is_ok_and(|text| !text.is_empty()) {
+                return Ok(());
+            }
+
+            let full = Region::full(frame.cols(), frame.rows());
+
+            assertion::match_text_in_region(frame, "the URL opener received the link", &full)
+        },
+    )
+}
+
 /// Inside `tmux`, dragging highlights and copies screen text through `tmux`,
 /// and clicking a link opens it, because the terminal no longer does either
 /// once Agentty takes mouse reports.
@@ -93,6 +118,7 @@ async fn mouse_selection_copies_text_and_opens_links_inside_tmux() -> E2eResult 
     let release = left_button_report(0, columns, rows, true);
     let setup_clipboard = clipboard.clone();
     let setup_opened = opened.clone();
+    let scenario_opened = opened.clone();
 
     // Act
     FeatureTest::new("mouse_selection")
@@ -119,7 +145,7 @@ async fn mouse_selection_copies_text_and_opens_links_inside_tmux() -> E2eResult 
                     .write_text(release)
                     .wait_for_stable_frame(300, 5000)
                     .write_text(click_middle_column())
-                    .wait_for_stable_frame(300, 5000)
+                    .step(wait_for_opened_link(scenario_opened))
             },
             |frame, report| {
                 Box::pin(async move {

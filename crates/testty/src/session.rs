@@ -35,6 +35,13 @@ const PRIMARY_DEVICE_ATTRIBUTES_QUERIES: [&[u8]; 2] = [b"\x1b[c", b"\x1b[0c"];
 /// keyboard enhancement check block until their timeout.
 const PRIMARY_DEVICE_ATTRIBUTES_REPLY: &[u8] = b"\x1b[?1;2c";
 
+/// Starts a synchronized update (DEC private mode 2026). A terminal keeps
+/// showing its previous state until [`SYNCHRONIZED_UPDATE_END`] arrives.
+const SYNCHRONIZED_UPDATE_BEGIN: &[u8] = b"\x1b[?2026h";
+
+/// Ends a synchronized update and presents everything written since it began.
+const SYNCHRONIZED_UPDATE_END: &[u8] = b"\x1b[?2026l";
+
 /// A live PTY session driving a real TUI binary.
 ///
 /// The session owns the PTY child process and provides methods to send
@@ -161,7 +168,7 @@ impl PtySession {
     pub fn capture_frame(&mut self) -> TerminalFrame {
         self.drain_output(DEFAULT_READ_TIMEOUT);
 
-        TerminalFrame::new(self.cols, self.rows, &self.output_buffer)
+        self.displayed_frame()
     }
 
     /// Wait until the specified text appears in the terminal, or timeout.
@@ -180,7 +187,7 @@ impl PtySession {
 
         loop {
             self.drain_output(Duration::from_millis(100));
-            let frame = TerminalFrame::new(self.cols, self.rows, &self.output_buffer);
+            let frame = self.displayed_frame();
 
             if !frame.find_text(needle).is_empty() {
                 return Ok(frame);
@@ -220,7 +227,7 @@ impl PtySession {
         let deadline = Instant::now() + timeout;
         self.drain_output(Duration::ZERO);
         let mut stable_since = Instant::now();
-        let mut frame = TerminalFrame::new(self.cols, self.rows, &self.output_buffer);
+        let mut frame = self.displayed_frame();
         let mut previous_frame =
             (!self.output_buffer.is_empty()).then(|| frame.contents_formatted());
 
@@ -244,7 +251,7 @@ impl PtySession {
                 continue;
             }
 
-            frame = TerminalFrame::new(self.cols, self.rows, &self.output_buffer);
+            frame = self.displayed_frame();
             let current_frame = Some(frame.contents_formatted());
             if current_frame != previous_frame {
                 previous_frame = current_frame;
@@ -284,7 +291,7 @@ impl PtySession {
             || {
                 self.drain_output(Duration::ZERO);
 
-                TerminalFrame::new(self.cols, self.rows, &self.output_buffer)
+                self.displayed_frame()
             },
             predicate,
             thread::sleep,
@@ -498,6 +505,28 @@ impl PtySession {
             position += 1;
         }
         self.query_scan_offset = position;
+    }
+
+    /// Parses the output a terminal would display now.
+    ///
+    /// A terminal holds its previous state while a synchronized update is
+    /// open, so output after an unfinished [`SYNCHRONIZED_UPDATE_BEGIN`] stays
+    /// hidden until its end arrives. Frames therefore never show a redraw
+    /// that arrived only in part. Output without synchronized updates is
+    /// parsed in full.
+    fn displayed_frame(&self) -> TerminalFrame {
+        let output = self.output_buffer.as_slice();
+        let open_update_start = output
+            .windows(SYNCHRONIZED_UPDATE_BEGIN.len())
+            .rposition(|window| window == SYNCHRONIZED_UPDATE_BEGIN)
+            .filter(|&start| {
+                !output[start..]
+                    .windows(SYNCHRONIZED_UPDATE_END.len())
+                    .any(|window| window == SYNCHRONIZED_UPDATE_END)
+            });
+        let displayed_output = open_update_start.map_or(output, |start| &output[..start]);
+
+        TerminalFrame::new(self.cols, self.rows, displayed_output)
     }
 
     /// Block until new PTY output arrives or `deadline` passes.

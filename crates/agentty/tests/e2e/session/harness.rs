@@ -606,6 +606,10 @@ async fn test_harness_only_launch_starts_regular_sessions_on_harness() -> E2eRes
     FeatureTest::new("harness_only")
         .with_git()
         .with_stub_only_path()
+        // The focused review can finish within one poll of the answer; the
+        // taller terminal keeps the answer visible above the review's output
+        // so the first wait cannot miss it.
+        .with_terminal_size(80, 40)
         .env("PATH", git_directory.path().to_string_lossy())
         .env("OPENAI_COMPATIBLE_BASE_URL", NO_LOCAL_SERVER)
         .env("MODEL_API_KEY", "test-key")

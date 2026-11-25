@@ -17,6 +17,7 @@ use crate::app::{App, AppError, spawn};
 use crate::infra::clock::{self, Clock};
 use crate::runtime::latency::CycleTiming;
 use crate::runtime::screen_selection::ScreenAction;
+use crate::runtime::synchronized_writer::SynchronizedWriter;
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 use crate::ui::component::nerpa_greeting::NerpaGreeting;
 use crate::ui::style;
@@ -34,8 +35,9 @@ const ANIMATION_REDRAW_INTERVAL: Duration = match FRAME_INTERVAL.checked_div(2) 
     None => FRAME_INTERVAL,
 };
 const SECONDS_PER_MINUTE: i64 = 60;
-/// Concrete terminal type used by the production runtime entry point.
-pub(crate) type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
+/// Concrete terminal type used by the production runtime entry point. Each
+/// frame reaches standard output as one synchronized update.
+pub(crate) type TuiTerminal = Terminal<CrosstermBackend<SynchronizedWriter<io::Stdout>>>;
 
 /// Converts a backend-specific error into `io::Error`.
 ///
