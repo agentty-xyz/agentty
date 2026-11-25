@@ -989,6 +989,29 @@ fn viewed_pages_are_reached_by_id_but_stay_off_the_active_page() {
 }
 
 #[test]
+/// Verifies a new session joins its own project's loaded page, so one of a
+/// viewed project leaves the terminal's list and selection alone, and one
+/// of a project with no loaded page joins none.
+fn push_project_session_appends_to_the_projects_own_page() {
+    // Arrange
+    let mut state = viewed_page_state();
+    state.table_state.select(Some(1));
+
+    // Act
+    state.push_project_session(1, state_session_fixture("active-new", Status::Draft));
+    state.push_project_session(9, state_session_fixture("viewed-new", Status::Draft));
+    state.push_project_session(5, state_session_fixture("unloaded-new", Status::Draft));
+
+    // Assert
+    assert_eq!(state.session_index_for_id("active-new"), Some(3));
+    assert_eq!(state.session_project_id("viewed-new"), Some(9));
+    assert!(!state.is_in_active_page("viewed-new"));
+    assert!(state.session_for_id("unloaded-new").is_none());
+    assert_eq!(state.sessions().len(), 4);
+    assert_eq!(state.table_state.selected(), Some(1));
+}
+
+#[test]
 /// Verifies each page keeps its own branch and worktree caches, which by-id
 /// accessors read and write on the page that holds the session.
 fn per_page_caches_are_read_and_written_on_the_sessions_page() {

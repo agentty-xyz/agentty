@@ -22,7 +22,7 @@ use app::review::{
     review_loading_message, review_view_text, start_review_assist as spawn_review_assist,
 };
 use app::service::{AppServices, RealSessionRunFactory, SessionRunFactory};
-use app::session::SessionManager;
+use app::session::{SessionManager, SessionPage};
 use app::session_runtime::SessionRuntime;
 use app::setting::SettingsManager;
 use app::sync::{
@@ -42,7 +42,7 @@ use crate::app::graph_question::{GraphQuestionState, GraphQuestionTarget};
 use crate::app::prompt_intent::DeferredSessionSettings;
 use crate::app::session_diff::{OpenDiffRefresh, PendingSessionDiffRequest};
 use crate::app::{AppError, session, spawn};
-use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::question::{
     QuestionAttachmentState, QuestionItem, QuestionProgress, default_option_index,
@@ -1835,7 +1835,8 @@ impl App {
         Ok(())
     }
 
-    /// Starts selected-project branch sync without changing the active mode.
+    /// Starts the active project's branch sync without changing the active
+    /// mode, resolving conflicts with the active project's default model.
     ///
     /// Duplicate requests are coalesced while the same project's sync is
     /// running; syncs of other projects run independently. The immutable sync
@@ -1843,6 +1844,22 @@ impl App {
     /// the Git and review work.
     pub(crate) fn start_sync_main(&mut self) {
         let sync_context = self.sync_handle.context_snapshot();
+        let session_model = self.sessions.default_session_model();
+
+        self.start_sync_main_with(sync_context, session_model);
+    }
+
+    /// Starts the sync `sync_context` describes, resolving conflicts with
+    /// `session_model`, the default model of the project it syncs, unless
+    /// that project's sync is already running or a merge blocks it.
+    ///
+    /// The merge queue is global, so queued merge work in any project
+    /// blocks the sync of every project.
+    pub(in crate::app) fn start_sync_main_with(
+        &mut self,
+        sync_context: sync::SyncContext,
+        session_model: AgentModel,
+    ) {
         if self
             .project_sync_statuses
             .get(&sync_context.project_id)
@@ -1851,7 +1868,7 @@ impl App {
             return;
         }
 
-        let request = self.new_sync_main_request(sync_context);
+        let request = self.new_sync_main_request(sync_context, session_model);
         if self.merge_queue.has_work() {
             self.set_project_sync_status(ProjectSyncStatus {
                 context: request.operation,
@@ -1866,8 +1883,13 @@ impl App {
         self.dispatch_sync_main_request(request);
     }
 
-    /// Captures one immutable request for the currently selected project.
-    fn new_sync_main_request(&mut self, sync_context: sync::SyncContext) -> SyncMainRequest {
+    /// Captures one immutable request for the project `sync_context`
+    /// describes, resolving conflicts with `session_model`.
+    fn new_sync_main_request(
+        &mut self,
+        sync_context: sync::SyncContext,
+        session_model: AgentModel,
+    ) -> SyncMainRequest {
         let operation_id = self.next_sync_operation_id;
         self.next_sync_operation_id = self.next_sync_operation_id.saturating_add(1);
         self.latest_project_sync_operation_ids
@@ -1887,7 +1909,7 @@ impl App {
         SyncMainRequest {
             app_event_tx: self.services.event_sender(),
             operation,
-            session_model: self.sessions.default_session_model(),
+            session_model,
             sync_context,
         }
     }
@@ -2248,9 +2270,15 @@ impl App {
     pub(crate) fn review_request_sync_targets(
         sessions: &SessionManager,
     ) -> Vec<sync::ReviewRequestSyncTarget> {
-        sessions
-            .state()
-            .sessions()
+        Self::page_review_request_sync_targets(sessions.state().active_page())
+    }
+
+    /// Builds review-request refresh targets for the active session
+    /// branches on `page`, the loaded page of one project.
+    pub(in crate::app) fn page_review_request_sync_targets(
+        page: &SessionPage,
+    ) -> Vec<sync::ReviewRequestSyncTarget> {
+        page.sessions()
             .iter()
             .filter(|session| session.can_sync_review_request())
             .map(|session| sync::ReviewRequestSyncTarget {

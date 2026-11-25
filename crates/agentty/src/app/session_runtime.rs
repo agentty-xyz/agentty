@@ -641,10 +641,11 @@ impl SessionRuntimeHandle {
         self.initiator != CommandInitiator::Remote
     }
 
-    /// Starts or queues a sync of the active project's branch through the
-    /// runtime actor.
-    pub(crate) async fn sync_project(&self) -> Result<(), SessionError> {
-        self.request_admission(SessionMutation::SyncProject).await
+    /// Starts or queues a sync of `scope`'s branch through the runtime
+    /// actor.
+    pub(crate) async fn sync_project_for(&self, scope: ProjectScope) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::SyncProject { scope })
+            .await
     }
 
     /// Lists the loaded sessions in display order through the runtime actor.

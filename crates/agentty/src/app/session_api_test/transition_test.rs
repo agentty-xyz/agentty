@@ -180,7 +180,7 @@ async fn runtime_backend_preserves_workflow_validation_errors() {
         .expect_err("draft session should not publish");
 
     // Assert
-    assert!(matches!(project_error, ApiSessionError::Operation(_)));
+    assert_eq!(project_error, ApiSessionError::NotFound);
     assert!(matches!(empty_message_error, ApiSessionError::Operation(_)));
     assert_eq!(missing_message_error, ApiSessionError::NotFound);
     assert!(matches!(stale_answers_error, ApiSessionError::Operation(_)));

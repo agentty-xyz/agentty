@@ -21,6 +21,7 @@ use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
+use crate::app::test_support::add_listed_project;
 use crate::app::{App, SessionManager, SessionQuery, SessionRuntimeCommand};
 use crate::domain::session::Status;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
@@ -426,12 +427,12 @@ async fn workspace_preparation_refresh_tracks_unloaded_sessions_and_ignores_read
 #[tokio::test]
 async fn incremental_registration_is_idempotent_and_rejects_missing_metadata() {
     // Arrange
-    let (mut app, directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
+    let (mut app, _directory, pool) = crate::test_support::new_git_test_app_with_pool().await;
     let id = app.create_session().await.expect("session");
 
     // Act
     app.sessions
-        .register_created_session(&app.services, &id, directory.path())
+        .register_created_session(&app.services, &id, &app.projects)
         .await
         .expect("existing");
     app.services
@@ -457,7 +458,7 @@ async fn incremental_registration_is_idempotent_and_rejects_missing_metadata() {
         .expect("metadata");
     let missing = app
         .sessions
-        .register_created_session(&app.services, &id, directory.path())
+        .register_created_session(&app.services, &id, &app.projects)
         .await;
 
     // Assert
@@ -469,10 +470,109 @@ async fn incremental_registration_is_idempotent_and_rejects_missing_metadata() {
     assert!(app.sessions.sessions().is_empty());
 }
 
+/// Reserves a session of `project_id` whose workspace is ready and whose
+/// saved first prompt cannot be read, so dispatching it fails at once
+/// without starting a turn, which shows that the dispatch ran.
+async fn reserve_ready_session_with_unreadable_prompt(app: &mut App, project_id: i64) -> String {
+    let settings = app
+        .sessions
+        .resolve_session_creation_settings(&app.services, project_id, None)
+        .await
+        .expect("settings");
+    let session_id = SessionManager::reserve_session(&app.services, project_id, "main", settings)
+        .await
+        .expect("reserve");
+    app.services
+        .db()
+        .sessions()
+        .save_preparation_prompt(&session_id, "invalid json")
+        .await
+        .expect("save");
+    app.services
+        .db()
+        .sessions()
+        .update_session_preparation(&session_id, SessionPreparationState::Ready, None)
+        .await
+        .expect("ready");
+
+    session_id
+}
+
+/// Registers the new session `session_id` of `project_id` and completes
+/// its creation as workspace setup does.
+async fn finish_reserved_creation(app: &mut App, project_id: i64, session_id: &str) {
+    app.finish_api_session_creation(session_id).await;
+    app.pending_session_creations.insert(
+        session_id.to_string(),
+        PendingSessionCreation {
+            project_id,
+            response_tx: None,
+            session_id: Some(session_id.to_string()),
+        },
+    );
+    app.complete_session_creation(session_id, Ok(session_id.to_string()))
+        .await;
+}
+
+#[tokio::test]
+async fn a_new_session_of_a_viewed_project_joins_its_page_and_dispatches_its_saved_prompt() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let viewed_project_id = add_listed_project(&mut app, &directory, "viewed").await;
+    let unloaded_project_id = add_listed_project(&mut app, &directory, "unloaded").await;
+    app.ensure_project_page(viewed_project_id)
+        .await
+        .expect("listed page should load");
+    let viewed_session_id =
+        reserve_ready_session_with_unreadable_prompt(&mut app, viewed_project_id).await;
+    let unloaded_session_id =
+        reserve_ready_session_with_unreadable_prompt(&mut app, unloaded_project_id).await;
+
+    // Act
+    finish_reserved_creation(&mut app, viewed_project_id, &viewed_session_id).await;
+    finish_reserved_creation(&mut app, unloaded_project_id, &unloaded_session_id).await;
+
+    // Assert
+    let preparation_state = async |session_id: &str| {
+        app.services
+            .db()
+            .sessions()
+            .load_session_preparation(session_id)
+            .await
+            .expect("load")
+            .expect("preparation")
+            .state
+    };
+    assert_eq!(
+        app.sessions
+            .state()
+            .viewed_page(viewed_project_id)
+            .map(|page| {
+                page.sessions()
+                    .iter()
+                    .map(|session| session.id.to_string())
+                    .collect::<Vec<_>>()
+            }),
+        Some(vec![viewed_session_id.clone()])
+    );
+    // A session of a project with no loaded page waits for that page.
+    assert!(app.sessions.session_for_id(&unloaded_session_id).is_none());
+    assert!(app.sessions.sessions().is_empty());
+    assert_eq!(
+        preparation_state(&viewed_session_id).await,
+        SessionPreparationState::Failed
+    );
+    assert_eq!(
+        preparation_state(&unloaded_session_id).await,
+        SessionPreparationState::Ready
+    );
+    assert!(matches!(app.mode, AppMode::List));
+}
+
 #[tokio::test]
 async fn prepared_fork_reply_uses_one_durable_handoff() {
     // Arrange
-    let (mut app, directory) = crate::test_support::new_git_test_app().await;
+    let (mut app, _directory) = crate::test_support::new_git_test_app().await;
     let source = app.create_session().await.expect("source");
     crate::test_support::set_session_status_for_test(&mut app, &source, Status::Review);
     let id = app
@@ -481,7 +581,7 @@ async fn prepared_fork_reply_uses_one_durable_handoff() {
         .await
         .expect("fork");
     app.sessions
-        .register_created_session(&app.services, &id, directory.path())
+        .register_created_session(&app.services, &id, &app.projects)
         .await
         .expect("register");
     let prompt = TurnPrompt::from_text("continue frozen history".to_string());

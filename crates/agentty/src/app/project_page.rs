@@ -8,13 +8,16 @@
 //! leaves the list, or when the last paired device disconnects. Automation
 //! stays with the terminal's project: workflows that apply the active
 //! project's settings check the active page, and sessions on a viewed page
-//! take the paths that serve projects the terminal does not show.
+//! take the paths that serve projects the terminal does not show. A
+//! session-API caller may also create sessions in, and sync, a viewed
+//! project, each from that project's own checkout and settings.
 
 use ag_session::{ProjectScope, SessionError as ApiSessionError};
 
 use crate::app::command_gateway::CommandInitiator;
 use crate::app::project::ProjectContext;
-use crate::app::{App, review};
+use crate::app::{App, SessionManager, review, sync};
+use crate::domain::agent::AgentKind;
 
 impl App {
     /// Resolves the project `scope` names for a request from `initiator`,
@@ -153,6 +156,54 @@ impl App {
         self.forget_dropped_viewed_contexts();
     }
 
+    /// Starts a sync of the viewed project `project_id`, whose page the
+    /// request loaded, in that project's own checkout.
+    ///
+    /// The sync runs on the branch checked out there now and refreshes the
+    /// review requests of that page's sessions, and its conflicts are
+    /// resolved with that project's default model, as
+    /// [`Self::start_sync_main`] does for the active project.
+    ///
+    /// # Errors
+    /// Returns [`ApiSessionError::NotFound`] when no viewed page of the
+    /// project is loaded.
+    pub(crate) async fn start_sync_main_for(
+        &mut self,
+        project_id: i64,
+    ) -> Result<(), ApiSessionError> {
+        let sync_context = self
+            .viewed_project_sync_context(project_id)
+            .await
+            .ok_or(ApiSessionError::NotFound)?;
+        let session_model = SessionManager::load_default_session_model(
+            &self.services,
+            Some(project_id),
+            AgentKind::Antigravity.default_model(),
+        )
+        .await;
+        self.start_sync_main_with(sync_context, session_model);
+
+        Ok(())
+    }
+
+    /// Detects the branch checked out now in the viewed project
+    /// `project_id`'s checkout, as loading its page does, rather than the
+    /// branch detected then. Returns `None` when no viewed page of the
+    /// project is loaded or no branch is checked out.
+    pub(crate) async fn detect_viewed_project_branch(&self, project_id: i64) -> Option<String> {
+        self.sessions.state().viewed_page(project_id)?;
+        let working_dir = self
+            .projects
+            .context(project_id)?
+            .working_dir()
+            .to_path_buf();
+
+        self.services
+            .git_client()
+            .detect_git_info(working_dir)
+            .await
+    }
+
     /// Adds the stored focused reviews of `project_id`'s sessions to the
     /// review cache, keeping the entries it already holds, and shows them
     /// on the loaded pages.
@@ -204,6 +255,31 @@ impl App {
         ));
 
         Ok(())
+    }
+
+    /// Builds the context of one sync of the viewed project `project_id`
+    /// from its viewed page and context: its checkout, the branch checked
+    /// out there now, and its sessions' review requests. Unlike the active
+    /// project's context, it is never published for background polling, so
+    /// it holds no git-status targets.
+    async fn viewed_project_sync_context(&self, project_id: i64) -> Option<sync::SyncContext> {
+        let project_branch_name = self.detect_viewed_project_branch(project_id).await;
+        let context = self.projects.context(project_id)?;
+        let page = self.sessions.state().viewed_page(project_id)?;
+
+        Some(sync::SyncContext {
+            run_client: self.services.run_client(),
+            generation: 0,
+            fs_client: self.services.fs_client(),
+            git_client: self.services.git_client(),
+            project_branch_name,
+            project_id,
+            project_name: context.name().to_string(),
+            review_request_client: self.services.review_request_client(),
+            review_request_sync_targets: Self::page_review_request_sync_targets(page),
+            session_git_status_targets: Vec::new(),
+            working_dir: context.working_dir().to_path_buf(),
+        })
     }
 
     /// Keeps the viewed project contexts in step with the viewed pages.

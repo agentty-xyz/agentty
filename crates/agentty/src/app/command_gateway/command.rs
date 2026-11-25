@@ -248,8 +248,10 @@ pub(crate) enum SessionMutation {
     Merge {
         session_id: SessionId,
     },
-    /// Syncs the active project's branch with its upstream.
-    SyncProject,
+    /// Syncs the branch of the project `scope` names with its upstream.
+    SyncProject {
+        scope: ProjectScope,
+    },
 }
 
 impl SessionMutation {
@@ -288,7 +290,7 @@ impl SessionMutation {
             Self::Rebase { session_id } => ("rebase", Some(session_id)),
             Self::UpdateSettings { session_id, .. } => ("update_settings", Some(session_id)),
             Self::Merge { session_id, .. } => ("merge", Some(session_id)),
-            Self::SyncProject => ("sync_project", None),
+            Self::SyncProject { .. } => ("sync_project", None),
         }
     }
 
@@ -318,7 +320,7 @@ impl SessionMutation {
             | Self::Rebase { session_id }
             | Self::UpdateSettings { session_id, .. }
             | Self::Merge { session_id } => RemoteScope::Session(session_id),
-            Self::SyncProject => RemoteScope::Project(ProjectScope::Active),
+            Self::SyncProject { scope } => RemoteScope::Project(*scope),
             Self::GraphProposal {
                 command: GraphProposalCommand::Generate(_) | GraphProposalCommand::Act { .. },
             }

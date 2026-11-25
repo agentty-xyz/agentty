@@ -768,6 +768,8 @@ impl SyncOrchestrator {
 
     /// Refreshes review-request status for every eligible target, stopping
     /// early when `reject_stale_context` is set and newer targets arrive.
+    /// A completed pass with `reject_stale_context` set, a polling pass,
+    /// also forgets the cadence and backoff of targets it no longer holds.
     ///
     /// Returns the updates with the number of idle targets left for a later
     /// pass.
@@ -826,7 +828,12 @@ impl SyncOrchestrator {
             });
         }
 
-        self.retain_active_target_states(&context.review_request_sync_targets);
+        // Only a polling pass, the one that rejects a stale context, holds
+        // every polled target. A project sync may hold another project's
+        // targets, so it keeps the polled targets' states.
+        if reject_stale_context {
+            self.retain_active_target_states(&context.review_request_sync_targets);
+        }
 
         (updates, idle_targets)
     }

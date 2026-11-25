@@ -1,23 +1,24 @@
 //! Session API project tests covering retired-model migration, rejection
 //! of cross-project inheritance, the active project's status and sync, and
-//! the listed projects a session-API caller lists and reads, each from its
-//! own session page.
+//! the listed projects a session-API caller lists, reads, creates sessions
+//! in, and syncs, each from its own session page and checkout.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ag_session::{
-    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest, HostProject, HostProjectStatus,
-    HostProjectSync, HostProjectSyncPhase, ProjectScope, ReasoningLevel,
-    SessionError as ApiSessionError, SessionId, SessionListEntry, SessionOperation,
+    AgentKind, AgentModel, AgentSelection, CreateSessionMode, CreateSessionRequest, HostProject,
+    HostProjectStatus, HostProjectSync, HostProjectSyncPhase, ProjectScope, ProjectSessions,
+    ReasoningLevel, SessionError as ApiSessionError, SessionId, SessionListEntry, SessionOperation,
     SessionSettingsChange, test_support as model_fixture,
 };
+use tempfile::TempDir;
 
 use super::support::{
     request_project_status, request_project_sync, request_session, request_session_creation,
     request_settings,
 };
-use crate::app::session::SessionGitStatus;
+use crate::app::session::{SessionGitStatus, session_branch};
 use crate::app::test_support::{
     MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
     SyncSessionStartError, add_listed_project, insert_loadable_session, start_fake_listener,
@@ -416,6 +417,279 @@ fn entry_ids(entries: &[SessionListEntry]) -> Vec<&str> {
         .collect()
 }
 
+/// Stores Claude Opus as the default agent and model of `project_id`.
+async fn prefer_claude_opus(app: &App, project_id: i64) {
+    app.services
+        .db()
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (SettingName::DefaultSmartAgent, "claude".to_string()),
+                (
+                    SettingName::DefaultSmartModel,
+                    AgentModel::ClaudeOpus55.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("project settings should persist");
+}
+
+/// Checks out the new branch `branch` in the checkout of the project
+/// `name`, which [`add_listed_project`] made under `directory`.
+fn check_out_new_branch(directory: &TempDir, name: &str, branch: &str) {
+    let status = std::process::Command::new("git")
+        .args(["checkout", "--quiet", "-b", branch])
+        .current_dir(directory.path().join(name))
+        .status()
+        .expect("git should run");
+
+    assert!(status.success(), "git checkout should succeed");
+}
+
+/// Returns the ids of the sessions on the viewed page of `project_id`.
+fn viewed_session_ids(app: &App, project_id: i64) -> Vec<String> {
+    app.sessions
+        .state()
+        .viewed_page(project_id)
+        .map_or_default(|page| {
+            page.sessions()
+                .iter()
+                .map(|session| session.id.to_string())
+                .collect()
+        })
+}
+
+/// Returns the ids of the terminal's sessions and the one it selects.
+fn terminal_list(app: &App) -> (Vec<String>, Option<String>) {
+    let session_ids = app
+        .sessions
+        .sessions()
+        .iter()
+        .map(|session| session.id.to_string())
+        .collect();
+    let selected_session_id = app.selected_session().map(|session| session.id.to_string());
+
+    (session_ids, selected_session_id)
+}
+
+/// Returns the sync phase and branch `sessions` reports for its project.
+fn reported_sync(
+    sessions: Result<ProjectSessions, ApiSessionError>,
+) -> Option<(String, HostProjectSyncPhase)> {
+    sessions
+        .expect("project should list")
+        .status
+        .and_then(|status| status.sync)
+        .map(|sync| (sync.branch, sync.phase))
+}
+
+#[tokio::test]
+async fn runtime_backend_creates_sessions_in_a_viewed_project_from_its_own_checkout() {
+    // Arrange
+    // The active project has no branch, so nothing created elsewhere can
+    // start from it.
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let active_project_id = app.active_project_id();
+    insert_loadable_session(&app, "active1", Status::Review, active_project_id).await;
+    app.refresh_sessions_now().await;
+    app.sessions.select_session_index(Some(0));
+    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    prefer_claude_opus(&app, other_project_id).await;
+    let service = app.session_service();
+    app.drive_session_request(service.project_sessions(ProjectScope::Project(other_project_id)))
+        .await
+        .expect("viewed project should list");
+    // The checkout moves to another branch after its page loaded.
+    check_out_new_branch(&directory, "other", "release");
+    app.project_sync_statuses.insert(
+        other_project_id,
+        ProjectSyncStatus {
+            context: ProjectSyncContext {
+                default_branch: "release".to_string(),
+                operation_id: 1,
+                project_id: other_project_id,
+                project_name: "other".to_string(),
+            },
+            phase: ProjectSyncPhase::Running,
+        },
+    );
+    let terminal_before = terminal_list(&app);
+    let default_model = app.sessions.default_session_model();
+    let request = |mode| CreateSessionRequest {
+        inherit_from_session_id: None,
+        mode,
+        project_id: other_project_id,
+    };
+
+    // Act
+    let while_syncing = request_session_creation(&mut app, request(CreateSessionMode::Draft)).await;
+    app.project_sync_statuses.remove(&other_project_id);
+    let mut created = Vec::new();
+    for mode in [CreateSessionMode::Draft, CreateSessionMode::Regular] {
+        created.push(
+            request_session_creation(&mut app, request(mode))
+                .await
+                .expect("a viewed project should take new sessions"),
+        );
+    }
+
+    // Assert
+    assert_eq!(
+        while_syncing,
+        Err(ApiSessionError::Operation(
+            "Project `other` is synchronizing `release`; try this base-branch operation again \
+             after sync"
+                .to_string()
+        ))
+    );
+    for session_id in &created {
+        let row = app
+            .services
+            .db()
+            .sessions()
+            .load_session(session_id)
+            .await
+            .expect("session read")
+            .expect("created session");
+        assert_eq!(row.project_id, Some(other_project_id), "{session_id}");
+        assert_eq!(row.base_branch, "release", "{session_id}");
+        assert_eq!(
+            (row.agent.as_str(), row.model.as_str()),
+            ("claude", AgentModel::ClaudeOpus55.as_str()),
+            "{session_id}"
+        );
+    }
+    assert_eq!(
+        viewed_session_ids(&app, other_project_id),
+        created.iter().map(ToString::to_string).collect::<Vec<_>>()
+    );
+    // The regular session's worktree branch lives in the viewed checkout.
+    let branches = std::process::Command::new("git")
+        .args(["branch", "--list", &session_branch(&created[1])])
+        .current_dir(directory.path().join("other"))
+        .output()
+        .expect("git should run");
+    assert!(
+        !branches.stdout.is_empty(),
+        "the session branch should exist"
+    );
+    assert_eq!(terminal_list(&app), terminal_before);
+    assert_eq!(terminal_before.0, vec!["active1".to_string()]);
+    assert_eq!(app.sessions.default_session_model(), default_model);
+}
+
+#[tokio::test]
+async fn runtime_backend_syncs_a_viewed_project_in_its_own_checkout_and_reports_it_there() {
+    // Arrange
+    let (mut app, directory) = crate::test_support::new_test_app().await;
+    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    prefer_claude_opus(&app, other_project_id).await;
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let mut sync_main_runner = MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(1)
+        .returning({
+            let started = Arc::clone(&started);
+
+            move |_, operation, session_model, sync_context| {
+                started.lock().expect("started syncs").push((
+                    operation,
+                    session_model,
+                    sync_context.project_branch_name,
+                    sync_context.working_dir,
+                ));
+            }
+        });
+    app.sync_main_runner = Arc::new(sync_main_runner);
+    let service = app.session_service();
+    let other = ProjectScope::Project(other_project_id);
+    app.drive_session_request(service.project_sessions(other))
+        .await
+        .expect("viewed project should list");
+    // The checkout moves to another branch after its page loaded.
+    check_out_new_branch(&directory, "other", "release");
+
+    // Act
+    let synced = app
+        .drive_session_request(service.sync_project_for(other))
+        .await;
+    let repeated = app
+        .drive_session_request(service.sync_project_for(other))
+        .await;
+    let running = app
+        .drive_session_request(service.project_sessions(other))
+        .await;
+    let active_while_running = app
+        .drive_session_request(service.project_sessions(ProjectScope::Active))
+        .await;
+    let (operation, session_model, project_branch_name, working_dir) =
+        started.lock().expect("started syncs").remove(0);
+    // The page leaves before the sync finishes.
+    app.clear_viewed_pages();
+    app.apply_app_events(sync_completed(
+        operation.clone(),
+        Ok(SyncMainOutcome {
+            default_branch: "release".to_string(),
+            pulled_commit_titles: Vec::new(),
+            pulled_commits: Some(2),
+            pushed_commit_titles: Vec::new(),
+            pushed_commits: Some(0),
+            resolved_conflict_files: Vec::new(),
+        }),
+    ))
+    .await;
+    let is_waiting = app
+        .pending_project_sync_completions
+        .contains_key(&other_project_id);
+    let complete = app
+        .drive_session_request(service.project_sessions(other))
+        .await;
+    app.merge_queue.set_active("merging".into());
+    let blocked = app
+        .drive_session_request(service.sync_project_for(other))
+        .await;
+
+    // Assert
+    assert_eq!(synced, Ok(()));
+    assert_eq!(repeated, Ok(()));
+    assert_eq!(
+        reported_sync(running),
+        Some(("release".to_string(), HostProjectSyncPhase::Running))
+    );
+    assert_eq!(reported_sync(active_while_running), None);
+    assert_eq!(operation.project_id, other_project_id);
+    assert_eq!(operation.project_name, "other");
+    assert_eq!(operation.default_branch, "release");
+    assert_eq!(project_branch_name.as_deref(), Some("release"));
+    assert_eq!(working_dir, directory.path().join("other"));
+    assert_eq!(session_model, AgentModel::ClaudeOpus55);
+    assert_ne!(app.sessions.default_session_model(), session_model);
+    assert!(is_waiting);
+    assert_eq!(
+        reported_sync(complete),
+        Some((
+            "release".to_string(),
+            HostProjectSyncPhase::Complete {
+                pulled_commits: Some(2),
+                pushed_commits: Some(0),
+                resolved_conflict_count: 0,
+            }
+        ))
+    );
+    assert!(app.pending_project_sync_completions.is_empty());
+    assert!(app.active_project_sync_status().is_none());
+    // Merge work in any project blocks the sync of every project.
+    assert_eq!(
+        blocked,
+        Err(ApiSessionError::Operation(
+            "Sync is blocked: a merge is active or queued; try again after it finishes".to_string()
+        ))
+    );
+}
+
 #[tokio::test]
 async fn runtime_backend_lists_projects_in_switcher_order_with_the_active_one_marked() {
     // Arrange
@@ -480,21 +754,7 @@ async fn runtime_backend_reads_a_viewed_project_with_its_branch_and_no_counts() 
     let other_project_id = add_listed_project(&mut app, &directory, "other").await;
     insert_loadable_session(&app, "viewed1", Status::Review, other_project_id).await;
     std::fs::write(directory.path().join("other/marker.txt"), "marker").expect("marker file");
-    app.services
-        .db()
-        .settings()
-        .upsert_project_settings(
-            other_project_id,
-            vec![
-                (SettingName::DefaultSmartAgent, "claude".to_string()),
-                (
-                    SettingName::DefaultSmartModel,
-                    AgentModel::ClaudeOpus55.as_str().to_string(),
-                ),
-            ],
-        )
-        .await
-        .expect("project settings should persist");
+    prefer_claude_opus(&app, other_project_id).await;
     let default_model = app.sessions.default_session_model();
     let service = app.session_service();
     let other = ProjectScope::Project(other_project_id);
@@ -550,8 +810,17 @@ async fn runtime_backend_reads_a_viewed_project_with_its_branch_and_no_counts() 
     assert_eq!(host.project_name, "other");
     assert_eq!(host.base_branch, "main");
     assert_eq!(host.default_model, AgentModel::ClaudeOpus55);
-    // Sessions are created only in the active project for now.
-    assert_eq!(host.session_modes, Vec::new());
+    // Sessions are created there with its own default settings.
+    assert_eq!(
+        host.session_modes
+            .iter()
+            .map(|session_mode| (session_mode.mode.clone(), session_mode.agent))
+            .collect::<Vec<_>>(),
+        vec![(
+            CreateSessionMode::Regular,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
+        )]
+    );
     assert_eq!(app.sessions.default_session_model(), default_model);
     assert!(files.iter().any(|entry| entry.path == "marker.txt"));
     assert!(service.supports(SessionOperation::Projects));
@@ -562,10 +831,10 @@ async fn runtime_backend_reads_a_viewed_project_with_its_branch_and_no_counts() 
 }
 
 #[tokio::test]
-async fn runtime_backend_refuses_unlisted_projects_and_keeps_creation_and_sync_active() {
+async fn runtime_backend_refuses_every_request_naming_a_project_it_does_not_list() {
     // Arrange
     let (mut app, directory) = crate::test_support::new_test_app().await;
-    let other_project_id = add_listed_project(&mut app, &directory, "other").await;
+    accept_project_syncs(&mut app, 0);
     let hidden_project_id = add_listed_project(&mut app, &directory, "hidden").await;
     hide_project(&mut app, hidden_project_id).await;
     let service = app.session_service();
@@ -583,37 +852,28 @@ async fn runtime_backend_refuses_unlisted_projects_and_keeps_creation_and_sync_a
         let files = app
             .drive_session_request(service.list_project_files_for(scope))
             .await;
+        let synced = app
+            .drive_session_request(service.sync_project_for(scope))
+            .await;
+        let created = request_session_creation(
+            &mut app,
+            CreateSessionRequest {
+                inherit_from_session_id: None,
+                mode: CreateSessionMode::Draft,
+                project_id,
+            },
+        )
+        .await;
 
         // Assert
         assert_eq!(sessions, Err(ApiSessionError::NotFound), "{project_id}");
         assert_eq!(host, Err(ApiSessionError::NotFound), "{project_id}");
         assert_eq!(files, Err(ApiSessionError::NotFound), "{project_id}");
+        assert_eq!(synced, Err(ApiSessionError::NotFound), "{project_id}");
+        assert_eq!(created, Err(ApiSessionError::NotFound), "{project_id}");
     }
-    let synced = app
-        .drive_session_request(service.sync_project_for(ProjectScope::Project(other_project_id)))
-        .await;
-    let created = request_session_creation(
-        &mut app,
-        CreateSessionRequest {
-            inherit_from_session_id: None,
-            mode: CreateSessionMode::Draft,
-            project_id: other_project_id,
-        },
-    )
-    .await;
-    assert_eq!(
-        synced,
-        Err(ApiSessionError::Operation(
-            "Host serves only its active project".to_string()
-        ))
-    );
-    assert_eq!(
-        created,
-        Err(ApiSessionError::Operation(format!(
-            "Project `{other_project_id}` is not active"
-        )))
-    );
     assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
+    assert!(app.project_sync_statuses.is_empty());
 }
 
 #[tokio::test]
