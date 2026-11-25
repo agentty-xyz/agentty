@@ -273,16 +273,17 @@ async fn runtime_backend_lists_sessions_with_their_list_stats() {
 }
 
 #[tokio::test]
-async fn runtime_backend_rejects_creation_for_inactive_projects() {
+async fn runtime_backend_refuses_creation_in_a_project_it_does_not_list() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let inactive_project_id = app
+    // Saved, but not offered by the switcher until the list reloads.
+    let unlisted_project_id = app
         .services
         .db()
         .projects()
-        .upsert_project("/inactive-project", Some("develop".to_string()))
+        .upsert_project("/unlisted-project", Some("develop".to_string()))
         .await
-        .expect("inactive project should persist");
+        .expect("unlisted project should persist");
 
     // Act
     let creation_error = request_session_creation(
@@ -290,17 +291,15 @@ async fn runtime_backend_rejects_creation_for_inactive_projects() {
         CreateSessionRequest {
             inherit_from_session_id: None,
             mode: CreateSessionMode::Draft,
-            project_id: inactive_project_id,
+            project_id: unlisted_project_id,
         },
     )
     .await
-    .expect_err("inactive project creation should fail");
+    .expect_err("unlisted project creation should fail");
 
     // Assert
-    assert_eq!(
-        creation_error,
-        ApiSessionError::Operation(format!("Project `{inactive_project_id}` is not active"))
-    );
+    assert_eq!(creation_error, ApiSessionError::NotFound);
+    assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
 }
 
 #[tokio::test]
@@ -940,12 +939,15 @@ async fn visible_durable_turn_persists_continuation_prompt() {
 }
 
 #[tokio::test]
-async fn project_creation_context_requires_a_base_branch() {
+async fn creation_base_branch_requires_a_branch() {
     // Arrange
     let (app, _temp_dir) = crate::test_support::new_test_app().await;
 
     // Act
-    let active_error = app.api_project_creation_context(None).err();
+    let active_error = app
+        .api_creation_base_branch(app.active_project_id(), None)
+        .await
+        .err();
 
     // Assert
     let expected =

@@ -1570,7 +1570,7 @@ async fn archive_list_help_tracks_session_and_pagination_selection() {
 async fn archive_load_more_enter_survives_programmatic_creation() {
     for refresh_before_enter in [false, true] {
         // Arrange
-        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
         let project = app.projects.active_project_id();
         for index in 0..21 {
             let id = format!("archive-{index:02}");
@@ -1606,7 +1606,7 @@ async fn archive_load_more_enter_survives_programmatic_creation() {
 
         // Act
         app.sessions
-            .register_created_session(&app.services, "background-created", base_dir.path())
+            .register_created_session(&app.services, "background-created", &app.projects)
             .await
             .expect("register session");
         if refresh_before_enter {

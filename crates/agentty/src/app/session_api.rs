@@ -248,7 +248,11 @@ impl SessionBackend for SessionRuntimeHandle {
     }
 
     async fn sync_project(&self) -> Result<(), ApiSessionError> {
-        SessionRuntimeHandle::sync_project(self).await
+        SessionRuntimeHandle::sync_project_for(self, ProjectScope::Active).await
+    }
+
+    async fn sync_project_for(&self, scope: ProjectScope) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::sync_project_for(self, scope).await
     }
 
     async fn create_session(
@@ -841,34 +845,51 @@ impl App {
 
     /// Validates one creation request and captures its launch settings. Drafts
     /// persist immediately; materialized worktrees return an owned effect plan.
+    ///
+    /// A request may name any listed project. Another project than the
+    /// active one has its page loaded, so the new session joins that page
+    /// rather than the terminal's list, and everything it starts from is
+    /// that project's own: its checkout must be free of its sync, its base
+    /// branch is the one checked out there now, and its default settings
+    /// are its stored ones. A paired device's request for another project
+    /// was refused before it got here; one that inherits from a session the
+    /// host lists to it names that session's project, the active one, or is
+    /// refused here before any page loads.
     pub(super) async fn prepare_api_session_creation(
         &mut self,
         request: CreateSessionRequest,
     ) -> Result<PreparedSessionCreation, ApiSessionError> {
         self.validate_api_session_request(&request)?;
-        self.ensure_project_checkout_available(request.project_id)
-            .map_err(api_error_from_app)?;
-
+        // Before any page loads: this is what keeps a paired device that
+        // inherits from an active-page session in the active project.
         let inherited_settings = self
             .inherited_creation_settings(
                 request.inherit_from_session_id.as_ref(),
                 request.project_id,
             )
             .await?;
+        if request.project_id != self.active_project_id() {
+            self.ensure_project_page(request.project_id).await?;
+        }
+        self.ensure_project_checkout_available(request.project_id)
+            .map_err(api_error_from_app)?;
+
         let (base_branch_override, creation_settings) = inherited_settings
             .map_or((None, None), |inherited| {
                 (Some(inherited.base_branch), Some(inherited.settings))
             });
+        let base_branch = self
+            .api_creation_base_branch(request.project_id, base_branch_override)
+            .await?;
         let runs_on_harness = request.mode == CreateSessionMode::Harness;
         match request.mode {
             CreateSessionMode::Draft => {
-                let project = self.api_project_creation_context(base_branch_override)?;
                 let session_id = self
                     .sessions
                     .create_draft_session_for_project_with_settings(
                         &self.services,
                         request.project_id,
-                        &project.base_branch,
+                        &base_branch,
                         creation_settings,
                     )
                     .await
@@ -878,7 +899,6 @@ impl App {
             }
             CreateSessionMode::Regular | CreateSessionMode::Harness => {}
         }
-        let project = self.api_project_creation_context(base_branch_override)?;
         let settings = self
             .sessions
             .resolve_session_creation_settings(
@@ -902,7 +922,7 @@ impl App {
         };
 
         Ok(PreparedSessionCreation::Materialized {
-            base_branch: project.base_branch,
+            base_branch,
             project_id: request.project_id,
             settings,
         })
@@ -910,10 +930,8 @@ impl App {
 
     /// Describes `scope`'s project for `initiator`, with its base branch
     /// and default model, and the creation modes
-    /// [`Self::validate_api_session_request`] accepts now.
-    ///
-    /// Sessions are created only in the active project for now, so another
-    /// listed project offers no creation modes.
+    /// [`Self::validate_api_session_request`] accepts now, each with that
+    /// project's own default settings.
     async fn api_host_context(
         &mut self,
         initiator: CommandInitiator,
@@ -965,9 +983,6 @@ impl App {
             .first()
             .map_or(settings.agent, |session_mode| session_mode.agent)
             .model();
-        if project_id != self.active_project_id() {
-            session_modes.clear();
-        }
 
         Ok(HostContext {
             base_branch,
@@ -1014,17 +1029,40 @@ impl App {
         }
     }
 
-    /// Starts a sync of the active project's branch through the
-    /// same workflow as the terminal's `s`, and reports a sync that the
-    /// project policy refused to start.
-    pub(super) fn sync_api_project(&mut self) -> Result<(), ApiSessionError> {
-        self.start_sync_main();
-        let blocked_message =
-            self.active_project_sync_status()
-                .and_then(|status| match &status.phase {
-                    ProjectSyncPhase::Blocked { message } => Some(message),
-                    _ => None,
-                });
+    /// Starts a sync of `scope`'s branch through the same workflow as the
+    /// terminal's `s`, and reports a sync that the project policy refused
+    /// to start.
+    ///
+    /// Another listed project has its page loaded first, as every request
+    /// naming it does, and syncs in its own checkout; see
+    /// [`Self::start_sync_main_for`]. A paired device's request for a
+    /// project other than the active one was refused before it got here.
+    ///
+    /// # Errors
+    /// Returns [`ApiSessionError::NotFound`] for a project the host does not
+    /// list, or an operation error when its page cannot be loaded or the
+    /// sync is blocked.
+    pub(super) async fn sync_api_project(
+        &mut self,
+        scope: ProjectScope,
+    ) -> Result<(), ApiSessionError> {
+        let project_id = match scope {
+            ProjectScope::Active => self.active_project_id(),
+            ProjectScope::Project(project_id) => project_id,
+        };
+        if project_id == self.active_project_id() {
+            self.start_sync_main();
+        } else {
+            self.ensure_project_page(project_id).await?;
+            self.start_sync_main_for(project_id).await?;
+        }
+        let blocked_message = self
+            .project_sync_statuses
+            .get(&project_id)
+            .and_then(|status| match &status.phase {
+                ProjectSyncPhase::Blocked { message } => Some(message),
+                _ => None,
+            });
         if let Some(message) = blocked_message {
             return Err(ApiSessionError::Operation(format!(
                 "Sync is blocked: {message}"
@@ -1160,15 +1198,14 @@ impl App {
         Ok(())
     }
 
+    /// Checks that `request` names a listed project, answering any other
+    /// as missing, and that a backend can run the session it asks for.
     fn validate_api_session_request(
         &self,
         request: &CreateSessionRequest,
     ) -> Result<(), ApiSessionError> {
-        if request.project_id != self.active_project_id() {
-            return Err(ApiSessionError::Operation(format!(
-                "Project `{}` is not active",
-                request.project_id
-            )));
+        if !self.projects.is_listed(request.project_id) {
+            return Err(ApiSessionError::NotFound);
         }
         if request.mode == CreateSessionMode::Harness
             && !self.services.harness_availability().is_available()
@@ -1821,21 +1858,30 @@ impl App {
         }))
     }
 
-    /// Resolves the active project into worktree creation inputs.
-    fn api_project_creation_context(
+    /// Resolves the base branch a new session of `project_id` starts from:
+    /// `base_branch_override`, inherited from a source session, or else the
+    /// project's branch. The active project's branch is the one its status
+    /// tracks; another project's is detected in its checkout now.
+    async fn api_creation_base_branch(
         &self,
+        project_id: i64,
         base_branch_override: Option<String>,
-    ) -> Result<ApiProjectCreationContext, ApiSessionError> {
-        let base_branch = base_branch_override
-            .or_else(|| self.projects.git_branch().map(str::to_string))
-            .ok_or_else(git_branch_required)?;
+    ) -> Result<String, ApiSessionError> {
+        if let Some(base_branch) = base_branch_override {
+            return Ok(base_branch);
+        }
+        let base_branch = if project_id == self.active_project_id() {
+            self.projects.git_branch().map(str::to_string)
+        } else {
+            self.detect_viewed_project_branch(project_id).await
+        };
 
-        Ok(ApiProjectCreationContext { base_branch })
+        base_branch.ok_or_else(git_branch_required)
     }
 
-    /// Attempts to register a newly persisted active-project session before
-    /// acknowledging creation, scheduling a refresh retry when loading is
-    /// temporarily unavailable.
+    /// Attempts to register a newly persisted session on its project's
+    /// loaded page before acknowledging creation, scheduling a refresh retry
+    /// when loading is temporarily unavailable.
     pub(super) async fn finish_api_session_creation(&mut self, session_id: &str) {
         if self.sessions.session_for_id(session_id).is_some() {
             return;
@@ -1843,7 +1889,7 @@ impl App {
 
         let _ = self
             .sessions
-            .register_created_session(&self.services, session_id, self.projects.working_dir())
+            .register_created_session(&self.services, session_id, &self.projects)
             .await;
         if self.sessions.session_for_id(session_id).is_some() {
             return;
@@ -1891,11 +1937,6 @@ pub(super) struct HostInputs {
     has_agent_cli: bool,
     /// Agents and models a session can switch to.
     models: Vec<AgentSelection>,
-}
-
-/// Worktree inputs resolved for one API-requested project.
-struct ApiProjectCreationContext {
-    base_branch: String,
 }
 
 /// Launch settings loaded from one existing session.

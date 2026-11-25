@@ -323,14 +323,16 @@ impl App {
         Ok(())
     }
 
-    /// Resumes ready prompts when their owning project becomes active again,
-    /// for the sessions it placed on the active page.
-    pub(crate) async fn resume_ready_workspace_prompts(&mut self) {
+    /// Resumes the ready prompts of `project_id`'s sessions on its loaded
+    /// page: the active page when its sessions reload, or a viewed page when
+    /// it loads, so a prompt saved while no page held its session, such as
+    /// one whose viewed page was dropped during setup, still starts.
+    pub(crate) async fn resume_ready_workspace_prompts(&mut self, project_id: i64) {
         let Ok(preparations) = self
             .services
             .db()
             .sessions()
-            .load_session_preparations(self.active_project_id())
+            .load_session_preparations(project_id)
             .await
         else {
             return;
@@ -338,7 +340,11 @@ impl App {
         for preparation in preparations {
             if preparation.state == SessionPreparationState::Ready
                 && preparation.prompt.is_some()
-                && self.sessions.is_in_active_page(&preparation.session_id)
+                && self
+                    .sessions
+                    .state()
+                    .session_project_id(&preparation.session_id)
+                    == Some(project_id)
             {
                 self.dispatch_prepared_prompt(&preparation.session_id).await;
             }

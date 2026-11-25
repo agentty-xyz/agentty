@@ -1201,6 +1201,35 @@ async fn collect_review_request_updates_skips_idle_targets_unless_forced() {
 }
 
 #[tokio::test]
+/// A project sync's review pass, whose targets may be another project's,
+/// keeps the backoff of the polled targets, which only a polling pass
+/// forgets once they leave its targets.
+async fn only_a_polling_review_pass_forgets_targets_it_does_not_hold() {
+    // Arrange
+    let (_context_tx, context_rx) = watch::channel(sync_context_fixture(0, Vec::new()));
+    let (mut orchestrator, _app_event_rx) = orchestrator_for(context_rx);
+    let polled_target = review_request_sync_target("polled-session", None);
+    let failure: Result<SyncReviewRequestTaskResult, String> = Err("gh exploded".to_string());
+    orchestrator.record_review_sync_outcome(&polled_target, &failure, 0);
+    let other_targets_context = sync_context_fixture(0, Vec::new());
+
+    // Act
+    orchestrator
+        .collect_review_request_updates(&other_targets_context, false, true)
+        .await;
+    let is_kept_by_sync = orchestrator
+        .review_sync_failures
+        .contains_key(&polled_target.session_id);
+    orchestrator
+        .collect_review_request_updates(&other_targets_context, true, false)
+        .await;
+
+    // Assert
+    assert!(is_kept_by_sync);
+    assert!(orchestrator.review_sync_failures.is_empty());
+}
+
+#[tokio::test]
 /// Verifies session git-status selection maps branch comparisons back to
 /// session ids, comparing by name when the base is not a local branch.
 async fn session_git_statuses_collects_all_target_statuses() {

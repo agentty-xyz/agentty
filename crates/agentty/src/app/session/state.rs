@@ -452,6 +452,18 @@ impl SessionState {
         }
     }
 
+    /// Appends one session snapshot of `project_id` to that project's loaded
+    /// page: the active page, as [`Self::push_session`] appends it, or the
+    /// project's viewed page, which leaves the terminal's list and selection
+    /// alone. A project with no loaded page takes nothing.
+    pub(crate) fn push_project_session(&mut self, project_id: i64, session: Session) {
+        if self.active.project_id == project_id {
+            self.push_session(session);
+        } else if let Some(page) = self.viewed.get_mut(&project_id) {
+            page.push_session(session);
+        }
+    }
+
     /// Removes one session snapshot by list index and rebuilds the cached
     /// identifier index when removal succeeds.
     pub(crate) fn remove_session_at(&mut self, session_index: usize) -> Option<Session> {

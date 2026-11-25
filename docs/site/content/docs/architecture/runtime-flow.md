@@ -92,8 +92,11 @@ project's settings stay on the active page; a session on a viewed page takes the
 that serve projects the terminal does not show, such as an automatic review with its own
 project's agent. A viewed page holds its project's first archive page and its branch as
 detected when it loads, without ahead/behind counts or per-session git status, which
-only the active project's background poll reports. Session creation and project sync
-still serve only the active project.
+only the active project's background poll reports. A session-API caller can also create
+sessions in a viewed project and sync it. Both start from that project's own checkout,
+the branch checked out there at the time of the request, and that project's stored
+defaults. A new session joins its project's page, not the terminal's list, and a sync
+reports its progress and result in that project's status.
 
 <a id="architecture-runtime-flow-remote-control"></a> The
 [remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
@@ -396,7 +399,8 @@ never discards worktree changes to fit a prompt.
 
 - **Project sync** runs each project independently, coalesces duplicate requests for one
   project, pauses that project's background fetch, and blocks its conflicting base
-  mutations without blocking navigation, other projects, or isolated session turns.
+  mutations without blocking navigation, other projects, or isolated session turns. A
+  queued or running merge in any project blocks every project's sync.
 - **Local merge** rebases and squash-merges an unlinked session, preserving its commit
   message.
 - **Session sync** rebases onto the local or remote base. Agent assistance resolves

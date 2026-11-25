@@ -6,6 +6,7 @@ use std::path::Path;
 use ag_git::GitClient;
 
 use super::{draft, session_folder};
+use crate::app::project::ProjectManager;
 use crate::app::session::SessionError;
 use crate::app::{AppServices, SessionManager};
 use crate::domain::agent::{
@@ -171,13 +172,15 @@ pub(crate) async fn migrate_session_off_retired_model(
 }
 
 impl SessionManager {
-    /// Registers only the newly persisted row; creation never reloads every
-    /// session.
+    /// Registers only the newly persisted row, on the loaded page of its
+    /// project, which `projects` describes; creation never reloads every
+    /// session. A session of a project whose page is not loaded is left for
+    /// that page to load.
     pub(crate) async fn register_created_session(
         &mut self,
         services: &AppServices,
         session_id: &str,
-        working_dir: &Path,
+        projects: &ProjectManager,
     ) -> Result<(), SessionError> {
         if self.session_for_id(session_id).is_some() {
             return Ok(());
@@ -188,6 +191,13 @@ impl SessionManager {
             .load_session(session_id)
             .await?
             .ok_or(SessionError::NotFound)?;
+        let Some(project) = row
+            .project_id
+            .filter(|project_id| self.state.page_for_project(*project_id).is_some())
+            .and_then(|project_id| projects.context(project_id))
+        else {
+            return Ok(());
+        };
         let preparation = services
             .db()
             .sessions()
@@ -209,7 +219,8 @@ impl SessionManager {
                 handles: self.state.handles_mut(),
                 preparations: &preparations,
                 previous_transcripts: &mut HashMap::new(),
-                project_name: working_dir
+                project_name: project
+                    .working_dir()
                     .file_name()
                     .and_then(std::ffi::OsStr::to_str)
                     .unwrap_or_default(),
@@ -220,7 +231,7 @@ impl SessionManager {
         )
         .await;
         for session in sessions {
-            self.state.push_session(session);
+            self.state.push_project_session(project.id(), session);
         }
         for (id, available) in availability {
             self.set_session_worktree_available(&id, available);

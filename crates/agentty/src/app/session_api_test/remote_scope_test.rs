@@ -278,6 +278,53 @@ async fn remote_creation_reaches_the_host_only_for_the_active_project() {
 }
 
 #[tokio::test]
+async fn remote_syncs_and_inheriting_creations_reach_only_the_active_project() {
+    // Arrange
+    let (mut app, directory) = new_test_app().await;
+    let active_project_id = app.active_project_id();
+    let listed_project_id = add_listed_project(&mut app, &directory, "listed").await;
+    insert_loadable_session(&app, "sess", Status::Review, active_project_id).await;
+    app.refresh_sessions_now().await;
+    let remote = app.remote_session_service();
+    let api = app.session_service();
+    let listed = ProjectScope::Project(listed_project_id);
+    let inheriting = CreateSessionRequest {
+        inherit_from_session_id: Some(SessionId::from("sess")),
+        mode: CreateSessionMode::Draft,
+        project_id: listed_project_id,
+    };
+
+    // Act
+    let synced = app
+        .drive_session_request(remote.sync_project_for(listed))
+        .await;
+    let created = app
+        .drive_session_request(remote.create_session(inheriting.clone()))
+        .await;
+    let api_created = app
+        .drive_session_request(api.create_session(inheriting))
+        .await;
+
+    // Assert
+    // A listed project the session API reaches stays out of a paired
+    // device's reach, whichever way it names the project.
+    assert_eq!(
+        synced,
+        Err(ApiSessionError::Operation(format!(
+            "Project `{listed_project_id}` is not active"
+        )))
+    );
+    let foreign_source = Err(ApiSessionError::Operation(format!(
+        "Session `sess` belongs to project `{active_project_id}`, not `{listed_project_id}`"
+    )));
+    assert_eq!(created, foreign_source);
+    assert_eq!(api_created, foreign_source);
+    assert!(app.project_sync_statuses.is_empty());
+    assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
+    assert_eq!(app.sessions.sessions().len(), 1);
+}
+
+#[tokio::test]
 async fn remote_project_reads_reach_only_the_active_project_and_load_no_page() {
     // Arrange
     let (mut app, directory) = new_test_app().await;
