@@ -55,7 +55,12 @@ const UNKNOWN_OID: &str = "echo 'sysctl: unknown oid' >&2; exit 1";
 /// Assembles a release whose `demo-app` binary prints its target, its path,
 /// and its arguments, then acts on them: `exit <status>`, `signal <name>` to
 /// end by that signal, `stdin` to copy standard input, or `trap <name>` to
-/// exit with status 7 on that signal while waiting for an input line.
+/// exit with status 7 on that signal while waiting for it.
+///
+/// `trap` waits with the `wait` built-in on a background `cat` of standard
+/// input, which the trap stops. A trapped signal interrupts `wait` even when
+/// it arrives just before `wait` starts; `read` can miss one arriving just
+/// before it blocks, as in `dash`, and then wait for input forever.
 fn release() -> Result<Release, Box<dyn Error>> {
     Release::assemble(MANIFEST, |target| {
         [
@@ -64,7 +69,8 @@ fn release() -> Result<Release, Box<dyn Error>> {
             r#"exit) exit "$2" ;;"#,
             r#"signal) kill -"$2" $$ ;;"#,
             "stdin) cat ;;",
-            r#"trap) trap 'echo "got $2"; exit 7' "$2"; echo ready; read -r line ;;"#,
+            r#"trap) trap 'echo "got $2"; kill $!; exit 7' "$2"; exec 3<&0"#,
+            "cat <&3 >/dev/null & echo ready; wait ;;",
             "esac",
         ]
         .join("\n")
