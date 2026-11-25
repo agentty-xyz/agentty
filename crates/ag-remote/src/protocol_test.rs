@@ -18,6 +18,8 @@ use crate::test_support::{host_fixture, project_status_fixture, session_fixture}
 
 #[path = "protocol_test/graph_test.rs"]
 mod graph;
+#[path = "protocol_test/project_test.rs"]
+mod project;
 
 #[test]
 fn client_frames_use_snake_case_type_and_method_tags() {
@@ -62,7 +64,7 @@ fn client_frames_use_snake_case_type_and_method_tags() {
             },
             ClientFrame::Request {
                 id: 1,
-                request: RemoteRequest::ListSessions,
+                request: RemoteRequest::ListSessions { project_id: None },
             },
             ClientFrame::Request {
                 id: 2,
@@ -121,7 +123,7 @@ fn client_frames_use_snake_case_type_and_method_tags() {
             },
             ClientFrame::Request {
                 id: 10,
-                request: RemoteRequest::SyncProject,
+                request: RemoteRequest::SyncProject { project_id: None },
             },
         ]
     );
@@ -134,7 +136,7 @@ fn unknown_methods_parse_as_unsupported_requests() {
     let with_fields = json!({"type": "request", "id": 1, "request": {
         "method": "fork_session", "session_id": "s"
     }});
-    let bare = json!({"type": "request", "id": 2, "request": {"method": "list_projects"}});
+    let bare = json!({"type": "request", "id": 2, "request": {"method": "list_workspaces"}});
 
     // Act
     let with_fields = serde_json::from_value::<ClientFrame>(with_fields);
@@ -382,6 +384,7 @@ fn session_creation_frames_default_to_regular_mode() {
             }],
             models: Vec::new(),
             project: "agentty".to_string(),
+            project_id: None,
             session_modes: vec![RemoteSessionMode::Regular, RemoteSessionMode::Harness],
         },
         RemoteResponse::Created {
@@ -398,12 +401,14 @@ fn session_creation_frames_default_to_regular_mode() {
     assert_eq!(
         decoded,
         [
-            RemoteRequest::GetHost,
+            RemoteRequest::GetHost { project_id: None },
             RemoteRequest::CreateSession {
                 mode: RemoteSessionMode::Regular,
+                project_id: None,
             },
             RemoteRequest::CreateSession {
                 mode: RemoteSessionMode::Harness,
+                project_id: None,
             },
         ]
     );
@@ -491,6 +496,7 @@ fn host_context_converts_modes_remote_devices_may_request() {
                 ag_session::test_support::codex_selection()
             )],
             project: "agentty".to_string(),
+            project_id: Some("1".to_string()),
             session_modes: vec![RemoteSessionMode::Harness, RemoteSessionMode::Regular],
         }
     );
@@ -1078,7 +1084,10 @@ fn session_file_frames_encode_entries_in_host_order() {
             session_id: "s".into(),
         }
     );
-    assert_eq!(project_request, RemoteRequest::ListProjectFiles);
+    assert_eq!(
+        project_request,
+        RemoteRequest::ListProjectFiles { project_id: None }
+    );
     assert_eq!(
         serde_json::to_value(&listed).expect("list should encode"),
         json!({"kind": "session_files", "files": [

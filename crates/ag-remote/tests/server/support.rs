@@ -13,10 +13,10 @@ use ag_remote::{
 };
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
-    ExecutionGraphStatus, ForgeKind, HostContext, HostProjectStatus, HostProjectSync,
-    HostProjectSyncPhase, HostSessionMode, MessageImage, QuestionItem, ReviewRequest,
-    ReviewRequestState, ReviewRequestSummary, Session, SessionBackend, SessionDiffFile,
-    SessionDiffFileStatus, SessionError, SessionFileEntry, SessionFocusedReview,
+    ExecutionGraphStatus, ForgeKind, HostContext, HostProject, HostProjectStatus, HostProjectSync,
+    HostProjectSyncPhase, HostSessionMode, MessageImage, ProjectScope, ProjectSessions,
+    QuestionItem, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, SessionBackend,
+    SessionDiffFile, SessionDiffFileStatus, SessionError, SessionFileEntry, SessionFocusedReview,
     SessionGraphActionRequest, SessionGraphApproval, SessionGraphProposalPhase,
     SessionGraphSummary, SessionGraphs, SessionGraphsRequest, SessionId, SessionListEntry,
     SessionListStats, SessionMessage, SessionMessageKind, SessionOperation, SessionService,
@@ -61,14 +61,12 @@ impl TestServer {
         Self::start_configured(devices, backend, None).await
     }
 
-    /// Starts a server that also registers with `relay`.
-    pub(crate) async fn start_linked(relay: RemoteRelayConfig) -> TestResult<Self> {
-        Self::start_configured(
-            MemoryDeviceStore::default(),
-            RecordingBackend::default(),
-            Some(relay),
-        )
-        .await
+    /// Starts a server over `backend` that also registers with `relay`.
+    pub(crate) async fn start_linked(
+        relay: RemoteRelayConfig,
+        backend: RecordingBackend,
+    ) -> TestResult<Self> {
+        Self::start_configured(MemoryDeviceStore::default(), backend, Some(relay)).await
     }
 
     /// Starts a server over `devices` and `backend`, linked to `relay` when
@@ -216,7 +214,17 @@ pub(crate) async fn start_linked_server(
     relay: &RelayHandle,
     instance: &StaticKeypair,
 ) -> TestResult<TestServer> {
-    let server = start_server_linked_to(relay, instance).await?;
+    start_linked_server_over(relay, instance, RecordingBackend::default()).await
+}
+
+/// Starts a server over `backend` linked to `relay` and waits until it is
+/// registered.
+pub(crate) async fn start_linked_server_over(
+    relay: &RelayHandle,
+    instance: &StaticKeypair,
+    backend: RecordingBackend,
+) -> TestResult<TestServer> {
+    let server = TestServer::start_linked(relay_link(relay, instance), backend).await?;
     let mut status = server.handle.status();
     tokio::time::timeout(
         FRAME_TIMEOUT,
@@ -233,11 +241,15 @@ pub(crate) async fn start_server_linked_to(
     relay: &RelayHandle,
     instance: &StaticKeypair,
 ) -> TestResult<TestServer> {
-    TestServer::start_linked(RemoteRelayConfig {
+    TestServer::start_linked(relay_link(relay, instance), RecordingBackend::default()).await
+}
+
+/// The link of a server registering with `relay` as `instance`.
+fn relay_link(relay: &RelayHandle, instance: &StaticKeypair) -> RemoteRelayConfig {
+    RemoteRelayConfig {
         instance_key: instance.clone(),
         url: format!("ws://{}/", relay.local_addr()),
-    })
-    .await
+    }
 }
 
 /// Builds a hello frame for the current protocol.
@@ -397,18 +409,78 @@ impl DeviceStore for MemoryDeviceStore {
     }
 }
 
+/// One of the test backend's projects.
+struct Project {
+    /// Branch its checkout is on.
+    branch: &'static str,
+    /// Whether the host has compared the branch with its upstream; the
+    /// terminal's project has, as the host's first stage compares only
+    /// that one.
+    has_counts: bool,
+    id: i64,
+    name: &'static str,
+    /// The one file its checkout holds.
+    readme: &'static str,
+    /// The session a new session in it is, and the sessions it lists.
+    sessions: &'static [&'static str],
+}
+
+/// The backend's projects: `agentty`, active at first, with `session-1`
+/// and `session-2`, and `website` with `session-3`. Only a backend that
+/// serves [`SessionOperation::Projects`] lists them and serves `website`.
+const PROJECTS: [Project; 2] = [
+    Project {
+        branch: "main",
+        has_counts: true,
+        id: 1,
+        name: "agentty",
+        readme: "README.md",
+        sessions: &["session-1", "session-2"],
+    },
+    Project {
+        branch: "site",
+        has_counts: false,
+        id: 2,
+        name: "website",
+        readme: "index.html",
+        sessions: &["session-3"],
+    },
+];
+
 /// Session backend that records every call and serves every optional
-/// operation. Each method's comment says how it answers; [`session`]
-/// describes the listed sessions.
+/// operation but [`SessionOperation::Projects`], which only
+/// [`RecordingBackend::with_projects`] serves. Each method's comment says
+/// how it answers; [`PROJECTS`] describes the projects and [`session`] the
+/// listed sessions.
 #[derive(Default)]
 pub(crate) struct RecordingBackend {
+    /// Index in [`PROJECTS`] of the project the terminal has open.
+    active: Mutex<usize>,
     calls: Mutex<Vec<String>>,
-    /// Whether a project sync was requested.
-    is_project_syncing: Mutex<bool>,
+    /// Ids of the projects the backend no longer lists, as when the
+    /// catalog hides them.
+    hidden: Mutex<Vec<i64>>,
+    /// Whether listings leave out the project they read, as a host that
+    /// reads the sessions and the status apart does.
+    is_unnamed: Mutex<bool>,
     released: watch::Sender<bool>,
+    /// Whether the backend serves [`SessionOperation::Projects`].
+    serves_projects: bool,
+    /// Ids of the projects a sync was requested for.
+    syncing: Mutex<Vec<i64>>,
 }
 
 impl RecordingBackend {
+    /// Creates a backend that also lists both of [`PROJECTS`] and serves
+    /// requests for either. It records each project request with the id of
+    /// the project it reached, as `host:2`.
+    pub(crate) fn with_projects() -> Self {
+        Self {
+            serves_projects: true,
+            ..Self::default()
+        }
+    }
+
     /// Returns the recorded calls.
     pub(crate) fn calls(&self) -> Vec<String> {
         locked(&self.calls).clone()
@@ -419,36 +491,147 @@ impl RecordingBackend {
         self.released.send_replace(true);
     }
 
+    /// Opens project `id` of [`PROJECTS`] in the terminal.
+    pub(crate) fn switch_to(&self, id: i64) {
+        if let Some(index) = PROJECTS.iter().position(|project| project.id == id) {
+            *locked(&self.active) = index;
+        }
+    }
+
+    /// Stops listing project `id`, and serving it and its sessions.
+    pub(crate) fn hide(&self, id: i64) {
+        locked(&self.hidden).push(id);
+    }
+
+    /// Makes listings name the project they read, or with `false` leave it
+    /// out.
+    pub(crate) fn name_listed_projects(&self, names: bool) {
+        *locked(&self.is_unnamed) = !names;
+    }
+
     fn record(&self, call: String) {
         locked(&self.calls).push(call);
+    }
+
+    /// The projects the backend lists.
+    fn listed(&self) -> impl Iterator<Item = &'static Project> {
+        let hidden = locked(&self.hidden).clone();
+
+        PROJECTS
+            .iter()
+            .filter(move |project| !hidden.contains(&project.id))
+    }
+
+    /// Returns the project `scope` is for and records `call` for it, or
+    /// refuses a scope the backend does not serve, as a host does.
+    fn scoped(&self, call: &str, scope: ProjectScope) -> Result<&'static Project, SessionError> {
+        let project = match scope {
+            ProjectScope::Active => &PROJECTS[*locked(&self.active)],
+            ProjectScope::Project(id) if self.serves_projects => self
+                .listed()
+                .find(|project| project.id == id)
+                .ok_or_else(|| SessionError::Operation("Project is not listed".to_string()))?,
+            ProjectScope::Project(_) => {
+                return Err(SessionError::Operation(
+                    "Host serves only its active project".to_string(),
+                ));
+            }
+        };
+        if self.serves_projects {
+            self.record(format!("{call}:{}", project.id));
+        } else {
+            self.record(call.to_string());
+        }
+
+        Ok(project)
+    }
+
+    /// Lists the sessions of `project`; `session-2` counts as updated once
+    /// for every message sent and every answer given to any session, so a
+    /// device sees another session change.
+    fn summaries(&self, project: &Project) -> Vec<SessionSummary> {
+        let plan_updated_at = self
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("send:") || call.starts_with("answer:"))
+            .fold(30, |updated_at, _| updated_at + 1);
+
+        project
+            .sessions
+            .iter()
+            .map(|id| match *id {
+                "session-1" => SessionSummary {
+                    id: SessionId::from("session-1"),
+                    status: SessionStatus::Review,
+                    title: Some("Build it".to_string()),
+                    updated_at: 20,
+                },
+                "session-2" => SessionSummary {
+                    id: SessionId::from("session-2"),
+                    status: SessionStatus::InProgress,
+                    title: Some("Plan it".to_string()),
+                    updated_at: plan_updated_at,
+                },
+                id => SessionSummary {
+                    id: SessionId::from(id),
+                    status: SessionStatus::Review,
+                    title: Some("Write the docs".to_string()),
+                    updated_at: 25,
+                },
+            })
+            .collect()
     }
 }
 
 #[async_trait]
 impl SessionBackend for RecordingBackend {
-    fn supports(&self, _operation: SessionOperation) -> bool {
-        true
+    fn supports(&self, operation: SessionOperation) -> bool {
+        operation != SessionOperation::Projects || self.serves_projects
     }
 
+    // Lists the listed [`PROJECTS`] in their order, the terminal's marked
+    // active.
+    async fn list_projects(&self) -> Result<Vec<HostProject>, SessionError> {
+        self.record("projects".to_string());
+        let active = PROJECTS[*locked(&self.active)].id;
+
+        Ok(self
+            .listed()
+            .map(|project| HostProject {
+                active_session_count: u32::try_from(project.sessions.len()).unwrap_or(u32::MAX),
+                id: project.id,
+                is_active: project.id == active,
+                name: project.name.to_string(),
+            })
+            .collect())
+    }
+
+    // A project's new session is the last one it lists: `session-2` in
+    // `agentty` and `session-3` in `website`.
     async fn create_session(
         &self,
         request: CreateSessionRequest,
     ) -> Result<SessionId, SessionError> {
         self.record(format!("create:{:?}:{}", request.mode, request.project_id));
+        let project = PROJECTS
+            .iter()
+            .find(|project| project.id == request.project_id)
+            .ok_or_else(|| SessionError::Operation("Project is not listed".to_string()))?;
+        let created = project.sessions.last().copied().unwrap_or("session-2");
 
-        Ok(SessionId::from("session-2"))
+        Ok(SessionId::from(created))
     }
 
-    // The host serves only regular sessions in project `1`.
-    async fn host_context(&self) -> Result<HostContext, SessionError> {
-        self.record("host".to_string());
+    // The host serves only regular sessions, in either project.
+    async fn host_context_for(&self, scope: ProjectScope) -> Result<HostContext, SessionError> {
+        let project = self.scoped("host", scope)?;
 
         Ok(HostContext {
-            base_branch: "main".to_string(),
+            base_branch: project.branch.to_string(),
             default_model: ag_session::test_support::CODEX_MODEL,
             models: vec![ag_session::test_support::codex_selection()],
-            project_id: 1,
-            project_name: "agentty".to_string(),
+            project_id: project.id,
+            project_name: project.name.to_string(),
             session_modes: vec![HostSessionMode {
                 agent: ag_session::test_support::codex_selection(),
                 mode: CreateSessionMode::Regular,
@@ -459,28 +642,75 @@ impl SessionBackend for RecordingBackend {
         })
     }
 
-    // The project is `agentty` on `main`, two commits behind its upstream,
-    // and syncing once a sync was requested. Listing it is not recorded.
-    async fn project_status(&self) -> Result<HostProjectStatus, SessionError> {
-        let is_syncing = *locked(&self.is_project_syncing);
+    // Lists the project's sessions with its status: `agentty` is two
+    // commits behind its upstream, `website` not compared yet, and each is
+    // syncing once a sync was requested for it. `session-2` comes with the
+    // figures of a running turn two commits ahead of its base, every other
+    // session without figures, as an older host lists them. A backend that
+    // serves projects names the project it listed, unless told not to by
+    // [`RecordingBackend::name_listed_projects`].
+    async fn project_sessions(&self, scope: ProjectScope) -> Result<ProjectSessions, SessionError> {
+        let project = self.scoped("list", scope)?;
+        let is_syncing = locked(&self.syncing).contains(&project.id);
+        let entries = self
+            .summaries(project)
+            .into_iter()
+            .map(|summary| {
+                let stats = (summary.id.as_str() == "session-2").then(|| SessionListStats {
+                    added_lines: 64,
+                    base_ahead_behind: Some((2, 0)),
+                    deleted_lines: 9,
+                    has_merge_conflict: false,
+                    in_progress_started_at: Some(100),
+                    in_progress_total_seconds: 12,
+                    is_published: false,
+                    model: ag_session::test_support::codex_selection().model(),
+                    reasoning_level: ag_session::ReasoningLevel::High,
+                    review_request: None,
+                    size_label: "M".to_string(),
+                    upstream_ahead_behind: None,
+                });
 
-        Ok(HostProjectStatus {
-            ahead_behind: Some((0, 2)),
-            branch: Some("main".to_string()),
-            project_name: "agentty".to_string(),
-            sync: is_syncing.then(|| HostProjectSync {
-                branch: "main".to_string(),
-                phase: HostProjectSyncPhase::Running,
+                SessionListEntry { stats, summary }
+            })
+            .collect();
+
+        Ok(ProjectSessions {
+            entries,
+            project_id: (self.serves_projects && !*locked(&self.is_unnamed)).then_some(project.id),
+            status: Some(HostProjectStatus {
+                ahead_behind: project.has_counts.then_some((0, 2)),
+                branch: Some(project.branch.to_string()),
+                project_name: project.name.to_string(),
+                sync: is_syncing.then(|| HostProjectSync {
+                    branch: project.branch.to_string(),
+                    phase: HostProjectSyncPhase::Running,
+                }),
             }),
         })
     }
 
     // Every project sync starts.
-    async fn sync_project(&self) -> Result<(), SessionError> {
-        self.record("sync_project".to_string());
-        *locked(&self.is_project_syncing) = true;
+    async fn sync_project_for(&self, scope: ProjectScope) -> Result<(), SessionError> {
+        let project = self.scoped("sync_project", scope)?;
+        locked(&self.syncing).push(project.id);
 
         Ok(())
+    }
+
+    // A backend that serves projects lists a session of either; one that
+    // does not answers as hosts that list only their active project do.
+    async fn is_session_listed(&self, session_id: &SessionId) -> Result<bool, SessionError> {
+        if !self.serves_projects {
+            let summaries = self.list_sessions().await?;
+
+            return Ok(summaries.iter().any(|summary| &summary.id == session_id));
+        }
+        self.record(format!("listed:{session_id}"));
+
+        Ok(self
+            .listed()
+            .any(|project| project.sessions.contains(&session_id.as_str())))
     }
 
     // A snapshot queues the messages sent to its session; `missing` is
@@ -582,71 +812,25 @@ impl SessionBackend for RecordingBackend {
         ]))
     }
 
-    // The project checkout holds the file `README.md`.
-    async fn list_project_files(&self) -> Result<Vec<SessionFileEntry>, SessionError> {
-        self.record("project_files".to_string());
+    // A project's checkout holds one file, `README.md` in `agentty`.
+    async fn list_project_files_for(
+        &self,
+        scope: ProjectScope,
+    ) -> Result<Vec<SessionFileEntry>, SessionError> {
+        let project = self.scoped("project_files", scope)?;
 
         Ok(vec![SessionFileEntry {
             is_dir: false,
-            path: "README.md".to_string(),
+            path: project.readme.to_string(),
         }])
     }
 
-    /// Lists `session-2` with the figures of a running turn two commits
-    /// ahead of its base, and every other session without figures, as an
-    /// older host lists them.
-    async fn list_session_entries(&self) -> Result<Vec<SessionListEntry>, SessionError> {
-        let summaries = self.list_sessions().await?;
-
-        Ok(summaries
-            .into_iter()
-            .map(|summary| {
-                let stats = (summary.id.as_str() == "session-2").then(|| SessionListStats {
-                    added_lines: 64,
-                    base_ahead_behind: Some((2, 0)),
-                    deleted_lines: 9,
-                    has_merge_conflict: false,
-                    in_progress_started_at: Some(100),
-                    in_progress_total_seconds: 12,
-                    is_published: false,
-                    model: ag_session::test_support::codex_selection().model(),
-                    reasoning_level: ag_session::ReasoningLevel::High,
-                    review_request: None,
-                    size_label: "M".to_string(),
-                    upstream_ahead_behind: None,
-                });
-
-                SessionListEntry { stats, summary }
-            })
-            .collect())
-    }
-
-    // Lists `session-1`, waiting on a question, and `session-2`, running a
-    // turn. `session-2` counts as updated once for every message sent and
-    // every answer given to any session, so a device sees another session
-    // change.
+    // Lists the active project's sessions, as `project_sessions` does.
     async fn list_sessions(&self) -> Result<Vec<SessionSummary>, SessionError> {
-        let plan_updated_at = self
-            .calls()
-            .iter()
-            .filter(|call| call.starts_with("send:") || call.starts_with("answer:"))
-            .fold(30, |updated_at, _| updated_at + 1);
+        let summaries = self.summaries(&PROJECTS[*locked(&self.active)]);
         self.record("list".to_string());
 
-        Ok(vec![
-            SessionSummary {
-                id: SessionId::from("session-1"),
-                status: SessionStatus::Review,
-                title: Some("Build it".to_string()),
-                updated_at: 20,
-            },
-            SessionSummary {
-                id: SessionId::from("session-2"),
-                status: SessionStatus::InProgress,
-                title: Some("Plan it".to_string()),
-                updated_at: plan_updated_at,
-            },
-        ])
+        Ok(summaries)
     }
 
     // The task `busy` is refused as the host refuses a session that is not

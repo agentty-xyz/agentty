@@ -6,10 +6,10 @@ use ag_remote::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteFocusedReview,
     RemoteFocusedReviewState, RemoteGraphAction, RemoteGraphActionRequest, RemoteGraphApproval,
     RemoteGraphProposalPhase, RemoteGraphStatus, RemoteImage, RemoteMessage, RemoteMessageKind,
-    RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectSync, RemoteProjectSyncPhase,
-    RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse, RemoteResult,
-    RemoteReviewRequest, RemoteSession, RemoteSessionGraph, RemoteSessionMode,
-    RemoteSessionSummary, RequestedSessionId, ServerFrame,
+    RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectEntry, RemoteProjectSync,
+    RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
+    RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionGraph, RemoteSessionMode,
+    RemoteSessionSummary, RequestedProjectId, RequestedSessionId, ServerFrame,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -17,7 +17,8 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{
-    Client, TestResult, TestServer, assert_rejected, hello_frame, next_frame, send,
+    Client, MemoryDeviceStore, RecordingBackend, TestResult, TestServer, assert_rejected,
+    hello_frame, next_frame, send,
 };
 
 /// Sends one request and returns its result.
@@ -60,6 +61,7 @@ fn project(sync: Option<RemoteProjectSync>) -> RemoteProject {
         ahead: Some(0),
         behind: Some(2),
         branch: Some("main".to_string()),
+        id: None,
         name: "agentty".to_string(),
         sync,
     }
@@ -120,7 +122,12 @@ async fn each_request_reaches_the_session_service() -> TestResult {
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
 
     // Act
-    let listed = call(&mut client, 1, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        1,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
     let loaded = call(
         &mut client,
         2,
@@ -381,7 +388,12 @@ async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_it
     let unlisted = call(&mut client, 4, accept("other-project-session", "5eed")).await?;
     client.send(Message::Text(unknown.into())).await?;
     let refused = next_frame(&mut client).await?;
-    let listed = call(&mut client, 6, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        6,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
 
     // Assert
     let RemoteResult::Ok(RemoteResponse::Graphs {
@@ -554,7 +566,12 @@ async fn project_file_listings_name_the_project_checkout() -> TestResult {
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
 
     // Act
-    let listed = call(&mut client, 1, RemoteRequest::ListProjectFiles).await?;
+    let listed = call(
+        &mut client,
+        1,
+        RemoteRequest::ListProjectFiles { project_id: None },
+    )
+    .await?;
 
     // Assert
     assert_eq!(
@@ -597,7 +614,12 @@ async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestRes
         },
     )
     .await?;
-    let listed = call(&mut client, 3, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        3,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
 
     // Assert
     assert_eq!(busy, RemoteResult::Error("Session is busy".to_string()));
@@ -629,7 +651,12 @@ async fn a_slow_request_delays_neither_other_requests_nor_change_pushes() -> Tes
 
     // Act
     send_held_message(&mut client, 1).await?;
-    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        2,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
     server.revisions_tx.send_replace(5);
     let changed = next_frame(&mut client).await?;
     server.backend.release();
@@ -667,7 +694,12 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
         },
     )
     .await?;
-    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        2,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
     let unlisted = call(
         &mut client,
         3,
@@ -760,7 +792,12 @@ async fn a_request_beyond_eight_in_progress_is_refused() -> TestResult {
     }
 
     // Act
-    let refused = call(&mut client, 9, RemoteRequest::ListSessions).await?;
+    let refused = call(
+        &mut client,
+        9,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
     server.backend.release();
     let mut held_ids = Vec::new();
     for _ in 1..=8 {
@@ -773,7 +810,12 @@ async fn a_request_beyond_eight_in_progress_is_refused() -> TestResult {
         }
     }
     held_ids.sort_unstable();
-    let listed = call(&mut client, 10, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        10,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
 
     // Assert
     assert_eq!(
@@ -820,7 +862,12 @@ async fn mutations_of_one_session_reach_the_host_in_arrival_order() -> TestResul
         },
     )
     .await?;
-    let listed = call(&mut client, 3, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        3,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
     let mutations_while_held = host_mutations(&server);
     server.backend.release();
     let replies = responses(&mut client, 2).await?;
@@ -892,7 +939,12 @@ async fn shutdown_waits_for_requests_in_progress() -> TestResult {
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
     send_held_message(&mut client, 1).await?;
     // A reply to a later request shows the held one has started.
-    call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    call(
+        &mut client,
+        2,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
     let TestServer {
         backend,
         devices: _devices,
@@ -1040,8 +1092,18 @@ async fn sync_project_reaches_the_host_and_the_listing_reports_its_progress() ->
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
 
     // Act
-    let synced = call(&mut client, 1, RemoteRequest::SyncProject).await?;
-    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    let synced = call(
+        &mut client,
+        1,
+        RemoteRequest::SyncProject { project_id: None },
+    )
+    .await?;
+    let listed = call(
+        &mut client,
+        2,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
 
     // Assert
     let listed_project = match listed {
@@ -1133,12 +1195,13 @@ async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult 
     let (mut client, _device_id, _token) = server.pair("Phone").await?;
 
     // Act
-    let host = call(&mut client, 1, RemoteRequest::GetHost).await?;
+    let host = call(&mut client, 1, RemoteRequest::GetHost { project_id: None }).await?;
     let created = call(
         &mut client,
         2,
         RemoteRequest::CreateSession {
             mode: RemoteSessionMode::Regular,
+            project_id: None,
         },
     )
     .await?;
@@ -1147,6 +1210,7 @@ async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult 
         3,
         RemoteRequest::CreateSession {
             mode: RemoteSessionMode::Harness,
+            project_id: None,
         },
     )
     .await?;
@@ -1170,6 +1234,7 @@ async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult 
                 ag_session::test_support::codex_selection()
             )],
             project: "agentty".to_string(),
+            project_id: Some("1".to_string()),
             session_modes: vec![RemoteSessionMode::Regular],
         })
     );
@@ -1200,7 +1265,12 @@ async fn pings_are_ignored_between_requests() -> TestResult {
     // Act
     client.send(Message::Ping(vec![1].into())).await?;
     client.send(Message::Pong(vec![2].into())).await?;
-    let listed = call(&mut client, 1, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        1,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
 
     // Assert
     assert!(matches!(listed, RemoteResult::Ok(_)));
@@ -1237,7 +1307,12 @@ async fn unknown_methods_get_an_error_and_keep_the_connection() -> TestResult {
     // Act
     client.send(Message::Text(unknown.into())).await?;
     let refused = next_frame(&mut client).await?;
-    let listed = call(&mut client, 2, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        2,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
 
     // Assert
     assert_eq!(
@@ -1293,7 +1368,12 @@ async fn requests_keep_working_after_the_host_drops_revisions() -> TestResult {
 
     // Act
     drop(revisions_tx);
-    let listed = call(&mut client, 1, RemoteRequest::ListSessions).await?;
+    let listed = call(
+        &mut client,
+        1,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
 
     // Assert
     assert!(matches!(listed, RemoteResult::Ok(_)));
@@ -1336,6 +1416,364 @@ async fn a_message_with_megabytes_of_images_fits_one_frame() -> TestResult {
     assert_eq!(
         server.backend.calls().last().map(String::as_str),
         Some("send:session-1:Look at [Image #1]:png=5242880,png=1048576")
+    );
+
+    Ok(())
+}
+
+/// Starts a server whose host lists the test backend's two projects, and
+/// pairs a device with it.
+async fn paired_with_projects() -> TestResult<(TestServer, Client, String)> {
+    let server = TestServer::start_with(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_projects(),
+    )
+    .await?;
+    let (client, _device_id, token) = server.pair("Phone").await?;
+
+    Ok((server, client, token))
+}
+
+/// The requests about a project, each naming `project_id`.
+fn project_requests(project_id: &str) -> Vec<RemoteRequest> {
+    let named = || Some(RequestedProjectId::from(project_id));
+
+    vec![
+        RemoteRequest::GetHost {
+            project_id: named(),
+        },
+        RemoteRequest::ListProjectFiles {
+            project_id: named(),
+        },
+        RemoteRequest::ListSessions {
+            project_id: named(),
+        },
+        RemoteRequest::SyncProject {
+            project_id: named(),
+        },
+        RemoteRequest::CreateSession {
+            mode: RemoteSessionMode::Regular,
+            project_id: named(),
+        },
+    ]
+}
+
+/// Sends each of `requests` in turn and returns their results.
+async fn call_each(
+    client: &mut Client,
+    requests: Vec<RemoteRequest>,
+) -> TestResult<Vec<RemoteResult>> {
+    let mut results = Vec::new();
+    for (id, request) in (1..).zip(requests) {
+        results.push(call(client, id, request).await?);
+    }
+
+    Ok(results)
+}
+
+#[tokio::test]
+async fn projects_are_listed_and_named_only_through_the_projects_capability() -> TestResult {
+    // Arrange
+    let without = TestServer::start().await?;
+    let (mut plain, _device_id, _token) = without.pair("Phone").await?;
+    let (with, mut client, token) = paired_with_projects().await?;
+
+    // Act
+    let mut refused = call_each(&mut plain, project_requests("1")).await?;
+    refused.push(call(&mut plain, 9, RemoteRequest::ListProjects).await?);
+    let (_again, welcome) = with.hello(&token).await?;
+    let listed = call(&mut client, 1, RemoteRequest::ListProjects).await?;
+
+    // Assert: a server whose host serves only its active project refuses a
+    // request that names one instead of answering for the active project.
+    assert_eq!(
+        refused,
+        vec![RemoteResult::Error("Unsupported request".to_string()); 6]
+    );
+    assert_eq!(without.backend.calls(), Vec::<String>::new());
+    let ServerFrame::Welcome { capabilities, .. } = welcome else {
+        return Err(format!("expected a welcome, got {welcome:?}").into());
+    };
+    assert_eq!(capabilities.last().map(String::as_str), Some("projects"));
+    assert_eq!(
+        listed,
+        RemoteResult::Ok(RemoteResponse::Projects {
+            projects: vec![
+                RemoteProjectEntry {
+                    active_sessions: 2,
+                    id: "1".to_string(),
+                    is_active: true,
+                    name: "agentty".to_string(),
+                },
+                RemoteProjectEntry {
+                    active_sessions: 1,
+                    id: "2".to_string(),
+                    is_active: false,
+                    name: "website".to_string(),
+                },
+            ],
+        })
+    );
+    assert_eq!(with.backend.calls(), ["projects"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_named_project_the_host_does_not_list_never_reaches_it() -> TestResult {
+    // Arrange
+    let (server, mut client, _token) = paired_with_projects().await?;
+    let mut requests = project_requests("9");
+    requests.extend(project_requests("website"));
+
+    // Act
+    let results = call_each(&mut client, requests).await?;
+
+    // Assert: only the listing ran, once for each well-formed id.
+    assert_eq!(
+        results,
+        vec![RemoteResult::Error("Project not found".to_string()); 10]
+    );
+    assert_eq!(server.backend.calls(), vec!["projects"; 5]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn requests_that_name_a_listed_project_reach_that_project() -> TestResult {
+    // Arrange: the terminal has `agentty` open.
+    let (server, mut client, _token) = paired_with_projects().await?;
+
+    // Act
+    let results = call_each(&mut client, project_requests("2")).await?;
+    let listed = call(
+        &mut client,
+        9,
+        RemoteRequest::ListSessions {
+            project_id: Some("2".into()),
+        },
+    )
+    .await?;
+
+    // Assert
+    let website = |sync| RemoteProject {
+        ahead: None,
+        behind: None,
+        branch: Some("site".to_string()),
+        id: Some("2".to_string()),
+        name: "website".to_string(),
+        sync,
+    };
+    let RemoteResult::Ok(RemoteResponse::Host {
+        base_branch,
+        project,
+        project_id,
+        ..
+    }) = &results[0]
+    else {
+        return Err(format!("expected the host, got {:?}", results[0]).into());
+    };
+    assert_eq!(
+        (
+            base_branch.as_str(),
+            project.as_str(),
+            project_id.as_deref()
+        ),
+        ("site", "website", Some("2"))
+    );
+    assert_eq!(
+        results[1..],
+        [
+            RemoteResult::Ok(RemoteResponse::SessionFiles {
+                files: vec![RemoteFileEntry {
+                    is_dir: false,
+                    path: "index.html".to_string(),
+                }],
+                truncated: false,
+            }),
+            RemoteResult::Ok(RemoteResponse::Sessions {
+                // The host has not compared `website` with its upstream.
+                project: Some(website(None)),
+                sessions: vec![summary("session-3", "Review", "Write the docs", 25)],
+            }),
+            RemoteResult::Ok(RemoteResponse::Accepted),
+            RemoteResult::Ok(RemoteResponse::Created {
+                session_id: "session-3".to_string(),
+            }),
+        ]
+    );
+    assert_eq!(
+        listed,
+        RemoteResult::Ok(RemoteResponse::Sessions {
+            project: Some(website(Some(RemoteProjectSync {
+                branch: "site".to_string(),
+                conflicts: None,
+                message: None,
+                phase: RemoteProjectSyncPhase::Running,
+                pulled_commits: None,
+                pushed_commits: None,
+            }))),
+            sessions: vec![summary("session-3", "Review", "Write the docs", 25)],
+        })
+    );
+    // Each request checked the listing before it reached the project, and
+    // the new session went to the project its host description named.
+    assert_eq!(
+        server.backend.calls(),
+        [
+            "projects",
+            "host:2",
+            "projects",
+            "project_files:2",
+            "projects",
+            "list:2",
+            "projects",
+            "sync_project:2",
+            "projects",
+            "host:2",
+            "create:Regular:2",
+            "projects",
+            "list:2",
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn requests_without_a_project_follow_the_terminal_s_active_project() -> TestResult {
+    // Arrange
+    let (server, mut client, _token) = paired_with_projects().await?;
+
+    // Act
+    let before = call(
+        &mut client,
+        1,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
+    server.backend.switch_to(2);
+    let after = call(
+        &mut client,
+        2,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await?;
+    let created = call(
+        &mut client,
+        3,
+        RemoteRequest::CreateSession {
+            mode: RemoteSessionMode::Regular,
+            project_id: None,
+        },
+    )
+    .await?;
+    let synced = call(
+        &mut client,
+        4,
+        RemoteRequest::SyncProject { project_id: None },
+    )
+    .await?;
+
+    // Assert: a listing names the project it read.
+    let listed_project = |result: &RemoteResult| match result {
+        RemoteResult::Ok(RemoteResponse::Sessions { project, sessions }) => Some((
+            project.as_ref().and_then(|project| project.id.clone()),
+            sessions
+                .iter()
+                .map(|session| session.id.clone())
+                .collect::<Vec<_>>(),
+        )),
+        _ => None,
+    };
+    assert_eq!(
+        listed_project(&before),
+        Some((
+            Some("1".to_string()),
+            vec!["session-1".to_string(), "session-2".to_string()]
+        ))
+    );
+    assert_eq!(
+        listed_project(&after),
+        Some((Some("2".to_string()), vec!["session-3".to_string()]))
+    );
+    assert_eq!(
+        created,
+        RemoteResult::Ok(RemoteResponse::Created {
+            session_id: "session-3".to_string(),
+        })
+    );
+    assert_eq!(synced, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        server.backend.calls(),
+        [
+            "list:1",
+            "list:2",
+            "host:2",
+            "create:Regular:2",
+            "sync_project:2"
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_requests_ask_the_host_once_whether_it_lists_the_session() -> TestResult {
+    // Arrange: `session-3` belongs to `website`, which the terminal does
+    // not have open.
+    let (server, mut client, _token) = paired_with_projects().await?;
+
+    // Act
+    let loaded = call(
+        &mut client,
+        1,
+        RemoteRequest::GetSession {
+            session_id: "session-3".into(),
+        },
+    )
+    .await?;
+    let sent = call(
+        &mut client,
+        2,
+        RemoteRequest::SendMessage {
+            images: Vec::new(),
+            message: "continue".to_string(),
+            session_id: "session-3".into(),
+        },
+    )
+    .await?;
+    let unlisted = call(
+        &mut client,
+        3,
+        RemoteRequest::StopTurn {
+            session_id: "other-project-session".into(),
+        },
+    )
+    .await?;
+
+    // Assert
+    let RemoteResult::Ok(RemoteResponse::Session {
+        session: Some(session),
+    }) = loaded
+    else {
+        return Err(format!("expected session-3, got {loaded:?}").into());
+    };
+    assert_eq!(session.id, "session-3");
+    assert_eq!(sent, RemoteResult::Ok(RemoteResponse::Accepted));
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        server.backend.calls(),
+        [
+            "listed:session-3",
+            "get:session-3",
+            "listed:session-3",
+            "send:session-3:continue",
+            "listed:other-project-session",
+        ]
     );
 
     Ok(())

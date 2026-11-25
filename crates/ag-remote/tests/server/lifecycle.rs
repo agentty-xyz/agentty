@@ -43,7 +43,7 @@ async fn revoking_a_device_closes_its_connections_and_invalidates_its_token() ->
         &mut other,
         &ClientFrame::Request {
             id: 1,
-            request: RemoteRequest::ListSessions,
+            request: RemoteRequest::ListSessions { project_id: None },
         },
     )
     .await?;

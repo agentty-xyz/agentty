@@ -251,7 +251,7 @@ async fn frames_sent_while_waiting_are_rejected() -> TestResult {
         &mut client,
         &ClientFrame::Request {
             id: 1,
-            request: RemoteRequest::ListSessions,
+            request: RemoteRequest::ListSessions { project_id: None },
         },
     )
     .await?;
@@ -303,7 +303,7 @@ async fn first_frame_must_be_hello_or_pair() -> TestResult {
         &mut request_first,
         &ClientFrame::Request {
             id: 1,
-            request: RemoteRequest::ListSessions,
+            request: RemoteRequest::ListSessions { project_id: None },
         },
     )
     .await?;

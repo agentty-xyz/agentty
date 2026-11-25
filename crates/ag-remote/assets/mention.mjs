@@ -2,7 +2,7 @@
 // typed answers to the agent's questions. As in the
 // terminal, typing `@` at the start of a word lists the files and
 // directories of the open session's worktree, or for a session yet to
-// start those of the active project's checkout, ranked by a fuzzy match
+// start those of its project's checkout, ranked by a fuzzy match
 // of what follows; picking one puts `@path ` in its place. The names come
 // from `list_session_files`, offered through the `files` capability, or
 // `list_project_files`, offered through `project_files`, and only ever
@@ -27,7 +27,7 @@ const SEGMENT_BOUNDARIES = new Set(["/", ".", "_", "-"]);
 const TOKEN_CHARACTER = /^[\p{L}\p{N}/._-]$/u;
 
 // Whether the host lets this device look up the files of `scope`: a
-// session's worktree, or with `"project"` the active project's checkout.
+// session's worktree, or with `"project"` a project's checkout.
 export function offersMentions(capabilities, scope = "session") {
   return capabilities.includes(scope === "project" ? "project_files" : "files");
 }
@@ -126,8 +126,9 @@ export function mentionText(entry) {
 // `capabilities` and `isConnected`, and `fileScope`: `"session"`, the
 // default, for the session's worktree, `"project"` for the project
 // checkout, or `null` for no lookup; with `"project"`, `projectKey` names
-// the Agentty whose project it is when a page shows several;
-// `request(body)` sends one request and
+// the Agentty whose project it is when a page shows several, and
+// `projectId` the project the device picked, `null` for the host's active
+// one; `request(body)` sends one request and
 // resolves with its result; `setText(text, caret)` replaces the field's
 // text and its saved draft and puts the caret at `caret`;
 // `showError(message)` shows a failure.
@@ -161,6 +162,7 @@ export function createMentions({ input, suggestions, request, context, setText, 
       capabilities = [],
       fileScope = "session",
       isConnected = false,
+      projectId = null,
       projectKey = "",
       session = null,
     } = context() ?? {};
@@ -168,7 +170,12 @@ export function createMentions({ input, suggestions, request, context, setText, 
       return null;
     }
     if (fileScope === "project") {
-      return { body: { method: "list_project_files" }, key: "project:" + projectKey };
+      return projectId === null
+        ? { body: { method: "list_project_files" }, key: "project:" + projectKey }
+        : {
+            body: { method: "list_project_files", project_id: projectId },
+            key: "project:" + projectKey + ":" + projectId,
+          };
     }
 
     return session

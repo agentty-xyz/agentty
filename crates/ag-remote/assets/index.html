@@ -728,6 +728,10 @@
                     <p class="project-line">
                         <span class="visually-hidden">Project</span>
                         <b data-part="project-name"></b>
+                        <select class="field project-select"
+                                data-part="project-select"
+                                aria-label="Project"
+                                hidden></select>
                         <span class="project-branch" data-part="project-branch" hidden></span>
                         <span class="project-counts" data-part="project-counts" hidden></span>
                     </p>
@@ -748,7 +752,7 @@
                 </button>
             </div>
             <div class="instance-sessions" data-part="list"></div>
-            <p class="list-empty" data-part="empty" hidden>No sessions in the active project.</p>
+            <p class="list-empty" data-part="empty" hidden>No sessions in this project.</p>
             <p class="error" role="alert" data-part="error"></p>
         </div>
     </body>

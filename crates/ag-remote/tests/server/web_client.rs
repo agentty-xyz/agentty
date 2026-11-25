@@ -21,7 +21,10 @@ use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::net::TcpListener;
 use tokio::process::{Child, ChildStdout, Command};
 
-use crate::support::{TestResult, TestServer, start_linked_server, start_relay};
+use crate::support::{
+    MemoryDeviceStore, RecordingBackend, TestResult, TestServer, start_linked_server,
+    start_linked_server_over, start_relay,
+};
 
 /// Directory of the web client's Node scripts and suites.
 const WEB_TESTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/web");
@@ -365,6 +368,139 @@ async fn web_client_app_creates_sends_and_opens_a_session_from_home_through_the_
     assert!(create < send);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_keeps_to_the_project_it_picks_through_the_listener() -> TestResult {
+    // Arrange: the host lists `agentty`, which the terminal has open, and
+    // `website`.
+    let server = TestServer::start_with(
+        MemoryDeviceStore::default(),
+        RecordingBackend::with_projects(),
+    )
+    .await?;
+    let (_paired, _device_id, token) = server.pair("Node browser").await?;
+    let address = server.handle.local_addr().to_string();
+
+    // Act
+    let mut app = WebDevice::run(APP_SCRIPT, &[&address, "projects", &token])?;
+    let listed = app.next_step().await?;
+    server.backend.switch_to(2);
+    server.revisions_tx.send(2)?;
+    let pinned = app.next_step().await?;
+    let picked = app.next_step().await?;
+    server.backend.name_listed_projects(false);
+    server.revisions_tx.send(3)?;
+    let unnamed = app.next_step().await?;
+    server.backend.name_listed_projects(true);
+    server.revisions_tx.send(4)?;
+    let created = app.next_step().await?;
+    server.backend.switch_to(1);
+    server.backend.hide(2);
+    server.revisions_tx.send(5)?;
+    let fell_back = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_kept_then_picked(&listed, &pinned, &picked);
+    // A listing that does not say it is `website`'s is not shown as one.
+    assert_eq!(
+        unnamed,
+        json!({
+            "step": "unnamed",
+            "error": "Agentty listed another project than the one picked here",
+            "rows": ["session-3"],
+        })
+    );
+    assert_eq!(
+        created,
+        json!({
+            "step": "created",
+            "error": "",
+            "hash": "#s=session-3",
+            "view": "session-view",
+        })
+    );
+    assert_eq!(
+        fell_back,
+        json!({
+            "step": "fellBack",
+            "picks": "{}",
+            "project": {
+                "branch": "main",
+                "countsHidden": false,
+                "error": "The project shown here is no longer listed, so this shows the \
+                          terminal's project.",
+                "name": "agentty",
+                "options": null,
+                "selected": null,
+            },
+            "rows": ["session-1", "session-2"],
+        })
+    );
+    assert!(succeeded);
+    let calls = server.backend.calls();
+    for expected in ["host:2", "create:Regular:2", "send:session-3:Fix the docs"] {
+        assert!(
+            calls.iter().any(|call| call == expected),
+            "{expected} in {calls:?}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Checks the steps where the page starts on the terminal's `agentty`,
+/// stays on it when the terminal moves to `website`, and then picks
+/// `website`.
+fn assert_kept_then_picked(listed: &Value, pinned: &Value, picked: &Value) {
+    let agentty = |options: Value| {
+        json!({
+            "branch": "main",
+            "countsHidden": false,
+            "error": "",
+            "name": null,
+            "options": options,
+            "selected": "1",
+        })
+    };
+    assert_eq!(
+        listed,
+        &json!({
+            "step": "listed",
+            "eyebrow": "New session · agentty · base main",
+            "project": agentty(json!(["agentty · terminal", "website"])),
+            "rows": ["session-1", "session-2"],
+        })
+    );
+    assert_eq!(
+        pinned,
+        &json!({
+            "step": "pinned",
+            "eyebrow": "New session · agentty · base main",
+            "project": agentty(json!(["agentty", "website · terminal"])),
+            "rows": ["session-1", "session-2"],
+        })
+    );
+    // The host has not compared `website` with its upstream, so its branch
+    // shows without counts.
+    assert_eq!(
+        picked,
+        &json!({
+            "step": "picked",
+            "eyebrow": "New session · website · base site",
+            "picks": "{\"\":\"2\"}",
+            "project": {
+                "branch": "site",
+                "countsHidden": true,
+                "error": "",
+                "name": null,
+                "options": ["agentty", "website · terminal"],
+                "selected": "2",
+            },
+            "rows": ["session-3"],
+        })
+    );
 }
 
 #[tokio::test]
@@ -851,6 +987,57 @@ async fn web_client_app_shows_two_agenttys_through_one_relay_and_keeps_them_apar
         })
     );
     assert!(succeeded);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn web_client_app_keeps_each_agentty_s_project_pick_apart_through_the_relay() -> TestResult {
+    // Arrange: both servers list the same projects and session ids.
+    let relay = start_relay().await?;
+    let first_key = StaticKeypair::generate()?;
+    let second_key = StaticKeypair::generate()?;
+    let first =
+        start_linked_server_over(&relay, &first_key, RecordingBackend::with_projects()).await?;
+    let second =
+        start_linked_server_over(&relay, &second_key, RecordingBackend::with_projects()).await?;
+    let first_link = link_of(&relay, &first_key, &first)?;
+    let second_link = link_of(&relay, &second_key, &second)?;
+
+    // Act
+    let mut app = WebDevice::run(RELAY_APP_SCRIPT, &["projects", &first_link, &second_link])?;
+    let awaiting = app.next_step().await?;
+    approve_first_request(&first).await?;
+    let awaiting_second = app.next_step().await?;
+    approve_first_request(&second).await?;
+    let picked = app.next_step().await?;
+    let succeeded = app.succeeded().await?;
+
+    // Assert
+    assert_eq!(awaiting["step"], "awaiting");
+    assert_eq!(awaiting_second["step"], "awaitingB");
+    assert_eq!(
+        picked,
+        json!({
+            "step": "picked",
+            // Picking on A leaves B on the terminal's project.
+            "first": {
+                "picked": [
+                    {"rows": ["A/session-3"], "selected": "2"},
+                    {"rows": ["B/session-1", "B/session-2"], "selected": "1"},
+                ],
+                "stored": {"A": "2"},
+            },
+            "picked": [
+                {"rows": ["A/session-1", "A/session-2"], "selected": "1"},
+                {"rows": ["B/session-3"], "selected": "2"},
+            ],
+            "stored": {"A": "1", "B": "2"},
+        })
+    );
+    assert!(succeeded);
+    assert!(first.backend.calls().iter().any(|call| call == "list:2"));
+    assert!(second.backend.calls().iter().any(|call| call == "list:2"));
 
     Ok(())
 }

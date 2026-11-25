@@ -9,24 +9,27 @@ through `ag_session::SessionService`.
   host. This crate receives a `SessionService`, a revision counter, and a `DeviceStore`.
 - Expose only the operations in `RemoteRequest`. The user approved PNG and JPEG images
   in chat messages, which the host stores itself, stopping a turn, creating sessions,
-  merging, publishing, syncing a session or the active project, session settings,
-  generating a graph proposal with `/graph`, answering the questions of a session's
-  graph work, and the graph inspector's actions: accepting an output, retrying or
-  replying to a node, resuming or cancelling a graph, and adding provider calls to its
-  spent budget. Any other mutation, any operation that runs a host command, and any read
-  outside a listed session or the active project's status is a new security decision; do
+  merging, publishing, syncing a session or a project, session settings, generating a
+  graph proposal with `/graph`, answering the questions of a session's graph work, and
+  the graph inspector's actions: accepting an output, retrying or replying to a node,
+  resuming or cancelling a graph, and adding provider calls to its spent budget. A
+  request about a project is for the host's active project unless it names another in
+  `project_id`; where the host offers `projects`, it may name any project the host
+  lists. Any other mutation, any operation that runs a host command, and any read
+  outside a listed session or a listed project's status is a new security decision; do
   not extend the protocol without one.
 - Every request added after the first protocol version names its capability; the three
   original mutations, `send_message`, `answer_questions`, and `cancel_session`, are
-  always served. A request declares the operation it needs and how it queues in
-  `RequestPolicy::of` in `crates/ag-remote/src/request.rs`, and takes the session it
-  targets as a `RequestedSessionId`, which reaches the host only through `listed`, the
-  check that the host lists it. Every mutation is listed under Security in
-  `docs/site/content/docs/usage/remote-control.md` and in `SECURITY.md`.
-- The host enforces the same listed-session scope and approved operations for remote
-  requests, so a new operation also needs the host to serve it to remote control:
-  mutations in `crates/agentty/src/app/command_gateway/command.rs`, reads in
-  `crates/agentty/src/app/session_runtime.rs`. Keep this crate's own checks.
+  always served. A request declares the operations it needs and how it queues in
+  `RequestPolicy::of` in `crates/ag-remote/src/request.rs`, and one that names a project
+  also needs `Projects`. It takes the project it names as a `RequestedProjectId` and the
+  session it targets as a `RequestedSessionId`, each of which reaches the host only
+  through its `listed`, the check that the host lists it. Every mutation is listed under
+  Security in `docs/site/content/docs/usage/remote-control.md` and in `SECURITY.md`.
+- The host enforces the same listed-project and listed-session scope and approved
+  operations for remote requests, so a new operation also needs the host to serve it to
+  remote control: mutations in `crates/agentty/src/app/command_gateway/command.rs`,
+  reads in `crates/agentty/src/app/session_runtime.rs`. Keep this crate's own checks.
 - Keep device tokens secret: persist only their SHA-256 hash, and never log tokens,
   pairing codes, or message content.
 - Keep the connection defences: a redeemed pairing code yields a token only after host

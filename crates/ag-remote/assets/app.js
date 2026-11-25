@@ -14,7 +14,7 @@ import { createHome, offersCreation } from "./home.mjs";
 import { createInstanceView, fallbackName } from "./instance.mjs";
 import { isSupported } from "./noise.mjs";
 import { forgetPairing, instanceIdOf, loadPairings, savePairing } from "./pairings.mjs";
-import { createProject } from "./project.mjs";
+import { createProject, offersProjects, parseProjects, projectPicks } from "./project.mjs";
 import { openRelayTransport, parsePairingLink } from "./relay.mjs";
 import { TICK_MS, createSessionList } from "./session_list.mjs";
 import { createSettings } from "./settings.mjs";
@@ -59,6 +59,9 @@ const CONNECTION_LABELS = {
 };
 // What an Agentty's heading says in each state, beside its name.
 const STATE_LABELS = { ...CONNECTION_LABELS, connected: "Connected" };
+// Why a listing is not shown when it is for another project than the one
+// the device asked for.
+const OTHER_PROJECT = "Agentty listed another project than the one picked here";
 
 // Each id is a literal, so the contract test in
 // crates/ag-remote/tests/server/http.rs can check it exists in index.html.
@@ -263,6 +266,9 @@ const state = {
   homeId: null,
   // The Agentty home describes; see `describeHome`.
   homeTarget: null,
+  // Whether home was asked to describe its host again while it created a
+  // session, as when the user picked another project meanwhile.
+  isHomeStale: false,
   // Every Agentty in the sidebar, in the order they were paired. Without a
   // relay, the one behind this page's listener, with the id "".
   instances: [],
@@ -540,6 +546,8 @@ function createInstance(id, pairing) {
   });
   instance.project = createProject({
     elements: view.project,
+    onSelect: () => onProjectPicked(instance),
+    picks: projectPicks(storage, id),
     request: instance.connection.request,
   });
   // Reloads the list and the open session, at most once a second and not
@@ -901,12 +909,29 @@ async function loadSessions(instance) {
   const sessionId = state.current?.instance === instance ? state.current.sessionId : null;
   const isStillOpen = () => state.current?.instance === instance && state.current.sessionId === sessionId;
   try {
-    const listed = await instance.connection.request({ method: "list_sessions" });
+    const projectId = await listProjects(instance);
+    const body = { method: "list_sessions" };
+    if (projectId !== null) {
+      body.project_id = projectId;
+    }
+    const listed = await instance.connection.request(body);
+    // A project picked while this ran is listed by the next run.
+    if (instance.project.projectId() !== projectId) {
+      return;
+    }
+    // An answer for another project, as a server that predates `projects`
+    // would give, is not shown as this one's.
+    const project = parseProject(listed);
+    if (projectId !== null && project?.id !== projectId) {
+      instance.view.error.textContent = OTHER_PROJECT;
+
+      return;
+    }
     const sessions = listed.sessions || [];
     instance.sessions = sessions;
     instance.isListed = true;
     renderSessions();
-    showProject(instance, parseProject(listed));
+    showProject(instance, project);
     instance.view.error.textContent = instance.rejection ?? "";
     if (sessionId) {
       const loaded = await instance.connection.request({ method: "get_session", session_id: sessionId });
@@ -925,12 +950,39 @@ async function loadSessions(instance) {
   }
 }
 
+// With the `projects` capability, reads the projects `instance` lists
+// again and returns the id of the one this device shows, `null` without
+// the capability. When it changes, as when the one shown is no longer
+// listed, or home waited for the first answer, home describes it again:
+// new sessions start there. A listing that fails keeps the project shown,
+// the terminal's until one was listed, so its sessions still load.
+async function listProjects(instance) {
+  if (!offersProjects(instance.connection.capabilities())) {
+    return null;
+  }
+  const before = instance.project.projectId();
+  const wasAwaiting = instance.project.awaitsProjects();
+  try {
+    instance.project.setProjects(parseProjects(await instance.connection.request({ method: "list_projects" })));
+  } catch (error) {
+    instance.project.listFailed(error.message);
+  }
+  const projectId = instance.project.projectId();
+  if ((projectId !== before || wasAwaiting) && instance === state.homeTarget) {
+    void describeHome(true);
+  }
+
+  return projectId;
+}
+
 // Shows the project a listing names. When the terminal switched to another
-// project, home describes the host again: new sessions start there.
+// project, home describes the host again: new sessions start there. A
+// device that keeps to a project it picked does not follow the terminal.
 function showProject(instance, listed) {
   instance.project.update(listed);
   if (
     listed &&
+    instance.project.projectId() === null &&
     instance.projectName !== null &&
     listed.name !== instance.projectName &&
     instance === state.homeTarget
@@ -938,6 +990,20 @@ function showProject(instance, listed) {
     void describeHome(true);
   }
   instance.projectName = listed?.name ?? instance.projectName;
+}
+
+// The user picked another project of `instance`: its list empties until
+// that project's listing arrives, and home describes the project when it
+// starts sessions on `instance`.
+function onProjectPicked(instance) {
+  instance.sessions = [];
+  instance.isListed = false;
+  instance.view.error.textContent = instance.rejection ?? "";
+  renderSessions();
+  instance.refreshGate.request(true);
+  if (instance === state.homeTarget) {
+    void describeHome(true);
+  }
 }
 
 function renderSessions() {
@@ -1026,17 +1092,25 @@ function homeInstance() {
 // where it is.
 async function describeHome(force = false) {
   if (home.isCreating()) {
+    // Described again once the creation ends; see `onSettled`.
+    state.isHomeStale = true;
+
     return;
   }
+  state.isHomeStale = false;
   const target = homeInstance();
   if (target === state.homeTarget && !force) {
     return;
   }
   state.homeTarget = target;
   renderOffline();
+  // An Agentty whose projects this device picks from is described once it
+  // listed them, so home never starts on a project the device left.
+  const isDescribable = isConnected(target) && !target.project.awaitsProjects();
   await home.setCapabilities(
-    isConnected(target) ? target.connection.capabilities() : [],
+    isDescribable ? target.connection.capabilities() : [],
     target && usesRelay ? target.id : "",
+    target?.project.projectId() ?? null,
   );
 }
 
@@ -1154,8 +1228,13 @@ function onPairingLost(instance) {
     "Could not reach Agentty. Check that remote control is on, then try again.";
 }
 
-// Forgets the credential `instance` connects with.
+// Forgets the credential `instance` connects with, and the project picked
+// on it.
 function forgetCredential(instance) {
+  const picks = projectPicks(storage, instance.id);
+  if (picks.load() !== null) {
+    picks.save(null);
+  }
   if (usesRelay) {
     state.pairings = forgetPairing(storage, state.pairings, instance.id);
   } else {
@@ -1416,6 +1495,13 @@ const home = createHome({
         chat.keepDraft(sessionId, failure.draft, failure.images);
       }
       instance.refreshGate.request(true);
+    }
+  },
+  // A host description asked for while a session was created runs now,
+  // whether or not the creation went through.
+  onSettled: () => {
+    if (state.isHomeStale) {
+      void describeHome(true);
     }
   },
   onHost: (host) => {
@@ -1731,6 +1817,7 @@ async function startThroughRelay() {
     if (deviceKey.origin === "created") {
       for (const pairing of state.pairings) {
         state.pairings = forgetPairing(storage, state.pairings, pairing.instanceId);
+        projectPicks(storage, pairing.instanceId).save(null);
       }
     } else if (!hasLink) {
       elements["pair-error"].textContent =

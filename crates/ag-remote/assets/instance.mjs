@@ -1,6 +1,6 @@
 // One Agentty in the sidebar of the remote control client: a heading with
-// its name and connection state, its project line with the project's sync,
-// `New session`, the element its session groups render into, the line
+// its name and connection state, its project line with the project's
+// picker and sync, `New session`, the element its session groups render into, the line
 // shown when it has no sessions, and its error line. With one Agentty the
 // heading stays out of the page, and the project line and `New session`
 // sit above the filter, as on a page that shows only that Agentty. Names
@@ -46,6 +46,7 @@ export function createInstanceView({ document, prototype }) {
     error: part("project-error"),
     line: part("project"),
     name: part("project-name"),
+    select: part("project-select"),
     status: part("project-status"),
     sync: part("project-sync"),
     syncLabel: part("project-sync-label"),

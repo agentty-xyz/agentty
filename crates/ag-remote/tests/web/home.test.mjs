@@ -42,6 +42,7 @@ function mountHome({
   const requests = [];
   const hosts = [];
   const created = [];
+  const settled = [];
   const request = async (body) => {
     requests.push(body);
     if (body.method === "get_host") {
@@ -69,6 +70,8 @@ function mountHome({
     },
     onCreated: (sessionId, failure) => created.push([sessionId, failure]),
     onHost: (described) => hosts.push(described),
+    // Each creation that ended, as the sessions opened by then.
+    onSettled: () => settled.push(created.length),
     request: request,
     settings: createSettings({
       document: document,
@@ -92,7 +95,7 @@ function mountHome({
   });
   home.setConnected(isConnected);
 
-  return { byId, created, document, home, hosts, requests, window };
+  return { byId, created, document, home, hosts, requests, settled, window };
 }
 
 function type(page, text) {
@@ -120,14 +123,16 @@ test("parseHost keeps what home shows and refuses other answers", () => {
     models: [],
     modes: ["regular", "harness"],
     project: "agentty",
+    projectId: null,
   });
-  assert.deepEqual(parseHost({ kind: "host", project: "p" }), {
+  assert.deepEqual(parseHost({ kind: "host", project: "p", project_id: "2" }), {
     baseBranch: "",
     model: "",
     modeModels: {},
     models: [],
     modes: [],
     project: "p",
+    projectId: "2",
   });
   assert.equal(parseHost({ kind: "accepted" }), null);
   assert.equal(parseHost({ kind: "host" }), null);
@@ -244,6 +249,8 @@ test("sending creates the session, sends the first message, then opens it", asyn
     { method: "send_message", message: "Fix the relay\nand test it", session_id: "new" },
   ]);
   assert.deepEqual(page.created, [["new", null]]);
+  // The creation ends after the new session opened.
+  assert.deepEqual(page.settled, [1]);
   assert.equal(page.byId("home-message").value, "");
   assert.equal(page.byId("home-message").rows, 1);
   assert.equal(sessionStorage.getItem(DRAFT_KEY_PREFIX + HOME_DRAFT_ID), null);
@@ -307,6 +314,8 @@ test("a refused creation keeps the text on home and says why", async () => {
   await settle();
 
   assert.deepEqual(page.created, []);
+  // The refused creation still ends, so the page can describe home again.
+  assert.deepEqual(page.settled, [0]);
   assert.equal(page.byId("home-message").value, "Fix the relay");
   assert.equal(page.byId("home-error").textContent, "No active project");
   assert.equal(page.byId("home-send").disabled, false);
@@ -645,6 +654,61 @@ test("home described for another Agentty drops what it looked up for the first",
   assert.equal(page.home.isCreating(), false);
   // Each Agentty's project files are looked up once.
   assert.equal(page.requests.filter((body) => body.method === "list_project_files").length, 2);
+});
+
+test("home for a picked project names it in every request about the project", async () => {
+  // Arrange
+  const page = mountHome({
+    host: { ...HOST, project: "website", project_id: "2" },
+    respond: (body) => {
+      if (body.method === "list_project_files") {
+        return { files: [{ is_dir: false, path: "index.html" }], kind: "session_files" };
+      }
+
+      return body.method === "create_session" ? { kind: "created", session_id: "new" } : { kind: "accepted" };
+    },
+  });
+
+  // Act
+  await page.home.setCapabilities([...CAPABILITIES, "project_files"], "A", "2");
+  type(page, "Fix @ind");
+  await settle();
+  page.byId("home-message").dispatchEvent(new FakeEvent("keydown", { key: "Enter" }));
+  page.byId("home-message").dispatchEvent(new FakeEvent("keydown", { ctrlKey: true, key: "Enter" }));
+  await settle();
+
+  // Assert
+  assert.equal(page.home.host().project, "website");
+  assert.equal(page.home.host().scope, "A#2");
+  assert.deepEqual(page.requests, [
+    { method: "get_host", project_id: "2" },
+    { method: "list_project_files", project_id: "2" },
+    { method: "create_session", mode: "regular", project_id: "2" },
+    { method: "send_message", message: "Fix @index.html ", session_id: "new" },
+  ]);
+});
+
+test("home shows no composer for a description of another project than the one picked", async () => {
+  // Arrange: a server that predates `projects` answers for its own.
+  const page = mountHome({ host: { ...HOST, project_id: "1" } });
+
+  // Act
+  await page.home.setCapabilities(CAPABILITIES, "", "2");
+  const other = { error: page.byId("home-error").textContent, formHidden: page.byId("home-form").hidden };
+  await page.home.setCapabilities(CAPABILITIES, "", "1");
+
+  // Assert
+  assert.deepEqual(other, {
+    error: "Could not describe the project: Agentty described another project",
+    formHidden: true,
+  });
+  assert.deepEqual(page.hosts.slice(0, 1), [null]);
+  assert.equal(page.home.host().project, "agentty");
+  assert.equal(page.byId("home-error").textContent, "");
+  assert.deepEqual(page.requests, [
+    { method: "get_host", project_id: "2" },
+    { method: "get_host", project_id: "1" },
+  ]);
 });
 
 test("newSession ids name the Agentty a host was described for", () => {

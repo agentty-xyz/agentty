@@ -31,11 +31,16 @@ test("each view is its own copy of the prototype, with its parts found", () => {
   assert.equal(first.project.syncLabel.textContent, "Sync");
   assert.equal(first.newSession.hidden, true);
   assert.equal(first.newSession.textContent.trim(), "New session");
-  assert.equal(first.empty.textContent, "No sessions in the active project.");
+  assert.equal(first.empty.textContent, "No sessions in this project.");
   assert.equal(first.error.getAttribute("role"), "alert");
+  // The project picker starts hidden and takes its name from its label.
+  assert.equal(first.project.select.localName, "select");
+  assert.equal(first.project.select.hidden, true);
+  assert.equal(first.project.select.getAttribute("aria-label"), "Project");
+  assert.notEqual(first.project.select, second.project.select);
   // The prototype itself stays hidden and whole.
   assert.equal(page.byId("instance-prototype").hidden, true);
-  assert.equal(page.byId("instance-prototype").querySelectorAll("[data-part]").length, 17);
+  assert.equal(page.byId("instance-prototype").querySelectorAll("[data-part]").length, 18);
   // Copies carry no ids, so the page never holds one twice.
   assert.equal(first.root.querySelectorAll("[id]").length, 0);
 });

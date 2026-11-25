@@ -5,7 +5,7 @@ use ag_session::{SessionDiffFile, SessionDiffFileStatus, SessionFileEntry, Sessi
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
-use super::execute;
+use super::{capabilities, execute};
 use crate::connection::{MessageOutcome, handle_incoming};
 use crate::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteGraphAction,
@@ -45,7 +45,7 @@ async fn reads_and_original_mutations_reach_the_host_for_listed_sessions() {
     // Arrange
     let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let requests = vec![
-        RemoteRequest::ListSessions,
+        RemoteRequest::ListSessions { project_id: None },
         RemoteRequest::GetSession {
             session_id: "session-1".into(),
         },
@@ -159,7 +159,11 @@ async fn host_errors_return_in_the_response() {
     );
 
     // Act
-    let listed = reply_result(&fixture.state, RemoteRequest::ListSessions).await;
+    let listed = reply_result(
+        &fixture.state,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await;
     let loaded = reply_result(
         &fixture.state,
         RemoteRequest::GetSession {
@@ -688,8 +692,16 @@ async fn project_files_list_the_project_checkout_only_when_the_host_serves_them(
     let not_serving = StateFixture::with_devices(MemoryDeviceStore::default());
 
     // Act
-    let listed = reply_result(&serving.state, RemoteRequest::ListProjectFiles).await;
-    let unsupported = reply_result(&not_serving.state, RemoteRequest::ListProjectFiles).await;
+    let listed = reply_result(
+        &serving.state,
+        RemoteRequest::ListProjectFiles { project_id: None },
+    )
+    .await;
+    let unsupported = reply_result(
+        &not_serving.state,
+        RemoteRequest::ListProjectFiles { project_id: None },
+    )
+    .await;
 
     // Assert
     assert_eq!(
@@ -720,8 +732,12 @@ async fn get_host_describes_the_project_and_only_remote_modes() {
     let not_serving = StateFixture::with_devices(MemoryDeviceStore::default());
 
     // Act
-    let host = reply_result(&serving.state, RemoteRequest::GetHost).await;
-    let unsupported = reply_result(&not_serving.state, RemoteRequest::GetHost).await;
+    let host = reply_result(&serving.state, RemoteRequest::GetHost { project_id: None }).await;
+    let unsupported = reply_result(
+        &not_serving.state,
+        RemoteRequest::GetHost { project_id: None },
+    )
+    .await;
 
     // Assert
     assert_eq!(
@@ -742,6 +758,7 @@ async fn get_host_describes_the_project_and_only_remote_modes() {
                 ag_session::test_support::codex_selection()
             )],
             project: "agentty".to_string(),
+            project_id: Some("1".to_string()),
             session_modes: vec![RemoteSessionMode::Regular],
         })
     );
@@ -761,7 +778,10 @@ async fn create_session_uses_the_active_project_and_a_served_mode() {
         &[SessionOperation::CreateSession],
     );
     let not_serving = StateFixture::with_devices(MemoryDeviceStore::default());
-    let create = |mode| RemoteRequest::CreateSession { mode };
+    let create = |mode| RemoteRequest::CreateSession {
+        mode,
+        project_id: None,
+    };
 
     // Act
     let created = reply_result(&serving.state, create(RemoteSessionMode::Regular)).await;
@@ -1084,8 +1104,16 @@ async fn sync_project_reaches_the_host_only_when_the_host_serves_it() {
     let not_serving = StateFixture::with_devices(MemoryDeviceStore::default());
 
     // Act
-    let synced = reply_result(&serving.state, RemoteRequest::SyncProject).await;
-    let unsupported = reply_result(&not_serving.state, RemoteRequest::SyncProject).await;
+    let synced = reply_result(
+        &serving.state,
+        RemoteRequest::SyncProject { project_id: None },
+    )
+    .await;
+    let unsupported = reply_result(
+        &not_serving.state,
+        RemoteRequest::SyncProject { project_id: None },
+    )
+    .await;
 
     // Assert
     assert_eq!(synced, RemoteResult::Ok(RemoteResponse::Accepted));
@@ -1106,7 +1134,11 @@ async fn list_sessions_describes_the_project_when_the_host_reports_it() {
     );
 
     // Act
-    let listed = reply_result(&reporting.state, RemoteRequest::ListSessions).await;
+    let listed = reply_result(
+        &reporting.state,
+        RemoteRequest::ListSessions { project_id: None },
+    )
+    .await;
 
     // Assert
     let project = match listed {
@@ -1119,6 +1151,7 @@ async fn list_sessions_describes_the_project_when_the_host_reports_it() {
             ahead: Some(1),
             behind: Some(2),
             branch: Some("main".to_string()),
+            id: None,
             name: "agentty".to_string(),
             sync: Some(RemoteProjectSync {
                 branch: "main".to_string(),
@@ -1131,4 +1164,23 @@ async fn list_sessions_describes_the_project_when_the_host_reports_it() {
         })
     );
     assert_eq!(reporting.backend.calls(), ["list", "project"]);
+}
+
+#[test]
+fn projects_are_offered_only_by_a_host_that_also_reports_project_status() {
+    // Arrange
+    let without_status =
+        StateFixture::supporting(MemoryDeviceStore::default(), &[SessionOperation::Projects]);
+    let with_status = StateFixture::supporting(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::Projects, SessionOperation::ProjectStatus],
+    );
+
+    // Act
+    let offered_without = capabilities(without_status.state.sessions());
+    let offered_with = capabilities(with_status.state.sessions());
+
+    // Assert: a page tells a project's listing apart only by its status.
+    assert_eq!(offered_without, Vec::<String>::new());
+    assert_eq!(offered_with, ["projects"]);
 }

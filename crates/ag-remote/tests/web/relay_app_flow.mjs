@@ -3,6 +3,7 @@
 // crates/ag-remote/tests/server/web_client.rs.
 //
 // Usage: node relay_app_flow.mjs multi <pairing link of A> <pairing link of B>
+//        node relay_app_flow.mjs projects <pairing link of A> <pairing link of B>
 //        node relay_app_flow.mjs revoke <pairing link of A> <pairing link of B>
 //        node relay_app_flow.mjs migrate <pairing link of A>
 //        node relay_app_flow.mjs embed <pairing link of A> <pairing link of B> <page address>
@@ -14,6 +15,10 @@
 // servers listing the same session ids, then the Rust test stops B after
 // `returned`, and the page opens A's session while B is offline and
 // finally forgets this device on B.
+//
+// In `projects` mode both test servers list the projects `agentty` and
+// `website`. The page pairs A and B as in `multi` mode, then picks
+// `website` on A, then on B, then `agentty` on A again.
 //
 // In `revoke` mode the page pairs A, then opens B's link; after
 // `awaitingB` the Rust test revokes this device on A, then approves B
@@ -51,6 +56,7 @@ const PAGE = readFileSync(new URL("../../assets/index.html", import.meta.url), "
   '<meta name="agentty-transport" content="relay">',
 );
 const PAIRINGS_KEY = "agentty.remote.pairings";
+const PROJECT_PICKS_KEY = "agentty.remote.projects";
 const LEGACY_PAIRING_KEY = "agentty.remote.relay";
 const WAIT_MS = 10000;
 
@@ -656,9 +662,67 @@ async function migrateFlow() {
   });
 }
 
+// The project picks this browser keeps, by Agentty label.
+function storedPicks() {
+  const picks = JSON.parse(window.localStorage.getItem(PROJECT_PICKS_KEY) ?? "{}");
+
+  return Object.fromEntries(Object.entries(picks).map(([id, pick]) => [labelled(id), pick]));
+}
+
+// Picks project `projectId` on the Agentty `section` shows, as the user
+// does, and waits for its listing.
+async function pickIn(section, projectId, expected) {
+  const select = section.querySelector('[data-part="project-select"]');
+  select.value = projectId;
+  select.dispatchEvent(new FakeEvent("change"));
+  await waitFor("the picked project's sessions", () => rows(section).join() === expected.join());
+}
+
+// What each Agentty shows: its picker's value and its rows.
+function picked() {
+  return sections().map((section) => ({
+    rows: rows(section),
+    selected: section.querySelector('[data-part="project-select"]').value,
+  }));
+}
+
+// Pairs A and B, both listing the projects `agentty` and `website`, and
+// picks a project on each, which each keeps apart from the other's.
+async function projectsFlow() {
+  await pairThroughPage();
+  report({ step: "awaiting" });
+  await waitFor("A's sessions", () => visibleView() === "home-view" && rows().length > 0);
+  window.location.hash = new URL(secondLink).hash;
+  await waitFor("B's pairing form", () => visibleView() === "pair-view");
+  await pairThroughPage();
+  report({ step: "awaitingB" });
+  await waitFor(
+    "both Agenttys' pickers",
+    () =>
+      sections().length === 2 &&
+      sections().every(
+        (section) => rows(section).length > 0 && !section.querySelector('[data-part="project-select"]').hidden,
+      ),
+  );
+
+  await pickIn(sections()[0], "2", ["A/session-3"]);
+  const firstPick = { picked: picked(), stored: storedPicks() };
+  await pickIn(sections()[1], "2", ["B/session-3"]);
+  await pickIn(sections()[0], "1", ["A/session-1", "A/session-2"]);
+  report({
+    step: "picked",
+    first: firstPick,
+    picked: picked(),
+    stored: storedPicks(),
+  });
+}
+
 if (mode === "multi") {
   await import(APP_URL.href);
   await multiFlow();
+} else if (mode === "projects") {
+  await import(APP_URL.href);
+  await projectsFlow();
 } else if (mode === "revoke") {
   await import(APP_URL.href);
   await revokeFlow();

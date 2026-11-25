@@ -1,7 +1,8 @@
 // Home composer of the remote control client: with the `host` and
 // `create_session` capabilities, home asks what the agent should work on,
-// creates a session in the host's active project, sends it the first
-// message, and opens it. The message box is the open session's composer
+// creates a session in the project the page shows, the host's active one
+// unless the device picked another, sends it the first message, and opens
+// it. The message box is the open session's composer
 // from composer.mjs, for the session about to start: with the `settings`
 // capability too, its settings line and slash commands pick the model,
 // reasoning level, answer style and speed among those of the agent the
@@ -9,7 +10,7 @@
 // the picks are applied with
 // `set_session_settings` before the first message goes out. The new
 // session has no worktree yet, so with the `project_files` capability
-// `@` lists the active project's checkout, as the terminal does for a
+// `@` lists that project's checkout, as the terminal does for a
 // draft. The project name, base
 // branch and models come from `get_host` and only ever become text
 // nodes. Functions take `document` and `window` as parameters, so the
@@ -25,6 +26,9 @@ import { agentModels, currentChoice, offersSettings, parseModels, settingsChange
 export const HOME_DRAFT_ID = "home";
 // What each session mode `get_host` lists is called on the page.
 const MODE_LABELS = { harness: "Harness", regular: "Regular" };
+// Why home describes nothing when Agentty describes another project than
+// the one it asked for, as a server that predates `projects` would.
+const OTHER_PROJECT = "Agentty described another project";
 // Settings a pick may change, as `set_session_settings` and a session
 // snapshot name them.
 const PICKED_FIELDS = {
@@ -77,6 +81,7 @@ export function parseHost(result) {
     models: parseModels(result),
     modes: modes,
     project: result.project,
+    projectId: typeof result.project_id === "string" ? result.project_id : null,
   };
 }
 
@@ -128,10 +133,11 @@ export function modeLabel(mode) {
 // `onCreated(sessionId, failure)` opens a new session; `failure` is `null`
 // when the first message went through, and otherwise
 // `{ draft, error, images }` with the text and images to keep and why it
-// failed.
+// failed. `onSettled()` runs once a creation ends, whether or not it
+// created a session.
 //
-// Returns `setCapabilities(list)`, which loads the host when it is
-// offered, `setConnected(isConnected)`, `focus()`, and `host()`.
+// Returns `setCapabilities(list, scope, projectId)`, which loads the host
+// when it is offered, `setConnected(isConnected)`, `focus()`, and `host()`.
 export function createHome({
   document,
   window,
@@ -139,6 +145,7 @@ export function createHome({
   request,
   onHost,
   onCreated,
+  onSettled = () => {},
   settings = null,
 }) {
   const state = {
@@ -152,6 +159,9 @@ export function createHome({
     // Settings picked for the new session, as `set_session_settings`
     // names them.
     picks: {},
+    // The project new sessions start in, as `list_projects` names it, or
+    // `null` for the host's active one; see `setCapabilities`.
+    projectId: null,
     // The Agentty new sessions start on, among several; see
     // `setCapabilities`.
     scope: "",
@@ -166,6 +176,7 @@ export function createHome({
       capabilities: state.capabilities,
       draftId: HOME_DRAFT_ID,
       fileScope: "project",
+      projectId: state.projectId,
       projectKey: state.scope,
       isConnected: state.isConnected,
       isRunning: false,
@@ -245,8 +256,11 @@ export function createHome({
     let host = null;
     if (offersCreation(state.capabilities)) {
       try {
-        host = parseHost(await request({ method: "get_host" }));
-        elements.error.textContent = "";
+        const described = parseHost(await request(withProject({ method: "get_host" })));
+        // An answer for another project would start sessions there.
+        const isOther = described && state.projectId !== null && described.projectId !== state.projectId;
+        host = isOther ? null : described;
+        elements.error.textContent = isOther ? "Could not describe the project: " + OTHER_PROJECT : "";
       } catch (error) {
         elements.error.textContent = "Could not describe the project: " + error.message;
       }
@@ -254,13 +268,25 @@ export function createHome({
     if (load !== state.loads) {
       return;
     }
-    state.host = host && { ...host, scope: state.scope };
+    state.host = host && { ...host, scope: scopeKey() };
     // The chosen mode stays while the host still offers it.
     if (!host?.modes.includes(state.mode)) {
       state.mode = host?.modes[0] ?? null;
     }
     render();
     onHost(host);
+  }
+
+  // `body` naming the project home describes, when it is not the host's
+  // active one.
+  function withProject(body) {
+    return state.projectId === null ? body : { ...body, project_id: state.projectId };
+  }
+
+  // What the new session's settings are kept under: the Agentty and the
+  // project, so what home looked up for another is not reused.
+  function scopeKey() {
+    return state.projectId === null ? state.scope : state.scope + "#" + state.projectId;
   }
 
   // The new session with the picks applied while the host lets this
@@ -293,7 +319,7 @@ export function createHome({
     state.isCreating = true;
     elements.error.textContent = "";
     render();
-    const body = { method: "create_session" };
+    const body = withProject({ method: "create_session" });
     if (state.mode) {
       body.mode = state.mode;
     }
@@ -304,6 +330,7 @@ export function createHome({
       elements.error.textContent = error.message;
       state.isCreating = false;
       render();
+      onSettled();
 
       return;
     }
@@ -338,6 +365,7 @@ export function createHome({
     state.isCreating = false;
     render();
     onCreated(sessionId, failure);
+    onSettled();
   }
 
   composer.load(HOME_DRAFT_ID);
@@ -353,11 +381,13 @@ export function createHome({
     // home described when it started.
     isCreating: () => state.isCreating,
     // Describes the host again with `capabilities`. A page that shows
-    // several Agenttys names the one in `scope`, so what home looked up for
-    // another is not reused.
-    setCapabilities: (capabilities, scope = "") => {
-      if (scope !== state.scope) {
+    // several Agenttys names the one in `scope`, and `projectId` names the
+    // project the device picked, `null` for the host's active one, so what
+    // home looked up for another is not reused.
+    setCapabilities: (capabilities, scope = "", projectId = null) => {
+      if (scope !== state.scope || projectId !== state.projectId) {
         state.scope = scope;
+        state.projectId = projectId;
         state.host = null;
         state.mode = null;
         state.picks = {};

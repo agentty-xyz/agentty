@@ -5,6 +5,7 @@
 //        node app_flow.mjs <listener address> route <device token>
 //        node app_flow.mjs <listener address> create <device token>
 //        node app_flow.mjs <listener address> pair <pairing code>
+//        node app_flow.mjs <listener address> projects <device token>
 //
 // In `session` mode the test server lists `Build it`, waiting on one
 // question, and `Plan it`, running a turn, which counts as updated
@@ -22,6 +23,15 @@
 //
 // In `pair` mode the page starts unpaired and pairs with the code. After
 // `awaiting` the Rust test denies the request.
+//
+// In `projects` mode the test server lists two projects, `agentty`, which
+// the terminal has open, and `website`. After `listed` the Rust test
+// switches the terminal to `website`, and the page keeps to `agentty`.
+// The page then picks `website` and lists its session. After `picked` the
+// Rust test makes one listing leave out its project, which the page does
+// not show, and then name it again; the page creates a session in
+// `website` from home. After `created` the Rust test switches the terminal back and
+// stops listing `website`, and the page falls back to `agentty`.
 //
 // The script prints one JSON line per step. Any wait that runs out ends
 // the script with a failure.
@@ -510,8 +520,90 @@ async function createFlow() {
   });
 }
 
+// The ids of the session rows, in order.
+function rowIds() {
+  return rows().map((row) => row.dataset.sessionId);
+}
+
+// What the project line shows: the picker, when it shows, with its
+// options, the name, the branch and its counts, and the line's note.
+function projectLine() {
+  const select = part("project-select");
+
+  return {
+    branch: part("project-branch").textContent,
+    countsHidden: part("project-counts").hidden,
+    error: part("project-error").textContent,
+    name: part("project-name").hidden ? null : part("project-name").textContent,
+    options: select.hidden ? null : Array.from(select.children, (option) => option.textContent),
+    selected: select.hidden ? null : select.value,
+  };
+}
+
+// The device keeps to the project it shows, picks another, lists and
+// creates there, and falls back once its pick is no longer listed.
+async function projectsFlow() {
+  await waitFor("the session list", () => rows().length > 0 && !part("project-select").hidden);
+  await waitFor("the home composer", () => !byId("home-form").hidden);
+  report({
+    step: "listed",
+    eyebrow: byId("home-eyebrow").textContent,
+    project: projectLine(),
+    rows: rowIds(),
+  });
+
+  // The Rust test switches the terminal to `website`.
+  await waitFor("the terminal's switch", () => projectLine().options?.[1] === "website · terminal");
+  report({
+    step: "pinned",
+    eyebrow: byId("home-eyebrow").textContent,
+    project: projectLine(),
+    rows: rowIds(),
+  });
+
+  const select = part("project-select");
+  select.value = "2";
+  select.dispatchEvent(new FakeEvent("change"));
+  await waitFor("website's sessions", () => rowIds().join() === "session-3");
+  await waitFor("website's home", () => byId("home-eyebrow").textContent.includes("website"));
+  report({
+    step: "picked",
+    eyebrow: byId("home-eyebrow").textContent,
+    picks: window.localStorage.getItem("agentty.remote.projects"),
+    project: projectLine(),
+    rows: rowIds(),
+  });
+
+  // The Rust test makes listings leave out the project they read; the page
+  // keeps `website`'s rows and says why, until listings name it again.
+  const listError = () => byId("sessions").querySelector('[data-part="error"]').textContent;
+  await waitFor("the unnamed listing", () => listError() !== "");
+  report({ step: "unnamed", error: listError(), rows: rowIds() });
+  await waitFor("a named listing", () => listError() === "");
+
+  byId("home-message").value = "Fix the docs";
+  byId("home-message").dispatchEvent(new FakeEvent("input"));
+  byId("home-send").click();
+  await waitFor("the new session", () => byId("transcript").children.length > 0);
+  report({
+    step: "created",
+    error: byId("session-error").textContent,
+    hash: window.location.hash,
+    view: visibleView(),
+  });
+
+  // The Rust test switches the terminal back and stops listing `website`.
+  await waitFor("the fallback", () => part("project-select").hidden && rowIds().length === 2);
+  report({
+    step: "fellBack",
+    picks: window.localStorage.getItem("agentty.remote.projects"),
+    project: projectLine(),
+    rows: rowIds(),
+  });
+}
+
 await import(APP_URL.href);
-const flows = { create: createFlow, pair: pairFlow, route: routeFlow, session: sessionFlow };
+const flows = { create: createFlow, pair: pairFlow, projects: projectsFlow, route: routeFlow, session: sessionFlow };
 await flows[mode]();
 
 // The client keeps its socket open, so the script ends itself once its

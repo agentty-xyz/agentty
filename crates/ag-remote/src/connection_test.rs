@@ -382,7 +382,7 @@ async fn requests_before_authentication_are_rejected() {
     let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let frame = ClientFrame::Request {
         id: 1,
-        request: RemoteRequest::ListSessions,
+        request: RemoteRequest::ListSessions { project_id: None },
     };
 
     // Act
