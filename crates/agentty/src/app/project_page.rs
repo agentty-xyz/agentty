@@ -57,8 +57,9 @@ impl App {
     /// The active project's page is always loaded. Another listed project's
     /// page is loaded in this turn when it is not held yet: its branch is
     /// detected as a project switch detects it, its stored focused reviews
-    /// join the review cache without replacing live ones, and a sync of the
-    /// project that finished while no page held it is reconciled.
+    /// join the review cache without replacing live ones, a sync of the
+    /// project that finished while no page held it is reconciled, and the
+    /// first prompts its sessions saved while no page held them start.
     ///
     /// # Errors
     /// Returns [`ApiSessionError::NotFound`] for a project the host does not
@@ -76,6 +77,7 @@ impl App {
             self.load_viewed_project_page(project_id).await?;
             self.hydrate_focused_review_cache(project_id).await;
             self.apply_pending_project_sync_completion(project_id).await;
+            self.resume_ready_workspace_prompts(project_id).await;
         }
         let now = self.services.clock().now_instant();
         self.sessions

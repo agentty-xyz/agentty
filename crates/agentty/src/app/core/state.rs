@@ -2168,7 +2168,8 @@ impl App {
         );
         app::review::hydrate_review_transients(&self.review_cache, self.sessions.state_mut());
         self.restart_git_status_task();
-        self.resume_ready_workspace_prompts().await;
+        self.resume_ready_workspace_prompts(self.active_project_id())
+            .await;
     }
 
     /// Reloads project list snapshots from persistence, and drops the viewed

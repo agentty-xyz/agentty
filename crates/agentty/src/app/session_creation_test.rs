@@ -531,42 +531,54 @@ async fn a_new_session_of_a_viewed_project_joins_its_page_and_dispatches_its_sav
     // Act
     finish_reserved_creation(&mut app, viewed_project_id, &viewed_session_id).await;
     finish_reserved_creation(&mut app, unloaded_project_id, &unloaded_session_id).await;
+    let viewed_page_session_ids = app
+        .sessions
+        .state()
+        .viewed_page(viewed_project_id)
+        .map(|page| {
+            page.sessions()
+                .iter()
+                .map(|session| session.id.to_string())
+                .collect::<Vec<_>>()
+        });
+    let is_unloaded_session_loaded = app.sessions.session_for_id(&unloaded_session_id).is_some();
+    let waiting_state = preparation_state(&app, &unloaded_session_id).await;
+    app.ensure_project_page(unloaded_project_id)
+        .await
+        .expect("listed page should load");
 
     // Assert
-    let preparation_state = async |session_id: &str| {
-        app.services
-            .db()
-            .sessions()
-            .load_session_preparation(session_id)
-            .await
-            .expect("load")
-            .expect("preparation")
-            .state
-    };
     assert_eq!(
-        app.sessions
-            .state()
-            .viewed_page(viewed_project_id)
-            .map(|page| {
-                page.sessions()
-                    .iter()
-                    .map(|session| session.id.to_string())
-                    .collect::<Vec<_>>()
-            }),
+        viewed_page_session_ids,
         Some(vec![viewed_session_id.clone()])
     );
-    // A session of a project with no loaded page waits for that page.
-    assert!(app.sessions.session_for_id(&unloaded_session_id).is_none());
-    assert!(app.sessions.sessions().is_empty());
     assert_eq!(
-        preparation_state(&viewed_session_id).await,
+        preparation_state(&app, &viewed_session_id).await,
         SessionPreparationState::Failed
     );
+    // A session of a project with no loaded page waits for that page, then
+    // joins it and has its prompt dispatched once it loads.
+    assert!(!is_unloaded_session_loaded);
+    assert_eq!(waiting_state, SessionPreparationState::Ready);
+    assert!(app.sessions.session_for_id(&unloaded_session_id).is_some());
     assert_eq!(
-        preparation_state(&unloaded_session_id).await,
-        SessionPreparationState::Ready
+        preparation_state(&app, &unloaded_session_id).await,
+        SessionPreparationState::Failed
     );
+    assert!(app.sessions.sessions().is_empty());
     assert!(matches!(app.mode, AppMode::List));
+}
+
+/// Returns the stored workspace-preparation state of `session_id`.
+async fn preparation_state(app: &App, session_id: &str) -> SessionPreparationState {
+    app.services
+        .db()
+        .sessions()
+        .load_session_preparation(session_id)
+        .await
+        .expect("load")
+        .expect("preparation")
+        .state
 }
 
 #[tokio::test]
@@ -1274,7 +1286,8 @@ async fn invalid_saved_prompt_is_retained_with_retry_feedback() {
         .expect("save corrupt payload");
 
     // Act
-    app.resume_ready_workspace_prompts().await;
+    app.resume_ready_workspace_prompts(app.active_project_id())
+        .await;
     let preparation = app
         .services
         .db()

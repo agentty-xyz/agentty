@@ -860,6 +860,8 @@ impl App {
         request: CreateSessionRequest,
     ) -> Result<PreparedSessionCreation, ApiSessionError> {
         self.validate_api_session_request(&request)?;
+        // Before any page loads: this is what keeps a paired device that
+        // inherits from an active-page session in the active project.
         let inherited_settings = self
             .inherited_creation_settings(
                 request.inherit_from_session_id.as_ref(),

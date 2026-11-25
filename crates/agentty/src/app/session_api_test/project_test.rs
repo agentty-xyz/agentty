@@ -4,6 +4,7 @@
 //! in, and syncs, each from its own session page and checkout.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_session::{
@@ -474,6 +475,57 @@ fn terminal_list(app: &App) -> (Vec<String>, Option<String>) {
     (session_ids, selected_session_id)
 }
 
+/// What one started project sync was given.
+struct StartedSync {
+    operation: ProjectSyncContext,
+    project_branch_name: Option<String>,
+    review_target_ids: Vec<String>,
+    session_model: AgentModel,
+    working_dir: PathBuf,
+}
+
+/// Lets `app` start exactly one project sync without running Git, and
+/// records what it was given.
+fn record_one_project_sync(app: &mut App) -> Arc<Mutex<Vec<StartedSync>>> {
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let mut sync_main_runner = MockSyncMainRunner::new();
+    sync_main_runner
+        .expect_start_sync_main()
+        .times(1)
+        .returning({
+            let started = Arc::clone(&started);
+
+            move |_, operation, session_model, sync_context| {
+                started.lock().expect("started syncs").push(StartedSync {
+                    operation,
+                    project_branch_name: sync_context.project_branch_name,
+                    review_target_ids: sync_context
+                        .review_request_sync_targets
+                        .into_iter()
+                        .map(|target| target.session_id.to_string())
+                        .collect(),
+                    session_model,
+                    working_dir: sync_context.working_dir,
+                });
+            }
+        });
+    app.sync_main_runner = Arc::new(sync_main_runner);
+
+    started
+}
+
+/// Stores a loadable review session of `project_id` with a published
+/// branch, whose review request a sync of the project refreshes.
+async fn insert_published_session(app: &App, session_id: &str, project_id: i64) {
+    insert_loadable_session(app, session_id, Status::Review, project_id).await;
+    app.services
+        .db()
+        .sessions()
+        .update_session_published_upstream_ref(session_id, Some(format!("origin/wt/{session_id}")))
+        .await
+        .expect("upstream should persist");
+}
+
 /// Returns the sync phase and branch `sessions` reports for its project.
 fn reported_sync(
     sessions: Result<ProjectSessions, ApiSessionError>,
@@ -584,26 +636,15 @@ async fn runtime_backend_creates_sessions_in_a_viewed_project_from_its_own_check
 async fn runtime_backend_syncs_a_viewed_project_in_its_own_checkout_and_reports_it_there() {
     // Arrange
     let (mut app, directory) = crate::test_support::new_test_app().await;
+    let active_project_id = app.active_project_id();
     let other_project_id = add_listed_project(&mut app, &directory, "other").await;
     prefer_claude_opus(&app, other_project_id).await;
-    let started = Arc::new(Mutex::new(Vec::new()));
-    let mut sync_main_runner = MockSyncMainRunner::new();
-    sync_main_runner
-        .expect_start_sync_main()
-        .times(1)
-        .returning({
-            let started = Arc::clone(&started);
-
-            move |_, operation, session_model, sync_context| {
-                started.lock().expect("started syncs").push((
-                    operation,
-                    session_model,
-                    sync_context.project_branch_name,
-                    sync_context.working_dir,
-                ));
-            }
-        });
-    app.sync_main_runner = Arc::new(sync_main_runner);
+    // Each page holds a published session whose review request a sync
+    // refreshes.
+    insert_published_session(&app, "active1", active_project_id).await;
+    insert_published_session(&app, "viewed1", other_project_id).await;
+    app.refresh_sessions_now().await;
+    let started = record_one_project_sync(&mut app);
     let service = app.session_service();
     let other = ProjectScope::Project(other_project_id);
     app.drive_session_request(service.project_sessions(other))
@@ -625,8 +666,13 @@ async fn runtime_backend_syncs_a_viewed_project_in_its_own_checkout_and_reports_
     let active_while_running = app
         .drive_session_request(service.project_sessions(ProjectScope::Active))
         .await;
-    let (operation, session_model, project_branch_name, working_dir) =
-        started.lock().expect("started syncs").remove(0);
+    let StartedSync {
+        operation,
+        project_branch_name,
+        review_target_ids,
+        session_model,
+        working_dir,
+    } = started.lock().expect("started syncs").remove(0);
     // The page leaves before the sync finishes.
     app.clear_viewed_pages();
     app.apply_app_events(sync_completed(
@@ -665,6 +711,14 @@ async fn runtime_backend_syncs_a_viewed_project_in_its_own_checkout_and_reports_
     assert_eq!(operation.default_branch, "release");
     assert_eq!(project_branch_name.as_deref(), Some("release"));
     assert_eq!(working_dir, directory.path().join("other"));
+    assert_eq!(review_target_ids, vec!["viewed1".to_string()]);
+    assert_eq!(
+        App::review_request_sync_targets(&app.sessions)
+            .into_iter()
+            .map(|target| target.session_id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["active1".to_string()]
+    );
     assert_eq!(session_model, AgentModel::ClaudeOpus55);
     assert_ne!(app.sessions.default_session_model(), session_model);
     assert!(is_waiting);
