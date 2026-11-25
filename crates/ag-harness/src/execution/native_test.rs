@@ -999,6 +999,79 @@ async fn access_refuses_coding_grants_the_sandbox_cannot_honor() {
 }
 
 #[tokio::test]
+async fn access_refuses_roots_given_by_links_or_in_protected_places() {
+    // Arrange
+    let fixture = AccessFixture::new();
+    let home = fixture.outside.join("home");
+    let cache = fixture.outside.join("shared-cache");
+    let session_temporary = home.join(".host/session/tmp");
+    for directory in [
+        &cache.join("inner"),
+        &home.join("Library/LaunchAgents"),
+        &session_temporary,
+    ] {
+        std::fs::create_dir_all(directory).expect("directory");
+    }
+    symlink(&cache, fixture.outside.join("cache-alias")).expect("cache alias");
+    let cases = [
+        // A root or temporary directory given by a link in its place.
+        Grants {
+            writable_roots: vec![fixture.outside.join("cache-alias")],
+            ..Grants::default()
+        },
+        Grants {
+            temporary_directory: Some(fixture.outside.join("cache-alias")),
+            ..Grants::default()
+        },
+        // A temporary directory in a home's `Library`, containing a home,
+        // or in a system directory.
+        Grants {
+            temporary_directory: Some(home.join("Library/LaunchAgents")),
+            ..Grants::default()
+        },
+        Grants {
+            temporary_directory: Some(fixture.outside.clone()),
+            ..Grants::default()
+        },
+        Grants {
+            temporary_directory: Some("/usr".into()),
+            ..Grants::default()
+        },
+        // Grants nested in one another outside the workspace.
+        Grants {
+            temporary_directory: Some(cache.join("inner")),
+            writable_roots: vec![cache.clone()],
+            ..Grants::default()
+        },
+        Grants {
+            writable_roots: vec![cache.clone(), cache.join("inner")],
+            ..Grants::default()
+        },
+    ];
+
+    // Act / Assert
+    for grants in cases {
+        assert_eq!(
+            resolve_access(&HomeInspection::at(&home), &fixture.policy(grants))
+                .await
+                .map(|_| ()),
+            Err(ExecutionError::Unsupported)
+        );
+    }
+    // A host's per-session temporary directory usually lies in its home.
+    let in_home = fixture.policy(Grants {
+        temporary_directory: Some(session_temporary),
+        writable_roots: vec![cache],
+        ..Grants::default()
+    });
+    assert!(
+        resolve_access(&HomeInspection::at(&home), &in_home)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn hidden_paths_resolve_to_the_exact_names_the_sandbox_matches() {
     // Arrange
     let directory = tempfile::tempdir().expect("directory");

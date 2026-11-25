@@ -655,6 +655,52 @@ async fn native_git_writes_cover_only_the_session_branch() {
     git(&main, &["fsck", "--no-progress"]);
 }
 
+/// Commands use the session's temporary directory as usual but cannot move
+/// or remove the directory itself, and a link left in its place is refused
+/// rather than followed, so every command writes the directory the host
+/// granted.
+#[tokio::test]
+async fn native_temporary_directory_stays_the_granted_directory() {
+    // Arrange
+    let fixture = LinkedWorktree::new();
+    let elsewhere = fixture.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("other directory");
+
+    // Act
+    let result = fixture
+        .run(
+            "mkdir -p \"$TMPDIR/a/b\" && file=$(mktemp \"$TMPDIR/x.XXXX\") && rm -rf \
+             \"$TMPDIR/a\" \"$file\" || exit 90; if mv \"$TMPDIR\" moved-tmp 2>/dev/null; then \
+             exit 91; fi; if rmdir \"$TMPDIR\" 2>/dev/null; then exit 92; fi; printf kept",
+            fixture.configuration(),
+        )
+        .await;
+    // `mv` falls back to copying when a rename fails, which leaves a copy
+    // behind but the granted directory itself in place.
+    let kept = std::fs::symlink_metadata(fixture.temporary()).is_ok_and(|entry| entry.is_dir());
+    std::fs::rename(fixture.temporary(), fixture.root().join("aside")).expect("move aside");
+    std::os::unix::fs::symlink(&elsewhere, fixture.temporary()).expect("link in place");
+    let linked = refusing_harness(&fixture.worktree())
+        .turn(
+            "printf planted > \"$TMPDIR/planted\"",
+            options(fixture.configuration()),
+        )
+        .await
+        .expect("linked turn");
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "kept", "{result:?}");
+    assert!(kept, "the temporary directory should stay in place");
+    assert_eq!(
+        linked.output()["status"],
+        "rejected",
+        "{:?}",
+        linked.output()
+    );
+    assert!(!elsewhere.join("planted").exists());
+}
+
 /// Git run outside the sandbox resumes a rebase from its to-do list, which
 /// can run commands, so a rebase the host left in progress stays read-only
 /// and none can be started by writing new state.

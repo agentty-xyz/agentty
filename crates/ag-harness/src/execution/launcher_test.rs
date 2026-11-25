@@ -8,6 +8,8 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 #[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStringExt;
+#[cfg(target_os = "macos")]
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::UnixStream;
 
 use rustix::io::Errno;
@@ -286,6 +288,51 @@ fn seatbelt_git_writes_and_network_rules_follow_the_metadata_denials() {
         full_disk < hidden && metadata < hidden && hidden < writable,
         "{profile}"
     );
+    // The grant's own path stays in place, after every rule that could
+    // reopen it.
+    let pinned = profile
+        .find("(deny file-write-unlink file-write-create (literal \"/sessions/own\"))")
+        .expect("pinned writable directory");
+    let git_rules = profile
+        .rfind("(deny file-write* (regex #\"^/workspace")
+        .expect("Git rules");
+    assert!(writable < pinned && git_rules < pinned, "{profile}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn write_grants_must_keep_their_validated_identity() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("grant");
+    let grant = directory.path().canonicalize().expect("canonical");
+    let metadata = std::fs::metadata(&grant).expect("metadata");
+    let mut configuration = Launch {
+        arguments: vec![],
+        directory: grant.clone(),
+        environment: BTreeMap::new(),
+        executable: "/bin/bash".into(),
+        external_reads: vec![],
+        git_metadata: vec![],
+        git_writes: None,
+        hidden_paths: vec![],
+        host_information: false,
+        launcher: "/launcher".into(),
+        linux_bubblewrap: None,
+        network: false,
+        read_scope: ReadScope::Granted,
+        system: false,
+        unix_sockets: vec![],
+        workspace: grant.clone(),
+        write_nodes: vec![(metadata.dev(), metadata.ino())],
+        writes: vec![grant.clone()],
+    };
+
+    // Act / Assert
+    assert!(super::verify_write_identities(&configuration).is_ok());
+    configuration.write_nodes = vec![(metadata.dev(), metadata.ino().wrapping_add(1))];
+    assert!(super::verify_write_identities(&configuration).is_err());
+    configuration.writes = vec![grant.join("missing")];
+    assert!(super::verify_write_identities(&configuration).is_err());
 }
 
 #[cfg(target_os = "macos")]

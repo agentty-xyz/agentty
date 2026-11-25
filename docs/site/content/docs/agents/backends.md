@@ -286,7 +286,8 @@ a key or sign-in is never chosen as the default.
   base does not resolve.
 - The temporary directory, `~/.agentty/harness/<session>/tmp/`, holds the Cargo
   (`CARGO_HOME`), npm, Go, pip, and `XDG_CACHE_HOME` caches of that session only, and is
-  removed with the session; host tools and other sessions never read it.
+  removed with the session; host tools and other sessions never read it. Commands can
+  change anything inside it, but cannot move or remove the directory itself.
 - <a id="backends-harness-cargo-cache"></a> Rust projects keep a Cargo download cache in
   `~/.agentty/cache/cargo/`, one per project. When a session's worktree has a
   `Cargo.lock` naming crates.io packages the cache lacks, Agentty fetches them outside

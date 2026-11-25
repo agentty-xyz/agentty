@@ -12,6 +12,8 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "macos")]
 use std::os::fd::OwnedFd;
 #[cfg(target_os = "macos")]
+use std::os::unix::fs::MetadataExt as _;
+#[cfg(target_os = "macos")]
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode, Stdio};
@@ -97,6 +99,7 @@ fn launch() -> io::Result<()> {
         if let Some(git) = &configuration.git_writes {
             prepare_branch_directories(git)?;
         }
+        verify_write_identities(&configuration)?;
         let profile = seatbelt(&configuration)?;
         let mut command = Command::new("/usr/bin/sandbox-exec");
         command
@@ -331,6 +334,25 @@ pub(super) fn prepare_branch_directories(git: &GitWrites) -> io::Result<Vec<std:
     Ok(directories)
 }
 
+/// Checks that each write grant of `configuration` is still the directory
+/// preparation validated, itself rather than a link put in its place, so
+/// one swapped meanwhile cannot redirect the grant; Linux checks the same
+/// identities inside its namespace.
+///
+/// # Errors
+/// Returns an error when a grant is missing or no longer matches.
+#[cfg(target_os = "macos")]
+fn verify_write_identities(configuration: &Launch) -> io::Result<()> {
+    for (index, path) in configuration.writes.iter().enumerate() {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if configuration.write_nodes.get(index).copied() != Some((metadata.dev(), metadata.ino())) {
+            return Err(io::Error::other("write grant identity changed"));
+        }
+    }
+
+    Ok(())
+}
+
 /// Builds the Seatbelt profile for `configuration`. Seatbelt checks every
 /// access against the resolved path, so links grant nothing beyond their
 /// targets, and the last matching rule decides: Git metadata denials follow
@@ -427,6 +449,7 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
             .map_err(io::Error::other)?;
         }
     }
+    pin_write_grants(&mut profile, &configuration.writes)?;
     if configuration.network {
         profile.push_str(SEATBELT_NETWORK);
     }
@@ -444,6 +467,24 @@ fn seatbelt(configuration: &Launch) -> io::Result<String> {
     }
 
     Ok(profile)
+}
+
+/// Appends rules keeping each of `writes` in place after every rule that
+/// could reopen it: a write grant covers its own path, so commands could
+/// otherwise move a granted directory away or replace it, while its
+/// contents stay writable.
+#[cfg(target_os = "macos")]
+fn pin_write_grants(profile: &mut String, writes: &[std::path::PathBuf]) -> io::Result<()> {
+    for path in writes {
+        writeln!(
+            profile,
+            "(deny file-write-unlink file-write-create (literal {}))",
+            serde_json::to_string(path)?
+        )
+        .map_err(io::Error::other)?;
+    }
+
+    Ok(())
 }
 
 /// Entries of a worktree's Git administration that stay read-only under the

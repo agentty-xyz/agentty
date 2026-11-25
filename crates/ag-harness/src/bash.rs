@@ -359,11 +359,15 @@ impl BashConfig {
     /// database's, or `HOME` of the harness or the commands), a system or
     /// toolchain directory such as `/usr`, `/opt`, `/etc`, `/Library`, or
     /// `/home/linuxbrew`, the workspace (grant those with
-    /// [`Self::with_write`]), or its Git metadata, and refuses every root
-    /// when the account has no home directory. Point tool caches at the
+    /// [`Self::with_write`]), its Git metadata, the temporary directory, or
+    /// another root, and refuses every root when the account has no home
+    /// directory. Point tool caches at the
     /// temporary directory through their environment instead, for example
     /// `CARGO_HOME`, `npm_config_cache`, `GOMODCACHE`, `GOCACHE`, and
     /// `PIP_CACHE_DIR`.
+    ///
+    /// A root must be the directory itself rather than a link to one, and
+    /// commands cannot move or remove the root itself.
     ///
     /// macOS keeps every `.git` entry inside a root read-only; Linux
     /// protects only the workspace repository's own Git metadata, so a
@@ -545,10 +549,14 @@ impl BashConfig {
     /// the workspace and exports it to commands as `TMPDIR`. Choose one
     /// directory per session, such as one the host creates under the system
     /// temporary directory, so commands never share temporary files with
-    /// other sessions. It must not overlap the workspace or its Git metadata.
-    /// The path is part of the policy fingerprint that identifies host
-    /// requests and command records, so derive it from a stable session
-    /// identity rather than choosing a fresh random name at each start.
+    /// other sessions. It must not overlap the workspace or its Git metadata,
+    /// a system or toolchain directory, or a home's `Library`, must not
+    /// contain a home directory, and must be the directory itself rather
+    /// than a link to one. Commands write inside it but cannot move or
+    /// remove the directory itself. The path is part of the policy fingerprint
+    /// that identifies host requests and command records, so derive it from a
+    /// stable session identity rather than choosing a fresh random name at each
+    /// start.
     ///
     /// # Errors
     /// Rejects relative paths, a second temporary directory, and a
