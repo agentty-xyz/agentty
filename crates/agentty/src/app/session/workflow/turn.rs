@@ -613,8 +613,8 @@ pub(super) async fn load_session_speed_mode(
 /// stamping them with `clock` so pinned clocks keep live times
 /// deterministic.
 ///
-/// - [`TurnEvent::Activity`]: adds tool rows to the live timeline and reduces
-///   the usage summary.
+/// - [`TurnEvent::Activity`]: adds tool rows to the live timeline and to the
+///   calls the turn summary counts.
 /// - [`TurnEvent::Output`]: adds streamed narration and reasoning to the live
 ///   timeline, published at most once per frame.
 /// - [`TurnEvent::Notice`]: keeps a transcript notice the caller appends once
@@ -645,6 +645,7 @@ pub(super) async fn consume_turn_events(
         clock: clock.as_ref(),
         session_id: &session_id,
     };
+    activity.start(consumer.now());
 
     while let Some(event) = event_rx.recv().await {
         if let TurnEvent::ThoughtDelta(thought) = event {

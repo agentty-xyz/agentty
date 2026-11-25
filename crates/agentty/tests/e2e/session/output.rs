@@ -1236,7 +1236,8 @@ async fn session_view_compact_mermaid_output() -> E2eResult {
     Ok(())
 }
 
-/// Usage footers remain paired with answers and failures in saved history.
+/// Turn summaries precede their answer or failure notice in saved history,
+/// in columns, while legacy usage footers saved after an answer still show.
 #[tokio::test]
 async fn test_session_activity_footers() -> E2eResult {
     // Arrange, Act, Assert
@@ -1261,12 +1262,22 @@ async fn test_session_activity_footers() -> E2eResult {
                     ),
                     (SessionMessageKind::UserPrompt, "Second prompt"),
                     (
-                        SessionMessageKind::WorkflowNotice,
-                        "[Error] Agent assistance failed.",
+                        SessionMessageKind::ActivitySummary,
+                        "turn-summary v1\n3 tools · 0s\nEdited\t✓\tsrc/lib.rs\t+3 −1\t1 \
+                         edit\nFailed\t✓\tcargo test 2>&1 | tail -5\texit 101\t→ rerun exit \
+                         0\nRan\t2 commands\n─ Worked 0s · 3 tools · 1 failed (1 nonzero exit), \
+                         all recovered",
                     ),
+                    (SessionMessageKind::AssistantAnswer, "Second answer"),
+                    (SessionMessageKind::UserPrompt, "Third prompt"),
                     (
                         SessionMessageKind::ActivitySummary,
-                        "Tools: Bash ×1 (1 failed)",
+                        "turn-summary v1\n1 tool · 0s\nFailed\t✗\tcargo build\texit 1\t\nRan\t1 \
+                         command\n─ Worked 0s · 1 tool · 1 failed (1 nonzero exit)",
+                    ),
+                    (
+                        SessionMessageKind::WorkflowNotice,
+                        "[Error] Agent assistance failed.",
                     ),
                 ] {
                     database
@@ -1287,9 +1298,8 @@ async fn test_session_activity_footers() -> E2eResult {
                         &[
                             "First answer",
                             "Tools: Read ×2",
-                            "Skills: review ×1",
+                            "Second answer",
                             "[Error] Agent assistance failed.",
-                            "Tools: Bash ×1 (1 failed)",
                         ],
                         &[],
                     ))
@@ -1298,11 +1308,13 @@ async fn test_session_activity_footers() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     for text in [
-                        "First answer",
-                        "Tools: Read ×2",
                         "Skills: review ×1",
-                        "[Error] Agent assistance failed.",
-                        "Tools: Bash ×1 (1 failed)",
+                        "Edited    ✓ src/lib.rs",
+                        "+3 −1",
+                        "exit 101",
+                        "→ rerun exit 0",
+                        "─ Worked 0s · 3 tools · 1 failed (1 nonzero exit), all recovered ─",
+                        "Failed    ✗ cargo build",
                     ] {
                         assertion::assert_text_in_region(frame, text, &full);
                     }
@@ -1311,11 +1323,18 @@ async fn test_session_activity_footers() -> E2eResult {
                         "First answer",
                         "Tools: Read",
                         "Skills: review",
+                        "Second prompt",
+                        "Edited",
+                        "─ Worked 0s · 3 tools",
+                        "Second answer",
+                        "Third prompt",
+                        "─ Worked 0s · 1 tool",
                         "[Error] Agent assistance failed.",
-                        "Tools: Bash",
                     ]
                     .map(|label| text.find(label).expect(label));
                     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+                    // The format marker is left out of the view.
+                    assertion::assert_not_visible(frame, "turn-summary v1");
                 })
             },
         )
@@ -1408,8 +1427,8 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
 }
 
 /// Wait until the live-activity turn has finished: the answer and saved
-/// counts-only footer render while the live timeline and its status line
-/// are gone.
+/// turn summary render while the live timeline and its status line are
+/// gone.
 fn wait_for_finalized_live_activity() -> Step {
     Step::eventually(
         Duration::from_secs(15),
@@ -1417,7 +1436,7 @@ fn wait_for_finalized_live_activity() -> Step {
         |frame| {
             let full = Region::full(frame.cols(), frame.rows());
             assertion::match_text_in_region(frame, "Activity demo finished", &full)?;
-            assertion::match_text_in_region(frame, "Skills: review ×1 (1 failed)", &full)?;
+            assertion::match_text_in_region(frame, "─ Worked 0s · 8 tools", &full)?;
             for hidden in ["Working...", "Committing...", "  ·  step "] {
                 assertion::match_not_visible(frame, hidden)?;
             }
@@ -1428,7 +1447,7 @@ fn wait_for_finalized_live_activity() -> Step {
 }
 
 /// Checks the timeline's rows as calls start and finish, the status line,
-/// and the counts-only saved footer that replaces them.
+/// and the saved turn summary that replaces them above the answer.
 fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     let running = common::frame_from_capture(&report.captures[0]);
     let running_full = Region::full(running.cols(), running.rows());
@@ -1496,27 +1515,23 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     assert!(!thinking.all_text().contains("Activity demo finished"));
 
     let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(frame, "Activity demo finished", &full);
-    assertion::assert_text_in_region(
-        frame,
-        "Tools: Bash ×3 (1 failed), Edit ×1, Grep ×1, Read ×1",
-        &full,
-    );
-    assertion::assert_text_in_region(frame, "MCP: posthog/query ×1", &full);
-    assertion::assert_text_in_region(frame, "Skills: review ×1 (1 failed)", &full);
     let text = frame.all_text();
-    let footer =
-        ["Tools: Bash", "MCP: posthog/query", "Skills: review"].map(|label| text.find(label));
-    assert!(footer.iter().all(Option::is_some));
-    assert!(footer.windows(2).all(|pair| pair[0] < pair[1]));
-    for hidden in [
-        "✓ Ran",
-        "✗",
-        "│ group failed",
-        "error line",
-        "{ cargo fmt; cargo test; }",
-        "✓ Edit",
-    ] {
+    let summary = [
+        "8 tools · 0s",
+        "Edited    ✓ src/example.rs  +1 −1  1 edit",
+        "Failed    ✗ review                      failed",
+        "✗ { cargo fmt; cargo test; }  failed",
+        "Explored  1 read · 1 search · ran 3 commands",
+        "Used      posthog/query ×1 · review ×1",
+        "─ Worked 0s · 8 tools · 2 failed (2 errors) ─",
+        "Activity demo finished",
+    ];
+    for row in summary {
+        assertion::assert_text_in_region(frame, row, &full);
+    }
+    let positions = summary.map(|label| text.find(label));
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    for hidden in ["✓ Ran", "│ group failed", "error line", "Tools:", "✓ Edit"] {
         assert!(!text.contains(hidden), "{hidden}");
     }
 }

@@ -2332,6 +2332,37 @@ input.graph-editor-input {
   color: var(--tone-working);
 }
 
+/* A turn summary's rows line up in columns, as in the terminal. */
+.activity-summary .summary-row {
+  display: grid;
+  grid-template-columns: 9ch 2ch minmax(0, 1fr) auto auto;
+  column-gap: var(--space-sm);
+}
+
+.activity-summary .summary-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-summary .summary-heading {
+  color: var(--color-muted);
+  font-weight: var(--font-weight-semibold);
+}
+
+.activity-summary .summary-target {
+  color: var(--color-text);
+}
+
+.activity-summary .summary-text {
+  grid-column: 2 / -1;
+}
+
+.activity-summary .summary-divider {
+  margin-top: var(--space-3xs);
+  padding-top: var(--space-3xs);
+  border-top: 1px solid var(--color-border);
+}
+
 .msg--notice {
   display: flex;
   align-items: baseline;

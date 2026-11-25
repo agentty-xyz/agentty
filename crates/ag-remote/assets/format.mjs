@@ -522,6 +522,74 @@ export function parseActivity(content) {
     .map((line) => ({ text: line, tone: activityTone(line) }));
 }
 
+// The first line of a turn summary in the layout this page knows, and the
+// heading, glyph, and note prefix its rows take their tones from, as
+// `TurnSummary` writes them (crates/agentty/src/domain/turn_summary.rs).
+const TURN_SUMMARY_MARKER = "turn-summary v1";
+const SUMMARY_FAILED_HEADING = "Failed";
+const SUMMARY_FAILURE_GLYPH = "✗";
+const SUMMARY_RECOVERY_PREFIX = "→ ";
+
+// Splits a finished turn's summary into its header, its rows, and its
+// closing `─ Worked` line, or returns `null` for other activity text, such
+// as an older `Tools:` footer or a summary layout this page does not know.
+// A row has five tab-separated columns (heading, glyph, target, result,
+// note) or two (heading, text); a row with an empty heading continues the
+// section above it.
+export function parseTurnSummary(content) {
+  const lines = content.split("\n");
+  if (lines[0].trim() !== TURN_SUMMARY_MARKER) {
+    return null;
+  }
+  const body = lines.slice(1).filter((line) => line.trim().length > 0);
+  const divider = (body.pop() ?? "").trim();
+  const header = (body.shift() ?? "").trim();
+  let section = "";
+  const rows = body.map((line) => {
+    const columns = line.split("\t");
+    section = columns[0] || section;
+    if (columns.length !== 5) {
+      return { heading: columns[0], text: columns.slice(1).join(" ") };
+    }
+    const [heading, glyph, target, result, note] = columns;
+
+    return {
+      glyph: glyph,
+      glyphTone: glyph === SUMMARY_FAILURE_GLYPH ? "error" : "success",
+      heading: heading,
+      note: note,
+      noteTone: note.startsWith(SUMMARY_RECOVERY_PREFIX) ? "success" : "muted",
+      resultParts: summaryResultParts(result, section),
+      target: target,
+    };
+  });
+
+  return { divider: divider, header: header, rows: rows };
+}
+
+// Splits a summary row's result into toned parts as the terminal colours
+// it: a failure is one error part, and elsewhere added lines (`+N`) are
+// green and removed ones (`−N`) red.
+function summaryResultParts(result, section) {
+  if (section === SUMMARY_FAILED_HEADING) {
+    return [{ text: result, tone: "error" }];
+  }
+
+  return result
+    .split(" ")
+    .filter((word) => word.length > 0)
+    .map((word) => {
+      let tone = "muted";
+      if (word.startsWith("+")) {
+        tone = "success";
+      } else if (word.startsWith("−")) {
+        tone = "error";
+      }
+
+      return { text: word, tone: tone };
+    });
+}
+
 function activityTone(line) {
   if (line.startsWith("✓")) {
     return "success";

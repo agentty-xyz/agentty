@@ -30,6 +30,7 @@ pub mod subagent;
 pub mod theme;
 pub(crate) mod transcript_notice;
 pub(crate) mod transient_message;
+pub(crate) mod turn_summary;
 pub(crate) mod turn_timeline;
 
 /// Agent provider and model metadata used by the domain layer.

@@ -213,8 +213,8 @@ async fn test_harness_session_runs_with_a_provider_key() -> E2eResult {
 /// answered as unavailable.
 const UNAVAILABLE_TOOL_ANSWER: &str = "Answered without the missing tool.";
 
-/// Saved footer of the turn whose invented tool call was unavailable.
-const UNAVAILABLE_TOOL_FOOTER: &str = "Tools: read_file ×1 (1 failed)";
+/// Saved summary line of the turn whose invented tool call was unavailable.
+const UNAVAILABLE_TOOL_FOOTER: &str = "─ Worked 0s · 1 tool · 1 failed (1 unavailable tool)";
 
 /// Scripts a provider that first calls `read_file`, a tool the harness does
 /// not have, then answers once the harness returns that call's result.
@@ -304,8 +304,12 @@ async fn test_harness_session_continues_after_an_unavailable_tool_call() -> E2eR
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, UNAVAILABLE_TOOL_ANSWER, &full);
                     // The run's own tool rows count the unavailable call as
-                    // failed in the turn's footer.
+                    // failed in the turn's summary, above the answer.
                     assertion::assert_text_in_region(frame, UNAVAILABLE_TOOL_FOOTER, &full);
+                    let text = frame.all_text();
+                    assert!(
+                        text.find(UNAVAILABLE_TOOL_FOOTER) < text.find(UNAVAILABLE_TOOL_ANSWER)
+                    );
                 })
             },
         )
@@ -2390,6 +2394,23 @@ fn assert_live_timeline_report(frame: &testty::frame::TerminalFrame, report: &Pr
     ] {
         assertion::assert_not_visible(frame, hidden);
     }
+    // The finished turn's summary replaces the timeline above the answer.
+    let summary = [
+        "2 steps · 5 tools · 0s",
+        "Edited    ✓ notes.txt",
+        "+1 −0",
+        "Failed    ✓ edit to notes.txt rejected",
+        "retried after re-reading",
+        "Explored  2 reads · 1 search",
+        "─ Worked 0s · 2 steps · 5 tools · 1 failed (1 rejected edit), all recovered ─",
+        TIMELINE_ANSWER_HEAD,
+    ];
+    for text in summary {
+        assertion::assert_text_in_region(frame, text, &full);
+    }
+    let text = frame.all_text();
+    let positions = summary.map(|label| text.find(label));
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 }
 
 /// Session turns the compaction scenario runs; the earlier, longer turns

@@ -398,3 +398,27 @@ fn activity_summary_rows_are_muted_and_clipped() {
         Some(style::palette::text_muted())
     );
 }
+
+#[test]
+fn turn_summaries_render_in_columns_beside_legacy_usage() {
+    // Arrange
+    let summary = "turn-summary v1\n1 tool · 0s\nRan\t1 command\n─ Worked 0s · 1 tool";
+
+    // Act
+    let lines = activity_summary_lines(summary, 30);
+
+    // Assert
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>(),
+        [
+            "1 tool · 0s",
+            "",
+            "Ran       1 command",
+            "",
+            "─ Worked 0s · 1 tool ─────────"
+        ]
+    );
+}

@@ -866,6 +866,27 @@ fn the_oldest_steps_are_evicted_once_the_timeline_holds_too_many_entries() {
 }
 
 #[test]
+fn narrated_steps_count_only_evicted_steps_that_narrated() {
+    // Arrange
+    let mut timeline = TurnTimeline::default();
+    timeline.observe_activity(
+        call("a", ActivityKind::Command, "ls", ActivityStatus::Completed),
+        0,
+    );
+
+    // Act
+    for id in 0..4_096 {
+        message(&mut timeline, id, &format!("Step {id}."), id * 1_000);
+    }
+    let snapshot = timeline.snapshot();
+
+    // Assert: the 4,097th entry evicts the oldest steps, the call-only one
+    // first, and only the evicted steps that narrated still count.
+    assert_eq!(snapshot.step_count, 4_097);
+    assert_eq!(timeline.narrated_steps(), Some(4_096));
+}
+
+#[test]
 fn snapshots_reuse_unchanged_steps_and_compare_by_revision() {
     // Arrange
     let mut timeline = TurnTimeline::default();

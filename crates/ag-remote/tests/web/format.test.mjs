@@ -19,6 +19,7 @@ import {
   parseNotice,
   parseProject,
   parseSeen,
+  parseTurnSummary,
   projectCounts,
   projectSyncLine,
   projectSyncTarget,
@@ -332,6 +333,98 @@ test("parseActivity keeps non-blank lines and colours them by their first charac
     { text: "Used 2 tools", tone: "muted" },
   ]);
   assert.deepEqual(parseActivity(""), []);
+});
+
+test("parseTurnSummary splits a turn summary into columns with their tones", () => {
+  // Arrange
+  const content = [
+    "turn-summary v1",
+    "2 steps · 4 tools · 1m 2s",
+    "Edited\t✓\tsrc/lib.rs\t+3 −1\t1 edit",
+    "\t✓\tsrc/main.rs\t\t2 edits",
+    "Failed\t✓\tcargo test 2>&1 | tail -5\texit 101\t→ rerun exit 0",
+    "\t✗\tcargo build\texit 1\t",
+    "Other\t✓\tthing\t3 lines\t",
+    "",
+    "Explored\t1 read · ran 2 commands",
+    "─ Worked 1m 2s · 2 steps · 4 tools · 2 failed (2 nonzero exits), 1 recovered",
+  ].join("\n");
+
+  // Act
+  const summary = parseTurnSummary(content);
+
+  // Assert
+  assert.equal(summary.header, "2 steps · 4 tools · 1m 2s");
+  assert.equal(
+    summary.divider,
+    "─ Worked 1m 2s · 2 steps · 4 tools · 2 failed (2 nonzero exits), 1 recovered",
+  );
+  assert.deepEqual(summary.rows, [
+    {
+      glyph: "✓",
+      glyphTone: "success",
+      heading: "Edited",
+      note: "1 edit",
+      noteTone: "muted",
+      resultParts: [
+        { text: "+3", tone: "success" },
+        { text: "−1", tone: "error" },
+      ],
+      target: "src/lib.rs",
+    },
+    {
+      glyph: "✓",
+      glyphTone: "success",
+      heading: "",
+      note: "2 edits",
+      noteTone: "muted",
+      resultParts: [],
+      target: "src/main.rs",
+    },
+    {
+      glyph: "✓",
+      glyphTone: "success",
+      heading: "Failed",
+      note: "→ rerun exit 0",
+      noteTone: "success",
+      resultParts: [{ text: "exit 101", tone: "error" }],
+      target: "cargo test 2>&1 | tail -5",
+    },
+    {
+      glyph: "✗",
+      glyphTone: "error",
+      heading: "",
+      note: "",
+      noteTone: "muted",
+      resultParts: [{ text: "exit 1", tone: "error" }],
+      target: "cargo build",
+    },
+    {
+      glyph: "✓",
+      glyphTone: "success",
+      heading: "Other",
+      note: "",
+      noteTone: "muted",
+      resultParts: [
+        { text: "3", tone: "muted" },
+        { text: "lines", tone: "muted" },
+      ],
+      target: "thing",
+    },
+    { heading: "Explored", text: "1 read · ran 2 commands" },
+  ]);
+});
+
+test("parseTurnSummary leaves other activity text to parseActivity", () => {
+  // Arrange
+  const cases = ["Tools: Read ×2\nSkills: review ×1", "turn-summary v2\n─ Worked 1 tool", ""];
+
+  // Act
+  const parsed = cases.map((content) => parseTurnSummary(content));
+
+  // Assert
+  assert.deepEqual(parsed, [null, null, null]);
+  assert.deepEqual(parseTurnSummary("turn-summary v1"), { divider: "", header: "", rows: [] });
 });
 
 test("parseSeen reads a stored map and refuses anything else", () => {

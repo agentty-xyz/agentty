@@ -12,8 +12,11 @@ use crate::transcript_notice::TranscriptNotice;
 /// Durable category for one saved session transcript message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionMessageKind {
-    /// Observed tool and skill usage, displayed but excluded from provider
-    /// replay.
+    /// Summary of one turn's tool calls, saved before its answer or failure
+    /// notice, displayed but excluded from provider replay. Current rows are
+    /// tab-separated text whose first line names the format and its version,
+    /// such as `turn-summary v1`, so a renderer can tell layouts apart; older
+    /// rows without that line list tool, MCP, and skill counts.
     ActivitySummary,
     /// Raw user prompt text without TUI prompt markers or transcript padding.
     UserPrompt,

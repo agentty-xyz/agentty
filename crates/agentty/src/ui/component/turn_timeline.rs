@@ -387,7 +387,7 @@ fn row_line(parts: RowParts) -> Line<'static> {
 
 /// Cuts a path to `width` columns, keeping its file name and eliding the
 /// middle.
-fn truncate_path(path: &str, width: usize) -> String {
+pub(crate) fn truncate_path(path: &str, width: usize) -> String {
     if path.width() <= width {
         return path.to_string();
     }

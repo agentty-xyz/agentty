@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, MockAgentChannel, OutputEvent,
-    OutputKind, TurnEvent, TurnNotice, TurnResult,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, MockAgentChannel,
+    OutputEvent, OutputKind, TurnEvent, TurnNotice, TurnResult,
 };
 use ag_forge as forge;
 use ag_git::{DiffStats, MockGitClient};
@@ -350,18 +350,17 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
     assert!(output_text.contains("[Main Checkout Warning]"));
     assert!(output_text.contains("tracked-file status changed"));
     assert!(output_text.contains("done"));
-    let store = db.sessions();
-    let messages = store
-        .load_session_messages("sess1")
-        .await
-        .expect("messages");
+    let messages = db.sessions().load_session_messages("sess1").await;
+    let messages = messages.expect("messages");
     let answer_index = messages
         .iter()
         .position(|message| message.kind == "assistant_answer")
         .expect("test fixture should succeed");
-    assert_eq!(messages[answer_index + 1].kind, "activity_summary");
-    assert_eq!(messages[answer_index + 1].content, "Tools: Read ×1");
-    assert!(!output_text.contains("Tools:"));
+    let summary = &messages[answer_index - 1];
+    assert_eq!(summary.kind, "activity_summary");
+    assert!(summary.content.contains("\nUsed\tRead ×1\n"));
+    assert!(summary.content.ends_with(" · 1 tool"));
+    assert!(!output_text.contains("─ Worked"));
 }
 
 #[test]
@@ -468,7 +467,10 @@ async fn test_consume_activity_survives_progress_coalescing() {
     .await;
 
     // Assert
-    assert_eq!(activity.summary(), "Tools: Read ×2\n");
+    assert_eq!(
+        activity.summary().render(None),
+        "turn-summary v1\n2 tools · 0s\nUsed\tRead ×2\n─ Worked 0s · 2 tools"
+    );
 }
 
 #[tokio::test]
@@ -553,8 +555,8 @@ async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
 }
 
 #[tokio::test]
-/// Verifies a turn removes its streamed output right after the saved answer
-/// and before the usage summary replaces its live rows, exactly once.
+/// Verifies a turn removes its streamed output right after the saved answer,
+/// which follows the turn summary, exactly once.
 async fn test_run_channel_turn_clears_streamed_output_beside_the_saved_answer() {
     // Arrange
     let mut channel = MockAgentChannel::new();
@@ -610,6 +612,75 @@ async fn test_run_channel_turn_clears_streamed_output_beside_the_saved_answer() 
     ));
     assert_eq!(events.iter().filter(|event| is_cleared(event)).count(), 1);
     assert!(transcript_text(&context.transcript).contains("done"));
+}
+
+#[tokio::test]
+/// Verifies a stopped or failed turn saves its summary right before its
+/// error notice and removes its live timeline only after both are saved.
+async fn test_run_channel_turn_saves_the_summary_before_a_failed_turn_notice() {
+    for (stopped, notice) in [
+        (true, "Session interrupted by user."),
+        (false, "provider failed"),
+    ] {
+        // Arrange
+        let mut channel = MockAgentChannel::new();
+        channel
+            .expect_run_turn()
+            .once()
+            .returning(move |_session_id, _req, events| {
+                Box::pin(async move {
+                    events
+                        .send(TurnEvent::Activity(activity_event()))
+                        .expect("turn event");
+
+                    Err(if stopped {
+                        AgentError::InterruptedByUser(notice.to_string())
+                    } else {
+                        AgentError::Backend(notice.to_string())
+                    })
+                })
+            });
+        let (mut context, db, _queued_messages, _directory) =
+            queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = app_event_tx;
+
+        // Act
+        let result = run_channel_turn(
+            &context,
+            auto_commit_run_client(),
+            default_turn_metadata(),
+            AgentRequestKind::SessionStart,
+            None,
+            "test prompt".into(),
+        )
+        .await;
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+
+        // Assert
+        assert!(result.is_err(), "{result:?}");
+        let messages = db
+            .sessions()
+            .load_session_messages(context.session_id.as_str())
+            .await
+            .expect("messages");
+        let summary = messages
+            .iter()
+            .position(|message| message.kind == "activity_summary")
+            .expect("summary saved");
+        assert!(messages[summary].content.starts_with("turn-summary v1\n"));
+        assert_eq!(messages[summary + 1].kind, "workflow_notice");
+        assert!(messages[summary + 1].content.contains(notice), "{stopped}");
+        let cleared = events
+            .iter()
+            .position(|event| matches!(event, AppEvent::SessionTurnCleared { .. }))
+            .expect("live timeline cleared");
+        let saved_before_clear = events[..cleared]
+            .iter()
+            .filter(|event| matches!(event, AppEvent::SessionUpdated { .. }))
+            .count();
+        assert!(saved_before_clear >= 2, "{stopped}: {events:?}");
+    }
 }
 
 #[tokio::test]
@@ -736,7 +807,10 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
         &finished.steps[0].rows[0],
         TimelineRow::Tool(row) if row.state == RowState::Succeeded
     ));
-    assert_eq!(activity.summary(), "Tools: Read ×1\n");
+    assert_eq!(
+        activity.summary().render(None),
+        "turn-summary v1\n1 tool · 0s\nUsed\tRead ×1\n─ Worked 0s · 1 tool"
+    );
 }
 
 #[tokio::test]

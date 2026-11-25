@@ -119,6 +119,12 @@ impl LiveTurn {
         state.timeline.current_action().map(|current| current.text)
     }
 
+    /// Returns the steps the turn narrated or reasoned in, or `None` when it
+    /// did neither.
+    pub(super) fn narrated_steps(&self) -> Option<usize> {
+        self.lock().timeline.narrated_steps()
+    }
+
     /// Removes the timeline from the session view once the turn's saved
     /// result replaces it; later calls, or a turn that showed nothing, send
     /// nothing.
