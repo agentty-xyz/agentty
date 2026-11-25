@@ -221,13 +221,8 @@ async fn each_offered_action_admits_the_mutation_the_terminal_inspector_admits()
             "retry" => "failed",
             _ => "gated",
         });
-        let launched = graph.clone();
         serve(&mut app, graph, progress, |repository| match name {
             "accept" => {
-                repository
-                    .expect_load_graph()
-                    .once()
-                    .return_once(move |_, _| Ok(Some(launched)));
                 repository
                     .expect_accept_result()
                     .once()

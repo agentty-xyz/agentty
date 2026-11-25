@@ -497,6 +497,35 @@ impl App {
         Ok(())
     }
 
+    /// Runs the nodes an approved expansion appended to `graph`, its new
+    /// current revision. A retained driver adopts the revision and is woken,
+    /// and a stopped one is resumed from its recorded credit, because the
+    /// approval asked for the added nodes to run.
+    pub(super) async fn continue_expanded_graph(
+        &mut self,
+        graph: &ExecutionGraph,
+    ) -> Result<(), ag_session::SessionError> {
+        if let Some(driver) = self
+            .services
+            .graph_drivers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&graph.id)
+        {
+            driver.request.graph = graph.clone();
+        }
+        self.resume_api_execution_graph(ResumeExecutionGraphRequest {
+            graph: GraphControlRequest {
+                graph_id: graph.id.clone(),
+                revision: graph.revision,
+            },
+        })
+        .await?;
+        self.services.wake_graphs();
+
+        Ok(())
+    }
+
     pub(super) async fn start_api_execution_graph(
         &mut self,
         request: StartExecutionGraphRequest,
@@ -618,19 +647,8 @@ impl App {
         &mut self,
         reference: GraphResultRef,
     ) -> Result<(), ag_session::SessionError> {
-        let stored = self
-            .services
-            .db()
-            .graphs()
-            .load_graph(&reference.graph_id, None)
-            .await
-            .map_err(|error| ag_session::SessionError::Operation(error.to_string()))?
-            .ok_or_else(|| ag_session::SessionError::Operation("Graph is missing".into()))?;
-        if stored.revision != reference.graph_revision {
-            return Err(ag_session::SessionError::Operation(
-                "Stale graph acceptance".into(),
-            ));
-        }
+        // The store accepts outputs produced under the current revision or
+        // an earlier one that only expansions followed.
         self.services
             .db()
             .graphs()
@@ -948,6 +966,9 @@ impl AppServices {
     ) {
         let repository = self.db().graphs();
         let progress = repository.progress(&graph.id).await.ok().flatten();
+        // An expansion may have appended dependents since the driver started.
+        let current = repository.load_graph(&graph.id, None).await.ok().flatten();
+        let graph = current.as_ref().unwrap_or(graph);
         let awaiting: Vec<(String, GraphResult, bool)> = progress
             .iter()
             .flat_map(|progress| {

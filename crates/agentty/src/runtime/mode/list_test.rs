@@ -739,7 +739,7 @@ async fn test_handle_enter_key_switches_to_sessions_tab_from_projects_tab() {
 #[tokio::test]
 async fn test_handle_enter_key_opens_launch_configuration_list_editor_in_settings_tab() {
     // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
+    let (mut app, _base_dir) = Box::pin(new_test_app_for_settings()).await;
     app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
 
     // Act
@@ -903,7 +903,7 @@ fn test_settings_selector_previous_and_escape_close_dropdown() {
 #[tokio::test]
 async fn test_launch_configuration_list_editor_adds_command_on_confirm() {
     // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
+    let (mut app, _base_dir) = Box::pin(new_test_app_for_settings()).await;
     handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         .await
         .expect("failed to open settings command editor");

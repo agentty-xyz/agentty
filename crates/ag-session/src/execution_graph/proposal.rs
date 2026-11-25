@@ -76,6 +76,46 @@ impl GraphProposalResolution<'_> {
     /// permissions, and invalid graphs. Request attachments, followed by
     /// revision attachments, are copied to every node unchanged.
     pub fn resolve(&self, proposal: &GraphProposal) -> Result<ExecutionGraph, String> {
+        let graph = ExecutionGraph {
+            id: self.graph_id.into(),
+            nodes: self.nodes(proposal, 0)?,
+            revision: NonZeroU64::MIN,
+            session_id: self.session_id.clone(),
+        };
+        graph.validate().map_err(|error| error.to_string())?;
+
+        Ok(graph)
+    }
+
+    /// Resolves `proposal` as nodes appended to `base`, returning its next
+    /// revision. Proposed nodes may depend on `base` nodes; task identities
+    /// continue after the base's nodes, and every node spends from the
+    /// graph's existing `{graph_id}:calls` budget.
+    ///
+    /// # Errors
+    /// Rejects everything [`Self::resolve`] rejects, a `base` that is not
+    /// this resolution's graph in the captured session, and proposed node
+    /// identities the base already uses.
+    pub fn resolve_expansion(
+        &self,
+        base: &ExecutionGraph,
+        proposal: &GraphProposal,
+    ) -> Result<ExecutionGraph, String> {
+        if base.id != self.graph_id || base.session_id != *self.session_id {
+            return Err("Graph expansion targets a different graph or session".into());
+        }
+
+        base.expand(self.nodes(proposal, base.nodes.len())?)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Resolves proposed nodes, numbering task identities from
+    /// `first_task_index`.
+    fn nodes(
+        &self,
+        proposal: &GraphProposal,
+        first_task_index: usize,
+    ) -> Result<Vec<GraphNode>, String> {
         if self.limits.generations == 0
             || self.limits.generation_provider_calls == 0
             || self.limits.provider_calls == 0
@@ -136,7 +176,7 @@ impl GraphProposalResolution<'_> {
                     })
                     .collect(),
                 env_id: EnvId::SessionWorktree(self.session_id.clone()),
-                execution: self.profile(node, definition, index)?,
+                execution: self.profile(node, definition, first_task_index + index)?,
                 id: node.id.clone(),
                 inputs: node
                     .inputs
@@ -159,15 +199,8 @@ impl GraphProposalResolution<'_> {
                 request: request.clone(),
             });
         }
-        let graph = ExecutionGraph {
-            id: self.graph_id.into(),
-            nodes,
-            revision: NonZeroU64::MIN,
-            session_id: self.session_id.clone(),
-        };
-        graph.validate().map_err(|error| error.to_string())?;
 
-        Ok(graph)
+        Ok(nodes)
     }
 
     fn profile(

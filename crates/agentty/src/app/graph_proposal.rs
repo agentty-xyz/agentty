@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ProviderCallBudget};
 use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, TurnPrompt};
 use ag_session::{
-    AgentDefinition, GenerateGraphProposalRequest, GraphProposalAction, GraphProposalLimits,
-    GraphProposalResolution, GraphProposalState, GraphProposalVersion, GraphProposalVersionOutcome,
-    SessionError, StartExecutionGraphRequest,
+    AgentDefinition, AgentSelection, ExecutionGraph, ExecutionGraphStatus,
+    GenerateGraphProposalRequest, GraphProposalAction, GraphProposalLimits,
+    GraphProposalResolution, GraphProposalState, GraphProposalTarget, GraphProposalVersion,
+    GraphProposalVersionOutcome, SessionError, StartExecutionGraphRequest,
 };
 use askama::Template;
 use tokio_util::sync::CancellationToken;
@@ -24,11 +25,16 @@ use crate::domain::session_message::SessionTranscript;
 /// Notice that follows a new proposal's request in its session's chat.
 const GENERATION_STARTED_NOTICE: &str = "Generating execution graph…";
 
+/// Notice that follows a request to add nodes to a launched graph.
+const EXPANSION_STARTED_NOTICE: &str = "Generating nodes for the execution graph…";
+
 #[derive(Template)]
 #[template(path = "graph_proposal_prompt.md", escape = "none")]
 struct GraphProposalPrompt<'a> {
     answers: &'a str,
     catalog: &'a str,
+    /// Nodes of the graph an expansion extends, or `null` for a new graph.
+    graph: &'a str,
     limits: &'a str,
     request: &'a str,
 }
@@ -87,13 +93,42 @@ impl App {
                 "Proposal has no resolved snapshot".into(),
             ));
         };
-        if state.version.approval.is_none() || launch.as_ref() != request {
+        if state.version.approval.is_none()
+            || (launch.as_ref() != request && !self.is_approved_expansion(&launch, request).await?)
+        {
             return Err(SessionError::Operation(
                 "Launch does not match exact proposal approval and limits".into(),
             ));
         }
 
         Ok(())
+    }
+
+    /// Whether `request` relaunches the stored current revision of the
+    /// graph `launch` published, under the same limits. Revisions after the
+    /// approved one come only from approved expansions, which keep every
+    /// earlier node.
+    async fn is_approved_expansion(
+        &self,
+        launch: &StartExecutionGraphRequest,
+        request: &StartExecutionGraphRequest,
+    ) -> Result<bool, SessionError> {
+        if request.provider_call_limits != launch.provider_call_limits
+            || request.graph.revision <= launch.graph.revision
+        {
+            return Ok(false);
+        }
+        let graphs = self.services.db().graphs();
+        let current = graphs
+            .load_graph(&request.graph.id, None)
+            .await
+            .map_err(proposal_error)?;
+        let approved = graphs
+            .load_graph(&launch.graph.id, Some(launch.graph.revision))
+            .await
+            .map_err(proposal_error)?;
+
+        Ok(current.as_ref() == Some(&request.graph) && approved.as_ref() == Some(&launch.graph))
     }
 
     pub(super) async fn generate_api_graph_proposal(
@@ -116,27 +151,20 @@ impl App {
             return Ok(());
         }
         Self::require_supported_graph_request(&input)?;
-        self.sessions.sync_session_from_handle(&input.session_id);
-        let (session, handles) = self
-            .sessions
-            .session_and_handles_or_err(&input.session_id)
-            .map_err(|_| SessionError::NotFound)?;
-        if !matches!(
-            session.status,
-            Status::Draft | Status::Review | Status::AgentReview | Status::Watching
-        ) || session.is_draft_session()
-        {
-            return Err(SessionError::Operation(
-                "Graph generation requires a prepared idle session".into(),
-            ));
-        }
-        let (agent, folder, transcript) = (
-            session.agent,
-            session.folder.clone(),
-            Arc::clone(&handles.transcript),
-        );
+        let base = match &input.expands {
+            Some(target) => Some(self.expansion_base(&input.session_id, target).await?),
+            None => None,
+        };
+        let (agent, folder, transcript) =
+            self.generation_session(&input.session_id, base.is_some())?;
+        let notice = if base.is_some() {
+            EXPANSION_STARTED_NOTICE
+        } else {
+            GENERATION_STARTED_NOTICE
+        };
         let state = GraphProposalState {
             agent,
+            base,
             definitions: self.enabled_agent_definitions(&folder).await?,
             limits: GraphProposalLimits::default(),
             permission: PermissionMode::AutoEdit,
@@ -178,7 +206,7 @@ impl App {
                 &self.services.event_sender(),
                 &self.services.session_update_versions(),
                 &state.input.session_id,
-                GENERATION_STARTED_NOTICE,
+                notice,
             )
             .await;
             self.graph_chat.invalidate();
@@ -261,8 +289,13 @@ impl App {
                     .map_err(proposal_error)?
                 {
                     // Publication and its receipt are durable even if launch
-                    // fails.
-                    self.start_api_execution_graph(*launch).await?;
+                    // fails. Approving added nodes asks for them to run, so
+                    // it resumes a paused graph too.
+                    if state.base.is_some() {
+                        self.continue_expanded_graph(&launch.graph).await?;
+                    } else {
+                        self.start_api_execution_graph(*launch).await?;
+                    }
                 }
             }
             GraphProposalAction::Answer(_)
@@ -287,6 +320,111 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Returns the agent, worktree, and transcript of `session_id` once it
+    /// can generate a proposal: a prepared idle session, or, for an
+    /// expansion, one whose graph still runs nodes.
+    fn generation_session(
+        &mut self,
+        session_id: &SessionId,
+        is_expansion: bool,
+    ) -> Result<(AgentSelection, PathBuf, Arc<Mutex<SessionTranscript>>), SessionError> {
+        self.sessions.sync_session_from_handle(session_id);
+        let (session, handles) = self
+            .sessions
+            .session_and_handles_or_err(session_id)
+            .map_err(|_| SessionError::NotFound)?;
+        let is_ready = matches!(
+            session.status,
+            Status::Draft | Status::Review | Status::AgentReview | Status::Watching
+        ) || (is_expansion && session.status == Status::InProgress);
+        if !is_ready || session.is_draft_session() {
+            return Err(SessionError::Operation(
+                "Graph generation requires a prepared idle session".into(),
+            ));
+        }
+
+        Ok((
+            session.agent,
+            session.folder.clone(),
+            Arc::clone(&handles.transcript),
+        ))
+    }
+
+    /// Returns where a new graph request of `session_id` adds nodes: the
+    /// graph its newest approved proposal launched, at its current revision,
+    /// while that graph can still run. Later proposals that were canceled,
+    /// failed, or are still undecided do not hide that graph. `None` asks for
+    /// a new graph.
+    pub(super) async fn expandable_graph_target(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<GraphProposalTarget>, SessionError> {
+        let Some(approval) = self
+            .services
+            .db()
+            .graph_proposals()
+            .list(session_id)
+            .await
+            .map_err(proposal_error)?
+            .into_iter()
+            .rev()
+            .find_map(|state| state.version.approval)
+        else {
+            return Ok(None);
+        };
+        let progress = self.execution_graph_progress(&approval.graph_id).await?;
+
+        Ok(progress
+            .filter(|progress| Self::is_expandable(progress.status))
+            .map(|progress| GraphProposalTarget {
+                graph_id: progress.graph_id,
+                revision: progress.revision,
+            }))
+    }
+
+    /// Loads the graph `target` names for an expansion of `session_id`. It
+    /// must belong to the session, still be at the requested revision, and
+    /// still be able to run.
+    async fn expansion_base(
+        &self,
+        session_id: &SessionId,
+        target: &GraphProposalTarget,
+    ) -> Result<ExecutionGraph, SessionError> {
+        let graph = self
+            .services
+            .db()
+            .graphs()
+            .load_graph(&target.graph_id, None)
+            .await
+            .map_err(proposal_error)?
+            .filter(|graph| graph.session_id == *session_id)
+            .ok_or_else(|| SessionError::Operation("Graph to expand is missing".into()))?;
+        if graph.revision != target.revision {
+            return Err(SessionError::Operation(
+                "The graph changed; request the expansion again".into(),
+            ));
+        }
+        let is_expandable = self
+            .execution_graph_progress(&graph.id)
+            .await?
+            .is_some_and(|progress| Self::is_expandable(progress.status));
+        if !is_expandable {
+            return Err(SessionError::Operation(
+                "Completed or canceled graphs cannot gain nodes".into(),
+            ));
+        }
+
+        Ok(graph)
+    }
+
+    /// Whether a graph with `status` can still gain nodes.
+    fn is_expandable(status: ExecutionGraphStatus) -> bool {
+        !matches!(
+            status,
+            ExecutionGraphStatus::Completed | ExecutionGraphStatus::Cancelled
+        )
     }
 
     /// Graph requests must carry non-empty text within host limits; pasted
@@ -480,10 +618,12 @@ async fn generate_inner(
         serde_json::json!({"limits": state.limits, "permission": state.permission.label()})
             .to_string();
     let answers = serde_json::json!(state.version.answers).to_string();
+    let graph = expansion_graph_data(state);
     let mut prompt = TurnPrompt::from_agent_data(
         GraphProposalPrompt {
             answers: &answers,
             catalog: &catalog,
+            graph: &graph,
             limits: &limits,
             request: &request,
         }
@@ -536,28 +676,73 @@ async fn generate_inner(
             None
         }
         GraphProposalOutcome::Proposal { proposal } => {
-            let graph = GraphProposalResolution {
-                agent: state.agent,
-                answers: &state.version.answers,
-                definitions: &state.definitions,
-                graph_id: &format!("proposal:{}:{}", state.input.id, state.version.number),
-                limits: &state.limits,
-                permission: state.permission,
-                request: &state.input.request,
-                revision_attachments: &state.version.attachments,
-                session_id: &state.input.session_id,
-            }
-            .resolve(proposal)?;
-            let provider_call_limits =
-                BTreeMap::from([(format!("{}:calls", graph.id), state.limits.provider_calls)]);
-            Some(Box::new(StartExecutionGraphRequest {
-                graph,
-                provider_call_limits,
-            }))
+            Some(Box::new(resolve_launch(state, proposal)?))
         }
     };
 
     Ok(GraphProposalVersionOutcome::Generated { launch, response })
+}
+
+/// The existing nodes an expansion extends, as generation input; `null` for
+/// a new graph.
+fn expansion_graph_data(state: &GraphProposalState) -> String {
+    serde_json::json!(state.base.as_ref().map(|base| {
+        base.nodes
+            .iter()
+            .map(|node| {
+                serde_json::json!({
+                    "agent_id": node.definition.id,
+                    "dependencies": node.dependencies,
+                    "id": node.id,
+                    "objective": node.objective,
+                    "outputs": node.outputs,
+                    "response_profile": node.execution.response_profile,
+                    "workspace_access": node.execution.workspace_access,
+                })
+            })
+            .collect::<Vec<_>>()
+    }))
+    .to_string()
+}
+
+/// Resolves `proposal` into the launch an approval of `state` starts: a new
+/// graph with its fixed budget, or the expanded next revision of the
+/// captured base, whose added nodes spend from the budgets fixed when it
+/// launched.
+fn resolve_launch(
+    state: &GraphProposalState,
+    proposal: &ag_protocol::GraphProposal,
+) -> Result<StartExecutionGraphRequest, String> {
+    let graph_id = state.base.as_ref().map_or_else(
+        || format!("proposal:{}:{}", state.input.id, state.version.number),
+        |base| base.id.clone(),
+    );
+    let resolution = GraphProposalResolution {
+        agent: state.agent,
+        answers: &state.version.answers,
+        definitions: &state.definitions,
+        graph_id: &graph_id,
+        limits: &state.limits,
+        permission: state.permission,
+        request: &state.input.request,
+        revision_attachments: &state.version.attachments,
+        session_id: &state.input.session_id,
+    };
+    let (graph, provider_call_limits) = match &state.base {
+        Some(base) => (
+            resolution.resolve_expansion(base, proposal)?,
+            BTreeMap::new(),
+        ),
+        None => (
+            resolution.resolve(proposal)?,
+            BTreeMap::from([(format!("{graph_id}:calls"), state.limits.provider_calls)]),
+        ),
+    };
+
+    Ok(StartExecutionGraphRequest {
+        graph,
+        provider_call_limits,
+    })
 }
 
 fn proposal_error(error: impl std::fmt::Display) -> SessionError {

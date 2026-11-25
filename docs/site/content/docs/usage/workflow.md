@@ -557,7 +557,8 @@ delete with `d`, and reorder with `J` / `K`. When Agentty runs in `tmux`, sessio
 In a prepared idle session, select `/graph`, describe the task, and press `Enter`; `Esc`
 disarms it and keeps your draft. The composer title shows `Graph`, and pasted images
 reach generation and every proposed node. Generation reads the workspace; no node runs
-until you approve.
+until you approve. If the session already has a graph that can still run, the request
+[adds work to that graph](@/docs/usage/workflow.md#adding-work-to-a-running-graph).
 
 Chat and questions stay in the left pane. The right pane, at most 35% of the width,
 shows the proposal version and how many nodes are done in its title. Below the overall
@@ -614,6 +615,18 @@ an ordinary turn.
 Messages from a [remote device](@/docs/usage/remote-control.md) are routed the same way:
 they reply to a pending proposal, answer a waiting node, or act on an output awaiting
 approval before they start an ordinary turn.
+
+### Adding Work to a Running Graph
+
+When the graph beside the chat has not completed or been canceled, `/graph` proposes
+nodes to add to that graph instead of starting a second one. `/graph` is hidden while a
+node runs, so use it when the graph is paused, waits for you, or is between nodes.
+Generation sees the existing nodes, the preview lists only the new ones, and you
+approve, revise, or cancel the proposal by replying in chat as usual. New nodes can wait
+for existing nodes and use their outputs; nodes that already ran or wait for you keep
+their state. Approval runs the new nodes from the graph's remaining provider calls, and
+resumes the graph if it is paused. If the graph changed or finished after you asked,
+approval fails; ask again. To start a separate graph, cancel the current one first.
 
 Duplicate approvals do not launch again. Pending proposals and undecided replies, to a
 proposal or to an output awaiting approval, survive a restart or project switch. A

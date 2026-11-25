@@ -194,6 +194,8 @@ impl GraphExecutor {
     /// Dispatches ready branches concurrently, then reevaluates joins. Returns
     /// only newly admitted receipts, never an inferred graph-complete status.
     /// Nodes with exhausted shared budgets remain unclaimed for a later call.
+    /// Each wave reloads the graph that `revision` addresses, so nodes an
+    /// expansion appended dispatch in the same call.
     ///
     /// # Errors
     /// Rejects stale graphs, unsupported profiles, unknown budgets,
@@ -210,11 +212,12 @@ impl GraphExecutor {
         folder: &Path,
         session_permissions: PermissionMode,
     ) -> Result<Vec<GraphExecutionRecord>, OneShotError> {
-        let graph = self.repository.graph(graph_id, revision).await?;
-        self.check_supported(&graph)?;
-
         let mut receipts = Vec::new();
         loop {
+            // Reload every wave: an expansion appended since the last one
+            // adds nodes, and `revision` keeps addressing the current one.
+            let graph = self.repository.graph(graph_id, revision).await?;
+            self.check_supported(&graph)?;
             let mut work = GraphWave(JoinSet::new());
             let initial_receipt_count = receipts.len();
             let mut reusable_capacity = None;

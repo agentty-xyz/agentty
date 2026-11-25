@@ -168,6 +168,60 @@ fn graph_proposal_resolution_carries_complete_history_and_images_to_every_node()
     }
 }
 
+#[test]
+fn graph_expansion_resolution_appends_nodes_after_the_base_tasks() {
+    // Arrange
+    let state = graph_proposal_state("preview", "session");
+    let resolution = GraphProposalResolution {
+        agent: state.agent,
+        answers: &state.version.answers,
+        definitions: &state.definitions,
+        graph_id: "host-graph",
+        limits: &state.limits,
+        permission: state.permission,
+        request: &state.input.request,
+        revision_attachments: &state.version.attachments,
+        session_id: &state.input.session_id,
+    };
+    let mut task_proposal = graph_proposal();
+    configure_case("task", &mut state.clone(), &mut task_proposal);
+    let base = resolution.resolve(&task_proposal).expect("base");
+    let mut added = graph_proposal();
+    configure_case("task", &mut state.clone(), &mut added);
+    added.nodes[0].id = "follow-up".into();
+    added.nodes[0].dependencies.push(GraphProposalDependency {
+        gate: GraphProposalGate::ExecutionSucceeded {},
+        node_id: "inspect".into(),
+    });
+    let mut foreign = base.clone();
+    foreign.id = "other-graph".into();
+
+    // Act
+    let expanded = resolution.resolve_expansion(&base, &added);
+    let reused = resolution.resolve_expansion(&base, &task_proposal);
+    let mismatched = resolution.resolve_expansion(&foreign, &added);
+
+    // Assert
+    let expanded = expanded.expect("expanded");
+    assert_eq!(expanded.revision.get(), 2);
+    assert_eq!(expanded.nodes[0], base.nodes[0]);
+    assert_eq!(
+        expanded.nodes[1].execution.context,
+        GraphContext::TaskConversation {
+            task_id: "host-graph:task:1".into()
+        }
+    );
+    assert_eq!(
+        expanded.nodes[1].execution.shared_budget_id.as_deref(),
+        Some("host-graph:calls")
+    );
+    assert!(reused.is_err());
+    assert_eq!(
+        mismatched,
+        Err("Graph expansion targets a different graph or session".into())
+    );
+}
+
 fn configure_case(
     case: &str,
     state: &mut GraphProposalState,

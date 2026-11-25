@@ -877,6 +877,7 @@ async fn service_delegates_graph_proposal_generation_to_supporting_hosts() {
     assert_eq!(
         backend.generations.lock().expect("generations").as_slice(),
         [GenerateGraphProposalRequest {
+            expands: None,
             id: "remote-1".to_string(),
             request: TurnPrompt::from_text("Split the parser".to_string()),
             session_id: SessionId::from("session-1"),

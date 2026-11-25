@@ -80,7 +80,7 @@ questions; acceptance selects that exact validated version.
 `GraphRepository` saves a complete validated snapshot before any execution exists.
 Revisions start at one and advance with an expected-current-revision check. Identical
 redeliveries are idempotent; conflicting contents or ownership are rejected. Once
-executions are linked, further revisions are rejected.
+executions are linked, only [expansions](#controlled-expansion) add revisions.
 
 Execution links reference existing task attempts or session-owned utility runs. Linking
 checks ownership and captures every declared input against stored result evidence in one
@@ -141,6 +141,27 @@ budget after the record commits. Launch limits stay unchanged, so a proposal gra
 relaunches against its approved limits. Acceptance uses `accept_execution_graph_result`
 with an exact validated reference. Graph writers exclude ordinary session work, merges,
 and focused-review readers.
+
+## Controlled Expansion
+
+`GraphRepository::expand_graph` appends nodes as the next revision of a launched graph.
+`ExecutionGraph::expand` keeps every existing node unchanged; appended nodes may depend
+on existing ones and pass the usual validation. The change is checked against the
+expected current revision and is idempotent by its expansion ID. Canceled and completed
+graphs are refused, and appended nodes must spend from the graph's existing budgets, so
+an expansion never adds provider calls.
+
+Because no node changes, work addressed to an earlier revision that only expansions
+followed continues under the current one: admission, settlement, acceptance,
+continuations, and history treat each node's executions across those revisions as one
+sequence, and inputs pinned under an earlier revision stay exact. A full revision ends
+that lineage. `GraphExecutor::run_ready` reloads the graph every wave, so a live driver
+dispatches appended nodes once woken.
+
+Expansion starts only from an explicit user request. `GenerateGraphProposalRequest`
+names the target graph and revision, the host captures that revision's snapshot, and a
+read-only run proposes new nodes against it. Approving the exact version appends them in
+the approval transaction, then wakes the retained driver or resumes a stopped one.
 
 ## Focused Review Graph
 

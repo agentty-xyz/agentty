@@ -189,7 +189,7 @@ async fn idle_scans_finish_before_waking_capacity_waiters() {
     let resources = Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new()));
     let waiting = Arc::new(Notify::new());
     let mut repository = MockGraphDispatchRepository::new();
-    repository.expect_graph().once().return_const(Ok(graph));
+    repository.expect_graph().return_const(Ok(graph));
     let checked_resources = resources.clone();
     let checked_waiting = waiting.clone();
     let mut claims = 0;
@@ -308,7 +308,7 @@ async fn unclaimed_admissions_refund_the_initial_provider_call() {
             HashMap::from([("budget".into(), budget.clone())]),
         ));
         let mut repository = MockGraphDispatchRepository::new();
-        repository.expect_graph().once().return_const(Ok(graph));
+        repository.expect_graph().return_const(Ok(graph));
         let claimed_budget = budget.clone();
         repository
             .expect_claim()
@@ -357,7 +357,7 @@ async fn exhausted_budget_defers_admission_and_releases_resource_leases() {
     ));
     let environment = resources.environment(&graph.nodes[0].env_id);
     let mut repository = MockGraphDispatchRepository::new();
-    repository.expect_graph().once().return_const(Ok(graph));
+    repository.expect_graph().return_const(Ok(graph));
     let mut runner = MockGraphNodeRunner::new();
     runner.expect_supports().once().return_const(true);
     let executor = GraphExecutor::new(Arc::new(repository), resources.clone(), Arc::new(runner));
@@ -387,7 +387,7 @@ async fn env_writer_blocks_read_admission_without_consuming_capacity() {
     let environment = resources.environment(&graph.nodes[0].env_id);
     let writer = environment.clone().try_write_owned().expect("writer lease");
     let mut repository = MockGraphDispatchRepository::new();
-    repository.expect_graph().once().return_const(Ok(graph));
+    repository.expect_graph().return_const(Ok(graph));
     let mut runner = MockGraphNodeRunner::new();
     runner.expect_supports().once().return_const(true);
     let executor = GraphExecutor::new(Arc::new(repository), resources.clone(), Arc::new(runner));
@@ -506,10 +506,7 @@ async fn wave_limit_settles_each_wave_before_admitting_more_ready_nodes() {
         graph.nodes.push(node);
     }
     let mut repository = MockGraphDispatchRepository::new();
-    repository
-        .expect_graph()
-        .once()
-        .return_const(Ok(graph.clone()));
+    repository.expect_graph().return_const(Ok(graph.clone()));
     let scans = Arc::new(std::sync::Mutex::new(Vec::new()));
     let observed = scans.clone();
     repository
@@ -594,7 +591,7 @@ async fn panicked_node_settles_failure_before_releasing_resource_leases() {
         let resources = Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new()));
         let environment = resources.environment(&graph.nodes[0].env_id);
         let mut repository = MockGraphDispatchRepository::new();
-        repository.expect_graph().once().return_const(Ok(graph));
+        repository.expect_graph().return_const(Ok(graph));
         repository
             .expect_claim()
             .once()
@@ -661,12 +658,101 @@ async fn panicked_node_settles_failure_before_releasing_resource_leases() {
 }
 
 #[tokio::test]
+async fn nodes_appended_between_waves_dispatch_in_the_same_call() {
+    // Arrange
+    let original = graph();
+    let mut expanded = original.clone();
+    let mut appended = dispatch();
+    appended.node.id = "appended".into();
+    appended.record.node_id = "appended".into();
+    appended.record.execution = ag_session::GraphExecutionRef::UtilityRun {
+        run_id: "appended-run".into(),
+    };
+    appended.record.graph_revision = NonZeroU64::new(2).expect("revision");
+    expanded.nodes.push(appended.node.clone());
+    expanded.revision = appended.record.graph_revision;
+    let mut repository = MockGraphDispatchRepository::new();
+    let mut loads = 0;
+    repository.expect_graph().returning(move |_, revision| {
+        assert_eq!(revision, NonZeroU64::MIN);
+        loads += 1;
+
+        Ok(if loads == 1 {
+            original.clone()
+        } else {
+            expanded.clone()
+        })
+    });
+    let claimed = Arc::new(Mutex::new(Vec::new()));
+    let observed = claimed.clone();
+    repository
+        .expect_claim()
+        .returning(move |_, revision, node_id, _, _| {
+            let mut claimed = observed.lock().expect("claims");
+            if claimed.iter().any(|(claimed, _)| claimed == node_id) {
+                return Ok(GraphAdmission::Existing(dispatch().record));
+            }
+            claimed.push((node_id.to_string(), revision));
+
+            Ok(GraphAdmission::Claimed(Box::new(
+                if node_id == "appended" {
+                    appended.clone()
+                } else {
+                    dispatch()
+                },
+            )))
+        });
+    repository.expect_finish().times(2).returning(|_, _| Ok(()));
+    let mut runner = MockGraphNodeRunner::new();
+    runner.expect_supports().return_const(true);
+    runner
+        .expect_run()
+        .times(2)
+        .returning(|_| Ok("response".into()));
+    let executor = GraphExecutor::new(
+        Arc::new(repository),
+        Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new())),
+        Arc::new(runner),
+    );
+
+    // Act
+    let receipts = executor
+        .run_ready(
+            "graph",
+            NonZeroU64::MIN,
+            Path::new("workspace"),
+            PermissionMode::ReadOnly,
+        )
+        .await
+        .expect("dispatch");
+
+    // Assert
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|record| record.node_id.as_str())
+            .collect::<Vec<_>>(),
+        ["reader", "appended"]
+    );
+    assert_eq!(
+        claimed.lock().expect("claims").as_slice(),
+        [
+            ("reader".to_string(), NonZeroU64::MIN),
+            (
+                "appended".to_string(),
+                NonZeroU64::new(2).expect("revision")
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn admitted_execution_stays_unsettled_until_its_settlement_returns() {
     for settles in [true, false] {
         // Arrange
         let unsettled = Arc::new(OnceLock::<UnsettledExecutions>::new());
         let mut repository = MockGraphDispatchRepository::new();
-        repository.expect_graph().once().return_const(Ok(graph()));
+        repository.expect_graph().return_const(Ok(graph()));
         let mut claims = 0;
         repository.expect_claim().returning(move |_, _, _, _, _| {
             claims += 1;
@@ -704,7 +790,7 @@ async fn admitted_execution_stays_unsettled_until_its_settlement_returns() {
             });
         }
         let mut runner = MockGraphNodeRunner::new();
-        runner.expect_supports().once().return_const(true);
+        runner.expect_supports().return_const(true);
         runner.expect_run().once().returning(move |_| {
             if settles {
                 Ok("response".into())
@@ -745,7 +831,7 @@ async fn admission_panic_returns_a_worker_error_and_releases_resource_leases() {
     let resources = Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new()));
     let environment = resources.environment(&graph.nodes[0].env_id);
     let mut repository = MockGraphDispatchRepository::new();
-    repository.expect_graph().once().return_const(Ok(graph));
+    repository.expect_graph().return_const(Ok(graph));
     repository
         .expect_claim()
         .once()
@@ -796,7 +882,7 @@ async fn unsupported_profiles_and_unknown_budgets_are_rejected_before_admission(
     for (graph, is_supported, expected_error) in cases {
         let resources = Arc::new(GraphResources::new(NonZeroUsize::MIN, HashMap::new()));
         let mut repository = MockGraphDispatchRepository::new();
-        repository.expect_graph().once().return_const(Ok(graph));
+        repository.expect_graph().return_const(Ok(graph));
         let mut runner = MockGraphNodeRunner::new();
         runner.expect_supports().once().return_const(is_supported);
         let executor = GraphExecutor::new(Arc::new(repository), resources, Arc::new(runner));
@@ -826,7 +912,7 @@ async fn full_capacity_defers_admission_until_a_permit_returns() {
     let holder = Arc::new(Notify::new());
     let permit = resources.try_capacity(&holder).expect("held permit");
     let mut repository = MockGraphDispatchRepository::new();
-    repository.expect_graph().once().return_const(Ok(graph()));
+    repository.expect_graph().return_const(Ok(graph()));
     let mut runner = MockGraphNodeRunner::new();
     runner.expect_supports().once().return_const(true);
     let executor = GraphExecutor::new(Arc::new(repository), resources.clone(), Arc::new(runner));

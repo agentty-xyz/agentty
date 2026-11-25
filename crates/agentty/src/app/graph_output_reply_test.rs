@@ -315,12 +315,15 @@ async fn reply_with_attachments_revises_without_deciding() {
 async fn accept_reply_reports_a_stale_output_instead_of_retargeting_it() {
     // Arrange
     let (graph, progress) = gated();
-    let mut stale = graph.clone();
-    stale.revision = stale.revision.saturating_add(1);
     let mut repository = listing(graph, progress);
-    repository
-        .expect_load_graph()
-        .returning(move |_, _| Ok(Some(stale.clone())));
+    // The graph was revised under a full revision after the output, so the
+    // store no longer accepts it.
+    repository.expect_accept_result().returning(|_, _| {
+        Err(DbError::InvalidData {
+            entity: "execution graph",
+            reason: "Stale graph revision".into(),
+        })
+    });
     let (mut app, _directory, _driver) = decided_app(repository, "accept").await;
     let _consumer = app.sessions.foreground_consumer();
 
@@ -334,7 +337,7 @@ async fn accept_reply_reports_a_stale_output_instead_of_retargeting_it() {
     let notice = wait_for_message(&app, "Graph output:").await;
 
     // Assert
-    assert!(notice.contains("Stale graph acceptance"), "{notice}");
+    assert!(notice.contains("Stale graph revision"), "{notice}");
 }
 
 #[tokio::test]

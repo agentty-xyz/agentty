@@ -44,7 +44,9 @@ pub trait GraphProposalRepository: Send + Sync {
         version: u32,
         outcome: &GraphProposalVersionOutcome,
     ) -> Result<(), DbError>;
-    /// Atomically publishes the inspected snapshot and approval receipt.
+    /// Atomically publishes the inspected snapshot and approval receipt. An
+    /// expansion instead appends its nodes to the captured base, which must
+    /// still be the current revision.
     /// Duplicate approval returns false and must never restart dispatch.
     async fn approve(&self, id: &str, version: u32) -> Result<bool, DbError>;
     /// Permanently discards one current unapproved proposal.
@@ -125,6 +127,24 @@ impl SqliteGraphRepository {
         Ok(state)
     }
 
+    /// Resolution of `state`'s current version into graph `graph_id`.
+    fn proposal_resolution<'a>(
+        state: &'a GraphProposalState,
+        graph_id: &'a str,
+    ) -> ag_session::GraphProposalResolution<'a> {
+        ag_session::GraphProposalResolution {
+            agent: state.agent,
+            answers: &state.version.answers,
+            definitions: &state.definitions,
+            graph_id,
+            limits: &state.limits,
+            permission: state.permission,
+            request: &state.input.request,
+            revision_attachments: &state.version.attachments,
+            session_id: &state.input.session_id,
+        }
+    }
+
     async fn proposal_insert_version(
         &self,
         connection: &mut SqliteConnection,
@@ -160,6 +180,24 @@ impl GraphProposalRepository for SqliteGraphRepository {
             return Err(Self::invalid("Invalid initial proposal capture"));
         }
         let mut transaction = begin_write(&self.pool, "create graph proposal").await?;
+        // An expansion captures the exact stored revision it extends.
+        let stored_base = match &state.input.expands {
+            Some(target) => {
+                Self::graph(&mut transaction, &target.graph_id, Some(target.revision)).await?
+            }
+            None => None,
+        };
+        if state.base != stored_base
+            || state.input.expands.is_some() != state.base.is_some()
+            || state
+                .base
+                .as_ref()
+                .is_some_and(|base| base.session_id != state.input.session_id)
+        {
+            return Err(Self::invalid(
+                "Graph expansion must capture its stored target in the same session",
+            ));
+        }
         let inserted = sqlx::query(
             "INSERT OR IGNORE INTO graph_proposal (id, session_id, version, capture, created_at) \
              VALUES (?, ?, 1, ?, ?)",
@@ -401,41 +439,55 @@ impl GraphProposalRepository for SqliteGraphRepository {
         let GraphProposalOutcome::Proposal { proposal } = &response.outcome else {
             return Err(Self::invalid("Clarification cannot be approved"));
         };
-        let expected = ag_session::GraphProposalResolution {
-            agent: state.agent,
-            answers: &state.version.answers,
-            definitions: &state.definitions,
-            graph_id: &format!("proposal:{id}:{version}"),
-            limits: &state.limits,
-            permission: state.permission,
-            request: &state.input.request,
-            revision_attachments: &state.version.attachments,
-            session_id: &state.input.session_id,
-        }
-        .resolve(proposal)
-        .map_err(Self::invalid)?;
-        if launch.graph != expected
-            || launch.provider_call_limits
-                != std::collections::BTreeMap::from([(
-                    format!("{}:calls", expected.id),
-                    state.limits.provider_calls,
-                )])
-        {
-            return Err(Self::invalid(
-                "Resolved snapshot or limits do not match inspected proposal",
-            ));
-        }
-        // Approval fixes the inspected execution limits with the published
-        // snapshot, so execution spending is durable from its first call.
         let now = self.timestamp_source.now_timestamp_seconds();
-        Self::save_in(&mut transaction, &launch.graph, None, now).await?;
-        Self::open_budgets(
-            &mut transaction,
-            &launch.graph.id,
-            &launch.provider_call_limits,
-            now,
-        )
-        .await?;
+        if let Some(base) = &state.base {
+            // An expansion appends exactly the inspected nodes to the
+            // captured base, which must still be the current revision, and
+            // spends from the budgets fixed when the base launched.
+            let expected = Self::proposal_resolution(&state, &base.id)
+                .resolve_expansion(base, proposal)
+                .map_err(Self::invalid)?;
+            if launch.graph != expected || !launch.provider_call_limits.is_empty() {
+                return Err(Self::invalid(
+                    "Resolved expansion does not match inspected proposal",
+                ));
+            }
+            let request = ag_session::ExpandExecutionGraphRequest {
+                graph: ag_session::GraphControlRequest {
+                    graph_id: base.id.clone(),
+                    revision: base.revision,
+                },
+                id: format!("graph-proposal:{id}:{version}"),
+                nodes: expected.nodes[base.nodes.len()..].to_vec(),
+            };
+            Self::expand_in(&mut transaction, &request, now).await?;
+        } else {
+            let expected = Self::proposal_resolution(&state, &format!("proposal:{id}:{version}"))
+                .resolve(proposal)
+                .map_err(Self::invalid)?;
+            if launch.graph != expected
+                || launch.provider_call_limits
+                    != std::collections::BTreeMap::from([(
+                        format!("{}:calls", expected.id),
+                        state.limits.provider_calls,
+                    )])
+            {
+                return Err(Self::invalid(
+                    "Resolved snapshot or limits do not match inspected proposal",
+                ));
+            }
+            // Approval fixes the inspected execution limits with the
+            // published snapshot, so execution spending is durable from its
+            // first call.
+            Self::save_in(&mut transaction, &launch.graph, None, now).await?;
+            Self::open_budgets(
+                &mut transaction,
+                &launch.graph.id,
+                &launch.provider_call_limits,
+                now,
+            )
+            .await?;
+        }
         let receipt = GraphProposalApproval {
             graph_id: launch.graph.id.clone(),
             limits: state.limits,

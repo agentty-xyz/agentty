@@ -14,7 +14,7 @@ use ag_session::{
 
 use super::{
     GraphChatCache, GraphChatSnapshot, edge_label, graph_summary, output_approval_notice,
-    proposal_chat_notice, proposal_standing,
+    proposal_chat_notice, proposal_preview, proposal_standing,
 };
 
 #[test]
@@ -204,6 +204,43 @@ fn chat_notice_reports_each_proposal_outcome_in_one_short_message() {
     }
     state.version.is_cancelled = true;
     assert_eq!(proposal_chat_notice(&state), "Graph proposal v1 cancelled.");
+}
+
+#[test]
+fn expansion_notice_and_preview_show_only_the_added_nodes() {
+    // Arrange
+    let mut state = test_support::graph_proposal_state("proposal", "session");
+    let base = ExecutionGraph {
+        id: "graph".into(),
+        nodes: vec![test_support::graph_node("inspect", "session")],
+        revision: NonZeroU64::MIN,
+        session_id: "session".into(),
+    };
+    let expanded = base
+        .expand(vec![test_support::graph_node("summary", "session")])
+        .expect("expanded");
+    state.base = Some(base);
+    state.version.outcome = resolved_outcome(Some(expanded));
+
+    // Act
+    let notice = proposal_chat_notice(&state);
+    let preview = proposal_preview(&state);
+
+    // Assert
+    assert_eq!(
+        notice,
+        "Graph proposal v1 ready: 1 new node for the running graph. Reply to approve, revise, or \
+         cancel it."
+    );
+    assert!(
+        preview.contains(
+            "Adds nodes to graph `graph` after revision 1; its 1 existing nodes stay unchanged."
+        ),
+        "{preview}"
+    );
+    assert!(preview.contains("### Nodes (1)"), "{preview}");
+    assert!(preview.contains("#### 1. summary · inspector"), "{preview}");
+    assert!(!preview.contains("Run inspect"), "{preview}");
 }
 
 #[test]

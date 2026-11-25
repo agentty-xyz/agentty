@@ -9,8 +9,9 @@ use ag_protocol::{
 };
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
-    GraphProposalAction, GraphProposalReplyOutcome, GraphProposalResolution, GraphProposalState,
-    GraphProposalVersionOutcome, StartExecutionGraphRequest,
+    ExecutionGraph, GraphProposalAction, GraphProposalReplyOutcome, GraphProposalResolution,
+    GraphProposalState, GraphProposalTarget, GraphProposalVersionOutcome,
+    StartExecutionGraphRequest,
 };
 use ag_store::Database;
 
@@ -50,6 +51,200 @@ fn resolved(state: &GraphProposalState) -> Result<GraphProposalVersionOutcome, S
             outcome: GraphProposalOutcome::Proposal { proposal },
         },
     })
+}
+
+/// A proposal that adds a `follow` node after `inspect` to `base`.
+fn expansion_state(id: &str, base: &ExecutionGraph) -> GraphProposalState {
+    let mut state = graph_proposal_state(id, "session");
+    state.input.expands = Some(GraphProposalTarget {
+        graph_id: base.id.clone(),
+        revision: base.revision,
+    });
+    state.base = Some(base.clone());
+
+    state
+}
+
+fn resolved_expansion(
+    state: &GraphProposalState,
+) -> Result<GraphProposalVersionOutcome, Box<dyn Error>> {
+    let base = state.base.as_ref().ok_or("expansion base")?;
+    let mut proposal = graph_proposal();
+    proposal.nodes[0].id = "follow".into();
+    proposal.nodes[0]
+        .dependencies
+        .push(ag_protocol::GraphProposalDependency {
+            gate: ag_protocol::GraphProposalGate::ExecutionSucceeded {},
+            node_id: "inspect".into(),
+        });
+    let graph = GraphProposalResolution {
+        agent: state.agent,
+        answers: &state.version.answers,
+        definitions: &state.definitions,
+        graph_id: &base.id,
+        limits: &state.limits,
+        permission: state.permission,
+        request: &state.input.request,
+        revision_attachments: &state.version.attachments,
+        session_id: &state.input.session_id,
+    }
+    .resolve_expansion(base, &proposal)?;
+
+    Ok(GraphProposalVersionOutcome::Generated {
+        launch: Some(Box::new(StartExecutionGraphRequest {
+            graph,
+            provider_call_limits: BTreeMap::new(),
+        })),
+        response: GraphProposalResponse {
+            outcome: GraphProposalOutcome::Proposal { proposal },
+        },
+    })
+}
+
+#[tokio::test]
+async fn graph_expansion_approval_appends_to_its_captured_base_once() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let database = Database::in_memory().await?;
+    seed(&database).await?;
+    let state = graph_proposal_state("preview", "session");
+    database.graph_proposals().create(&state).await?;
+    database
+        .graph_proposals()
+        .finish("preview", 1, &resolved(&state)?)
+        .await?;
+    database.graph_proposals().approve("preview", 1).await?;
+    let base = database
+        .graphs()
+        .load_graph("proposal:preview:1", None)
+        .await?
+        .ok_or("base graph")?;
+    let expansion = expansion_state("expand", &base);
+    let superseded = expansion_state("stale", &base);
+    let mut uncaptured = expansion_state("uncaptured", &base);
+    uncaptured.base = None;
+    let mut tampered = expansion_state("tampered", &base);
+    if let Some(base) = &mut tampered.base {
+        base.nodes[0].objective = "Something else".into();
+    }
+    for state in [&expansion, &superseded] {
+        database.graph_proposals().create(state).await?;
+        database
+            .graph_proposals()
+            .finish(&state.input.id, 1, &resolved_expansion(state)?)
+            .await?;
+    }
+
+    // Act
+    let rejected_captures = [
+        database.graph_proposals().create(&uncaptured).await,
+        database.graph_proposals().create(&tampered).await,
+    ];
+    let approved = database.graph_proposals().approve("expand", 1).await?;
+    let repeated = database.graph_proposals().approve("expand", 1).await?;
+    let stale_approval = database.graph_proposals().approve("stale", 1).await;
+
+    // Assert
+    for rejected in rejected_captures {
+        assert!(
+            rejected
+                .expect_err("capture")
+                .to_string()
+                .contains("must capture its stored target")
+        );
+    }
+    assert!(approved);
+    assert!(!repeated);
+    assert!(
+        stale_approval
+            .expect_err("stale base")
+            .to_string()
+            .contains("must extend the current revision")
+    );
+    let expanded = database
+        .graphs()
+        .load_graph(&base.id, None)
+        .await?
+        .ok_or("expanded graph")?;
+    assert_eq!(expanded.revision.get(), 2);
+    assert_eq!(
+        expanded
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<Vec<_>>(),
+        ["inspect", "follow"]
+    );
+    assert_eq!(
+        database.graphs().budget_limits(&base.id).await?,
+        BTreeMap::from([(format!("{}:calls", base.id), state.limits.provider_calls)])
+    );
+    let receipt = database
+        .graph_proposals()
+        .get("expand", None)
+        .await?
+        .ok_or("expansion proposal")?
+        .version
+        .approval
+        .ok_or("approval")?;
+    assert_eq!(receipt.graph_id, base.id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_expansion_approval_rejects_a_mismatched_resolution() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let database = Database::in_memory().await?;
+    seed(&database).await?;
+    let state = graph_proposal_state("preview", "session");
+    database.graph_proposals().create(&state).await?;
+    database
+        .graph_proposals()
+        .finish("preview", 1, &resolved(&state)?)
+        .await?;
+    database.graph_proposals().approve("preview", 1).await?;
+    let base = database
+        .graphs()
+        .load_graph("proposal:preview:1", None)
+        .await?
+        .ok_or("base graph")?;
+    let expansion = expansion_state("expand", &base);
+    let mut outcome = resolved_expansion(&expansion)?;
+    if let GraphProposalVersionOutcome::Generated {
+        launch: Some(launch),
+        ..
+    } = &mut outcome
+    {
+        launch.provider_call_limits = BTreeMap::from([("extra".to_string(), 1)]);
+    }
+    database.graph_proposals().create(&expansion).await?;
+    database
+        .graph_proposals()
+        .finish("expand", 1, &outcome)
+        .await?;
+
+    // Act
+    let approval = database.graph_proposals().approve("expand", 1).await;
+
+    // Assert
+    assert!(
+        approval
+            .expect_err("mismatch")
+            .to_string()
+            .contains("Resolved expansion does not match")
+    );
+    assert_eq!(
+        database
+            .graphs()
+            .load_graph(&base.id, None)
+            .await?
+            .ok_or("graph")?
+            .revision,
+        base.revision
+    );
+
+    Ok(())
 }
 
 #[tokio::test]

@@ -9,6 +9,12 @@ pub enum GraphContractError {
     /// A graph must contain at least one node.
     #[error("graph must contain at least one node")]
     EmptyGraph,
+    /// An expansion must append at least one node.
+    #[error("graph expansion must append at least one node")]
+    EmptyExpansion,
+    /// The graph has no revision number left for another revision.
+    #[error("graph revision counter is exhausted")]
+    RevisionExhausted,
     /// A scoped identity, dependency, or name occurs more than once.
     #[error("duplicate graph {kind}: {id}")]
     Duplicate {

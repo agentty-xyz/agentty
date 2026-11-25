@@ -70,9 +70,37 @@ impl ExecutionGraph {
         self.validate_acyclic()
     }
 
+    /// Returns the next revision: this one with `nodes` appended.
+    ///
+    /// Existing nodes stay exactly as they are, so their executions, results,
+    /// and pinned inputs remain valid under the new revision. Appended nodes
+    /// may depend on existing nodes, never the reverse.
+    ///
+    /// # Errors
+    /// Rejects an empty expansion, an exhausted revision counter, and any
+    /// expanded graph that fails [`Self::validate`], such as one reusing a
+    /// node or task identity.
+    pub fn expand(&self, nodes: Vec<GraphNode>) -> Result<Self, GraphContractError> {
+        if nodes.is_empty() {
+            return Err(GraphContractError::EmptyExpansion);
+        }
+        let revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(GraphContractError::RevisionExhausted)?;
+        let mut graph = self.clone();
+        graph.nodes.extend(nodes);
+        graph.revision = revision;
+        graph.validate()?;
+
+        Ok(graph)
+    }
+
     /// Pins one declared input to a host-loaded, validated or accepted version.
     ///
-    /// This checks shape and consistency only. Hosts must load result state
+    /// The result may come from this revision or an earlier one; hosts admit
+    /// an earlier one only when every later revision appended nodes. This
+    /// checks shape and consistency only. Hosts must load result state
     /// from authoritative storage, validate all dependency gates atomically at
     /// dispatch, and persist every resolved input with the execution admission.
     ///
@@ -94,7 +122,9 @@ impl ExecutionGraph {
             .find(|input| input.name == input_name)
             .ok_or(GraphContractError::ResultMismatch("declared input"))?;
         let reference = &result.reference;
-        if reference.graph_id != self.id || reference.graph_revision != self.revision {
+        // A result from an earlier revision stays bindable once later
+        // revisions only appended nodes; hosts check that lineage.
+        if reference.graph_id != self.id || reference.graph_revision > self.revision {
             return Err(GraphContractError::ResultMismatch(
                 "graph identity or revision",
             ));

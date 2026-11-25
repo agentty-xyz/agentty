@@ -7,8 +7,8 @@ use ag_protocol::ProtocolRequestProfile;
 use crate::execution_graph::test_support::{graph, reader, result};
 use crate::{
     EnvId, ExecutionGraph, GraphCompletionGate, GraphContext, GraphContractError, GraphDependency,
-    GraphExecutionRef, GraphNode, GraphPostProcessing, GraphResult, GraphResultState,
-    GraphWorkspaceAccess,
+    GraphExecutionRef, GraphInputBinding, GraphNode, GraphPostProcessing, GraphResult,
+    GraphResultState, GraphWorkspaceAccess,
 };
 
 type InvalidGraphCase = (fn(&mut ExecutionGraph), GraphContractError);
@@ -449,4 +449,84 @@ fn task_node(node: &mut GraphNode, task_id: &str) {
     };
     node.execution.response_profile = ProtocolRequestProfile::SessionTurn;
     node.outputs[0].schema = ProtocolRequestProfile::SessionTurn;
+}
+
+#[test]
+fn expansion_appends_nodes_as_the_next_revision_and_keeps_existing_nodes() {
+    // Arrange
+    let graph = graph();
+    let mut third = reader("third");
+    third.dependencies.push(GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "second".into(),
+    });
+
+    // Act
+    let expanded = graph.expand(vec![third.clone()]).expect("expanded");
+
+    // Assert
+    assert_eq!(expanded.revision.get(), 2);
+    assert_eq!(expanded.nodes[..2], graph.nodes[..]);
+    assert_eq!(expanded.nodes[2], third);
+    assert_eq!(
+        (expanded.id, expanded.session_id),
+        (graph.id, graph.session_id)
+    );
+}
+
+#[test]
+fn expansion_rejects_empty_exhausted_reused_and_invalid_nodes() {
+    // Arrange
+    let graph = graph();
+    let mut exhausted = graph.clone();
+    exhausted.revision = NonZeroU64::MAX;
+    let mut missing = reader("third");
+    missing.dependencies.push(GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "absent".into(),
+    });
+
+    // Act
+    let results = [
+        graph.expand(Vec::new()),
+        exhausted.expand(vec![reader("third")]),
+        graph.expand(vec![reader("first")]),
+        graph.expand(vec![missing]),
+    ];
+
+    // Assert
+    assert_eq!(
+        results.map(Result::err),
+        [
+            Some(GraphContractError::EmptyExpansion),
+            Some(GraphContractError::RevisionExhausted),
+            Some(duplicate("node", "first")),
+            Some(GraphContractError::UnknownNode("absent".into())),
+        ]
+    );
+}
+
+#[test]
+fn expanded_revisions_bind_results_produced_under_earlier_revisions() {
+    // Arrange
+    let mut third = reader("third");
+    third.dependencies.push(GraphDependency {
+        gate: GraphCompletionGate::ResultValidated {
+            output_name: "response".into(),
+        },
+        node_id: "first".into(),
+    });
+    third.inputs.push(GraphInputBinding {
+        name: "evidence".into(),
+        output_name: "response".into(),
+        producer_node_id: "first".into(),
+    });
+    let expanded = graph().expand(vec![third]).expect("expanded");
+    let result = result();
+
+    // Act
+    let binding = expanded.bind_input("third", "evidence", &result);
+
+    // Assert
+    assert_eq!(binding.expect("earlier result").result, result.reference);
 }
