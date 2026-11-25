@@ -34,9 +34,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::native::{
     ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt,
-    NativeTurnError, RunOptions, RunProjector, SESSION_SANDBOX, UsageMeter, cleanup_failure,
-    failure, output_schema, parse_output, reject_attachments, repository, running_context_window,
-    system_prompt, with_stored_api_keys,
+    NativeTurnError, RunOptions, RunProjector, SESSION_SANDBOX, UsageMeter, charge_run,
+    cleanup_failure, failure, output_schema, parse_output, reject_attachments, repository,
+    running_context_window, system_prompt, with_stored_api_keys,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -162,7 +162,6 @@ async fn run_session_turn(
         environment: &environment,
         events: &events,
         profile,
-        provider_call_budget: req.provider_call_budget.as_ref(),
         reasoning_level: req.reasoning_level,
         repository: &repository,
         running_context_window,
@@ -194,6 +193,7 @@ async fn run_session_turn(
     let input_digest = input_digest(&input);
     let offers_bash = options.offers_bash();
     let meter = UsageMeter::new(&selection, &environment, running_context_window);
+    charge_run(req.provider_call_budget.as_ref())?;
     let (run, stream) = ActiveRun::start(session.run(options.request(input)));
     // Dropping this turn cancels the run, which keeps settling on its task.
     let _cancel_on_drop = CancelOnDrop(run.cancel.clone());
@@ -453,7 +453,6 @@ struct SessionOpener<'a> {
     environment: &'a BTreeMap<String, String>,
     events: &'a mpsc::UnboundedSender<TurnEvent>,
     profile: ProtocolRequestProfile,
-    provider_call_budget: Option<&'a ag_contracts::ProviderCallBudget>,
     reasoning_level: ReasoningLevel,
     repository: &'a Repository,
     running_context_window: Option<u64>,
@@ -511,11 +510,7 @@ impl SessionOpener<'_> {
         stored_selection: &ModelSelection,
         selection: &ModelSelection,
     ) -> Result<Session, NativeTurnError> {
-        let registry = selection.registry(
-            self.environment,
-            self.provider_call_budget,
-            self.running_context_window,
-        )?;
+        let registry = selection.registry(self.environment, self.running_context_window)?;
         let harness = self.build_harness(|context, observer| {
             stored_selection.resume_only_harness(context, observer)
         })?;
@@ -573,7 +568,6 @@ impl SessionOpener<'_> {
         HarnessContext {
             compacts: self.compacts,
             environment: self.environment,
-            provider_call_budget: self.provider_call_budget,
             reasoning_level: self.reasoning_level,
             repository: self.repository,
             running_context_window: self.running_context_window,

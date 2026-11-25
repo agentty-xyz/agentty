@@ -3,7 +3,9 @@
 
 use std::pin::pin;
 
-use ag_contracts::{AgentDefinitionPromptUpdate, OneShotRequest, OneShotSubmission, TurnEvent};
+use ag_contracts::{
+    AgentDefinitionPromptUpdate, OneShotRequest, OneShotSubmission, ProviderCallBudget, TurnEvent,
+};
 use ag_harness::{RunError, RunOutput, Unsettled};
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPromptAttachment,
@@ -129,7 +131,6 @@ pub(crate) async fn run_one_shot(
         &HarnessContext {
             compacts: false,
             environment: &environment,
-            provider_call_budget: request.provider_call_budget.as_ref(),
             reasoning_level: request.reasoning_level,
             repository: &repository,
             running_context_window,
@@ -153,6 +154,7 @@ pub(crate) async fn run_one_shot(
     }
     .render()?;
     let meter = UsageMeter::new(&selection, &environment, running_context_window);
+    charge_run(request.provider_call_budget.as_ref())?;
     let (stream, handle) = harness.run(options.request(prompt)).into_parts();
     let cancel = handle.cancel_token();
     let mut outcome = pin!(handle.outcome());
@@ -176,6 +178,21 @@ pub(crate) async fn run_one_shot(
     let response = parse_output(&output, profile)?;
 
     Ok(OneShotSubmission { response, usage })
+}
+
+/// Charges `budget` one provider call for a harness run about to start.
+///
+/// A native run counts as one call however many model requests it sends,
+/// matching one CLI or app-server turn attempt, so a graph budget means the
+/// same on every backend. Requests inside the run, including re-sent
+/// requests and context summaries, are not charged again.
+///
+/// # Errors
+/// Returns the budget's exhaustion diagnostic before the run starts.
+pub(crate) fn charge_run(budget: Option<&ProviderCallBudget>) -> Result<(), String> {
+    budget.map_or(Ok(()), |budget| {
+        budget.consume().map_err(|error| error.to_string())
+    })
 }
 
 /// Describes cleanup of a finished run that still failed to settle.

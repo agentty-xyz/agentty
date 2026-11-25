@@ -26,11 +26,12 @@ flowchart LR
 External agent tools provide the loop for CLI and app-server providers. `ag-harness`
 provides a Rust implementation that `ag-agent` runs in process for `AgentKind::Harness`
 when the host configures its native transport, as Agentty always does. Without that
-configuration, harness work fails before execution. The native harness charges each
-model request against a utility's provider-call budget. Its adapter decides each failed
-turn from the harness `ErrorKind`: a cancelled run is reported as stopped, and a
-retryable kind is noted as possibly temporary, with the provider's requested wait when
-present. The adapter does not replay the turn, which would repeat its tool effects. See
+configuration, harness work fails before execution. A native run charges one call
+against the request's provider-call budget before it starts, however many model requests
+it sends, like one CLI or app-server turn attempt. Its adapter decides each failed turn
+from the harness `ErrorKind`: a cancelled run is reported as stopped, and a retryable
+kind is noted as possibly temporary, with the provider's requested wait when present.
+The adapter does not replay the turn, which would repeat its tool effects. See
 [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for its component
 contracts.
 

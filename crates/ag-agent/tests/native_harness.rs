@@ -1622,11 +1622,12 @@ async fn claude_turn_streams_messages_and_replays_signed_thinking_with_tool_resu
         None,
         Some(&config(data_root.path(), anthropic_environment(&server))),
     );
-    // A provider-call budget wraps the client, which must keep replaying
-    // each turn's instructions as Anthropic requires.
+    // Each turn charges the shared budget one call, however many model
+    // requests it sends, like a turn of an external backend.
+    let budget = ProviderCallBudget::new(8);
     let budgeted = |prompt: &str, continuation: TurnContinuation| TurnRequest {
         continuation,
-        provider_call_budget: Some(ProviderCallBudget::new(8)),
+        provider_call_budget: Some(budget.clone()),
         ..turn_request(worktree.path(), CLAUDE_MODEL, prompt)
     };
 
@@ -1654,6 +1655,7 @@ async fn claude_turn_streams_messages_and_replays_signed_thinking_with_tool_resu
     assert_eq!(second.assistant_message.answer, "Notes summarized");
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(requests.len(), 3);
+    assert_eq!(budget.remaining(), 6);
     assert!(requests.iter().all(|request| {
         request
             .headers
