@@ -36,6 +36,9 @@ mod question;
 #[path = "session_api_test/queue_test.rs"]
 mod queue;
 
+#[path = "session_api_test/remote_device_test.rs"]
+mod remote_device;
+
 #[path = "session_api_test/remote_scope_test.rs"]
 mod remote_scope;
 

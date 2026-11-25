@@ -54,39 +54,68 @@ may do, and the encryption between a device and Agentty are security boundaries.
 [Remote Control Design](https://agentty.xyz/docs/architecture/remote-control-design/)
 for its trust model.
 
-A paired device is an authenticated control surface, not a viewer. Within the sessions
-of the active project, it can do what the
+A paired device is an authenticated control surface, not a viewer. It reaches every
+project the terminal lists, not only the one the terminal has open, and within the
+sessions of those projects it can do what the
 [usage page](https://agentty.xyz/docs/usage/remote-control/#usage-remote-control-device-access)
-lists under "What a paired device can do": today that is reading transcripts, focused
-review results, diffs, and graph proposals and execution graphs with their captured
-instructions and outputs, listing the file and directory names in a session's worktree
-and in the active project's checkout, seeing the project's branch and sync state,
-sending prompts with PNG or JPEG images, which Agentty stores in its own temporary
-folder for the turn, answering questions, including those of a session's graph proposal
-or graph nodes, stopping a turn, syncing a session branch, changing session settings,
-canceling a session, merging a session into its base branch, creating sessions,
-publishing a session branch and opening its pull request with the user's forge
-credentials, syncing the active project's branch with its Git remote, asking for a graph
-proposal with `/graph`, which starts model work that reads the session's worktree and
-proposes a graph but launches nothing until a chat reply approves the proposal, and
-acting on an execution graph as the terminal's graph inspector does: accepting an
-output, retrying a node or replying to it with guidance, resuming a paused graph, adding
-provider calls to its spent budget, and cancelling a graph, which is permanent and which
-the device's page asks to confirm first. With those, anyone holding a paired device can
-have code written, land it on the base branch, and push it to the Git remote, so remove
-a device you no longer control.
+lists under "What a paired device can do": today that is listing the projects, reading
+transcripts, focused review results, diffs, and graph proposals and execution graphs
+with their captured instructions and outputs, listing the file and directory names in a
+session's worktree and in a listed project's checkout, seeing each listed project's
+branch and sync state, sending prompts with PNG or JPEG images, which Agentty stores in
+its own temporary folder for the turn, answering questions, including those of a
+session's graph proposal or graph nodes, stopping a turn, syncing a session branch,
+changing session settings, canceling a session, merging a session into its base branch,
+creating sessions in any listed project, publishing a session branch and opening its
+pull request with the user's forge credentials, syncing any listed project's branch with
+its Git remote, asking for a graph proposal with `/graph`, which starts model work that
+reads the session's worktree and proposes a graph but launches nothing until a chat
+reply approves the proposal, and acting on an execution graph as the terminal's graph
+inspector does: accepting an output, retrying a node or replying to it with guidance,
+resuming a paused graph, adding provider calls to its spent budget, and cancelling a
+graph, which is permanent and which the device's page asks to confirm first. With those,
+anyone holding a paired device can have code written, land it on the base branch, and
+push it to the Git remote of any listed project, so remove a device you no longer
+control.
 
-Agentty enforces both limits on the host, not only in the remote-control server. In the
-same step that serves a device's request, the host answers a session it does not list
-for the active project at that moment as if the session did not exist, and refuses any
-operation outside the list above. The remote-control server checks the same limits
-before it asks the host.
+What a paired device reaches:
+
+- **Listed projects.** The project the terminal has open, and every saved project its
+  `Projects` tab and project switcher list. Session worktrees are never listed. A
+  project the terminal stops listing is out of reach from the next request Agentty
+  serves.
+- **Listed sessions.** A session that its listed project's session list shows: the
+  project's active sessions and the archived sessions on the list's first page, or as
+  many as the terminal has loaded for the project it has open. Agentty answers any other
+  session, such as an older archived one or a deleted one, as if it did not exist. A
+  session list is the one Agentty holds in memory, which it reloads when the project's
+  stored sessions change, so a session changed from outside this Agentty leaves the list
+  when it next reloads.
+- **Project requests.** Listing sessions, describing a project for a new session,
+  listing a checkout's file names, creating a session, and syncing either name a listed
+  project or name none, which means the project the terminal has open when Agentty
+  serves the request. Agentty answers a project it does not list as not found.
+- **Operations.** The operations above are the same in every listed project, and
+  operations outside them are refused in every project. A request that reaches a project
+  uses that project's own checkout and project settings.
+
+Agentty enforces these limits on the host, not only in the remote-control server. In the
+same step that serves a device's request, the host checks again that a project the
+request names is listed, and that a session it names is in a listed project's session
+list, loading that list when it is not loaded yet, and refuses any operation outside the
+list above. The remote-control server checks the same limits before it asks the host.
+Which project the terminal has open does not change what a device reaches, and a project
+that has left the list, or a session that has left its project's list, by the time the
+host serves the request is refused.
 
 Report these as vulnerabilities:
 
 - pairing a device without the one-time code or without approval in the terminal;
-- a paired device doing more than the usage page lists, or reaching a session outside
-  the active project;
+- a paired device doing more than the usage page lists, or reaching a project or session
+  outside the terminal's project list: a project the terminal does not list, or a
+  session that a listed project's session list does not show;
+- a request from a paired device using one project's checkout or project settings for a
+  session or project it does not belong to;
 - a removed device still connecting;
 - a relay that serves the web client unchanged, or anyone on the network path to a relay
   served over TLS, reading or changing what a device and Agentty exchange, or learning

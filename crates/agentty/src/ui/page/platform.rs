@@ -27,25 +27,19 @@ const SIGN_IN_PITCH: &str = "Sign in to connect this Agentty to the platform's r
 const KEEP_ON_HINT: &str =
     "With keep on, remote control through the platform's relay starts whenever Agentty starts.";
 
+/// Title of the Platform tab, which names no project: paired devices pick
+/// their own among the projects the terminal lists.
+const TITLE: &str = "Agentty Platform";
+
 /// Renders the Platform tab.
 pub struct PlatformPage<'a> {
-    project_name: Option<String>,
     view: PlatformTabView<'a>,
 }
 
 impl<'a> PlatformPage<'a> {
-    /// Creates the page for one frame. Paired devices follow the sessions
-    /// of the project named `project_name`.
-    pub(crate) fn new(view: PlatformTabView<'a>, project_name: Option<String>) -> Self {
-        Self { project_name, view }
-    }
-
-    /// Returns the title naming the project that paired devices follow.
-    fn title(&self) -> String {
-        match self.project_name.as_deref() {
-            Some(name) => format!("'{name}' on the platform"),
-            None => "Agentty Platform".to_string(),
-        }
+    /// Creates the page for one frame.
+    pub(crate) fn new(view: PlatformTabView<'a>) -> Self {
+        Self { view }
     }
 
     /// Returns all render lines for content `width` columns wide and
@@ -173,8 +167,8 @@ impl<'a> PlatformPage<'a> {
         } else {
             lines.push(field_line("Remote", "Off", palette::text_muted()));
             lines.push(muted_line(
-                "Start remote control to follow and steer this project's sessions from a paired \
-                 phone or browser through the platform's relay.",
+                "Start remote control to follow and steer the sessions of your projects from a \
+                 paired phone or browser through the platform's relay.",
             ));
         }
         lines.extend(outcome_lines(remote_control));
@@ -201,7 +195,7 @@ impl Page for PlatformPage<'_> {
         let main_area = layout::tab_page_area(area);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(self.title())
+            .title(TITLE)
             .border_style(style::border_style())
             .padding(Padding::horizontal(1));
         let content_area = block.inner(main_area);

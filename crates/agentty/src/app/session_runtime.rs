@@ -36,10 +36,11 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 ///
 /// Each read sits in the query type of its remote-control scope, which the
 /// foreground dispatch applies by variant: [`ProjectQuery`] reads a listed
-/// project and reaches a paired device only for the active project,
-/// [`SessionQuery`] reads the session [`Self::Session`] names and reaches a
-/// paired device only while the host lists that session for the active
-/// project, and [`LocalQuery`] is not served to remote control.
+/// project, or the list, and reaches a paired device only for a project the
+/// host lists, [`SessionQuery`] reads the session [`Self::Session`] names
+/// and reaches a paired device only while the host lists that session on a
+/// listed project's page, and [`LocalQuery`] is not served to remote
+/// control.
 pub(crate) enum SessionRuntimeCommand {
     /// A read of a listed project, or of the projects the host lists.
     Project {
@@ -103,14 +104,13 @@ pub(crate) enum ProjectQuery {
 
 impl ProjectQuery {
     /// Classifies the read for a paired device: the project its scope
-    /// names, the session it asks about, or, for the project list, a read
-    /// remote control does not serve.
+    /// names, the session it asks about, or the project list.
     pub(crate) fn remote_scope(&self) -> RemoteScope<'_> {
         match self {
             Self::HostContext { scope, .. }
             | Self::List { scope, .. }
             | Self::ListProjectFiles { scope, .. } => RemoteScope::Project(*scope),
-            Self::ListProjects { .. } => RemoteScope::NotServed,
+            Self::ListProjects { .. } => RemoteScope::ProjectList,
             Self::ProjectStatus { .. } => RemoteScope::Project(ProjectScope::Active),
             Self::SessionListed { session_id, .. } => RemoteScope::Session(session_id),
         }
@@ -633,12 +633,6 @@ impl SessionRuntimeHandle {
             session_id: session_id.clone(),
         })
         .await
-    }
-
-    /// Returns whether this handle's caller may name projects other than
-    /// the active one, which paired devices may not yet.
-    pub(crate) fn serves_other_projects(&self) -> bool {
-        self.initiator != CommandInitiator::Remote
     }
 
     /// Starts or queues a sync of `scope`'s branch through the runtime

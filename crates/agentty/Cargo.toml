@@ -102,6 +102,7 @@ ag-git = { workspace = true, features = ["test-utils"] }
 ag-store = { workspace = true, features = ["test-utils"] }
 ag-relay.workspace = true
 assert_cmd.workspace = true
+futures-util.workspace = true
 testty.workspace = true
 mockall.workspace = true
 opentelemetry-proto = { workspace = true, features = ["logs"] }
@@ -109,4 +110,5 @@ prost.workspace = true
 wiremock.workspace = true
 sqlx = { workspace = true, features = ["sqlx-toml"] }
 tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite.workspace = true
 tracing-subscriber.workspace = true

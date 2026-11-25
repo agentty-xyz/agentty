@@ -55,20 +55,18 @@ const GRAPH_ANSWERS_NOT_TAKEN: &str =
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
-    /// Reports the operations the host serves. Naming another listed project
-    /// ([`SessionOperation::Projects`]) is served to every caller but paired
-    /// devices, whose handle reaches only the active project.
+    /// Reports the operations the host serves, to every caller. Naming
+    /// another listed project ([`SessionOperation::Projects`]) is served to
+    /// paired devices too; the host answers a project it does not list as
+    /// missing.
     fn supports(&self, operation: SessionOperation) -> bool {
-        if operation == SessionOperation::Projects {
-            return self.serves_other_projects();
-        }
-
         matches!(
             operation,
             SessionOperation::CreateSession
                 | SessionOperation::HostContext
                 | SessionOperation::MergeSession
                 | SessionOperation::ProjectFiles
+                | SessionOperation::Projects
                 | SessionOperation::SessionDiff
                 | SessionOperation::SessionFiles
                 | SessionOperation::StopTurn
@@ -391,8 +389,8 @@ impl App {
     }
 
     /// Uses the same mailbox for paired remote-control devices, whose
-    /// requests the host limits to the sessions it lists and the operations
-    /// remote control serves.
+    /// requests the host limits to the projects and sessions it lists and
+    /// the operations remote control serves.
     pub(crate) fn remote_session_service(&self) -> SessionService {
         SessionService::new(Arc::new(
             self.sessions
@@ -453,14 +451,14 @@ impl App {
     /// Routes mutations to shared admission and keeps reads on the query path.
     ///
     /// Each read's variant decides its remote-control scope: a paired
-    /// device's project read reaches only the active project, its session
-    /// read only a session the host lists for the active project, and its
-    /// local reads are refused. A session-API read renews the lease of the
-    /// page it reads.
+    /// device's project read reaches the project list and only a project
+    /// the host lists, its session read only a session the host lists, and
+    /// its local reads are refused. A read of a session-API caller or a
+    /// paired device renews the lease of the page it reads.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
             SessionRuntimeCommand::Project { initiator, query } => {
-                match self.remote_refusal(initiator, query.remote_scope()) {
+                match self.remote_refusal(initiator, query.remote_scope()).await {
                     Some(refusal) => query.refuse(refusal),
                     None => self.answer_project_query(initiator, query).await,
                 }
@@ -471,7 +469,7 @@ impl App {
                 session_id,
             } => {
                 let scope = RemoteScope::Session(&session_id);
-                if self.remote_refusal(initiator, scope).is_some() {
+                if self.remote_refusal(initiator, scope).await.is_some() {
                     query.answer_unlisted();
                 } else {
                     self.renew_session_page_lease(initiator, &session_id);
@@ -479,7 +477,7 @@ impl App {
                 }
             }
             SessionRuntimeCommand::Local { initiator, query } => {
-                match self.remote_refusal(initiator, RemoteScope::NotServed) {
+                match self.remote_refusal(initiator, RemoteScope::NotServed).await {
                     Some(refusal) => query.refuse(refusal),
                     None => self.answer_local_query(query).await,
                 }
@@ -609,30 +607,16 @@ impl App {
     }
 
     /// Reports whether the host lists `session_id`: whether it is on the
-    /// loaded page of a listed project. A session of a listed project whose
-    /// page is not loaded has that page loaded first. A paired device only
-    /// reaches this for a session on the active page.
+    /// loaded page of a listed project, as
+    /// [`Self::listed_session_project`] decides, which loads that page
+    /// first when needed. A paired device reaches this only once its scope
+    /// check found the session listed.
     async fn api_session_listed(
         &mut self,
         initiator: CommandInitiator,
         session_id: &SessionId,
     ) -> Result<bool, ApiSessionError> {
-        if self.sessions.session_for_id(session_id).is_none() {
-            let project_id = self
-                .services
-                .db()
-                .sessions()
-                .load_session_project_id(session_id)
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-            let Some(project_id) = project_id.filter(|project_id| {
-                *project_id != self.active_project_id() && self.projects.is_listed(*project_id)
-            }) else {
-                return Ok(false);
-            };
-            self.ensure_project_page(project_id).await?;
-        }
-        let is_listed = self.sessions.session_for_id(session_id).is_some();
+        let is_listed = self.listed_session_project(session_id).await?.is_some();
         self.renew_session_page_lease(initiator, session_id);
 
         Ok(is_listed)
@@ -851,17 +835,19 @@ impl App {
     /// rather than the terminal's list, and everything it starts from is
     /// that project's own: its checkout must be free of its sync, its base
     /// branch is the one checked out there now, and its default settings
-    /// are its stored ones. A paired device's request for another project
-    /// was refused before it got here; one that inherits from a session the
-    /// host lists to it names that session's project, the active one, or is
-    /// refused here before any page loads.
+    /// are its stored ones. A paired device's request for a project the
+    /// host does not list was refused before it got here; one that inherits
+    /// from a session the host lists to it names that session's project, or
+    /// is refused here before the requested project's page loads. The
+    /// scope check may already have loaded the source session's page.
     pub(super) async fn prepare_api_session_creation(
         &mut self,
         request: CreateSessionRequest,
     ) -> Result<PreparedSessionCreation, ApiSessionError> {
         self.validate_api_session_request(&request)?;
-        // Before any page loads: this is what keeps a paired device that
-        // inherits from an active-page session in the active project.
+        // Before the requested project's page loads: this is what keeps a
+        // creation that inherits from a session in that session's own
+        // project.
         let inherited_settings = self
             .inherited_creation_settings(
                 request.inherit_from_session_id.as_ref(),
@@ -1036,7 +1022,7 @@ impl App {
     /// Another listed project has its page loaded first, as every request
     /// naming it does, and syncs in its own checkout; see
     /// [`Self::start_sync_main_for`]. A paired device's request for a
-    /// project other than the active one was refused before it got here.
+    /// project the host does not list was refused before it got here.
     ///
     /// # Errors
     /// Returns [`ApiSessionError::NotFound`] for a project the host does not

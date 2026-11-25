@@ -47,7 +47,15 @@ async fn remote_control_tab() -> Result<(), Box<dyn std::error::Error>> {
                     let off_frame = common::frame_from_capture(&report.captures[0]);
                     let off_full = Region::full(off_frame.cols(), off_frame.rows());
                     assertion::assert_text_in_region(&off_frame, "Settings | Remote", &off_full);
-                    assertion::assert_text_in_region(&off_frame, "remote control", &off_full);
+                    // The tab names no project: devices reach every listed
+                    // one.
+                    assertion::assert_text_in_region(&off_frame, "Remote control", &off_full);
+                    assertion::assert_text_in_region(
+                        &off_frame,
+                        "steer the sessions of your projects",
+                        &off_full,
+                    );
+                    assertion::assert_not_visible(&off_frame, "' remote control");
                     assertion::assert_text_in_region(&off_frame, "Enter: start", &off_full);
                     assertion::assert_text_in_region(&off_frame, "None yet", &off_full);
                     assertion::assert_not_visible(&off_frame, "online");

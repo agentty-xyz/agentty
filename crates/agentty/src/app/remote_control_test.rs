@@ -1237,9 +1237,16 @@ async fn the_last_device_leaving_drops_the_viewed_pages() {
     let (mut app, base_dir, _revisions) = listening_app_with_sessions().await;
     let generation = app.remote_control.generation;
     let other_project_id = add_listed_project(&mut app, &base_dir, "other").await;
-    app.ensure_project_page(other_project_id)
+    // A device's request loads the page and hands it to the background
+    // poll, as a session-API caller's does.
+    let remote = app.remote_session_service();
+    let listed = app
+        .drive_session_request(
+            remote.project_sessions(ag_session::ProjectScope::Project(other_project_id)),
+        )
         .await
-        .expect("listed page should load");
+        .map(|listing| listing.project_id);
+    let polled_while_viewed = app.sync_handle.generation_for(other_project_id);
     let mut both_connected = connected("phone");
     both_connected
         .connections
@@ -1255,9 +1262,12 @@ async fn the_last_device_leaving_drops_the_viewed_pages() {
         .await;
 
     // Assert
+    assert_eq!(listed, Ok(Some(other_project_id)));
+    assert!(polled_while_viewed.is_some());
     assert_eq!(while_one_connected, vec![other_project_id]);
     assert_eq!(app.sessions.state().viewed_project_ids(), Vec::<i64>::new());
     assert!(app.projects.context(other_project_id).is_none());
+    assert_eq!(app.sync_handle.generation_for(other_project_id), None);
     assert_eq!(app.sessions.sessions().len(), 2);
 }
 

@@ -173,6 +173,40 @@ pub(super) async fn request_review_request(
         .await
 }
 
+/// Returns the ids of `entries` in order.
+pub(super) fn entry_ids(entries: &[ag_session::SessionListEntry]) -> Vec<&str> {
+    entries
+        .iter()
+        .map(|entry| entry.summary.id.as_str())
+        .collect()
+}
+
+/// Returns the ids of the sessions on the viewed page of `project_id`.
+pub(super) fn viewed_session_ids(app: &App, project_id: i64) -> Vec<String> {
+    app.sessions
+        .state()
+        .viewed_page(project_id)
+        .map_or_default(|page| {
+            page.sessions()
+                .iter()
+                .map(|session| session.id.to_string())
+                .collect()
+        })
+}
+
+/// Returns the ids of the terminal's sessions and the one it selects.
+pub(super) fn terminal_list(app: &App) -> (Vec<String>, Option<String>) {
+    let session_ids = app
+        .sessions
+        .sessions()
+        .iter()
+        .map(|session| session.id.to_string())
+        .collect();
+    let selected_session_id = app.selected_session().map(|session| session.id.to_string());
+
+    (session_ids, selected_session_id)
+}
+
 pub(super) fn question_transition_app_server(
     first_turn_release: Arc<tokio::sync::Notify>,
     turn_started_tx: tokio::sync::mpsc::UnboundedSender<AgentRequestKind>,

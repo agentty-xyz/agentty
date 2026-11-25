@@ -193,13 +193,14 @@ that agents run with edit permissions.
 
 **Decision.** A paired device may stop a turn, create sessions, merge a session into its
 base branch, publish a session branch and open or refresh its review request, sync a
-session branch, sync the active project's branch with its remote, and change session
-settings. Each operation is a separate request with its own capability, reaches only
-sessions the host lists, and creates sessions in and syncs only the active project.
-Merge and publish ask for confirmation on the device, not in the terminal, and Agentty
-keeps no audit trail of remote actions yet. Running host commands, opening worktrees,
-changing Agentty settings, managing projects, and choosing the remote branch name stay
-out of reach.
+session branch, sync a project's branch with its remote, and change session settings.
+Each operation is a separate request with its own capability and reaches only the
+projects and sessions the host lists; see
+[Devices reach every listed project](#devices-reach-every-listed-project). Merge and
+publish ask for confirmation on the device, not in the terminal, and Agentty keeps no
+audit trail of remote actions yet. Running host commands, opening worktrees, changing
+Agentty settings, managing projects, and choosing the remote branch name stay out of
+reach.
 
 **Consequences.**
 
@@ -211,29 +212,80 @@ out of reach.
 - The capability list leaves room for per-device permissions or a terminal approval
   later without a protocol change.
 
-### The host enforces the remote scope itself
+### Devices reach every listed project
 
-**Context.** `ag-remote` checks that the host lists a session before each request that
-names it and calls only the approved operations. The host trusted those checks, and the
-listed check and the operation ran in separate turns of the foreground loop, so a
-project switch between them could let one request reach a session the device no longer
-sees.
+**Context.** A paired device followed the terminal's active project: it listed, read,
+and changed only that project's sessions, and switching projects in the terminal
+switched every device with it. Someone away from the terminal could not reach another
+project's sessions, and the terminal could not move without moving the devices.
 
-**Decision.** The remote server's session service tags as remote every mutation and
-every read that names a session or another object; reads of the active project as a
-whole serve every caller. In the foreground turn that serves a remote request, the host
-answers a session it does not list for the active project as missing and refuses any
-operation outside the approved set with `Remote control does not serve this operation`.
-One exhaustive classification of the host's mutations names that set, payloads included:
-a question answer or proposal request that carries attachments, which name files on the
-host, and a publication that names its branch are not served. The reads remote control
-never makes, of graphs, proposals, and tasks by their own identity and of a session's
-tasks, are refused as a group. `ag-remote` keeps its own checks.
+**Decision.** A device reaches every project the terminal lists, the project it has open
+and every saved project its switcher offers, and picks the one its page shows. A request
+about a project names a listed project, or none for the one the terminal has open when
+the host serves it. A device reaches a session only while that session is in a listed
+project's session list: its active sessions and the archive's first page, or the
+terminal's own window for the project it has open. The approved operations stay the same
+and apply in every listed project, which adds creating sessions in and syncing a project
+the terminal does not have open.
+
+**Why.** The terminal's project list is already the set of repositories the user
+registered with Agentty and chose to see, and a device could already land changes in the
+active one with the user's credentials, so the list bounds reach without a new setting.
+Tying reach to the active project instead made it depend on terminal state that changes
+under a device without its knowing.
 
 **Consequences.**
 
-- Both limits hold even if `ag-remote` gains a call by mistake, and a project switch
-  between its check and the host's turn no longer reaches the old session.
+- What a device reaches no longer depends on the terminal's project, so a terminal
+  switch between `ag-remote`'s check and the host's turn changes nothing it reaches. A
+  session a device listed before a switch stays reachable while it is still in its
+  project's list.
+- Reach still ends with the list: a project the terminal stops listing is out of reach
+  from the next request the host serves, and a session deleted or archived past its list
+  from the moment that list, the page the host holds, next reloads.
+- The host holds a session page for each listed project a device or another programmatic
+  caller views, loads it in the turn that serves the request, and drops it when idle;
+  see [Runtime Flow](@/docs/architecture/runtime-flow.md). Automation that applies the
+  terminal's project settings stays with the terminal's project.
+- A project the terminal does not have open shows fewer details on a device; the usage
+  page lists them under Limitations.
+
+### The host enforces the remote scope itself
+
+**Context.** `ag-remote` checks that the host lists a project or session before each
+request that names it and calls only the approved operations. Those checks and the
+operation run in separate turns of the foreground loop, so the host cannot trust them
+alone: the project list or a project's session list can change between them.
+
+**Decision.** The remote server's session service tags every request as remote. In the
+foreground turn that serves it, the host checks again: a project the request names must
+be listed, and a session it names must be in a listed project's session list, whose page
+the host loads in that same turn when it is not loaded. It answers anything else as
+missing, and refuses any operation outside the approved set with
+`Remote control does not serve this operation`. One exhaustive classification of the
+host's mutations names that set, payloads included: a question answer or proposal
+request that carries attachments, which name files on the host, and a publication that
+names its branch are not served. The reads remote control never makes, of graphs,
+proposals, and tasks by their own identity and of a session's tasks, are refused as a
+group. `ag-remote` keeps its own checks.
+
+**Where each check lives.**
+
+- `ag-remote` refuses a request whose operations the host does not serve, checks that a
+  named project is in the host's project list, and asks the host whether it lists a
+  named session, in that order, before it calls the host.
+- The host's command gateway checks each mutation's classification and the project or
+  session it reaches. Its query routing checks each read the same way.
+- A request that names no project resolves the terminal's project once, in the turn that
+  serves it, and a session listing returns its project's identity with the sessions read
+  in that turn, so a page never pairs one project's sessions with another's status.
+
+**Consequences.**
+
+- Both limits hold even if `ag-remote` gains a call by mistake. A project that leaves
+  the list, or a session that leaves its project's list, between `ag-remote`'s check and
+  the host's turn is refused there; a terminal switch in between changes nothing a
+  device reaches.
 - A new host mutation is unavailable to devices until it is classified, so extending
   remote control changes both the host and `ag-remote`.
 - Terminal and in-process callers are not affected.

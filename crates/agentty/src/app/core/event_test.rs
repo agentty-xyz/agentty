@@ -808,12 +808,26 @@ fn queue_unrelated_session_progress(app: &App) {
 #[tokio::test]
 async fn completed_turn_starts_auto_review_when_project_is_inactive() {
     // A session of another project reviews with its own project's agent,
-    // whether no page holds it or a session-API caller views its page.
-    for is_viewed in [false, true] {
+    // whether no page holds it or a session-API caller or a paired device
+    // views its page.
+    for viewer in [
+        None,
+        Some(ProjectViewer::SessionApi),
+        Some(ProjectViewer::Device),
+    ] {
         // Arrange, Act & Assert
-        Box::pin(completed_inactive_turn_starts_auto_review_with_its_projects_agent(is_viewed))
-            .await;
+        Box::pin(completed_inactive_turn_starts_auto_review_with_its_projects_agent(viewer)).await;
     }
+}
+
+/// The caller whose request loads the page of a project the terminal does
+/// not show.
+#[derive(Clone, Copy)]
+enum ProjectViewer {
+    /// A paired device, asking whether the host lists the session.
+    Device,
+    /// A session-API caller.
+    SessionApi,
 }
 
 /// Stores review defaults for `project_id` that differ from the active
@@ -848,24 +862,41 @@ async fn persist_inactive_review_settings(app: &App, project_id: i64) {
 }
 
 /// Loads the page of the inactive project `project_id`, holding
-/// `session_id`, as a session-API caller views it.
-async fn view_inactive_project_page(app: &mut App, project_id: i64, session_id: &SessionId) {
+/// `session_id`, as `viewer` views it.
+async fn view_inactive_project_page(
+    app: &mut App,
+    project_id: i64,
+    session_id: &SessionId,
+    viewer: ProjectViewer,
+) {
     std::fs::create_dir_all(crate::app::session::session_folder(
         app.services.base_path(),
         session_id.as_str(),
     ))
     .expect("session folder");
     app.reload_projects().await;
-    app.ensure_project_page(project_id)
-        .await
-        .expect("listed page should load");
+    match viewer {
+        ProjectViewer::Device => {
+            let remote = app.remote_session_service();
+            let is_listed = app
+                .drive_session_request(remote.is_session_listed(session_id))
+                .await;
+            assert_eq!(is_listed, Ok(true));
+        }
+        ProjectViewer::SessionApi => app
+            .ensure_project_page(project_id)
+            .await
+            .expect("listed page should load"),
+    }
     assert!(app.sessions.session_for_id(session_id).is_some());
     assert!(!app.sessions.is_in_active_page(session_id));
 }
 
 /// Runs [`completed_turn_starts_auto_review_when_project_is_inactive`] for a
-/// session whose page is loaded as a viewed page when `is_viewed`.
-async fn completed_inactive_turn_starts_auto_review_with_its_projects_agent(is_viewed: bool) {
+/// session whose page `viewer`, when given, loads as a viewed page.
+async fn completed_inactive_turn_starts_auto_review_with_its_projects_agent(
+    viewer: Option<ProjectViewer>,
+) {
     // Arrange
     let diff_text = "diff --git a/file.rs b/file.rs\n+inactive change";
     let expected_hash = crate::app::test_support::diff_content_hash(diff_text);
@@ -900,8 +931,8 @@ async fn completed_inactive_turn_starts_auto_review_with_its_projects_agent(is_v
         )
         .await
         .expect("failed to insert inactive session");
-    if is_viewed {
-        view_inactive_project_page(&mut app, inactive_project_id, &session_id).await;
+    if let Some(viewer) = viewer {
+        view_inactive_project_page(&mut app, inactive_project_id, &session_id, viewer).await;
     }
     persist_inactive_review_settings(&app, inactive_project_id).await;
     let turn_applied_state = TurnAppliedState {

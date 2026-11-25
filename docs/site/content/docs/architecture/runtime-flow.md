@@ -81,21 +81,21 @@ not execution ownership.
 
 <a id="architecture-runtime-flow-project-pages"></a> The host holds the session page of
 the terminal's project and, beside it, a viewed page for each other listed project, one
-the project switcher offers, that a session-API caller names. A request that names such
-a project, or a session on its page, loads the page in the turn that serves it and
-renews its lease. A viewed page is dropped once its lease is idle for ten minutes, when
-more than four are held, when its project leaves the list, or when the last paired
-device disconnects. A terminal switch promotes the target's viewed page and keeps the
-previous page loaded while its lease is live. Lookups by session id reach every loaded
-page, while the terminal's list, selection, and automation that applies the active
-project's settings stay on the active page; a session on a viewed page takes the paths
-that serve projects the terminal does not show, such as an automatic review with its own
-project's agent. A viewed page holds its project's first archive page and its branch as
-detected when it loads. A session-API caller can also create sessions in a viewed
-project and sync it. Both start from that project's own checkout, the branch checked out
-there at the time of the request, and that project's stored defaults. A new session
-joins its project's page, not the terminal's list, and a sync reports its progress and
-result in that project's status.
+the project switcher offers, that a session-API caller or a paired device names. A
+request from either that names such a project, or a session on its page, loads the page
+in the turn that serves it and renews its lease. A viewed page is dropped once its lease
+is idle for ten minutes, when more than four are held, when its project leaves the list,
+or when the last paired device disconnects. A terminal switch promotes the target's
+viewed page and keeps the previous page loaded while its lease is live. Lookups by
+session id reach every loaded page, while the terminal's list, selection, and automation
+that applies the active project's settings stay on the active page; a session on a
+viewed page takes the paths that serve projects the terminal does not show, such as an
+automatic review with its own project's agent. A viewed page holds its project's first
+archive page and its branch as detected when it loads. Either caller can also create
+sessions in a viewed project and sync it. Both start from that project's own checkout,
+the branch checked out there at the time of the request, and that project's stored
+defaults. A new session joins its project's page, not the terminal's list, and a sync
+reports its progress and result in that project's status.
 
 <a id="architecture-runtime-flow-git-status"></a> The sync orchestrator polls git status
 for exactly the loaded pages. Each pass fetches the active project's remote and reads
@@ -118,11 +118,13 @@ sync, which refreshes them.
 [remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
 runtime's Tokio executor but owns no application state. It calls the session API through
 the mailbox like any programmatic caller, under the remote initiator: the foreground
-turn that serves each of its requests answers a session outside the active project's
-page as missing, a project other than the active one as inactive, and refuses any
-operation remote control does not serve, so a device neither reaches nor loads a viewed
-page. While a device is connected, the session-change revision follows a fingerprint of
-what the session API reports from memory, built from the same helpers the API reads:
+turn that serves each of its requests answers a project the host does not list, or a
+session that no listed project's page holds, as missing, and refuses any operation
+remote control does not serve. A device's request loads and leases the page of the
+listed project it names, or of a listed session's project, as a session-API caller's
+does, so a device idle past a page's eviction gets the page loaded again by its next
+request. While a device is connected, the session-change revision follows a fingerprint
+of what the session API reports from memory, built from the same helpers the API reads:
 each loaded page's sessions with their list entries and live details and its project
 status, the project list, the host's model choices, the graph replies being decided, and
 what live graph drivers add to stored graph progress. Each foreground cycle, and each
