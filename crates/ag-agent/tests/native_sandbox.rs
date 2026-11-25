@@ -20,8 +20,9 @@ use ag_agent::{
     NativeHarnessConfig, TrustedCargoCache, create_agent_channel, dispatch_sandbox_helper,
 };
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, PermissionMode,
-    ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
+    AgentDefinitionPrompt, AgentRequestKind, CommandScope, ContextCompaction, ExecutionPolicy,
+    PermissionMode, ReasoningLevel, ResponseStyle, SessionCommandRequest, SpeedMode,
+    TurnContinuation, TurnEvent, TurnNotice, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
 use ag_harness::tool::ToolDefinition;
@@ -230,7 +231,60 @@ async fn session_commands_write_a_linked_worktree_but_not_its_git_metadata() -> 
         notices.contains(&TurnNotice::SandboxAvailable),
         "the sandboxed turn must report it: {notices:?}"
     );
-    fixture.assert_effects()
+    fixture.assert_effects()?;
+
+    host_commands_run_in_the_sandbox_of_their_scope(&fixture, &config).await
+}
+
+/// Runs a host command, such as a commit hook, in the session's sandbox and
+/// in a workspace sandbox of the main checkout: both run inside the native
+/// sandbox, cannot write outside, and use the session's temporary directory
+/// or a fresh one removed afterwards.
+async fn host_commands_run_in_the_sandbox_of_their_scope(
+    fixture: &Fixture,
+    config: &NativeHarnessConfig,
+) -> TestResult {
+    // Arrange
+    let command = format!(
+        "printf '%s\\n' \"$TMPDIR\"; touch '{}' 2>/dev/null && echo escaped",
+        fixture.escape().display()
+    );
+    let request = |folder: &Path, scope| SessionCommandRequest {
+        command: command.clone(),
+        folder: folder.to_path_buf(),
+        scope,
+    };
+    let session_scope = CommandScope::Session {
+        session_id: SESSION_ID.to_string(),
+    };
+
+    // Act
+    let session = config
+        .run_session_command(request(&fixture.worktree, session_scope))
+        .await?;
+    let workspace = config
+        .run_session_command(request(fixture.repository.path(), CommandScope::Workspace))
+        .await?;
+
+    // Assert
+    // Standard output comes first; coverage builds may add standard error.
+    let temporary = |output: &str| output.lines().next().unwrap_or_default().to_string();
+    let session_temporary = temporary(&session.output);
+    let workspace_temporary = temporary(&workspace.output);
+    assert_eq!(session.sandbox, TurnNotice::SandboxAvailable);
+    assert_eq!(workspace.sandbox, TurnNotice::SandboxAvailable);
+    assert!(
+        session_temporary.ends_with(&format!("{SESSION_ID}/tmp")),
+        "{session_temporary}"
+    );
+    assert!(
+        workspace_temporary.contains("/.utility/run-"),
+        "{workspace_temporary}"
+    );
+    assert!(!Path::new(&workspace_temporary).exists());
+    assert!(!fixture.escape().exists());
+
+    Ok(())
 }
 
 /// Fills the project's trusted Cargo cache through a host `cargo` that

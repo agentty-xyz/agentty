@@ -37,9 +37,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "native-sandbox")]
-use crate::bash::BashConfig;
+use crate::Repository;
 #[cfg(feature = "native-sandbox")]
-use crate::execution::{self, Host, NativeLaunch};
+use crate::bash::{BashArguments, BashConfig, CommandOutcome};
+#[cfg(feature = "native-sandbox")]
+use crate::command_settlement::Commands;
+#[cfg(feature = "native-sandbox")]
+use crate::execution::{self, BashTool, Host, NativeLaunch};
 #[cfg(feature = "native-sandbox")]
 use crate::turn::TurnError;
 
@@ -267,6 +271,54 @@ pub fn dispatch() -> Option<std::process::ExitCode> {
     let _ = std::env::current_exe().map(|executable| DISPATCHED_HELPER.set(executable));
 
     None
+}
+
+/// What [`run_command`] reports about the one command it ran.
+#[cfg(feature = "native-sandbox")]
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct CommandRun {
+    /// The command's exit, captured output, and termination.
+    pub outcome: CommandOutcome,
+    /// Why the command ran without the native sandbox its configuration
+    /// selected, as a turn would report it; `None` when it ran inside it.
+    pub warning: Option<SandboxWarning>,
+}
+
+/// Runs `command` once in the root of `repository` with the grants of
+/// `configuration`, outside any turn, as a turn's `bash` call would run it:
+/// a native configuration runs inside the native sandbox, and where that
+/// cannot run, `sandbox` decides as it does for a turn. Hosts use it for
+/// commands that run on their own behalf over content commands may have
+/// written, such as a repository's Git hooks, so those run in the same
+/// sandbox as the commands that wrote it. Nothing is journaled. Like a
+/// turn, it takes a validated [`Repository`], whose root is the workspace
+/// and whose `.git` the sandbox protects as Git metadata.
+///
+/// # Errors
+/// Returns [`TurnError::SandboxUnavailable`] when the sandbox is unavailable
+/// and `sandbox` refuses to run without it, and the error a turn's `bash`
+/// call would report when the policy is rejected or execution fails.
+#[cfg(feature = "native-sandbox")]
+pub async fn run_command(
+    configuration: &BashConfig,
+    sandbox: Sandbox,
+    repository: &Repository,
+    command: &BashArguments,
+) -> Result<CommandRun, TurnError> {
+    let (configuration, warning) = SandboxGate::new(sandbox)
+        .resolve(configuration, repository.root())
+        .await?;
+    let tool = BashTool::new(
+        configuration,
+        repository.root().to_path_buf(),
+        Commands::default(),
+        None,
+    )?;
+    // No tool call: a fixed call id, and no approval to leave the sandbox.
+    let outcome = tool.execute(command, "command", false).await?;
+
+    Ok(CommandRun { outcome, warning })
 }
 
 /// This executable, once [`dispatch`] returned in it.

@@ -11,6 +11,9 @@ use mockall::Sequence;
 use tempfile::tempdir;
 
 use crate::error::GitError;
+#[cfg(unix)]
+use crate::hook::{HookOutput, MockCommitHookRunner};
+use crate::hook_support::HostHooks;
 use crate::merge::{
     CompatibilityMergeOutput, MergeTreeAttempt, MockCompatibilityMergeRunner, SquashMergeOutcome,
     classify_cached_diff, classify_merge_tree_attempt, has_merge_conflicts,
@@ -535,6 +538,7 @@ async fn squash_merge_returns_parse_error_outside_git_repository() {
         "feature-branch".to_string(),
         "main".to_string(),
         "Merge feature".to_string(),
+        HostHooks::shared(),
     )
     .await
     .expect_err("non-repository should fail branch detection");
@@ -560,6 +564,7 @@ async fn squash_merge_returns_branch_mismatch_error_when_target_is_not_checked_o
         "feature-branch".to_string(),
         "main".to_string(),
         "Merge feature".to_string(),
+        HostHooks::shared(),
     )
     .await;
 
@@ -588,6 +593,7 @@ async fn squash_merge_commits_the_provided_multiline_message() {
         "feature-branch".to_string(),
         "main".to_string(),
         commit_message.clone(),
+        HostHooks::shared(),
     )
     .await;
     let head_message = run_git_stdout(temp_dir.path(), &["log", "-1", "--pretty=%B"]);
@@ -598,6 +604,54 @@ async fn squash_merge_commits_the_provided_multiline_message() {
         SquashMergeOutcome::Committed,
     );
     assert_eq!(head_message, commit_message);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn squash_merge_runs_merged_hooks_only_through_the_runner() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let repo_path = temp_dir.path().join("repo");
+    let marker = temp_dir.path().join("ran-on-host");
+    fs::create_dir(&repo_path).expect("failed to create repository");
+    setup_test_git_repo(&repo_path);
+    run_git_command(&repo_path, &["checkout", "-b", "feature-branch"]);
+    // Session-written hook, merged into the checkout, which runs hooks from
+    // its worktree.
+    let hook = repo_path.join(".githooks/pre-commit");
+    fs::create_dir_all(hook.parent().expect("hooks directory")).expect("hooks directory");
+    fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).expect("hook");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("executable hook");
+    run_git_command(&repo_path, &["add", "."]);
+    run_git_command(&repo_path, &["commit", "-m", "Add hook"]);
+    run_git_command(&repo_path, &["checkout", "main"]);
+    run_git_command(&repo_path, &["config", "core.hooksPath", ".githooks"]);
+    let mut hooks = MockCommitHookRunner::new();
+    hooks.expect_run_pre_commit().times(1).returning(|_| {
+        Box::pin(async {
+            Ok(HookOutput {
+                output: String::new(),
+                success: true,
+            })
+        })
+    });
+
+    // Act
+    let result = squash_merge(
+        repo_path.clone(),
+        "feature-branch".to_string(),
+        "main".to_string(),
+        "Merge feature".to_string(),
+        std::sync::Arc::new(hooks),
+    )
+    .await;
+
+    // Assert
+    assert!(
+        matches!(result, Ok(SquashMergeOutcome::Committed)),
+        "{result:?}"
+    );
+    assert!(!marker.exists(), "a merged hook ran on the host");
 }
 
 #[cfg(unix)]
@@ -630,6 +684,7 @@ async fn squash_merge_runs_pre_commit_hook() {
         "feature-branch".to_string(),
         "main".to_string(),
         "Squash merge feature".to_string(),
+        HostHooks::shared(),
     )
     .await
     .expect_err("pre-commit hook should block the squash commit");
@@ -665,6 +720,7 @@ async fn squash_merge_skips_commit_creation_when_changes_are_already_present() {
         "session-branch".to_string(),
         "main".to_string(),
         "Merge session".to_string(),
+        HostHooks::shared(),
     )
     .await;
     let commit_count_after = run_git_stdout(temp_dir.path(), &["rev-list", "--count", "HEAD"]);
@@ -691,6 +747,7 @@ async fn squash_merge_returns_command_detail_for_missing_source_branch() {
         "missing-branch".to_string(),
         "main".to_string(),
         "Merge feature".to_string(),
+        HostHooks::shared(),
     )
     .await;
 

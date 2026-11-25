@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::UsagePurpose;
-use ag_git::GitClient;
+use ag_git::{CommitHookRunner, GitClient};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 
@@ -33,6 +33,8 @@ pub(super) struct AssistContext {
     pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Session PID slot for CLI cancellation or retained app-server accounting.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
+    /// Runs the repository's commit hooks inside the session sandbox.
+    pub(super) commit_hooks: Arc<dyn CommitHookRunner>,
     /// Repository bundle used for session persistence updates.
     pub(super) db: AppRepositories,
     /// Session worktree folder where git/agent commands run.

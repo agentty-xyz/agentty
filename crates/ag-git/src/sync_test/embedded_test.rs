@@ -16,6 +16,7 @@ use super::support::{
 };
 use crate::client::{GitClient, RealGitClient};
 use crate::error::GitError;
+use crate::hook_support::HostHooks;
 use crate::rebase::{GitCommandRunner, MockGitCommandRunner, ProcessGitCommandRunner};
 use crate::sync::stage_all_with_runner;
 
@@ -131,7 +132,7 @@ async fn untracked_embedded_repositories_are_never_staged_or_inspected() {
         .expect("stage all");
     fixture.inspect_with_host_git().await;
     RealGitClient
-        .commit_all(root.clone(), "Add notes".to_string())
+        .commit_all(root.clone(), "Add notes".to_string(), HostHooks::shared())
         .await
         .expect("commit");
 
@@ -180,7 +181,9 @@ async fn repositories_at_gitlink_paths_stop_staging_and_rebases_and_are_never_in
 
     // Act
     let staged = client.stage_all(root.clone()).await;
-    let committed = client.commit_all(root.clone(), "Commit".to_string()).await;
+    let committed = client
+        .commit_all(root.clone(), "Commit".to_string(), HostHooks::shared())
+        .await;
     let rebased = client
         .rebase_start(root.clone(), "main".to_string())
         .await

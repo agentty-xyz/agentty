@@ -616,6 +616,12 @@ application, such as "Install bubblewrap", so you can show them as they are;
 `SandboxUnavailableReason::remedy` documents what your own configuration can change
 instead.
 
+`sandbox::run_command` runs one command with a `BashConfig` and `Sandbox` outside any
+turn, the way a turn's `bash` call would, and returns its `CommandOutcome` with the
+warning a turn would report. Use it for commands your application runs on its own behalf
+over content that commands could have written, such as the repository's Git hooks, so
+they run in the same sandbox. Nothing is journaled.
+
 The workspace is read-only unless you grant `with_write`. Everything else is explicit
 too:
 

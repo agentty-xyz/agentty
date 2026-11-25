@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{MockAgentChannel, TurnResult};
+use ag_contracts::{MockAgentChannel, MockSessionCommandClient, TurnResult};
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
 use ag_telemetry::KeyValue;
@@ -564,7 +564,7 @@ async fn test_rebase_session_auto_commits_uncommitted_changes() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -1022,6 +1022,7 @@ async fn test_sync_main_uses_active_project_branch_from_context() {
         Arc::new(mock_git_client),
         AgentModel::Gemini38Flash,
         Arc::new(ag_worker::MockRunClient::new()),
+        Arc::new(MockSessionCommandClient::new()),
     )
     .await;
 
@@ -1061,6 +1062,7 @@ async fn test_sync_main_requires_clean_selected_project_branch() {
         Arc::new(mock_git_client),
         AgentModel::Gemini38Flash,
         Arc::new(ag_worker::MockRunClient::new()),
+        Arc::new(MockSessionCommandClient::new()),
     )
     .await;
 
@@ -1087,6 +1089,7 @@ async fn test_sync_main_returns_error_without_upstream_remote() {
         app.services.git_client(),
         AgentModel::Gemini38Flash,
         Arc::new(ag_worker::MockRunClient::new()),
+        Arc::new(MockSessionCommandClient::new()),
     )
     .await;
 
@@ -1151,6 +1154,7 @@ async fn test_sync_main_pushes_local_commits_to_remote() {
         Arc::new(mock_git_client),
         AgentModel::Gemini38Flash,
         Arc::new(ag_worker::MockRunClient::new()),
+        Arc::new(MockSessionCommandClient::new()),
     )
     .await;
 

@@ -1,5 +1,9 @@
 //! Session fork snapshot preparation and source validation unit tests.
 
+use std::sync::Arc;
+
+use ag_git::{HookOutput, MockCommitHookRunner};
+
 use super::App;
 use crate::app::AppError;
 use crate::domain::session::{SessionDiffState, Status};
@@ -196,9 +200,18 @@ async fn fork_refreshes_committed_changes_for_every_review_status() {
             .expect("source")
             .folder
             .clone();
+        let mut hooks = MockCommitHookRunner::new();
+        hooks.expect_run_pre_commit().returning(|_| {
+            Box::pin(async {
+                Ok(HookOutput {
+                    output: String::new(),
+                    success: true,
+                })
+            })
+        });
         app.services
             .git_client()
-            .commit_all(folder.clone(), "source change".into())
+            .commit_all(folder.clone(), "source change".into(), Arc::new(hooks))
             .await
             .expect("commit source");
         tokio::fs::write(folder.join("README.md"), "uncommitted source change\n")

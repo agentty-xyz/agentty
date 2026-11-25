@@ -132,18 +132,17 @@ async fn run_session_turn(
     let environment = config.environment();
     let selection = ModelSelection::resolve(&req.model, &environment)?;
     let environment = with_stored_api_keys(environment).await;
-    let (compacts, summary_model) = match &req.context_compaction {
-        ContextCompaction::Off => (false, None),
-        ContextCompaction::Automatic { summary_model } => (
-            true,
-            selection.summary_model(summary_model.as_deref(), &environment, chatgpt_is_signed_in),
-        ),
-    };
+    let (compacts, summary_model) = compaction(&req.context_compaction, &selection, &environment);
     let profile = req.request_kind.protocol_profile();
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
     let sandbox = config
-        .session_sandbox(&session_id, &req, &environment)
+        .session_sandbox(
+            &session_id,
+            &req.folder,
+            req.main_checkout_root.as_deref(),
+            &environment,
+        )
         .await?;
     let options = RunOptions::new(profile, req.permission_mode, &environment, &sandbox)?;
     let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
@@ -237,6 +236,22 @@ async fn run_session_turn(
         provider_conversation_id,
         usage,
     })
+}
+
+/// Returns whether the session compacts its earlier turns automatically, and
+/// the model that writes the summaries when `compaction` names one.
+fn compaction(
+    compaction: &ContextCompaction,
+    selection: &ModelSelection,
+    environment: &BTreeMap<String, String>,
+) -> (bool, Option<ModelSelection>) {
+    match compaction {
+        ContextCompaction::Off => (false, None),
+        ContextCompaction::Automatic { summary_model } => (
+            true,
+            selection.summary_model(summary_model.as_deref(), environment, chatgpt_is_signed_in),
+        ),
+    }
 }
 
 /// Forwards, in stream order, the output a run streams as

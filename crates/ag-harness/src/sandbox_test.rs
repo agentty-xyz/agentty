@@ -12,10 +12,12 @@ use std::time::Duration;
 use serde_json::json;
 
 #[cfg(feature = "native-sandbox")]
-use super::{DISPATCHED_HELPER, IfUnavailable, Sandbox, SandboxGate, dispatch};
+use super::{DISPATCHED_HELPER, IfUnavailable, Sandbox, SandboxGate, dispatch, run_command};
 use super::{SandboxUnavailableReason, SandboxWarning};
 #[cfg(feature = "native-sandbox")]
-use crate::bash::{BashConfig, Enforcement, UnsandboxedExecutor};
+use crate::Repository;
+#[cfg(feature = "native-sandbox")]
+use crate::bash::{BashArguments, BashConfig, Enforcement, UnsandboxedExecutor};
 #[cfg(feature = "native-sandbox")]
 use crate::execution::Host;
 #[cfg(feature = "native-sandbox")]
@@ -158,6 +160,41 @@ async fn unavailable_sandbox_runs_unsandboxed_with_a_warning_or_refuses() {
     assert!(fallback.executor.is_some());
     assert_eq!(
         warning,
+        Some(SandboxWarning::new(
+            SandboxUnavailableReason::HelperUntrusted
+        ))
+    );
+    assert!(matches!(
+        refused,
+        Err(TurnError::SandboxUnavailable(
+            SandboxUnavailableReason::HelperUntrusted
+        ))
+    ));
+}
+
+#[cfg(feature = "native-sandbox")]
+#[tokio::test]
+async fn run_command_runs_one_command_as_a_turn_would_where_the_sandbox_is_unavailable() {
+    // Arrange
+    let fixture = GateFixture::new();
+    let native = fixture.native(&fixture.workspace.join("helper"));
+    let repository = Repository::fixture(fixture.workspace.clone());
+    let command = BashArguments::new("printf hook; exit 3".to_string()).expect("command");
+    let refusing = Sandbox::Native {
+        if_unavailable: IfUnavailable::Refuse,
+    };
+
+    // Act
+    let run = run_command(&native, Sandbox::default(), &repository, &command)
+        .await
+        .expect("unsandboxed fallback");
+    let refused = run_command(&native, refusing, &repository, &command).await;
+
+    // Assert
+    assert_eq!(run.outcome.exit.exit_code, Some(3));
+    assert_eq!(run.outcome.stdout, "hook");
+    assert_eq!(
+        run.warning,
         Some(SandboxWarning::new(
             SandboxUnavailableReason::HelperUntrusted
         ))

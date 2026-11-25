@@ -11,6 +11,7 @@ use tempfile::tempdir;
 
 use super::support::{async_git_output, git_command_stdout, run_git_command, setup_test_git_repo};
 use crate::error::GitError;
+use crate::hook_support::HostHooks;
 use crate::rebase::GIT_INDEX_LOCK_RETRY_ATTEMPTS;
 use crate::repo::{
     AsyncGitCommand, AsyncGitCommandOutput, MockAsyncGitCommandRunner, ProcessAsyncGitCommandRunner,
@@ -1215,6 +1216,7 @@ async fn test_empty_amend_resets_session_commit_and_returns_no_changes() {
         "main".to_string(),
         "Session commit".to_string(),
         SingleCommitMessageStrategy::Replace,
+        HostHooks::shared(),
     )
     .await;
 

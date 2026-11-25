@@ -412,7 +412,7 @@ pub(super) fn setup_mock_merge_and_rebase_expectations(mock: &mut git::MockGitCl
         .returning(|_, _, _| Box::pin(async { Ok(String::new()) }));
     mock.expect_squash_merge()
         .times(0..)
-        .returning(|_, _, _, _| Box::pin(async { Ok(git::SquashMergeOutcome::Committed) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(git::SquashMergeOutcome::Committed) }));
     mock.expect_rebase()
         .times(0..)
         .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -421,7 +421,7 @@ pub(super) fn setup_mock_merge_and_rebase_expectations(mock: &mut git::MockGitCl
         .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
     mock.expect_run_pre_commit_hook()
         .times(0..)
-        .returning(|_| Box::pin(async { Ok(()) }));
+        .returning(|_, _| Box::pin(async { Ok(()) }));
     mock.expect_rebase_continue()
         .times(0..)
         .returning(|_| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
@@ -520,10 +520,10 @@ pub(super) fn synthetic_added_line_diff(line_count: usize) -> String {
 pub(super) fn setup_mock_commit_and_branch_expectations(mock: &mut git::MockGitClient) {
     mock.expect_commit_all()
         .times(0..)
-        .returning(|_, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
     mock.expect_commit_all_preserving_single_commit()
         .times(0..)
-        .returning(|_, _, _, _| {
+        .returning(|_, _, _, _, _| {
             Box::pin(async {
                 Err(git::GitError::OutputParse(
                     "Nothing to commit: no changes detected".to_string(),

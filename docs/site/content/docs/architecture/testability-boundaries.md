@@ -20,6 +20,8 @@ integration tests exercise supported APIs without exposing private implementatio
 | Boundary                       | Contract                        |
 | ------------------------------ | ------------------------------- |
 | Git and worktrees              | `GitClient`                     |
+| Commit hooks                   | `CommitHookRunner`              |
+| Sandboxed host commands        | `SessionCommandClient`          |
 | Filesystem and path probes     | `FsClient`                      |
 | Session turns                  | `AgentChannel`                  |
 | Isolated model calls           | `OneShotClient`                 |

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::UsagePurpose;
+use ag_contracts::{SessionCommandClient, UsagePurpose};
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_telemetry::{FutureExt as _, Outcome, Span};
@@ -16,6 +16,7 @@ use askama::Template;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 use tracing::warn;
 
+use super::commit_hook::{SandboxedCommitHookRunner, SessionHookTarget};
 use super::published_branch::{self, PublishedBranchAutoPushInput};
 use super::worker::{SessionCommand, has_unfinished_rebase_operation};
 use super::{SessionTaskService, StatusTransition, session_branch, session_folder};
@@ -192,6 +193,8 @@ struct MergeTaskInput {
     run_client: Arc<dyn RunClient>,
     repo_root: PathBuf,
     session_agent: AgentSelection,
+    /// Runs the worktree's commit hooks inside the session sandbox.
+    session_commands: Arc<dyn SessionCommandClient>,
     session_update_versions: SessionUpdateVersionMap,
     source_branch: String,
     status: Arc<Mutex<Status>>,
@@ -220,6 +223,7 @@ struct RebaseAssistInput {
     assist_mode: RebaseAssistMode,
     available_agent_kinds: Arc<[AgentKind]>,
     child_pid: Arc<Mutex<Option<u32>>>,
+    commit_hooks: Arc<dyn git::CommitHookRunner>,
     db: AppRepositories,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -251,6 +255,9 @@ pub(super) struct RebaseCommandInput {
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     /// Clock used for persisted status timing.
     pub(super) clock: Arc<dyn Clock>,
+    /// Runs the worktree's commit hooks inside the session sandbox for the
+    /// pre-rebase auto-commit and resolved conflicts.
+    pub(super) commit_hooks: Arc<dyn git::CommitHookRunner>,
     /// Repository bundle used by workflow persistence.
     pub(super) db: AppRepositories,
     /// Session worktree folder where git commands run.
@@ -334,6 +341,8 @@ struct FinalizeMergeInput<'a> {
 /// Input context for assisted conflict resolution during `sync main`.
 struct SyncRebaseAssistInput {
     base_branch: String,
+    /// Runs the checkout's commit hooks inside a sandbox scoped to it.
+    commit_hooks: Arc<dyn git::CommitHookRunner>,
     event_context: Option<SyncMainEventContext>,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -374,6 +383,14 @@ impl RebaseAssistLoopInput {
         match self {
             Self::Session(input) => input.git_client.as_ref(),
             Self::Project(input) => input.git_client.as_ref(),
+        }
+    }
+
+    /// Returns the runner of the checkout's commit hooks.
+    fn commit_hooks(&self) -> Arc<dyn git::CommitHookRunner> {
+        match self {
+            Self::Session(input) => Arc::clone(&input.commit_hooks),
+            Self::Project(input) => Arc::clone(&input.commit_hooks),
         }
     }
 
@@ -485,7 +502,7 @@ impl RebaseAssistLoopInput {
         loop {
             let Err(error) = self
                 .git_client()
-                .run_pre_commit_hook(self.folder().to_path_buf())
+                .run_pre_commit_hook(self.folder().to_path_buf(), self.commit_hooks())
                 .await
             else {
                 return Ok(());
@@ -815,6 +832,7 @@ impl SessionMergeService {
             run_client: services.session_run_client(&id),
             repo_root,
             session_agent,
+            session_commands: services.task_run_factory().session_commands(),
             session_update_versions,
             source_branch: session_branch(&id),
             status,
@@ -1127,6 +1145,7 @@ impl SessionManager {
             git_client,
             id,
             repo_root,
+            session_commands,
             source_branch,
             session_update_versions,
             status,
@@ -1146,7 +1165,10 @@ impl SessionManager {
             Span::child("merge.squash")
                 .run(
                     Self::squash_merge_session_branch(
-                        git_client.as_ref(),
+                        (
+                            git_client.as_ref(),
+                            Arc::new(SandboxedCommitHookRunner::workspace(session_commands)),
+                        ),
                         &folder,
                         &repo_root,
                         &source_branch,
@@ -1202,13 +1224,15 @@ impl SessionManager {
     /// Squash-merges the rebased session branch into its base branch with the
     /// canonical session commit message, returning that message, the merge
     /// outcome, and the merged commit hash. An empty squash diff is already
-    /// present in the target and creates no commit.
+    /// present in the target and creates no commit. The checkout's
+    /// `pre-commit` hook runs through `commit_hooks`, sandboxed to the
+    /// checkout, because the merge brought session-written files into it.
     ///
     /// # Errors
     /// Returns an error when the squash diff, commit message, squash merge, or
     /// merged commit hash cannot be loaded or applied.
     async fn squash_merge_session_branch(
-        git_client: &dyn GitClient,
+        (git_client, commit_hooks): (&dyn GitClient, Arc<dyn git::CommitHookRunner>),
         folder: &Path,
         repo_root: &Path,
         source_branch: &str,
@@ -1240,6 +1264,7 @@ impl SessionManager {
                     source_branch.to_string(),
                     base_branch.to_string(),
                     commit_message.clone(),
+                    commit_hooks,
                 )
                 .await?
         } else {
@@ -1336,6 +1361,16 @@ impl SessionManager {
             assist_mode: RebaseAssistMode::OneShot,
             available_agent_kinds: Arc::clone(&input.available_agent_kinds),
             child_pid: Arc::clone(&input.child_pid),
+            commit_hooks: Arc::new(SandboxedCommitHookRunner::session(
+                Arc::clone(&input.session_commands),
+                SessionHookTarget {
+                    app_event_tx: input.app_event_tx.clone(),
+                    db: input.db.clone(),
+                    session_id: input.id.clone(),
+                    session_update_versions: Arc::clone(&input.session_update_versions),
+                    transcript: Arc::clone(&input.transcript),
+                },
+            )),
             db: input.db.clone(),
             folder: input.folder.clone(),
             fs_client: Arc::clone(&input.fs_client),
@@ -1485,6 +1520,10 @@ impl SessionManager {
     /// Returns a [`SyncSessionStartError`] when project context is invalid or
     /// updating the default branch fails (`git pull --rebase`, assisted
     /// conflict resolution, or `git push`).
+    ///
+    /// The checkout's commit hooks run through `session_commands` inside a
+    /// sandbox scoped to the checkout, because conflict assistance writes
+    /// the resolutions they read.
     pub(crate) async fn sync_main_for_project(
         default_branch: Option<String>,
         working_dir: PathBuf,
@@ -1492,8 +1531,11 @@ impl SessionManager {
         git_client: Arc<dyn GitClient>,
         session_model: AgentModel,
         run_client: Arc<dyn RunClient>,
+        session_commands: Arc<dyn SessionCommandClient>,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
         let fs_client: Arc<dyn FsClient> = Arc::new(fs::RealFsClient);
+        let commit_hooks: Arc<dyn git::CommitHookRunner> =
+            Arc::new(SandboxedCommitHookRunner::workspace(session_commands));
         let sync_assist_client: Arc<dyn SyncAssistClient> =
             Arc::new(RealSyncAssistClient::new(run_client));
         let session_agent = crate::domain::agent::resolve_agent_selection_for_model(
@@ -1507,7 +1549,7 @@ impl SessionManager {
             working_dir,
             event_context,
             fs_client,
-            git_client,
+            (git_client, commit_hooks),
             session_agent,
             sync_assist_client,
         )
@@ -1515,7 +1557,8 @@ impl SessionManager {
     }
 
     /// Synchronizes the selected project branch with optional mocked assistance
-    /// support for tests.
+    /// support for tests. `git` pairs the Git boundary with the runner of the
+    /// checkout's commit hooks.
     ///
     /// # Errors
     /// Returns a [`SyncSessionStartError`] when project context is invalid,
@@ -1526,10 +1569,11 @@ impl SessionManager {
         working_dir: PathBuf,
         event_context: Option<SyncMainEventContext>,
         fs_client: Arc<dyn FsClient>,
-        git_client: Arc<dyn GitClient>,
+        git: (Arc<dyn GitClient>, Arc<dyn git::CommitHookRunner>),
         session_agent: AgentSelection,
         sync_assist_client: Arc<dyn SyncAssistClient>,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
+        let (git_client, commit_hooks) = git;
         let default_branch = default_branch.ok_or_else(|| {
             SyncSessionStartError::Other("Active project has no git branch".to_string())
         })?;
@@ -1566,6 +1610,7 @@ impl SessionManager {
             let sync_rebase_input = SyncRebaseAssistInput {
                 event_context,
                 base_branch: default_branch.clone(),
+                commit_hooks,
                 folder: working_dir.clone(),
                 fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
@@ -1717,6 +1762,7 @@ impl SessionManager {
             branch_operation_lock,
             child_pid,
             clock,
+            commit_hooks,
             db,
             folder,
             fs_client,
@@ -1763,6 +1809,7 @@ impl SessionManager {
                 assist_mode,
                 available_agent_kinds,
                 child_pid: Arc::clone(&child_pid),
+                commit_hooks,
                 db: db.clone(),
                 folder: folder.clone(),
                 fs_client: Arc::clone(&fs_client),
@@ -1884,7 +1931,7 @@ impl SessionManager {
             SessionTaskService::session_commit_mode(&input.db, &input.id, &input.rebase_target)
                 .await?;
         match SessionTaskService::commit_session_changes(
-            input.git_client.as_ref(),
+            (input.git_client.as_ref(), Arc::clone(&input.commit_hooks)),
             &input.folder,
             commit_mode,
             (
@@ -2753,6 +2800,7 @@ impl SessionManager {
             app_event_tx: input.app_event_tx.clone(),
             available_agent_kinds: Arc::clone(&input.available_agent_kinds),
             child_pid: Arc::clone(&input.child_pid),
+            commit_hooks: Arc::clone(&input.commit_hooks),
             db: input.db.clone(),
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),

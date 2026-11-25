@@ -3,8 +3,10 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use super::error::GitError;
+use super::hook::CommitHookRunner;
 use super::merge::SquashMergeOutcome;
 use super::rebase::{InProgressGitOperation, RebaseStepResult};
 use super::sync::{
@@ -53,14 +55,19 @@ pub trait GitClient: Send + Sync {
     /// its effective Git hook is missing or cannot be executed.
     fn check_pre_commit_hook_ready(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>>;
 
-    /// Runs the effective Git `pre-commit` hook against the current index.
+    /// Runs the effective Git `pre-commit` hook against the current index
+    /// through `hooks`, never in the host Git process.
     ///
     /// Missing hooks are accepted, matching normal Git commit behavior.
     ///
     /// # Errors
-    /// Returns an error when Git cannot run the hook or the hook rejects the
-    /// staged changes.
-    fn run_pre_commit_hook(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>>;
+    /// Returns an error when the hook cannot run or rejects the staged
+    /// changes.
+    fn run_pre_commit_hook(
+        &self,
+        repo_path: PathBuf,
+        hooks: Arc<dyn CommitHookRunner>,
+    ) -> GitFuture<Result<(), GitError>>;
 
     /// Creates a new worktree at `worktree_path` on `branch_name` from
     /// `start_ref` inside `repo_path`.
@@ -104,16 +111,19 @@ pub trait GitClient: Send + Sync {
     ) -> GitFuture<Result<String, GitError>>;
 
     /// Performs a squash merge of `source_branch` into `target_branch` inside
-    /// `repo_path` using `commit_message`.
+    /// `repo_path` using `commit_message`, running the `pre-commit` hook
+    /// through `hooks` before committing without hooks.
     ///
     /// # Errors
-    /// Returns an error when checkout, merge, or commit operations fail.
+    /// Returns an error when checkout, merge, the hook, or commit operations
+    /// fail.
     fn squash_merge(
         &self,
         repo_path: PathBuf,
         source_branch: String,
         target_branch: String,
         commit_message: String,
+        hooks: Arc<dyn CommitHookRunner>,
     ) -> GitFuture<Result<SquashMergeOutcome, GitError>>;
 
     /// Runs `git rebase <target_branch>` in `repo_path`.
@@ -187,23 +197,37 @@ pub trait GitClient: Send + Sync {
 
     /// Stages and commits all changes in `repo_path` using `message`.
     ///
+    /// The `pre-commit` hook runs through `hooks`, never in the host Git
+    /// process, which commits without hooks once it accepts the changes.
+    /// A hook that keeps rewriting files is restaged and retried a bounded
+    /// number of times.
+    ///
     /// # Errors
-    /// Returns an error when staging or commit creation fails.
-    fn commit_all(&self, repo_path: PathBuf, message: String) -> GitFuture<Result<(), GitError>>;
+    /// Returns an error when staging, the hook, or commit creation fails; a
+    /// hook rejection carries the hook's output.
+    fn commit_all(
+        &self,
+        repo_path: PathBuf,
+        message: String,
+        hooks: Arc<dyn CommitHookRunner>,
+    ) -> GitFuture<Result<(), GitError>>;
 
     /// Commits all changes while preserving one evolving session commit in
     /// `repo_path`.
     ///
-    /// Uses `commit_message` for new or amended commit content.
+    /// Uses `commit_message` for new or amended commit content, and runs the
+    /// `pre-commit` hook through `hooks` as [`Self::commit_all`] does.
     ///
     /// # Errors
-    /// Returns an error when staging, amend/create, or branch inspection fails.
+    /// Returns an error when staging, the hook, amend/create, or branch
+    /// inspection fails.
     fn commit_all_preserving_single_commit(
         &self,
         repo_path: PathBuf,
         base_branch: String,
         commit_message: String,
         message_strategy: SingleCommitMessageStrategy,
+        hooks: Arc<dyn CommitHookRunner>,
     ) -> GitFuture<Result<(), GitError>>;
 
     /// Stages all tracked and untracked changes in `repo_path`, except
@@ -554,8 +578,12 @@ impl GitClient for RealGitClient {
         Box::pin(async move { check_pre_commit_hook_ready(repo_path).await })
     }
 
-    fn run_pre_commit_hook(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>> {
-        Box::pin(async move { run_pre_commit_hook(repo_path).await })
+    fn run_pre_commit_hook(
+        &self,
+        repo_path: PathBuf,
+        hooks: Arc<dyn CommitHookRunner>,
+    ) -> GitFuture<Result<(), GitError>> {
+        Box::pin(async move { run_pre_commit_hook(repo_path, hooks).await })
     }
 
     fn create_worktree(
@@ -593,9 +621,17 @@ impl GitClient for RealGitClient {
         source_branch: String,
         target_branch: String,
         commit_message: String,
+        hooks: Arc<dyn CommitHookRunner>,
     ) -> GitFuture<Result<SquashMergeOutcome, GitError>> {
         Box::pin(async move {
-            squash_merge(repo_path, source_branch, target_branch, commit_message).await
+            squash_merge(
+                repo_path,
+                source_branch,
+                target_branch,
+                commit_message,
+                hooks,
+            )
+            .await
         })
     }
 
@@ -649,8 +685,13 @@ impl GitClient for RealGitClient {
         Box::pin(async move { list_conflicted_files(repo_path).await })
     }
 
-    fn commit_all(&self, repo_path: PathBuf, message: String) -> GitFuture<Result<(), GitError>> {
-        Box::pin(async move { commit_all(repo_path, message).await })
+    fn commit_all(
+        &self,
+        repo_path: PathBuf,
+        message: String,
+        hooks: Arc<dyn CommitHookRunner>,
+    ) -> GitFuture<Result<(), GitError>> {
+        Box::pin(async move { commit_all(repo_path, message, hooks).await })
     }
 
     fn commit_all_preserving_single_commit(
@@ -659,6 +700,7 @@ impl GitClient for RealGitClient {
         base_branch: String,
         commit_message: String,
         message_strategy: SingleCommitMessageStrategy,
+        hooks: Arc<dyn CommitHookRunner>,
     ) -> GitFuture<Result<(), GitError>> {
         Box::pin(async move {
             commit_all_preserving_single_commit(
@@ -666,6 +708,7 @@ impl GitClient for RealGitClient {
                 base_branch,
                 commit_message,
                 message_strategy,
+                hooks,
             )
             .await
         })

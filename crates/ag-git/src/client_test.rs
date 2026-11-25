@@ -9,6 +9,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 use crate::client::{GitClient, RealGitClient};
+use crate::hook_support::HostHooks;
 use crate::merge::{SquashMergeOutcome, squash_merge};
 use crate::rebase::abort_rebase;
 use crate::repo::main_repo_root;
@@ -83,13 +84,14 @@ async fn test_real_git_client_runs_hook_checks_and_commits() {
         .await
         .expect("repository without hook configuration should be ready");
     client
-        .run_pre_commit_hook(dir.path().to_path_buf())
+        .run_pre_commit_hook(dir.path().to_path_buf(), HostHooks::shared())
         .await
         .expect("missing pre-commit hook should be accepted");
     client
         .commit_all(
             dir.path().to_path_buf(),
             "Update repository documentation".to_string(),
+            HostHooks::shared(),
         )
         .await
         .expect("real git client should commit changes");
@@ -238,6 +240,7 @@ async fn test_squash_merge_returns_committed_when_changes_exist() {
         "feature-branch".to_string(),
         "main".to_string(),
         "Squash merge feature".to_string(),
+        HostHooks::shared(),
     )
     .await;
 
@@ -268,6 +271,7 @@ async fn test_squash_merge_returns_already_present_when_changes_exist_in_target(
         "session-branch".to_string(),
         "main".to_string(),
         "Merge session".to_string(),
+        HostHooks::shared(),
     )
     .await;
 
@@ -293,6 +297,7 @@ async fn test_commit_all_preserving_single_commit_creates_first_commit() {
         "main".to_string(),
         commit_message.clone(),
         SingleCommitMessageStrategy::Replace,
+        HostHooks::shared(),
     )
     .await;
     let commit_count = run_git_command_stdout(dir.path(), &["rev-list", "--count", "HEAD"]);
@@ -320,6 +325,7 @@ async fn test_commit_all_preserving_single_commit_amends_existing_session_commit
         "main".to_string(),
         commit_message.clone(),
         SingleCommitMessageStrategy::Replace,
+        HostHooks::shared(),
     )
     .await
     .expect("failed to create first session commit");
@@ -333,6 +339,7 @@ async fn test_commit_all_preserving_single_commit_amends_existing_session_commit
         "main".to_string(),
         commit_message.clone(),
         SingleCommitMessageStrategy::Replace,
+        HostHooks::shared(),
     )
     .await;
     let second_hash = run_git_command_stdout(dir.path(), &["rev-parse", "HEAD"]);
@@ -356,6 +363,7 @@ async fn test_commit_all_preserving_single_commit_replaces_amended_message() {
         "main".to_string(),
         "First session message".to_string(),
         SingleCommitMessageStrategy::Replace,
+        HostHooks::shared(),
     )
     .await
     .expect("failed to create first session commit");
@@ -367,6 +375,7 @@ async fn test_commit_all_preserving_single_commit_replaces_amended_message() {
         "main".to_string(),
         "Refined session message".to_string(),
         SingleCommitMessageStrategy::Replace,
+        HostHooks::shared(),
     )
     .await;
     let head_message = run_git_command_stdout(dir.path(), &["log", "-1", "--pretty=%B"]);
@@ -400,6 +409,7 @@ async fn test_commit_all_preserving_single_commit_retries_index_lock_and_succeed
         "main".to_string(),
         commit_message.clone(),
         SingleCommitMessageStrategy::Replace,
+        HostHooks::shared(),
     )
     .await;
     lock_cleanup

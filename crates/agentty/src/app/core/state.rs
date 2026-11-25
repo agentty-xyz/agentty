@@ -2205,6 +2205,7 @@ impl App {
             project_name: projects.project_name().to_string(),
             review_request_client: services.review_request_client(),
             review_request_sync_targets: Self::review_request_sync_targets(sessions),
+            session_commands: services.task_run_factory().session_commands(),
             session_git_status_targets: Self::session_git_status_targets(sessions),
             working_dir: projects.working_dir().to_path_buf(),
         }

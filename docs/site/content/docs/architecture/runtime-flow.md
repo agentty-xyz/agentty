@@ -373,9 +373,11 @@ work; it does not submit an empty reply.
 | Focused review                      | Eligible changed diff or manual request   |
 | Publish, sync, merge                | User request or ordered workflow          |
 
-All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have bounded
-execution and cleanup, and background results keep their original session and project
-identity.
+All model-backed tasks use `RunClient` or `SessionRunClient`. Commit hooks, which need
+no model, run through `SessionCommandClient` from `RuntimeConfig::session_commands`
+inside the native sandbox, and host Git then commits with hooks disabled. Subprocesses
+have bounded execution and cleanup, and background results keep their original session
+and project identity.
 
 An automatic focused review keeps its durable trigger while a live driver dispatches a
 graph that does the session's work and can still finish. It starts once that graph

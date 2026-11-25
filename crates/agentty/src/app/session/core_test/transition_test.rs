@@ -70,7 +70,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -777,13 +777,13 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
     mock_git_client
         .expect_commit_all_preserving_single_commit()
         .times(1)
-        .withf(|_, base_branch, commit_message, strategy| {
+        .withf(|_, base_branch, commit_message, strategy, _| {
             base_branch == "main"
                 && commit_message == "Refine session work"
                 && *strategy == git::SingleCommitMessageStrategy::Replace
         })
         .in_sequence(&mut sequence)
-        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_head_short_hash()
         .times(1)
@@ -801,7 +801,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
 
     // Act
     let outcome = SessionTaskService::commit_session_changes(
-        &mock_git_client,
+        (&mock_git_client, Arc::new(git::MockCommitHookRunner::new())),
         &session_folder,
         SessionCommitMode::Evolving {
             base_branch: "main",

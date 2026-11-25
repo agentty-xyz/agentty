@@ -55,6 +55,10 @@ flowchart TD
 its own executable serves as the native sandbox helper; without the call, commands run
 unsandboxed and every turn warns about it.
 
+Commands a host runs on its own behalf in the native sandbox, such as commit hooks,
+involve no model. They take the same worker, runtime, and harness path through
+`RuntimeConfig::session_commands`, without scheduler admission.
+
 The `check-execution-boundary` hook enforces this boundary on every commit: dependency
 rules cover all workspace dependencies, including test code, and source checks keep raw
 adapter use and agent CLI launches out of production code outside the execution crates.

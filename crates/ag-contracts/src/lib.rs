@@ -3,6 +3,7 @@
 //! scheduling.
 
 mod activity;
+mod command;
 mod contract;
 mod execution_policy;
 mod input_size;
@@ -22,6 +23,11 @@ mod usage;
 pub use activity::{
     ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
     LineRange,
+};
+#[cfg(any(test, feature = "test-utils"))]
+pub use command::MockSessionCommandClient;
+pub use command::{
+    CommandScope, SessionCommandClient, SessionCommandOutput, SessionCommandRequest,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::MockAgentChannel;

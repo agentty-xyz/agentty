@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentError, TurnResult, TurnUsage};
 use ag_forge as forge;
-use ag_git::GitClient;
+use ag_git::{CommitHookRunner, GitClient};
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
 use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
@@ -60,6 +60,9 @@ pub(super) struct PostTurnContext {
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     /// Clock used by linked review-request metadata refresh.
     pub(super) clock: Arc<dyn Clock>,
+    /// Runs the worktree's commit hooks inside the session sandbox during
+    /// auto-commit.
+    pub(super) commit_hooks: Arc<dyn CommitHookRunner>,
     /// Repository bundle used for turn metadata, settings, and auto-commit.
     pub(super) db: AppRepositories,
     /// Session worktree folder used by auto-commit and auto-push effects.
@@ -97,6 +100,7 @@ impl PostTurnContext {
             cancel_token,
             child_pid: Arc::clone(&context.child_pid),
             clock: Arc::clone(&context.clock),
+            commit_hooks: context.commit_hooks(),
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
@@ -655,6 +659,7 @@ async fn run_auto_commit(
         app_event_tx: context.app_event_tx.clone(),
         available_agent_kinds: Arc::clone(&context.available_agent_kinds),
         child_pid: Arc::clone(&context.child_pid),
+        commit_hooks: Arc::clone(&context.commit_hooks),
         db: context.db.clone(),
         folder: context.folder.clone(),
         git_client: Arc::clone(&context.git_client),

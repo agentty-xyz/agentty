@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::test_support::token_usage;
 use ag_contracts::{OneShotSubmission, UsagePurpose};
-use ag_git::MockGitClient;
+use ag_git::{MockCommitHookRunner, MockGitClient};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
@@ -46,6 +46,7 @@ async fn test_run_agent_assist_uses_injected_run_client_and_records_usage_under_
     let context = AssistContext {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
+        commit_hooks: Arc::new(MockCommitHookRunner::new()),
         harness_models: HarnessModels::default(),
         child_pid: Arc::new(Mutex::new(None)),
         db,

@@ -5,14 +5,16 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
+use std::sync::Arc;
 use std::time::Duration;
 
-use ag_telemetry::{Outcome, Span};
+use ag_telemetry::{FutureExt, Outcome, Span};
 #[cfg(unix)]
 use rustix::fs::{self as rustix_fs, Access};
 use tokio::time;
 
 use super::error::GitError;
+use super::hook::{CommitHookRunner, HookOutput, PRE_COMMIT_HOOK_LABEL};
 use super::rebase::{
     GIT_INDEX_LOCK_RETRY_ATTEMPTS, GIT_INDEX_LOCK_RETRY_DELAY, GitCommandRunner,
     ProcessGitCommandRunner, is_git_index_lock_error, is_rebase_conflict,
@@ -133,22 +135,29 @@ pub enum PullRebaseResult {
     },
 }
 
-/// Stages all changes and commits them with the given message.
+/// Stages all changes and commits them with the given message, running the
+/// `pre-commit` hook through `hooks` rather than in the host Git process.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
 /// * `commit_message` - Message for the commit
+/// * `hooks` - Runner of the repository's `pre-commit` hook
 /// # Returns
 /// Ok(()) on success.
 ///
 /// # Errors
-/// Returns a [`GitError`] if staging or committing changes fails.
-pub(crate) async fn commit_all(repo_path: PathBuf, commit_message: String) -> Result<(), GitError> {
+/// Returns a [`GitError`] if staging, the hook, or committing changes fails.
+pub(crate) async fn commit_all(
+    repo_path: PathBuf,
+    commit_message: String,
+    hooks: Arc<dyn CommitHookRunner>,
+) -> Result<(), GitError> {
     commit_all_with_retry(
         repo_path,
         commit_message,
         SingleCommitMessageStrategy::Replace,
         false,
+        hooks,
     )
     .await
 }
@@ -165,17 +174,19 @@ pub(crate) async fn commit_all(repo_path: PathBuf, commit_message: String) -> Re
 /// * `commit_message` - Message that identifies the session commit
 /// * `message_strategy` - Whether amends replace or reuse the existing `HEAD`
 ///   message
+/// * `hooks` - Runner of the repository's `pre-commit` hook
 /// # Returns
 /// Ok(()) on success.
 ///
 /// # Errors
-/// Returns a [`GitError`] if staging, commit lookup, or committing changes
-/// fails.
+/// Returns a [`GitError`] if staging, commit lookup, the hook, or committing
+/// changes fails.
 pub(crate) async fn commit_all_preserving_single_commit(
     repo_path: PathBuf,
     base_branch: String,
     commit_message: String,
     message_strategy: SingleCommitMessageStrategy,
+    hooks: Arc<dyn CommitHookRunner>,
 ) -> Result<(), GitError> {
     let amend_existing_commit = has_commits_since(repo_path.clone(), base_branch).await?;
 
@@ -184,6 +195,7 @@ pub(crate) async fn commit_all_preserving_single_commit(
         commit_message,
         message_strategy,
         amend_existing_commit,
+        hooks,
     )
     .await
 }
@@ -212,36 +224,50 @@ pub(crate) async fn check_pre_commit_hook_ready(repo_path: PathBuf) -> Result<()
     spawn_blocking_in_context(move || ensure_pre_commit_hook_ready(&repo_path)).await?
 }
 
-/// Runs the effective Git `pre-commit` hook against the current index.
+/// Runs the effective Git `pre-commit` hook against the current index
+/// through `hooks`, never in the host Git process.
 ///
 /// Missing hooks are accepted so repositories without configured validation
 /// retain Git's normal commit behavior. Hook failures are returned with their
 /// captured output.
 ///
 /// # Errors
-/// Returns a [`GitError`] when Git cannot run the hook or the hook rejects the
-/// staged changes.
-pub(crate) async fn run_pre_commit_hook(repo_path: PathBuf) -> Result<(), GitError> {
-    spawn_blocking_in_context(move || {
-        pre_commit_hook_result(run_git_command_output_sync(
-            &repo_path,
-            &["hook", "run", "--ignore-missing", "pre-commit"],
-        ))
-    })
-    .await?
-}
-
-/// Interprets the output of an effective pre-commit hook invocation.
-fn pre_commit_hook_result(output: Result<Output, GitError>) -> Result<(), GitError> {
-    let output = output?;
-    if output.status.success() {
+/// Returns a [`GitError`] when the hook cannot run or rejects the staged
+/// changes.
+pub(crate) async fn run_pre_commit_hook(
+    repo_path: PathBuf,
+    hooks: Arc<dyn CommitHookRunner>,
+) -> Result<(), GitError> {
+    let hook = run_effective_pre_commit_hook(&repo_path, hooks.as_ref()).await?;
+    if hook.success {
         return Ok(());
     }
 
-    Err(GitError::CommandFailed {
-        command: "git hook run pre-commit".to_string(),
-        stderr: command_output_detail(&output.stdout, &output.stderr),
-    })
+    Err(hook.rejection(PRE_COMMIT_HOOK_LABEL))
+}
+
+/// Runs the repository's `pre-commit` hook through `hooks`, or accepts the
+/// changes at once when no executable hook is configured, so repositories
+/// without one never start a hook runner, such as a sandbox.
+///
+/// # Errors
+/// Returns a [`GitError`] when the hook path cannot be resolved or the
+/// runner cannot run the hook.
+pub(crate) async fn run_effective_pre_commit_hook(
+    repo_path: &Path,
+    hooks: &dyn CommitHookRunner,
+) -> Result<HookOutput, GitError> {
+    let path = repo_path.to_path_buf();
+    let hook_path =
+        spawn_blocking_in_context(move || resolve_pre_commit_hook_path(&path)).await??;
+    if !is_executable_hook(&hook_path) {
+        return Ok(HookOutput {
+            output: String::new(),
+            success: true,
+        });
+    }
+
+    hooks.run_pre_commit(repo_path.to_path_buf()).await
 }
 
 /// Returns the short hash of the current `HEAD` commit.
@@ -1767,67 +1793,129 @@ fn last_leading_applied_commit(cherry_output: &str) -> Option<&str> {
 /// session commit back to its parent. In that case the helper drops the now
 /// empty session commit and reports the standard no-changes sentinel so the
 /// app can skip model-assisted commit recovery.
+///
+/// Each attempt runs the `pre-commit` hook through `hooks` first, and only
+/// once it accepts the staged changes commits on the host without hooks.
 async fn commit_all_with_retry(
     repo_path: PathBuf,
     commit_message: String,
     message_strategy: SingleCommitMessageStrategy,
     amend_existing_commit: bool,
+    hooks: Arc<dyn CommitHookRunner>,
 ) -> Result<(), GitError> {
-    spawn_blocking_in_context(move || {
-        stage_all_sync(&repo_path)?;
+    stage_all(repo_path.clone()).await?;
+    let mut last_hook_output = String::new();
 
-        for attempt in 0..COMMIT_ALL_HOOK_RETRY_ATTEMPTS {
-            let phase = Span::child("git.commit.attempt");
-            phase.attribute(
-                "agentty.retry.attempt",
-                i64::try_from(attempt).unwrap_or(i64::MAX).saturating_add(1),
-            );
-            let result = {
-                let _attempt = phase.context().attach();
+    for attempt in 0..COMMIT_ALL_HOOK_RETRY_ATTEMPTS {
+        let phase = Span::child("git.commit.attempt");
+        phase.attribute(
+            "agentty.retry.attempt",
+            i64::try_from(attempt).unwrap_or(i64::MAX).saturating_add(1),
+        );
+        let result = CommitAttempt::run(
+            &repo_path,
+            &commit_message,
+            message_strategy,
+            amend_existing_commit,
+            hooks.as_ref(),
+        )
+        .with_context(phase.context())
+        .await;
+        let attempt_result = result
+            .as_ref()
+            .map_or(CommitAttemptResult::Failed, |attempt| {
+                attempt.result(amend_existing_commit)
+            });
+        phase.attribute("agentty.git.commit.result", attempt_result.label());
+        phase.finish(attempt_result.outcome());
+        let attempt = result?;
+        let output = attempt.output();
 
-                run_commit_command(
-                    &repo_path,
-                    &commit_message,
-                    message_strategy,
-                    amend_existing_commit,
-                )
-            };
-            let attempt_result = result
-                .as_ref()
-                .map_or(CommitAttemptResult::Failed, |output| {
-                    CommitAttemptResult::classify(output, amend_existing_commit)
+        match attempt_result {
+            CommitAttemptResult::Committed => return Ok(()),
+            CommitAttemptResult::NothingToCommit => return Err(nothing_to_commit_error()),
+            CommitAttemptResult::EmptyAmend => {
+                let repo_path = repo_path.clone();
+                spawn_blocking_in_context(move || reset_empty_amend_sync(&repo_path)).await??;
+
+                return Err(nothing_to_commit_error());
+            }
+            CommitAttemptResult::HookModified => {
+                last_hook_output = output;
+                stage_all(repo_path.clone()).await?;
+            }
+            CommitAttemptResult::Failed => {
+                return Err(GitError::CommandFailed {
+                    command: "git commit".to_string(),
+                    stderr: output,
                 });
-            phase.attribute("agentty.git.commit.result", attempt_result.label());
-            phase.finish(attempt_result.outcome());
-            let output = result?;
-
-            match attempt_result {
-                CommitAttemptResult::Committed => return Ok(()),
-                CommitAttemptResult::NothingToCommit => return Err(nothing_to_commit_error()),
-                CommitAttemptResult::EmptyAmend => {
-                    reset_empty_amend_sync(&repo_path)?;
-
-                    return Err(nothing_to_commit_error());
-                }
-                CommitAttemptResult::HookModified => stage_all_sync(&repo_path)?,
-                CommitAttemptResult::Failed => {
-                    return Err(GitError::CommandFailed {
-                        command: "git commit".to_string(),
-                        stderr: command_output_detail(&output.stdout, &output.stderr),
-                    });
-                }
             }
         }
+    }
 
-        Err(GitError::CommandFailed {
-            command: "git commit".to_string(),
-            stderr: format!(
-                "Failed to commit: commit hooks kept modifying files after \
-                 {COMMIT_ALL_HOOK_RETRY_ATTEMPTS} attempts"
-            ),
-        })
+    Err(GitError::CommandFailed {
+        command: "git commit".to_string(),
+        stderr: format!(
+            "Failed to commit: commit hooks kept modifying files after \
+             {COMMIT_ALL_HOOK_RETRY_ATTEMPTS} attempts. Last hook output:\n{last_hook_output}"
+        ),
     })
-    .await?
+}
+
+/// What one commit attempt ended with: the `pre-commit` hook rejecting the
+/// staged changes, or the finished host `git commit` process.
+enum CommitAttempt {
+    /// The hook ran and rejected the staged changes; nothing was committed.
+    HookRejected(HookOutput),
+    /// The hook accepted the changes and `git commit` ran.
+    Commit(Output),
+}
+
+impl CommitAttempt {
+    /// Runs the `pre-commit` hook through `hooks`, then, when it accepts the
+    /// staged changes, `git commit` on the host.
+    async fn run(
+        repo_path: &Path,
+        commit_message: &str,
+        message_strategy: SingleCommitMessageStrategy,
+        amend_existing_commit: bool,
+        hooks: &dyn CommitHookRunner,
+    ) -> Result<Self, GitError> {
+        let hook = run_effective_pre_commit_hook(repo_path, hooks).await?;
+        if !hook.success {
+            return Ok(Self::HookRejected(hook));
+        }
+        let repo_path = repo_path.to_path_buf();
+        let commit_message = commit_message.to_string();
+        let output = spawn_blocking_in_context(move || {
+            run_commit_command(
+                &repo_path,
+                &commit_message,
+                message_strategy,
+                amend_existing_commit,
+            )
+        })
+        .await??;
+
+        Ok(Self::Commit(output))
+    }
+
+    /// Classifies this attempt.
+    fn result(&self, amend_existing_commit: bool) -> CommitAttemptResult {
+        match self {
+            Self::HookRejected(hook) if hook.modified_files() => CommitAttemptResult::HookModified,
+            Self::HookRejected(_) => CommitAttemptResult::Failed,
+            Self::Commit(output) => CommitAttemptResult::classify(output, amend_existing_commit),
+        }
+    }
+
+    /// Returns the hook's or `git commit`'s output.
+    fn output(&self) -> String {
+        match self {
+            Self::HookRejected(hook) => hook.output.trim().to_string(),
+            Self::Commit(output) => command_output_detail(&output.stdout, &output.stderr),
+        }
+    }
 }
 
 /// Bounded classification of one commit attempt, exported as
@@ -1850,7 +1938,7 @@ enum CommitAttemptResult {
 }
 
 impl CommitAttemptResult {
-    /// Classifies one finished `git commit` process.
+    /// Classifies one finished `git commit` process, which ran no hooks.
     fn classify(output: &Output, amend_existing_commit: bool) -> Self {
         if output.status.success() {
             return Self::Committed;
@@ -1864,10 +1952,6 @@ impl CommitAttemptResult {
 
         if amend_existing_commit && is_empty_amend_output(&stdout, &stderr) {
             return Self::EmptyAmend;
-        }
-
-        if is_hook_modified_error(&stdout, &stderr) {
-            return Self::HookModified;
         }
 
         Self::Failed
@@ -2257,7 +2341,14 @@ fn has_head_commit_sync(repo_path: &Path) -> Result<bool, GitError> {
     })
 }
 
-/// Runs `git commit` with optional amend and hook settings.
+/// Runs `git commit` with optional amend, without hooks.
+///
+/// The `pre-commit` hook already ran, through the caller's
+/// [`CommitHookRunner`], so `--no-verify` here is Agentty's own behavior,
+/// not a way around a repository's checks: it keeps the host process from
+/// running the hook again with the host's access. Host Git also searches no
+/// hooks directory (see `repo::host_configuration`), so no other commit
+/// hook runs on the host either.
 ///
 /// Uses shared git retry behavior for transient `index.lock` contention.
 fn run_commit_command(
@@ -2266,7 +2357,7 @@ fn run_commit_command(
     message_strategy: SingleCommitMessageStrategy,
     amend_existing_commit: bool,
 ) -> Result<Output, GitError> {
-    let mut args = vec!["commit"];
+    let mut args = vec!["commit", "--no-verify"];
     if amend_existing_commit {
         args.push("--amend");
         match message_strategy {
@@ -2284,17 +2375,6 @@ fn run_commit_command(
     }
 
     run_git_command_with_index_lock_retry(repo_path, &args, &[])
-}
-
-/// Returns whether commit output indicates hooks rewrote files.
-fn is_hook_modified_error(stdout: &str, stderr: &str) -> bool {
-    let combined = format!(
-        "{stdout}
-{stderr}"
-    )
-    .to_ascii_lowercase();
-
-    combined.contains("files were modified by this hook")
 }
 
 /// Returns whether git push output indicates a missing upstream branch.

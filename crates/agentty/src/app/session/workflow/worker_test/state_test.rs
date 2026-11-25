@@ -30,6 +30,7 @@ use crate::app::AppEvent;
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
@@ -349,6 +350,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -361,10 +363,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
         session_id: "sess1".into(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Antigravity,
-            AgentModel::Gemini38Flash,
-        ),
+        session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         status: Arc::new(Mutex::new(Status::InProgress)),
     };
 
@@ -923,6 +922,7 @@ async fn run_turn_with_cargo_cache(
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::new(Arc::new(cargo_cache)),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),

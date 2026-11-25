@@ -18,6 +18,7 @@ use super::super::{
 };
 use crate::app::AppEvent;
 use crate::app::service::HarnessModels;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::domain::session_message::SessionTranscript;
@@ -135,6 +136,7 @@ pub(super) async fn build_rebase_assist_input_for_test(
             available_agent_kinds: Arc::from(AgentKind::ALL),
             harness_models: HarnessModels::default(),
             child_pid: Arc::new(Mutex::new(None)),
+            commit_hooks: Arc::new(git::MockCommitHookRunner::new()),
             db,
             folder,
             fs_client: test_fs_client(),
@@ -177,6 +179,7 @@ pub(super) async fn build_merge_task_input_for_test(
             run_client: test_run_client(),
             transcript: empty_transcript(),
             repo_root,
+            session_commands: accepting_session_commands(),
             session_update_versions: Arc::default(),
             session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
             source_branch: "wt/session-123".to_string(),
@@ -214,6 +217,7 @@ pub(super) fn build_sync_rebase_input_for_test(
     SyncRebaseAssistInput {
         event_context: None,
         base_branch: "main".to_string(),
+        commit_hooks: Arc::new(git::MockCommitHookRunner::new()),
         folder,
         fs_client: test_fs_client(),
         git_client,
@@ -286,7 +290,7 @@ pub(super) fn successful_sync_conflict_git_client() -> git::MockGitClient {
     mock_git_client
         .expect_run_pre_commit_hook()
         .times(1)
-        .returning(|_| Box::pin(async { Ok(()) }));
+        .returning(|_, _| Box::pin(async { Ok(()) }));
     mock_git_client
         .expect_rebase_continue()
         .times(1)

@@ -36,6 +36,7 @@ use crate::app::AppEvent;
 use crate::app::cargo_cache::CargoCacheWarmer;
 use crate::app::graph_activity::GraphActivityRegistry;
 use crate::app::service::HarnessModels;
+use crate::app::service::test_support::accepting_session_commands;
 use crate::app::session::SessionError;
 use crate::app::session::workflow::steering::SteeringDeliveries;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
@@ -178,6 +179,7 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         cargo_cache: CargoCacheWarmer::default(),
+        session_commands: accepting_session_commands(),
         session_run: SessionRunClient::from_channel(
             "sess1".to_string(),
             Arc::new(MockAgentChannel::new()),

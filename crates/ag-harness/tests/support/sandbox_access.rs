@@ -5,9 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ag_harness::bash::{BashConfig, CommandOutcome};
-use ag_harness::sandbox::SandboxUnavailableReason;
-use ag_harness::{TurnError, TurnOptions};
+use ag_harness::bash::{BashArguments, BashConfig, CommandOutcome};
+use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, run_command};
+use ag_harness::{Repository, TurnError, TurnOptions};
 
 use super::fixture::{NativeFixture, Workspace, schema, with_runtime};
 
@@ -626,6 +626,60 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
     assert!(settled.is_err());
     #[cfg(target_os = "macos")]
     drop(settled);
+    assert_eq!(
+        std::fs::read_to_string(root.join(".git/config")).expect("metadata"),
+        "protected"
+    );
+}
+
+#[tokio::test]
+async fn run_command_confines_one_host_command_like_a_turn_command() {
+    // Arrange
+    let workspace = Workspace::new();
+    let configuration = BashConfig::new(
+        workspace.launcher(),
+        "/bin/bash".into(),
+        "native-runtime-v1".into(),
+        Duration::from_secs(10),
+        1024,
+    )
+    .expect("configuration")
+    .with_host_information()
+    .with_write("output".into())
+    .expect("write grant");
+    let repository = Repository::new(workspace.path(), "/usr/bin/git").expect("repository");
+    let command = BashArguments::new(
+        "printf allowed > output/file; if printf escaped > input; then exit 91; fi; if printf \
+         escaped > .git/config; then exit 92; fi; printf confined"
+            .to_string(),
+    )
+    .expect("command");
+
+    // Act
+    let run = run_command(
+        &with_runtime(configuration, &[]),
+        Sandbox::Native {
+            if_unavailable: IfUnavailable::Refuse,
+        },
+        &repository,
+        &command,
+    )
+    .await
+    .expect("sandboxed run");
+
+    // Assert
+    let root = workspace.path();
+    assert_eq!(run.outcome.exit.exit_code, Some(0), "{:?}", run.outcome);
+    assert_eq!(run.outcome.stdout, "confined");
+    assert_eq!(run.warning, None);
+    assert_eq!(
+        std::fs::read_to_string(root.join("output/file")).expect("granted write"),
+        "allowed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("input")).expect("input"),
+        "input-value"
+    );
     assert_eq!(
         std::fs::read_to_string(root.join(".git/config")).expect("metadata"),
         "protected"

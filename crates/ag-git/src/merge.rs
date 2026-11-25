@@ -1,14 +1,17 @@
 //! Squash-merge workflows and merge-conflict detection between branches.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tempfile::tempdir;
 
 use super::error::GitError;
+use super::hook::CommitHookRunner;
 use super::repo::{
     command_output_detail, run_git_command_output_sync, run_git_command_sync,
     spawn_blocking_in_context,
 };
+use super::sync::run_effective_pre_commit_hook;
 use super::worktree::detect_git_info_sync;
 
 /// Outcome of attempting a squash merge operation.
@@ -330,7 +333,8 @@ pub(crate) async fn squash_merge_diff(
 /// This function:
 /// 1. Verifies the repository is already on the target branch
 /// 2. Performs `git merge --squash` from the source branch
-/// 3. Commits the squashed changes, running configured commit hooks
+/// 3. Runs the configured `pre-commit` hook through `hooks`, then commits the
+///    squashed changes without hooks
 ///
 /// The caller is responsible for ensuring `repo_path` is already checked out
 /// on `target_branch`. Switching branches here would disrupt the user's
@@ -341,20 +345,24 @@ pub(crate) async fn squash_merge_diff(
 /// * `source_branch` - Name of the branch to merge from (e.g., `wt/abc123`)
 /// * `target_branch` - Name of the branch to merge into (e.g., `main`)
 /// * `commit_message` - Message for the squash commit
+/// * `hooks` - Runner of the checkout's `pre-commit` hook
 ///
 /// # Returns
 /// A [`SquashMergeOutcome`] describing whether a squash commit was created.
 ///
 /// # Errors
 /// Returns an error if the repository is on the wrong branch, the merge
-/// fails, or the commit or a configured commit hook fails.
+/// fails, the hook cannot run or rejects the changes, or the commit fails.
 pub(crate) async fn squash_merge(
     repo_path: PathBuf,
     source_branch: String,
     target_branch: String,
     commit_message: String,
+    hooks: Arc<dyn CommitHookRunner>,
 ) -> Result<SquashMergeOutcome, GitError> {
-    spawn_blocking_in_context(move || {
+    let merge_path = repo_path.clone();
+    let has_staged_changes = spawn_blocking_in_context(move || {
+        let repo_path = merge_path;
         // Verify that `repo_path` is already on the target branch.
         let current_branch = detect_git_info_sync(&repo_path).ok_or_else(|| {
             GitError::OutputParse(format!(
@@ -388,19 +396,34 @@ pub(crate) async fn squash_merge(
             &cached_diff.stderr,
         )?;
 
-        if !has_staged_changes {
-            return Ok(SquashMergeOutcome::AlreadyPresentInTarget);
-        }
+        Ok(has_staged_changes)
+    })
+    .await??;
+    if !has_staged_changes {
+        return Ok(SquashMergeOutcome::AlreadyPresentInTarget);
+    }
 
+    // The merge put session-written files, possibly including hook
+    // configuration, into the checkout, so the hook runs through `hooks`.
+    let hook = run_effective_pre_commit_hook(&repo_path, hooks.as_ref()).await?;
+    if !hook.success {
+        return Err(GitError::CommandFailed {
+            command: "git commit".to_string(),
+            stderr: format!("Failed to commit squash merge: {}", hook.output.trim()),
+        });
+    }
+
+    spawn_blocking_in_context(move || {
+        // `--no-verify`: the hook already ran above; see `run_commit_command`.
         run_git_command_sync(
             &repo_path,
-            &["commit", "-m", commit_message.as_str()],
+            &["commit", "--no-verify", "-m", commit_message.as_str()],
             "Failed to commit squash merge",
-        )?;
-
-        Ok(SquashMergeOutcome::Committed)
+        )
     })
-    .await?
+    .await??;
+
+    Ok(SquashMergeOutcome::Committed)
 }
 
 /// Interprets `git diff --cached --quiet`, which exits `0` when the index

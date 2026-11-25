@@ -11,9 +11,8 @@ use super::support::{
     write_executable_pre_commit_hook,
 };
 use crate::error::GitError;
-use crate::sync::{
-    commit_all, ensure_pre_commit_hook_ready, pre_commit_hook_result, run_pre_commit_hook,
-};
+use crate::hook_support::HostHooks;
+use crate::sync::{commit_all, ensure_pre_commit_hook_ready, run_pre_commit_hook};
 
 #[test]
 fn ensure_pre_commit_hook_ready_allows_repositories_without_configuration() {
@@ -164,10 +163,10 @@ async fn run_pre_commit_hook_accepts_missing_hook() {
     setup_test_git_repo(temp_dir.path());
 
     // Act
-    let result = run_pre_commit_hook(temp_dir.path().to_path_buf()).await;
+    let result = run_pre_commit_hook(temp_dir.path().to_path_buf(), HostHooks::shared()).await;
 
     // Assert
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 }
 
 #[cfg(unix)]
@@ -186,10 +185,10 @@ async fn run_pre_commit_hook_uses_effective_custom_hook() {
     );
 
     // Act
-    let result = run_pre_commit_hook(temp_dir.path().to_path_buf()).await;
+    let result = run_pre_commit_hook(temp_dir.path().to_path_buf(), HostHooks::shared()).await;
 
     // Assert
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert_eq!(
         fs::read_to_string(temp_dir.path().join("pre-commit-ran"))
             .expect("pre-commit marker should exist"),
@@ -213,7 +212,7 @@ async fn run_pre_commit_hook_returns_hook_failure_output() {
     );
 
     // Act
-    let result = run_pre_commit_hook(temp_dir.path().to_path_buf()).await;
+    let result = run_pre_commit_hook(temp_dir.path().to_path_buf(), HostHooks::shared()).await;
 
     // Assert
     assert!(matches!(
@@ -223,25 +222,6 @@ async fn run_pre_commit_hook_returns_hook_failure_output() {
             ref stderr,
         }) if command == "git hook run pre-commit"
             && stderr.contains("resolved conflict rejected")
-    ));
-}
-
-#[test]
-fn pre_commit_hook_result_preserves_command_launch_error() {
-    // Arrange
-    let command_error = GitError::CommandFailed {
-        command: "git hook run pre-commit".to_string(),
-        stderr: "git executable unavailable".to_string(),
-    };
-
-    // Act
-    let result = pre_commit_hook_result(Err(command_error));
-
-    // Assert
-    assert!(matches!(
-        result,
-        Err(GitError::CommandFailed { ref stderr, .. })
-            if stderr == "git executable unavailable"
     ));
 }
 
@@ -259,7 +239,12 @@ async fn commit_all_allows_configured_validation_without_hook() {
         .expect("failed to write worktree change");
 
     // Act
-    let result = commit_all(temp_dir.path().to_path_buf(), "Change README".to_string()).await;
+    let result = commit_all(
+        temp_dir.path().to_path_buf(),
+        "Change README".to_string(),
+        HostHooks::shared(),
+    )
+    .await;
 
     // Assert
     assert!(result.is_ok());

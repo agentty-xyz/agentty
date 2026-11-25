@@ -6,6 +6,8 @@ mod client;
 mod diff;
 /// Typed error types for git infrastructure operations.
 mod error;
+/// Commit hooks run outside the host Git process.
+mod hook;
 /// Squash-merge workflows.
 mod merge;
 /// Rebase and conflict workflows.
@@ -19,6 +21,11 @@ mod sync;
 /// Worktree and branch-detection workflows.
 mod worktree;
 
+/// Crate-wide hook runner for tests that commit.
+#[cfg(test)]
+#[path = "hook_support_test.rs"]
+mod hook_support;
+
 /// Crate-wide span capture for telemetry tests.
 #[cfg(test)]
 #[path = "telemetry_support_test.rs"]
@@ -30,6 +37,9 @@ pub use client::{GitClient, GitFuture, RealGitClient};
 pub use diff::{DiffFile, hunk_starts};
 /// Re-exported typed error for git infrastructure operations.
 pub use error::GitError;
+#[cfg(any(test, feature = "test-utils"))]
+pub use hook::MockCommitHookRunner;
+pub use hook::{CommitHookRunner, HookOutput, PRE_COMMIT_HOOK_COMMAND, PRE_COMMIT_HOOK_LABEL};
 pub use merge::SquashMergeOutcome;
 pub(crate) use merge::{has_merge_conflicts, squash_merge, squash_merge_diff};
 pub use rebase::{InProgressGitOperation, RebaseStepResult};

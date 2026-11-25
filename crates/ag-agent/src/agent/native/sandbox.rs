@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use ag_contracts::TurnNotice;
 use ag_harness::RunEventKind;
-use ag_harness::bash::{BashConfig, BashError};
+use ag_harness::bash::{BashConfig, BashError, CommandOutcome, CommandTermination};
 use ag_harness::event::Item;
 use ag_harness::sandbox::{IfUnavailable, Sandbox, SandboxUnavailableReason, SandboxWarning};
 use rustix::fs::{self, AtFlags, FileType, Mode, OFlags};
@@ -331,6 +331,46 @@ pub(crate) fn notice(event: &RunEventKind) -> Option<TurnNotice> {
         } if call.likely_sandbox_denial => Some(TurnNotice::LikelySandboxDenial),
         _ => None,
     }
+}
+
+/// Returns the sandbox state one command reports: a warning when it ran
+/// without the native sandbox, otherwise that the sandbox ran it.
+pub(crate) fn sandbox_state(warning: Option<&SandboxWarning>) -> TurnNotice {
+    warning.map_or(TurnNotice::SandboxAvailable, unavailable)
+}
+
+/// Returns the captured output of one command: standard output, then
+/// standard error, each with its omitted middle marked, and a note when the
+/// deadline stopped it.
+pub(crate) fn command_output(outcome: &CommandOutcome) -> String {
+    let stream = |head: &str, omitted: u64, tail: &str| {
+        if omitted == 0 {
+            format!("{head}{tail}")
+        } else {
+            format!("{head}\n[{omitted} bytes omitted]\n{tail}")
+        }
+    };
+    let mut output = [
+        stream(
+            &outcome.stdout,
+            outcome.stdout_omitted_bytes,
+            &outcome.stdout_tail,
+        ),
+        stream(
+            &outcome.stderr,
+            outcome.stderr_omitted_bytes,
+            &outcome.stderr_tail,
+        ),
+    ]
+    .into_iter()
+    .filter(|text| !text.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
+    if outcome.exit.termination == CommandTermination::Deadline {
+        output.push_str("\n[stopped at its deadline]");
+    }
+
+    output
 }
 
 /// Words `warning` for Agentty's users: whether commands still run

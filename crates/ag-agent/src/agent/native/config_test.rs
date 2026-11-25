@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ag_contracts::{
-    AgentDefinitionPrompt, AgentRequestKind, ContextCompaction, ExecutionPolicy, PermissionMode,
-    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
+    CommandScope, PermissionMode, ProviderCallBudget, ReasoningLevel, SessionCommandRequest,
+    TurnNotice,
 };
 use ag_harness::catalog::ModelId;
 use ag_harness::lifecycle::LifecycleEvent;
@@ -37,7 +37,7 @@ use super::{
     running_context_window, unicode_environment,
 };
 use crate::agent::model_profile;
-use crate::agent::native::sandbox::{CommandSandbox, SESSION_SANDBOX};
+use crate::agent::native::sandbox::{CommandSandbox, SESSION_SANDBOX, UTILITY_SANDBOX};
 
 #[test]
 /// Asks for the base URL of a keyed provider without a default endpoint,
@@ -1046,26 +1046,6 @@ fn bash_environment_prioritizes_tool_variables_in_large_environments() {
     assert_eq!(granted.len(), 102);
 }
 
-/// Returns a session turn request for `folder`.
-fn session_request(folder: &Path) -> TurnRequest {
-    TurnRequest {
-        context_compaction: ContextCompaction::Off,
-        provider_call_budget: None,
-        execution_policy: ExecutionPolicy::default(),
-        continuation: TurnContinuation::fresh(),
-        folder: folder.to_path_buf(),
-        main_checkout_root: None,
-        model: "muse-spark-1.3".to_string(),
-        permission_mode: PermissionMode::AutoEdit,
-        agent_profile: AgentDefinitionPrompt::default(),
-        prompt: "Commit".into(),
-        reasoning_level: ReasoningLevel::default(),
-        request_kind: AgentRequestKind::SessionStart,
-        response_style: ResponseStyle::default(),
-        speed_mode: SpeedMode::default(),
-    }
-}
-
 #[tokio::test]
 /// Gives each session one stable temporary directory beside its harness
 /// database, and rejects invalid session ids.
@@ -1075,19 +1055,14 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     let workspace = tempfile::tempdir().expect("workspace");
     let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
     let environment = BTreeMap::new();
-    let request = session_request(workspace.path());
+    let sandbox =
+        |session_id| config.session_sandbox(session_id, workspace.path(), None, &environment);
 
     // Act
-    let first = config
-        .session_sandbox("session-1", &request, &environment)
-        .await;
-    let second = config
-        .session_sandbox("session-1", &request, &environment)
-        .await;
-    let other = config
-        .session_sandbox("session-2", &request, &environment)
-        .await;
-    let invalid = config.session_sandbox("a/b", &request, &environment).await;
+    let first = sandbox("session-1").await;
+    let second = sandbox("session-1").await;
+    let other = sandbox("session-2").await;
+    let invalid = sandbox("a/b").await;
 
     // Assert
     let policy = |sandbox: CommandSandbox| {
@@ -1105,6 +1080,144 @@ async fn session_sandbox_keeps_one_temporary_directory_per_session() {
     assert_ne!(first, policy(other.expect("other session sandbox")));
     assert!(data_root.path().join("session-1/tmp/cargo").is_dir());
     assert!(invalid.is_err());
+}
+
+#[tokio::test]
+/// Runs a host command in the session worktree with the session's sandbox
+/// and temporary directory, reporting its exit code, output, and sandbox
+/// state, and rejects what cannot run at all.
+async fn run_session_command_runs_in_the_session_sandbox_and_reports_failures() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let git = |arguments: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(workspace.path())
+            .output()
+            .expect("git")
+            .status;
+        assert!(status.success(), "git {arguments:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    let path = std::env::var("PATH").expect("PATH");
+    let config = NativeHarnessConfig::with_environment(data_root.path().to_path_buf(), move || {
+        BTreeMap::from([("PATH".to_string(), path.clone())])
+    });
+    let request = |command: &str, session_id: &str| SessionCommandRequest {
+        command: command.to_string(),
+        folder: workspace.path().to_path_buf(),
+        scope: CommandScope::Session {
+            session_id: session_id.to_string(),
+        },
+    };
+
+    // Act
+    let output = config
+        .run_session_command(request(
+            "printf out; printf err >&2; printf %s \"$TMPDIR\" > tmpdir; exit 4",
+            "session-1",
+        ))
+        .await
+        .expect("command runs");
+    let invalid_command = config.run_session_command(request(" ", "session-1")).await;
+    let invalid_session = config.run_session_command(request("true", "a/b")).await;
+    let invalid_folder = config
+        .run_session_command(SessionCommandRequest {
+            folder: data_root.path().join("missing"),
+            ..request("true", "session-1")
+        })
+        .await;
+
+    // Assert
+    assert_eq!(output.exit_code, Some(4));
+    assert_eq!(output.output, "out\nerr");
+    // Unit tests register no sandbox helper, so the session falls back.
+    assert!(matches!(
+        output.sandbox,
+        TurnNotice::SandboxUnavailable { .. }
+    ));
+    let temporary = std::fs::read_to_string(workspace.path().join("tmpdir")).expect("TMPDIR");
+    assert!(temporary.ends_with("session-1/tmp"), "{temporary}");
+    assert!(
+        invalid_command
+            .expect_err("blank command")
+            .contains("Invalid session command")
+    );
+    assert!(invalid_session.is_err());
+    assert!(invalid_folder.is_err());
+}
+
+#[tokio::test]
+/// Refuses a workspace command where the native sandbox cannot run, as in
+/// unit tests, which register no sandbox helper, instead of running it on
+/// the host.
+async fn run_session_command_runs_workspace_commands_only_in_the_sandbox() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let initialized = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("git")
+        .status;
+    assert!(initialized.success());
+    let path = std::env::var("PATH").expect("PATH");
+    let config = NativeHarnessConfig::with_environment(data_root.path().to_path_buf(), move || {
+        BTreeMap::from([("PATH".to_string(), path.clone())])
+    });
+
+    // Act
+    let result = config
+        .run_session_command(SessionCommandRequest {
+            command: "printf %s \"$TMPDIR\" > tmpdir; printf done".to_string(),
+            folder: workspace.path().to_path_buf(),
+            scope: CommandScope::Workspace,
+        })
+        .await;
+
+    // Assert
+    let error = result.expect_err("the workspace scope refuses without the sandbox");
+    assert!(error.contains("native sandbox unavailable"), "{error}");
+    assert!(!workspace.path().join("tmpdir").exists());
+}
+
+#[tokio::test]
+/// Gives session commands the session's sandbox, which falls back to
+/// running without it, and workspace commands a fresh utility sandbox,
+/// which refuses where the native sandbox cannot run.
+async fn command_sandbox_selects_the_policy_of_each_scope() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let config = NativeHarnessConfig::new(data_root.path().to_path_buf());
+    let environment = BTreeMap::new();
+    let session = CommandScope::Session {
+        session_id: "session-1".to_string(),
+    };
+
+    // Act
+    let (_, session_policy, session_directory) = config
+        .command_sandbox(&session, workspace.path(), &environment)
+        .await
+        .expect("session sandbox");
+    let (_, workspace_policy, workspace_directory) = config
+        .command_sandbox(&CommandScope::Workspace, workspace.path(), &environment)
+        .await
+        .expect("workspace sandbox");
+
+    // Assert
+    assert_eq!(session_policy, SESSION_SANDBOX);
+    assert!(session_directory.is_none());
+    assert_eq!(workspace_policy, UTILITY_SANDBOX);
+    assert_eq!(
+        workspace_directory
+            .expect("workspace temporary directory")
+            .path()
+            .parent(),
+        Some(data_root.path().join(".utility").as_path())
+    );
 }
 
 #[tokio::test]
@@ -1166,11 +1279,7 @@ async fn session_sandbox_reports_temporary_directory_failures() {
 
     // Act
     let failure = config
-        .session_sandbox(
-            "session-1",
-            &session_request(workspace.path()),
-            &BTreeMap::new(),
-        )
+        .session_sandbox("session-1", workspace.path(), None, &BTreeMap::new())
         .await;
 
     // Assert
@@ -1217,17 +1326,25 @@ async fn session_sandbox_copies_from_the_project_cargo_cache() {
         .with_trusted_cargo_cache(cache_root.path().to_path_buf());
     let environment = BTreeMap::new();
     let copy = data_root.path().join("session-1/tmp/cargo").join(archive);
-    let mut request = session_request(workspace.path());
-    request.main_checkout_root = Some(main_checkout.to_path_buf());
 
     // Act
     without_cache
-        .session_sandbox("session-1", &request, &environment)
+        .session_sandbox(
+            "session-1",
+            workspace.path(),
+            Some(main_checkout),
+            &environment,
+        )
         .await
         .expect("sandbox without cache");
     let copied_without_cache = copy.exists();
     config
-        .session_sandbox("session-1", &request, &environment)
+        .session_sandbox(
+            "session-1",
+            workspace.path(),
+            Some(main_checkout),
+            &environment,
+        )
         .await
         .expect("sandbox");
 

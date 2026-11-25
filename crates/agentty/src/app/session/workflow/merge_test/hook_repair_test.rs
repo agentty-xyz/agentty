@@ -49,7 +49,7 @@ async fn existing_session_hook_repair_preserves_assistance_errors() {
     let mut git = MockGitClient::new();
     git.expect_run_pre_commit_hook()
         .once()
-        .returning(|_| Box::pin(async { Err(hook_failure("lint failed")) }));
+        .returning(|_, _| Box::pin(async { Err(hook_failure("lint failed")) }));
     git.expect_stage_all().never();
     let (_folder, mut input) = build_rebase_assist_input_for_test(Arc::new(git)).await;
     input.assist_mode = RebaseAssistMode::ExistingSession(Arc::new(FailingAssistClient));
@@ -83,7 +83,7 @@ async fn repairs_hook_failures_in_existing_session_and_continues() {
         git.expect_run_pre_commit_hook()
             .once()
             .in_sequence(&mut sequence)
-            .returning(move |_| Box::pin(async move { Err(hook_failure(diagnostic)) }));
+            .returning(move |_, _| Box::pin(async move { Err(hook_failure(diagnostic)) }));
         git.expect_stage_all()
             .once()
             .in_sequence(&mut sequence)
@@ -92,7 +92,7 @@ async fn repairs_hook_failures_in_existing_session_and_continues() {
     git.expect_run_pre_commit_hook()
         .once()
         .in_sequence(&mut sequence)
-        .returning(|_| Box::pin(async { Ok(()) }));
+        .returning(|_, _| Box::pin(async { Ok(()) }));
     git.expect_rebase_continue()
         .once()
         .in_sequence(&mut sequence)
@@ -137,7 +137,7 @@ async fn repairs_project_hook_failure_through_sync_assistance() {
     git.expect_run_pre_commit_hook()
         .once()
         .in_sequence(&mut sequence)
-        .returning(|_| Box::pin(async { Err(hook_failure("formatting failed")) }));
+        .returning(|_, _| Box::pin(async { Err(hook_failure("formatting failed")) }));
     let mut assist = MockSyncAssistClient::new();
     assist
         .expect_resolve_rebase_conflicts()
@@ -154,7 +154,7 @@ async fn repairs_project_hook_failure_through_sync_assistance() {
     git.expect_run_pre_commit_hook()
         .once()
         .in_sequence(&mut sequence)
-        .returning(|_| Box::pin(async { Ok(()) }));
+        .returning(|_, _| Box::pin(async { Ok(()) }));
     let folder = tempfile::tempdir().expect("temporary checkout");
     let input = RebaseAssistLoopInput::Project(build_sync_rebase_input_for_test(
         folder.path().to_path_buf(),
@@ -175,7 +175,7 @@ async fn project_hook_repair_preserves_assistance_errors() {
     let mut git = MockGitClient::new();
     git.expect_run_pre_commit_hook()
         .once()
-        .returning(|_| Box::pin(async { Err(hook_failure("lint failed")) }));
+        .returning(|_, _| Box::pin(async { Err(hook_failure("lint failed")) }));
     git.expect_stage_all().never();
     let mut assist = MockSyncAssistClient::new();
     assist
@@ -218,7 +218,7 @@ async fn session_hook_repair_aborts_on_assistance_or_staging_failure() {
             .returning(|_, _| Box::pin(async { Ok(vec![]) }));
         git.expect_run_pre_commit_hook()
             .once()
-            .returning(|_| Box::pin(async { Err(hook_failure("lint failed")) }));
+            .returning(|_, _| Box::pin(async { Err(hook_failure("lint failed")) }));
         git.expect_stage_all()
             .times(usize::from(!fail_assistance))
             .returning(|_| Box::pin(async { Err(GitError::OutputParse("staging failed".into())) }));

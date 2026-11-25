@@ -4,8 +4,9 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use ag_contracts::{AgentError, ExecutionPolicy, McpPolicy, ToolPolicy};
+use ag_contracts::{AgentError, ExecutionPolicy, McpPolicy, SessionCommandClient, ToolPolicy};
 use ag_scheduler::SessionAdmission;
 use ag_session::{
     AgentAvailabilityProbe, AgentCliInfo, AgentKind, ChatGptSignInOutcome, ChatGptSignInUrlHandler,
@@ -76,6 +77,14 @@ impl RuntimeConfig {
         }
 
         self
+    }
+
+    /// Returns the client that runs host commands, such as a repository's
+    /// Git hooks, inside the sandbox of a session's own commands. Commands
+    /// need [`Self::with_native_harness`], which owns that sandbox and the
+    /// session directories; without it, each fails before it runs.
+    pub fn session_commands(&self) -> Arc<dyn SessionCommandClient> {
+        self.factory.session_commands()
     }
 
     /// Returns the configured controls for one harness.

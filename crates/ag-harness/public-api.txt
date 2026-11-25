@@ -2383,6 +2383,13 @@ impl serde_core::ser::Serialize for ag_harness::sandbox::SandboxUnavailableReaso
 pub fn ag_harness::sandbox::SandboxUnavailableReason::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ag_harness::sandbox::SandboxUnavailableReason
 pub fn ag_harness::sandbox::SandboxUnavailableReason::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub struct ag_harness::sandbox::CommandRun
+pub ag_harness::sandbox::CommandRun::outcome: ag_harness::bash::CommandOutcome
+pub ag_harness::sandbox::CommandRun::warning: core::option::Option<ag_harness::sandbox::SandboxWarning>
+impl core::clone::Clone for ag_harness::sandbox::CommandRun
+pub fn ag_harness::sandbox::CommandRun::clone(&self) -> Self
+impl core::fmt::Debug for ag_harness::sandbox::CommandRun
+pub fn ag_harness::sandbox::CommandRun::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct ag_harness::sandbox::SandboxWarning
 pub ag_harness::sandbox::SandboxWarning::message: alloc::string::String
 pub ag_harness::sandbox::SandboxWarning::reason: ag_harness::sandbox::SandboxUnavailableReason
@@ -2407,6 +2414,7 @@ pub fn ag_harness::sandbox::SandboxWarning::serialize<__S>(&self, __S) -> core::
 impl<'de> serde_core::de::Deserialize<'de> for ag_harness::sandbox::SandboxWarning
 pub fn ag_harness::sandbox::SandboxWarning::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub fn ag_harness::sandbox::dispatch() -> core::option::Option<std::process::ExitCode>
+pub async fn ag_harness::sandbox::run_command(&ag_harness::bash::BashConfig, ag_harness::sandbox::Sandbox, &ag_harness::Repository, &ag_harness::bash::BashArguments) -> core::result::Result<ag_harness::sandbox::CommandRun, ag_harness::turn::TurnError>
 pub mod ag_harness::store
 #[non_exhaustive] pub enum ag_harness::store::CheckpointError
 pub ag_harness::store::CheckpointError::InvalidRecord
