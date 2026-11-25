@@ -53,8 +53,11 @@ pub(super) async fn apply_next_session_diff(app: &mut App) {
     .expect("session diff request should settle");
 }
 
-/// Applies queued app events through the first completed clipboard-image
-/// capture.
+/// Applies queued app events one at a time through the first completed
+/// clipboard-image capture.
+///
+/// Batched application drains the queue, so it would reduce a capture queued
+/// behind an unrelated event without this loop ever seeing it.
 pub(super) async fn apply_next_prompt_image_paste(app: &mut App) {
     loop {
         let event = tokio::time::timeout(std::time::Duration::from_secs(10), app.next_app_event())
@@ -62,7 +65,7 @@ pub(super) async fn apply_next_prompt_image_paste(app: &mut App) {
             .expect("prompt image paste event should arrive")
             .expect("app event channel should remain open");
         let is_prompt_image_paste = matches!(event, AppEvent::PromptImagePasted { .. });
-        app.apply_app_events(event).await;
+        app.apply_single_app_event(event).await;
         if is_prompt_image_paste {
             return;
         }
