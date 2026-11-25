@@ -3926,8 +3926,19 @@ test("refreshes run at most once a second and coalesce while one runs", async ()
   await settle();
   assert.equal(runs, 3);
   assert.equal(clock.pending(), 0);
+
+  // One made while a refresh runs follows it at once, with no wait, and
+  // the next ordinary request waits again.
+  gate.request(true);
   finish();
   await settle();
+  assert.equal(runs, 4);
+  assert.equal(clock.pending(), 0);
+  finish();
+  await settle();
+  gate.request();
+  assert.equal(clock.pending(), 1);
+  assert.equal(runs, 4);
 });
 
 test("a hidden page fetches nothing until it shows again", async () => {
@@ -3961,6 +3972,26 @@ test("a hidden page fetches nothing until it shows again", async () => {
   document.dispatchEvent(new FakeEvent("visibilitychange"));
   await settle();
   assert.equal(runs, 1);
+
+  // Within a second of the last refresh, an ordinary request made while
+  // hidden still waits once the page shows, and an urgent one runs at once.
+  gate.request();
+  await settle();
+  assert.equal(runs, 2);
+  document.visibilityState = "hidden";
+  gate.request();
+  document.visibilityState = "visible";
+  document.dispatchEvent(new FakeEvent("visibilitychange"));
+  await settle();
+  assert.equal(runs, 2);
+  assert.equal(clock.pending(), 1);
+  document.visibilityState = "hidden";
+  gate.request(true);
+  document.visibilityState = "visible";
+  document.dispatchEvent(new FakeEvent("visibilitychange"));
+  await settle();
+  assert.equal(runs, 3);
+  assert.equal(clock.pending(), 0);
 });
 
 // A pasted file of `type` with `bytes`.

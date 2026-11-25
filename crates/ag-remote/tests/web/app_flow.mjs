@@ -5,7 +5,9 @@
 //        node app_flow.mjs <listener address> route <device token>
 //        node app_flow.mjs <listener address> create <device token>
 //        node app_flow.mjs <listener address> pair <pairing code>
-//        node app_flow.mjs <listener address> projects <device token>
+//        node app_flow.mjs <listener address> pin <device token>
+//        node app_flow.mjs <listener address> unnamed <device token>
+//        node app_flow.mjs <listener address> fallback <device token>
 //
 // In `session` mode the test server lists `Build it`, waiting on one
 // question, and `Plan it`, running a turn, which counts as updated
@@ -24,14 +26,19 @@
 // In `pair` mode the page starts unpaired and pairs with the code. After
 // `awaiting` the Rust test denies the request.
 //
-// In `projects` mode the test server lists two projects, `agentty`, which
-// the terminal has open, and `website`. After `listed` the Rust test
-// switches the terminal to `website`, and the page keeps to `agentty`.
-// The page then picks `website` and lists its session. After `picked` the
-// Rust test makes one listing leave out its project, which the page does
-// not show, and then name it again; the page creates a session in
-// `website` from home. After `created` the Rust test switches the terminal back and
-// stops listing `website`, and the page falls back to `agentty`.
+// In `pin`, `unnamed`, and `fallback` modes the test server lists two
+// projects, `agentty`, which the terminal has open, and `website`. In `pin`
+// mode, after `listed` the Rust test switches the terminal to `website`,
+// and the page keeps to `agentty`; the page then picks `website` and lists
+// its session. The other two modes start by picking `website`. In
+// `unnamed` mode, after `picked` the Rust test makes the next listing leave
+// out its project, which the page does not show; the page then creates a
+// session in `website` from home, and the listing that follows names it
+// again. In `fallback` mode, after `picked` the Rust test stops listing
+// `website`, and the page falls back to `agentty`.
+//
+// Each of these modes waits for at most one listing that a `changed` push
+// starts, since the page reads at most once a second after one.
 //
 // The script prints one JSON line per step. Any wait that runs out ends
 // the script with a failure.
@@ -540,11 +547,31 @@ function projectLine() {
   };
 }
 
-// The device keeps to the project it shows, picks another, lists and
-// creates there, and falls back once its pick is no longer listed.
-async function projectsFlow() {
+// Waits for the first listing of both projects and home's description of
+// the one shown.
+async function projectsListed() {
   await waitFor("the session list", () => rows().length > 0 && !part("project-select").hidden);
   await waitFor("the home composer", () => !byId("home-form").hidden);
+}
+
+// Picks `website` and waits for its sessions and home's description of it.
+async function pickWebsite() {
+  const select = part("project-select");
+  select.value = "2";
+  select.dispatchEvent(new FakeEvent("change"));
+  await waitFor("website's sessions", () => rowIds().join() === "session-3");
+  await waitFor("website's home", () => byId("home-eyebrow").textContent.includes("website"));
+}
+
+// The text the session list shows when a listing is not shown.
+function listError() {
+  return byId("sessions").querySelector('[data-part="error"]').textContent;
+}
+
+// The device keeps to the project it shows while the terminal switches,
+// then picks another and lists it.
+async function pinFlow() {
+  await projectsListed();
   report({
     step: "listed",
     eyebrow: byId("home-eyebrow").textContent,
@@ -561,11 +588,7 @@ async function projectsFlow() {
     rows: rowIds(),
   });
 
-  const select = part("project-select");
-  select.value = "2";
-  select.dispatchEvent(new FakeEvent("change"));
-  await waitFor("website's sessions", () => rowIds().join() === "session-3");
-  await waitFor("website's home", () => byId("home-eyebrow").textContent.includes("website"));
+  await pickWebsite();
   report({
     step: "picked",
     eyebrow: byId("home-eyebrow").textContent,
@@ -573,26 +596,44 @@ async function projectsFlow() {
     project: projectLine(),
     rows: rowIds(),
   });
+}
 
-  // The Rust test makes listings leave out the project they read; the page
-  // keeps `website`'s rows and says why, until listings name it again.
-  const listError = () => byId("sessions").querySelector('[data-part="error"]').textContent;
+// The device does not show a listing that leaves out the project it
+// picked, and shows the next one, which names it, after creating a session
+// there from home.
+async function unnamedFlow() {
+  await projectsListed();
+  await pickWebsite();
+  report({ step: "picked", rows: rowIds() });
+
+  // The Rust test makes the next listing leave out the project it read;
+  // the page keeps `website`'s rows and says why.
   await waitFor("the unnamed listing", () => listError() !== "");
   report({ step: "unnamed", error: listError(), rows: rowIds() });
-  await waitFor("a named listing", () => listError() === "");
 
+  // Opening the new session lists `website` again, named this time.
   byId("home-message").value = "Fix the docs";
   byId("home-message").dispatchEvent(new FakeEvent("input"));
   byId("home-send").click();
   await waitFor("the new session", () => byId("transcript").children.length > 0);
+  await waitFor("a named listing", () => listError() === "");
   report({
     step: "created",
     error: byId("session-error").textContent,
     hash: window.location.hash,
+    rows: rowIds(),
     view: visibleView(),
   });
+}
 
-  // The Rust test switches the terminal back and stops listing `website`.
+// The device falls back to the terminal's project once its pick is no
+// longer listed.
+async function fallbackFlow() {
+  await projectsListed();
+  await pickWebsite();
+  report({ step: "picked", rows: rowIds() });
+
+  // The Rust test stops listing `website`.
   await waitFor("the fallback", () => part("project-select").hidden && rowIds().length === 2);
   report({
     step: "fellBack",
@@ -603,7 +644,15 @@ async function projectsFlow() {
 }
 
 await import(APP_URL.href);
-const flows = { create: createFlow, pair: pairFlow, projects: projectsFlow, route: routeFlow, session: sessionFlow };
+const flows = {
+  create: createFlow,
+  fallback: fallbackFlow,
+  pair: pairFlow,
+  pin: pinFlow,
+  route: routeFlow,
+  session: sessionFlow,
+  unnamed: unnamedFlow,
+};
 await flows[mode]();
 
 // The client keeps its socket open, so the script ends itself once its
