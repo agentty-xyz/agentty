@@ -329,6 +329,34 @@ fn diff_reports_repository_unavailable_when_removed_after_index_resolution() {
     ));
 }
 
+#[test]
+fn diff_reports_repository_unavailable_when_git_dir_is_removed_after_index_resolution() {
+    // Arrange
+    let temp_dir = tempdir().expect("failed to create temp dir");
+    let preserved_index_dir = tempdir().expect("failed to create preserved index dir");
+    setup_test_git_repo(temp_dir.path());
+    let index_path = resolve_diff_index_path(temp_dir.path()).expect("index path should resolve");
+    let index_path = temp_dir.path().join(index_path.trim());
+    let preserved_index_path = preserved_index_dir.path().join("index");
+    fs::copy(index_path, &preserved_index_path).expect("index copy should succeed");
+    fs::remove_dir_all(temp_dir.path().join(".git")).expect("git dir removal should succeed");
+
+    // Act
+    let result = diff_output_after_index_resolution(
+        temp_dir.path(),
+        "main",
+        DiffOutputFormat::Patch,
+        &preserved_index_path,
+    );
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(GitError::RepositoryUnavailable { detail })
+            if detail.contains("Failed to list untracked files")
+    ));
+}
+
 #[tokio::test]
 async fn diff_preserves_invalid_base_reference_error() {
     // Arrange
