@@ -41,12 +41,17 @@ pub(crate) fn proposal_chat_notice(state: &GraphProposalState) -> String {
                     )
                 },
                 |launch| {
-                    let nodes = launch.graph.nodes.len();
+                    let nodes = added_nodes(state, &launch.graph.nodes).len();
                     let noun = if nodes == 1 { "node" } else { "nodes" };
+                    let what = if state.base.is_some() {
+                        format!("{nodes} new {noun} for the running graph")
+                    } else {
+                        format!("{nodes} {noun}")
+                    };
 
                     format!(
-                        "Graph proposal v{version} ready: {nodes} {noun}. Reply to approve, \
-                         revise, or cancel it."
+                        "Graph proposal v{version} ready: {what}. Reply to approve, revise, or \
+                         cancel it."
                     )
                 },
             ),
@@ -126,7 +131,17 @@ pub(crate) fn proposal_preview(state: &GraphProposalState) -> String {
             }
             GraphProposalOutcome::Proposal { .. } => {
                 if let Some(launch) = launch {
-                    push_launch_preview(&mut text, &launch.graph.nodes);
+                    if let Some(base) = &state.base {
+                        let _ = write!(
+                            text,
+                            "Adds nodes to graph `{}` after revision {}; its {} existing nodes \
+                             stay unchanged.\n\n",
+                            base.id,
+                            base.revision,
+                            base.nodes.len()
+                        );
+                    }
+                    push_launch_preview(&mut text, added_nodes(state, &launch.graph.nodes));
                 }
             }
         },
@@ -367,6 +382,14 @@ pub(crate) fn launched_graph_nodes(state: &GraphProposalState) -> &[GraphNode] {
         } if !state.version.is_cancelled => launch.graph.nodes.as_slice(),
         _ => &[],
     }
+}
+
+/// The resolved `nodes` that `state` proposes: all of them for a new graph,
+/// or those after its captured base for an expansion.
+fn added_nodes<'a>(state: &GraphProposalState, nodes: &'a [GraphNode]) -> &'a [GraphNode] {
+    let existing = state.base.as_ref().map_or(0, |base| base.nodes.len());
+
+    nodes.get(existing..).unwrap_or_default()
 }
 
 /// Appends numbered clarification questions, quoting multi-line question text

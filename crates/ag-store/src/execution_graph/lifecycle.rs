@@ -161,13 +161,10 @@ impl SqliteGraphRepository {
         let (id, record) = Self::execution(&mut transaction, &request.execution)
             .await?
             .ok_or_else(|| Self::invalid("Continuation source is missing"))?;
-        if record.graph_id != graph.id
-            || record.graph_revision != graph.revision
-            || record.node_id != request.node_id
-        {
-            return Err(Self::invalid(
-                "Continuation source differs from node or revision",
-            ));
+        // The source may run under an earlier revision that only expansions
+        // followed; the node it ran is unchanged.
+        if record.graph_id != graph.id || record.node_id != request.node_id {
+            return Err(Self::invalid("Continuation source differs from node"));
         }
         if !Self::is_dispatch_claimed(&mut transaction, &record.execution).await? {
             return Err(Self::invalid(
@@ -368,11 +365,9 @@ impl SqliteGraphRepository {
              e LEFT JOIN execution_graph_continuation c ON c.execution_graph_execution_id = e.id \
              LEFT JOIN execution_graph_response r ON r.execution_graph_execution_id = e.id LEFT \
              JOIN execution_graph_task_turn t ON t.execution_graph_execution_id = e.id WHERE \
-             e.execution_graph_id = ? AND e.revision = ? AND e.node_id = ? AND e.id <= ? ORDER BY \
-             e.id",
+             e.execution_graph_id = ? AND e.node_id = ? AND e.id <= ? ORDER BY e.id",
         )
         .bind(&record.graph_id)
-        .bind(Self::integer(record.graph_revision)?)
         .bind(&record.node_id)
         .bind(current_id)
         .fetch_all(&mut *transaction)

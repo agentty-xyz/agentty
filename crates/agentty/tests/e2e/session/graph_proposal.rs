@@ -116,6 +116,7 @@ async fn seed_chain(
         node.id = format!("node-{index}");
         proposal.nodes.push(node);
     }
+    let expansion = expansion_response(&proposal.nodes[0]);
     let response = GraphProposalResponse {
         outcome: GraphProposalOutcome::Proposal { proposal },
     };
@@ -163,6 +164,7 @@ case "$prompt" in
         esac ;;
     esac
     case "$prompt" in
+      *'or null for a new graph (JSON data): [{{'*) printf '%s\n' '{expansion}' ;;
       *'Need clarification'*'revision feedback, oldest first (JSON data):'*'[]'*) printf '%s\n' '{question}' ;;
       *) printf '%s\n' '{response}' ;;
     esac ;;
@@ -185,6 +187,26 @@ esac
     std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o750))?;
 
     Ok(())
+}
+
+/// Provider result for a request to extend the launched graph: one `summary`
+/// node that runs after `first`.
+fn expansion_response(first: &GraphProposalNode) -> String {
+    let mut summary = first.clone();
+    summary.id = "summary".into();
+    summary.dependencies = vec![GraphProposalDependency {
+        gate: GraphProposalGate::ExecutionSucceeded {},
+        node_id: first.id.clone(),
+    }];
+    let expansion = GraphProposalResponse {
+        outcome: GraphProposalOutcome::Proposal {
+            proposal: GraphProposal {
+                nodes: vec![summary],
+            },
+        },
+    };
+
+    serde_json::json!({"type":"result", "subtype":"success", "structured_output": expansion, "usage":{"input_tokens":5,"output_tokens":9}}).to_string()
 }
 
 #[tokio::test]
@@ -460,6 +482,89 @@ async fn graph_output_acceptance_reply_continues_the_graph() -> E2eResult {
                         &CellColor::new(0, 128, 0),
                     );
                     assertion::assert_not_visible(&continued, "Awaiting your approval");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// `/graph` on a session whose graph waits at an approval gate proposes
+/// nodes for that graph; approving them runs the new node in the same
+/// graph while the gate keeps waiting.
+#[tokio::test]
+async fn graph_request_expands_the_running_graph() -> E2eResult {
+    // Arrange
+    let gate = GraphProposalGate::ResultAccepted {
+        output_name: "report".into(),
+    };
+    FeatureTest::new("graph_request_expands_the_running_graph")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .setup(move |env| Box::pin(seed_gated(env, 2, gate)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph proposals", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .wait_for_text("Describe the task for the execution graph", 5000)
+                    .write_text("query the current architecture")
+                    .press_key("Enter")
+                    .wait_for_text("Graph proposal v1 ready: 2 nodes", 10000)
+                    .press_key("Enter")
+                    .write_text("Approve it")
+                    .press_key("Enter")
+                    .wait_for_text("inspect awaits your approval", 10000)
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .wait_for_text("Describe the task for the execution graph", 5000)
+                    .write_text("also summarize the findings")
+                    .press_key("Enter")
+                    .wait_for_text("Generating nodes for the execution graph…", 5000)
+                    .wait_for_text(
+                        "Graph proposal v1 ready: 1 new node for the running graph",
+                        10000,
+                    )
+                    .capture_labeled("expansion", "Proposal adds a node to the running graph")
+                    .press_key("Enter")
+                    .write_text("Approve it")
+                    .press_key("Enter")
+                    .wait_for_text("2/3 done", 10000)
+                    .wait_for_text("✓ summary", 10000)
+                    .capture_labeled("expanded", "The added node runs in the same graph")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    let expansion = common::frame_from_capture(&report.captures[0]);
+                    let expanded = common::frame_from_capture(&report.captures[1]);
+                    let sidebar_width = expanded.cols() * 35 / 100;
+                    let sidebar = Region::new(
+                        expanded.cols() - sidebar_width,
+                        0,
+                        sidebar_width,
+                        expanded.rows(),
+                    );
+                    assertion::assert_text_in_region(
+                        &expansion,
+                        "Awaiting your approval",
+                        &sidebar,
+                    );
+                    assertion::assert_text_in_region(&expanded, "● inspect", &sidebar);
+                    assertion::assert_text_in_region(&expanded, "✓ summary", &sidebar);
+                    assertion::assert_text_in_region(&expanded, "○ node-1", &sidebar);
+                    assertion::assert_text_in_region(
+                        &expanded,
+                        "inspect awaits your approval",
+                        &sidebar,
+                    );
                 })
             },
         )

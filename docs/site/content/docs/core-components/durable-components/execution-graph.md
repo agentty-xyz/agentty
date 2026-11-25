@@ -53,7 +53,9 @@ flowchart LR
   by control or by a chat reply saved before the restart.
 - Cancellation is terminal for that graph. Deleting the owning session removes its graph
   records.
-- Revisions are rejected once executions are linked.
+- Once executions are linked, a revision only appends nodes, by an explicit, approved
+  expansion. Existing nodes, their executions, and their pinned inputs never change, and
+  added nodes spend from the existing budgets.
 - Provider-call limits are fixed at first launch and spending is recorded, so a restart
   never replenishes spent calls. Only an explicit, recorded extension adds calls.
 

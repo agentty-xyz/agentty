@@ -45,6 +45,21 @@ impl ExtendGraphBudgetRequest {
     pub const MAX_ADDITIONAL_CALLS: usize = 1000;
 }
 
+/// An append-only change to a launched graph. The new revision is the
+/// expected current revision plus `nodes`; existing nodes, their executions,
+/// and their pinned inputs never change.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpandExecutionGraphRequest {
+    /// Graph to expand, at the revision the change was prepared against.
+    pub graph: GraphControlRequest,
+    /// Idempotency identity: redelivering the same expansion records it
+    /// once, and reusing it for a different one is rejected.
+    pub id: String,
+    /// Nodes to append, in declaration order. They may depend on existing
+    /// nodes and spend from the graph's existing provider-call budgets.
+    pub nodes: Vec<super::GraphNode>,
+}
+
 /// An explicit action against the exact latest execution of a node.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinueGraphNodeRequest {

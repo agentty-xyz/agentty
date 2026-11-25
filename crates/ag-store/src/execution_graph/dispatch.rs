@@ -89,11 +89,10 @@ impl SqliteGraphRepository {
         }
         let previous = Self::node_execution(&mut transaction, &graph, node_id).await?;
         let continuation: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM execution_graph_continuation WHERE execution_graph_id = ? AND \
-             revision = ? AND node_id = ? AND execution_graph_execution_id IS NULL",
+            "SELECT id FROM execution_graph_continuation WHERE execution_graph_id = ? AND node_id \
+             = ? AND execution_graph_execution_id IS NULL",
         )
         .bind(graph_id)
-        .bind(Self::integer(revision)?)
         .bind(node_id)
         .fetch_optional(&mut *transaction)
         .await?;
@@ -263,12 +262,13 @@ impl SqliteGraphRepository {
         graph: &ExecutionGraph,
         node_id: &str,
     ) -> Result<Option<GraphExecutionRecord>, DbError> {
+        // A node's executions may span revisions that only expansions
+        // followed; none of them changed the node.
         let reference: Option<String> = sqlx::query_scalar(
             "SELECT reference FROM execution_graph_execution WHERE execution_graph_id = ? AND \
-             revision = ? AND node_id = ? ORDER BY id DESC LIMIT 1",
+             node_id = ? ORDER BY id DESC LIMIT 1",
         )
         .bind(&graph.id)
-        .bind(Self::integer(graph.revision)?)
         .bind(node_id)
         .fetch_optional(&mut *connection)
         .await?;
@@ -393,11 +393,10 @@ impl SqliteGraphRepository {
         let rows = sqlx::query_as::<_, (String, String, String)>(
             "SELECT r.id, r.reference, r.body FROM execution_graph_result r JOIN \
              execution_graph_execution e ON e.id = r.execution_graph_execution_id WHERE \
-             e.execution_graph_id = ? AND e.revision = ? AND e.node_id = ? AND r.output_name = ? \
-             ORDER BY r.version DESC",
+             e.execution_graph_id = ? AND e.node_id = ? AND r.output_name = ? ORDER BY r.version \
+             DESC",
         )
         .bind(&graph.id)
-        .bind(Self::integer(graph.revision)?)
         .bind(node_id)
         .bind(output)
         .fetch_all(&mut *connection)

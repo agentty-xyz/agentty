@@ -24,6 +24,8 @@ use crate::test_support::{
 
 #[path = "graph_proposal_boundary_test.rs"]
 mod boundary;
+#[path = "graph_proposal_expansion_test.rs"]
+mod expansion;
 
 #[tokio::test]
 async fn generation_uses_read_only_worker_contract_and_captured_inputs() {
@@ -467,6 +469,7 @@ async fn created_proposal_refreshes_an_empty_graph_sidebar_without_a_session_upd
     let now = std::time::Instant::now();
     app.graph_chat.complete("sess".into(), 0, now, Ok(None));
     let request = ag_session::GenerateGraphProposalRequest {
+        expands: None,
         id: "api-preview".into(),
         request: ag_protocol::TurnPrompt::from_text("Inspect".into()),
         session_id: "sess".into(),
@@ -517,6 +520,7 @@ async fn admitted_proposal_titles_a_prepared_draft_that_still_accepts_its_first_
     });
     app.services.set_run_client(Arc::new(client));
     let request = ag_session::GenerateGraphProposalRequest {
+        expands: None,
         id: "titled-preview".into(),
         request: ag_protocol::TurnPrompt::from_text("Inspect".into()),
         session_id: "sess".into(),

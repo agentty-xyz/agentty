@@ -18,8 +18,9 @@ pub use error::GraphContractError;
 pub use graph::ExecutionGraph;
 pub use lifecycle::{
     ContinueGraphNodeRequest, ExecutionGraphProgress, ExecutionGraphStatus,
-    ExtendGraphBudgetRequest, GraphBlockedReason, GraphControlRequest, GraphNodeContinuation,
-    GraphNodeProgress, GraphNodeStatus, GraphQuestionAnswer, ResumeExecutionGraphRequest,
+    ExpandExecutionGraphRequest, ExtendGraphBudgetRequest, GraphBlockedReason, GraphControlRequest,
+    GraphNodeContinuation, GraphNodeProgress, GraphNodeStatus, GraphQuestionAnswer,
+    ResumeExecutionGraphRequest,
 };
 pub use node::{
     GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionProfile, GraphInputBinding,
@@ -28,7 +29,7 @@ pub use node::{
 pub use proposal::{GraphProposalLimits, GraphProposalResolution};
 pub use proposal_state::{
     GenerateGraphProposalRequest, GraphProposalAction, GraphProposalApproval,
-    GraphProposalReplyOutcome, GraphProposalState, GraphProposalVersion,
+    GraphProposalReplyOutcome, GraphProposalState, GraphProposalTarget, GraphProposalVersion,
     GraphProposalVersionOutcome,
 };
 pub use result::{

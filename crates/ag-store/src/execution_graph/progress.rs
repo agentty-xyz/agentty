@@ -81,12 +81,13 @@ impl SqliteGraphRepository {
         graph: &ExecutionGraph,
         node: &GraphNode,
     ) -> Result<GraphNodeProgress, DbError> {
+        // Executions under earlier revisions still belong to the node: only
+        // expansions follow a revision once any execution is linked.
         let references: Vec<String> = sqlx::query_scalar(
             "SELECT reference FROM execution_graph_execution WHERE execution_graph_id = ? AND \
-             revision = ? AND node_id = ? ORDER BY id",
+             node_id = ? ORDER BY id",
         )
         .bind(&graph.id)
-        .bind(Self::integer(graph.revision)?)
         .bind(&node.id)
         .fetch_all(&mut *connection)
         .await?;

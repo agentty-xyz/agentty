@@ -4,6 +4,7 @@
 mod budget;
 mod dispatch;
 mod execution;
+mod expansion;
 mod lifecycle;
 mod model;
 mod output_reply;

@@ -73,12 +73,24 @@ pub trait GraphRepository: Send + Sync {
     /// Saves a complete validated snapshot atomically. Creation requires
     /// revision one and no expected revision; updates require the current
     /// revision and its immediate successor. Identical historical redelivery
-    /// returns false. Ownership is immutable. Revisions after execution links
-    /// exist are rejected until a coordinator defines safe mutation policy.
+    /// returns false. Ownership is immutable. Once execution links exist,
+    /// only [`Self::expand_graph`] adds revisions.
     async fn save_graph(
         &self,
         graph: &ExecutionGraph,
         expected_revision: Option<NonZeroU64>,
+    ) -> Result<bool, DbError>;
+
+    /// Appends nodes as the next revision, checked against the expected
+    /// current revision. Existing nodes, executions, results, and pinned
+    /// inputs stay valid, and work addressed to earlier revisions continues
+    /// under the new one. Appended nodes spend from the existing budgets and
+    /// never add credit. Returns `false` for an identical redelivery; rejects
+    /// a stale revision, canceled or completed graphs, invalid expanded
+    /// graphs, and an identity reused for a different expansion.
+    async fn expand_graph(
+        &self,
+        request: &ag_session::ExpandExecutionGraphRequest,
     ) -> Result<bool, DbError>;
 
     /// Saves a launch snapshot and fixes its provider-call limits atomically,
@@ -259,16 +271,34 @@ impl SqliteGraphRepository {
         .transpose()
     }
 
+    /// Loads the current snapshot for work addressed to `revision`: the
+    /// current revision, or an earlier one that only expansions followed, so
+    /// every node it names is unchanged.
     pub(super) async fn current(
         connection: &mut SqliteConnection,
         graph_id: &str,
         revision: NonZeroU64,
     ) -> Result<ExecutionGraph, DbError> {
-        let graph = Self::graph(connection, graph_id, None)
+        let graph = Self::graph(&mut *connection, graph_id, None)
             .await?
             .ok_or_else(|| Self::invalid("Graph does not exist"))?;
-        if graph.revision != revision {
+        if revision > graph.revision {
             return Err(Self::invalid("Stale graph revision"));
+        }
+        if revision < graph.revision {
+            let (from, to) = (Self::integer(revision)?, Self::integer(graph.revision)?);
+            let expansions: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM execution_graph_expansion WHERE execution_graph_id = ? AND \
+                 revision > ? AND revision <= ?",
+            )
+            .bind(graph_id)
+            .bind(from)
+            .bind(to)
+            .fetch_one(&mut *connection)
+            .await?;
+            if expansions != to - from {
+                return Err(Self::invalid("Stale graph revision"));
+            }
         }
 
         Ok(graph)
@@ -396,6 +426,13 @@ impl GraphRepository for SqliteGraphRepository {
         transaction.commit().await?;
 
         Ok(saved)
+    }
+
+    async fn expand_graph(
+        &self,
+        request: &ag_session::ExpandExecutionGraphRequest,
+    ) -> Result<bool, DbError> {
+        self.record_expansion(request).await
     }
 
     async fn launch_graph(
@@ -653,6 +690,18 @@ impl SqliteGraphRepository {
             .execute(&mut *transaction)
             .await?;
         }
+        Self::insert_snapshot(transaction, graph, now).await?;
+
+        Ok(true)
+    }
+
+    /// Stores the immutable snapshot of one new revision.
+    pub(super) async fn insert_snapshot(
+        connection: &mut SqliteConnection,
+        graph: &ExecutionGraph,
+        now: i64,
+    ) -> Result<(), DbError> {
+        let revision = Self::integer(graph.revision)?;
         let snapshot = serde_json::json!(graph).to_string();
         sqlx::query!(
             "INSERT INTO execution_graph_revision (execution_graph_id, revision, snapshot, \
@@ -662,10 +711,10 @@ impl SqliteGraphRepository {
             snapshot,
             now
         )
-        .execute(&mut *transaction)
+        .execute(connection)
         .await?;
 
-        Ok(true)
+        Ok(())
     }
 
     /// Lists current snapshots for one session in graph creation order.

@@ -59,7 +59,9 @@ pub enum GraphAdmission {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait GraphDispatchRepository: Send + Sync {
-    /// Loads the current immutable graph; missing/stale graphs are errors.
+    /// Loads the current immutable graph for `revision`: the current revision,
+    /// or an earlier one that only expansions followed. Missing graphs and
+    /// other stale revisions are errors.
     async fn graph(&self, id: &str, revision: NonZeroU64) -> Result<ExecutionGraph, OneShotError>;
 
     /// Under a writer lock, rechecks revision and every dependency, pins

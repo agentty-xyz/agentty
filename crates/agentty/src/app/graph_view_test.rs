@@ -425,11 +425,6 @@ async fn inspector_loads_exact_result_body_and_dispatches_shared_acceptance() {
                 validation: None,
             }))
         });
-    let graph = view.graphs[0].clone();
-    repository
-        .expect_load_graph()
-        .once()
-        .return_once(move |_, _| Ok(Some(graph)));
     repository
         .expect_accept_result()
         .once()
