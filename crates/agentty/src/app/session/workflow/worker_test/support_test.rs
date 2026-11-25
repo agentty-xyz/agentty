@@ -1493,6 +1493,12 @@ pub(super) async fn queue_test_context(
     (context, db, queue_handle, base_dir)
 }
 
+/// Returns the session run client of session `sess1` whose channel expects
+/// no turns.
+pub(super) fn idle_session_run() -> SessionRunClient {
+    SessionRunClient::from_channel("sess1".to_string(), Arc::new(MockAgentChannel::new()))
+}
+
 /// Builds one [`SessionWorkerContext`] whose only meaningful state is the
 /// shared `queued_messages` mutex; every other field is wired with a stub
 /// value because these tests only exercise the queue helpers.

@@ -363,10 +363,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
         session_id: "sess1".into(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Antigravity,
-            AgentModel::Gemini38Flash,
-        ),
+        session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         status: Arc::new(Mutex::new(Status::InProgress)),
     };
 
