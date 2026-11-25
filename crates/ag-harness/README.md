@@ -399,9 +399,10 @@ async fn review(
   `Usage` counts overlap: `cache_read` and a known `cache_write` are part of `input`,
   and `reasoning` is part of `output`. Uncached input, cache reads, cache writes, and
   output bill at their own prices, and cache reads and writes fall back to the input
-  price when no cache price is declared; built-in prices declare cache prices only for
-  Claude models. Each request's exact cost rounds to the nearest micro-USD, halves up,
-  and sums saturate at `u64::MAX`. Models without prices, such as models set with
+  price when no cache price is declared; built-in prices declare each provider's
+  published cache-hit price, and a cache-write price where the provider charges one.
+  Each request's exact cost rounds to the nearest micro-USD, halves up, and sums
+  saturate at `u64::MAX`. Models without prices, such as models set with
   `HarnessBuilder::model` or `switch_model`, OpenAI-compatible servers, and plan-billed
   ChatGPT models, report no cost.
 - **Runs stream typed events.** `run.into_parts()` returns an `EventStream` (a

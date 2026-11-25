@@ -192,7 +192,7 @@ impl fmt::Display for Capabilities {
 pub enum PricingSource {
     /// The harness's built-in list prices, as the providers published them
     /// at their lowest input tier: Anthropic on 2026-11-21, the others on
-    /// 2026-10-29. Claude Haiku 5.5 also carries its long-prompt prices.
+    /// 2026-11-23. Claude Haiku 5.5 also carries its long-prompt prices.
     BuiltIn,
     /// Prices the host supplied, such as a negotiated rate.
     Host,
@@ -208,11 +208,10 @@ pub enum PricingSource {
 /// a [`crate::Usage`] with them. Cached input bills at
 /// [`Self::cache_read_per_mtok_micro_usd`] and cache creation at
 /// [`Self::cache_write_per_mtok_micro_usd`]; without a declared cache price,
-/// both fall back to the input price. Built-in prices model cache prices
-/// only for Claude models, with Anthropic's cache-read and 5-minute
-/// cache-write prices, so they overstate cached input for the other
-/// providers that publish a discount; a host can declare those prices
-/// through [`super::CatalogBuilder::pricing`], or
+/// both fall back to the input price. Built-in prices carry each
+/// provider's cached-input price where its pricing pages publish one, and a
+/// cache-write price where the provider charges one by default; a host can
+/// declare other prices through [`super::CatalogBuilder::pricing`], or
 /// [`ModelSpec::with_pricing`] for a model it catalogs itself.
 ///
 /// A provider that bills long prompts at higher prices declares them with
@@ -369,7 +368,9 @@ impl Pricing {
     }
 
     /// Returns built-in list prices in micro-USD per million tokens for a
-    /// provider that publishes separate cache prices.
+    /// provider that discounts cached input. A provider that charges no
+    /// separate cache write passes `None` for it, so writes bill at the
+    /// input price.
     #[cfg(any(
         feature = "providers-anthropic",
         feature = "providers-compat",
@@ -380,12 +381,13 @@ impl Pricing {
         input_per_mtok_micro_usd: u64,
         output_per_mtok_micro_usd: u64,
         cache_read_per_mtok_micro_usd: u64,
-        cache_write_per_mtok_micro_usd: u64,
+        cache_write_per_mtok_micro_usd: Option<u64>,
     ) -> Self {
-        Self::built_in(input_per_mtok_micro_usd, output_per_mtok_micro_usd)
-            .with_cache_read(cache_read_per_mtok_micro_usd)
-            .with_cache_write(cache_write_per_mtok_micro_usd)
-            .with_source(PricingSource::BuiltIn)
+        let mut pricing = Self::built_in(input_per_mtok_micro_usd, output_per_mtok_micro_usd);
+        pricing.cache_read = Some(cache_read_per_mtok_micro_usd);
+        pricing.cache_write = cache_write_per_mtok_micro_usd;
+
+        pricing
     }
 
     /// Returns these prices attributed to `source`.

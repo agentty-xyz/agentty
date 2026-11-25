@@ -38,16 +38,17 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
 
 /// Cost of one [`PricedModel`] request under [`host_pricing`]: 800 uncached
-/// input tokens at $3, 200 cached at $0.30, and 100 output tokens at $15 per
-/// million tokens.
+/// input tokens at $3, the 400 cache writes among them included, 200 cached
+/// at $0.30, and 100 output tokens at $15 per million tokens.
 const REQUEST_MICRO_USD: u64 = 2_400 + 60 + 1_500;
 
 /// Catalog key of [`PricedModel`] in [`priced_harness`].
 const PRICED: &str = "host/priced";
 
 /// Answers `{"answer": <prompt>}`, first calling `read` for the prompt
-/// `tool`. Every response reports 1,000 input tokens, 200 of them cached,
-/// and 100 output tokens, 40 of them reasoning.
+/// `tool`. Every response reports 1,000 input tokens, 200 of them read from
+/// and 400 written to the cache, and 100 output tokens, 40 of them
+/// reasoning.
 struct PricedModel;
 
 #[async_trait]
@@ -69,6 +70,7 @@ impl Model for PricedModel {
         };
         let usage = CompletionUsage::default()
             .with_cache_hit_tokens(Some(200))
+            .with_cache_write_tokens(Some(400))
             .with_input_tokens(Some(1_000))
             .with_output_tokens(Some(100))
             .with_reasoning_tokens(Some(40));
@@ -220,12 +222,13 @@ async fn catalog_models_bill_at_list_prices_unless_the_host_overrides_them()
         .await;
 
     // Assert
-    // GPT-6 Luna lists $0.10 input and $0.50 output per million tokens:
-    // 1,000 input tokens, the 200 cached ones at the input price, bill 100
-    // micro-USD and 100 output tokens 50.
+    // GPT-6 Luna lists $0.10 input, $0.01 cached input, $0.125 for a
+    // 30-minute cache write, and $0.50 output per million tokens: 400
+    // ordinary input tokens bill 40 micro-USD, the 200 cached ones 2, the
+    // 400 written ones 50, and 100 output tokens 50.
     assert_eq!(
         priced(at_list.cost),
-        Some((100 + 50, PricingSource::BuiltIn))
+        Some((40 + 2 + 50 + 50, PricingSource::BuiltIn))
     );
     assert_eq!(
         priced(overridden.cost),

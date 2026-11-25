@@ -796,6 +796,12 @@ impl From<&ResponsesUsage> for model::CompletionUsage {
                     .as_ref()
                     .and_then(|details| details.cached_tokens),
             )
+            .with_cache_write_tokens(
+                usage
+                    .input_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.cache_write_tokens),
+            )
             .with_input_tokens(usage.input_tokens)
             .with_output_tokens(usage.output_tokens)
             .with_reasoning_tokens(
@@ -810,6 +816,11 @@ impl From<&ResponsesUsage> for model::CompletionUsage {
 
 #[derive(Clone, Deserialize)]
 struct InputTokenDetails {
+    /// Input tokens written to the prompt cache, which models from GPT-5.6
+    /// on report and bill separately; part of `input_tokens`, apart from
+    /// `cached_tokens`.
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    cache_write_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     cached_tokens: Option<u64>,
 }

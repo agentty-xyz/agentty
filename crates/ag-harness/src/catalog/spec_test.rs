@@ -172,7 +172,7 @@ fn changing_a_built_in_cache_price_marks_the_prices_host_supplied() {
 #[test]
 fn built_in_cache_prices_keep_the_built_in_source() {
     // Arrange / Act
-    let pricing = Pricing::built_in_cached(4_000_000, 20_000_000, 200_000, 5_000_000);
+    let pricing = Pricing::built_in_cached(4_000_000, 20_000_000, 200_000, Some(5_000_000));
 
     // Assert
     assert_eq!(pricing.source(), PricingSource::BuiltIn);
@@ -183,9 +183,20 @@ fn built_in_cache_prices_keep_the_built_in_source() {
 }
 
 #[test]
+fn built_in_prices_without_a_cache_write_price_bill_writes_as_input() {
+    // Arrange / Act
+    let pricing = Pricing::built_in_cached(1_250_000, 4_250_000, 150_000, None);
+
+    // Assert
+    assert_eq!(pricing.source(), PricingSource::BuiltIn);
+    assert_eq!(pricing.cache_read_per_mtok_micro_usd(), 150_000);
+    assert_eq!(pricing.cache_write_per_mtok_micro_usd(), 1_250_000);
+}
+
+#[test]
 fn long_context_prices_apply_only_above_their_threshold() {
     // Arrange
-    let base = Pricing::built_in_cached(100_000, 500_000, 10_000, 125_000);
+    let base = Pricing::built_in_cached(100_000, 500_000, 10_000, Some(125_000));
     let long_prompt = Pricing::new(500_000, 2_500_000).with_cache_read(50_000);
 
     // Act

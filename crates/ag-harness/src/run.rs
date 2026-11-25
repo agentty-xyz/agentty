@@ -537,8 +537,9 @@ pub struct Usage {
     /// Input tokens served from the provider's prompt cache.
     pub cache_read: u64,
     /// Input tokens written to the provider's prompt cache, part of `input`,
-    /// or `None` when unknown; of the built-in protocols only Anthropic
-    /// Messages reports them.
+    /// or `None` when unknown; of the built-in protocols Anthropic Messages
+    /// reports them, and the `OpenAI` Responses API does for models from
+    /// GPT-5.6 on.
     pub cache_write: Option<u64>,
     /// Reasoning tokens.
     pub reasoning: u64,
