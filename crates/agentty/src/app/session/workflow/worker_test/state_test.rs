@@ -862,10 +862,6 @@ async fn run_turn_with_cargo_cache(
     mock_git_client
         .expect_ref_hash()
         .returning(|_, _| Box::pin(async { Ok("base-commit".to_string()) }));
-    // A detached `HEAD`, which Harness turns accept like the session branch.
-    mock_git_client
-        .expect_head_reference()
-        .returning(|_| Box::pin(async { Ok("HEAD".to_string()) }));
     mock_git_client
         .expect_diff_stats()
         .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));

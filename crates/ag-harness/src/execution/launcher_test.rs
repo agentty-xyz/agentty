@@ -244,10 +244,7 @@ fn seatbelt_git_metadata_and_network_rules_follow_the_write_grants() {
     let pinned = profile
         .find("(deny file-write-unlink file-write-create (literal \"/sessions/own\"))")
         .expect("pinned writable directory");
-    let git_rules = profile
-        .rfind("(deny file-write* (regex #\"^/workspace")
-        .expect("Git rules");
-    assert!(writable < pinned && git_rules < pinned, "{profile}");
+    assert!(writable < pinned && administration < pinned, "{profile}");
 }
 
 #[cfg(target_os = "macos")]
@@ -264,7 +261,6 @@ fn write_grants_must_keep_their_validated_identity() {
         executable: "/bin/bash".into(),
         external_reads: vec![],
         git_metadata: vec![],
-        git_writes: None,
         hidden_paths: vec![],
         host_information: false,
         launcher: "/launcher".into(),
