@@ -43,7 +43,8 @@ again.
 remote control through the platform's relay, and again to stop it. Before it starts,
 Agentty checks the account and its registration again, so a revoked sign-in signs out
 instead of connecting. The tab then shows the relay state, a pairing link on the
-platform's pairing page, a QR code of the link when the terminal is large enough,
+platform's pairing page, a QR code of the link where the terminal has room (see
+[Pair Through the Relay](@/docs/usage/remote-control.md#pair-through-the-relay)),
 pairing requests to approve with `y` or deny with `x`, and the paired devices, which `d`
 removes. See [Keybindings](@/docs/usage/keybindings.md#platform) for every key.
 

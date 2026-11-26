@@ -82,6 +82,47 @@ fn platform_args(server: &MockServer) -> [String; 2] {
     ["--platform-url".to_string(), server.uri()]
 }
 
+/// Starts a fake platform with a relay that registers this Agentty once,
+/// as `Test machine`.
+async fn kept_on_platform() -> MockServer {
+    let server = fake_platform(account_with_relay).await;
+    Mock::given(method("PUT"))
+        .and(path_regex("^/api/v1/instances/[0-9a-f]{64}$"))
+        .respond_with(|request: &Request| {
+            let instance_id = request.url.path().rsplit('/').next().unwrap_or_default();
+
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "instance_id": instance_id, "name": "Test machine" }))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    server
+}
+
+/// Builds the `name` scenario launched with a saved sign-in to `server`
+/// that keeps remote control on, so it connects through the platform's
+/// relay as soon as Agentty starts.
+fn kept_on_test(name: &str, server: &MockServer) -> FeatureTest {
+    let stored = json!({ "access_token": TOKEN, "keep_on": true, "platform_url": server.uri() });
+
+    FeatureTest::new(name)
+        .with_git()
+        .args(platform_args(server))
+        .setup(move |env| {
+            Box::pin(async move {
+                common::open_database(env)
+                    .await?
+                    .settings()
+                    .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
+                    .await?;
+
+                Ok(())
+            })
+        })
+}
+
 /// Verify a launch without remote flags offers the Platform tab, where
 /// `Enter` signs in with a device code and the approved sign-in ends with
 /// remote control running through the platform's relay, with a pairing
@@ -193,36 +234,11 @@ async fn platform_tab_sign_in() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 async fn platform_tab_keep_on() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange
-    let server = fake_platform(account_with_relay).await;
-    Mock::given(method("PUT"))
-        .and(path_regex("^/api/v1/instances/[0-9a-f]{64}$"))
-        .respond_with(|request: &Request| {
-            let instance_id = request.url.path().rsplit('/').next().unwrap_or_default();
-
-            ResponseTemplate::new(200)
-                .set_body_json(json!({ "instance_id": instance_id, "name": "Test machine" }))
-        })
-        .expect(1)
-        .mount(&server)
-        .await;
-    let stored = json!({ "access_token": TOKEN, "keep_on": true, "platform_url": server.uri() });
+    let server = kept_on_platform().await;
 
     // Act, Assert
-    FeatureTest::new("platform_tab_keep_on")
-        .with_git()
+    kept_on_test("platform_tab_keep_on", &server)
         .with_terminal_size(160, 50)
-        .args(platform_args(&server))
-        .setup(move |env| {
-            Box::pin(async move {
-                common::open_database(env)
-                    .await?
-                    .settings()
-                    .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
-                    .await?;
-
-                Ok(())
-            })
-        })
         .run(
             |scenario| {
                 scenario
@@ -248,6 +264,83 @@ async fn platform_tab_keep_on() -> Result<(), Box<dyn std::error::Error>> {
 
                     let kept_off = common::frame_from_capture(&report.captures[1]);
                     assertion::assert_text_in_region(&kept_off, "Remote  On", &full);
+                })
+            },
+        )
+        .await?;
+    server.verify().await;
+
+    Ok(())
+}
+
+/// Top edge of a QR finder pattern, which every pairing link's code
+/// shows whatever its key.
+const QR_FINDER_TOP: &str = "█▀▀▀▀▀█";
+
+/// Verify a laptop-sized terminal shows the pairing link's QR code beside
+/// the account and relay details, with the scan hint.
+#[tokio::test]
+async fn platform_tab_qr_code() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = kept_on_platform().await;
+
+    // Act, Assert
+    kept_on_test("platform_tab_qr_code", &server)
+        .with_terminal_size(130, 38)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab_reverse("Platform"))
+                    .wait_for_text("Relay   Connecting", 10000)
+                    .capture_labeled("qr_code", "The QR code fits beside the details")
+            },
+            |_frame, report| {
+                Box::pin(async move {
+                    let frame = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(&frame, QR_FINDER_TOP, &full);
+                    assertion::assert_text_in_region(&frame, "Scan the code", &full);
+                    assertion::assert_text_in_region(&frame, "l: sign out", &full);
+                    assertion::assert_not_visible(&frame, "Enlarge the terminal");
+                })
+            },
+        )
+        .await?;
+    server.verify().await;
+
+    Ok(())
+}
+
+/// Verify a terminal too short for the pairing link's QR code leaves it
+/// out and says how to show it, while the link stays usable.
+#[tokio::test]
+async fn platform_tab_qr_code_too_short() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = kept_on_platform().await;
+
+    // Act, Assert
+    kept_on_test("platform_tab_qr_code_too_short", &server)
+        .with_terminal_size(130, 26)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab_reverse("Platform"))
+                    .wait_for_text("Relay   Connecting", 10000)
+                    .capture_labeled("no_qr_code", "A short terminal leaves the code out")
+            },
+            |_frame, report| {
+                Box::pin(async move {
+                    let frame = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(&frame, "Open the link", &full);
+                    assertion::assert_text_in_region(
+                        &frame,
+                        "Enlarge the terminal to show the link as a QR code.",
+                        &full,
+                    );
+                    assertion::assert_not_visible(&frame, QR_FINDER_TOP);
                 })
             },
         )

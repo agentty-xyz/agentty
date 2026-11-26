@@ -317,12 +317,13 @@ printf '%s' <key> | xxd -r -p | shasum -a 256
 ### Pair Through the Relay
 
 With a relay, the tab also shows the relay state, a pairing link, and a QR code of the
-link when the terminal is large enough. Scan the code or open the link on the other
-device. The relay's pairing page opens with the code filled in: name the device, press
-`Pair`, then approve the pairing as usual. On this computer, press `o` to open the link;
-press `c` to copy it for another device. Copying uses the terminal clipboard; if the
-terminal does not support it, select the link instead. The link carries the pairing
-code, so it works once.
+link. The code sits beside the details, or below the relay state in a narrow terminal;
+when it fits nowhere, the tab asks you to enlarge the terminal to show it. Scan the code
+or open the link on the other device. The relay's pairing page opens with the code
+filled in: name the device, press `Pair`, then approve the pairing as usual. On this
+computer, press `o` to open the link; press `c` to copy it for another device. Copying
+uses the terminal clipboard; if the terminal does not support it, select the link
+instead. The link carries the pairing code, so it works once.
 
 The browser remembers the pairing, so later visits to the relay's address connect
 without a link. Pairing through a relay needs an up-to-date browser, from 2025 or later,

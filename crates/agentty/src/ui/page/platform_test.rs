@@ -1,6 +1,7 @@
 //! Platform tab rendering tests for each sign-in and account state.
 
 use ag_remote::RelayStatus;
+use ratatui::text::Line;
 
 use super::PlatformPage;
 use crate::presentation::platform::{
@@ -11,6 +12,7 @@ use crate::presentation::remote_control::{
     RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
     RemoteRelayView,
 };
+use crate::ui::page::remote_control::QrPlacement;
 use crate::ui::render::Page;
 use crate::ui::style::palette;
 
@@ -246,22 +248,40 @@ fn registered_page_shows_remote_control_through_the_platform_relay() {
     assert!(!running.contains("127.0.0.1:50000"));
 }
 
-#[test]
-fn registered_page_shows_the_qr_code_only_when_it_fits() {
-    // Arrange
-    let relay = RemoteRelayView::new(
-        "https://platform.example/sessions/#relay=x".to_string(),
-        RelayStatus::Connected,
+/// Builds remote control through the platform's relay with a pairing link
+/// as long as the platform's, keep on, and one connected device.
+fn platform_remote_control() -> RemoteControlView {
+    let link = format!(
+        "https://platform.agentty.xyz/?pair#relay=wss%3A%2F%2Frelay%2Eplatform%2Eagentty%2Exyz\
+         &key={}&code=ABCD%2DEFGH",
+        "0123456789abcdef".repeat(4)
     );
-    let first_qr_row = relay.qr_code[0].clone();
-    let remote_control = RemoteControlView {
+
+    RemoteControlView {
+        devices: vec![RemoteDeviceView {
+            id: "mac".to_string(),
+            is_connected: true,
+            name: "Mac browser".to_string(),
+        }],
         listener: Some(RemoteListenerView {
             pairing_code: "ABCD-EFGH".to_string(),
-            relay: Some(relay),
+            relay: Some(RemoteRelayView::new(link, RelayStatus::Connected)),
             url: "http://127.0.0.1:50000/".to_string(),
         }),
         ..RemoteControlView::default()
-    };
+    }
+}
+
+#[test]
+fn registered_page_shows_the_qr_code_wherever_it_fits() {
+    // Arrange
+    let remote_control = platform_remote_control();
+    let qr_code = remote_control
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.qr_code.clone())
+        .expect("relay should have a QR code");
     let platform = registered();
     let page = PlatformPage::new(PlatformTabView {
         platform: &platform,
@@ -269,18 +289,62 @@ fn registered_page_shows_the_qr_code_only_when_it_fits() {
     });
 
     // Act
-    let tall = page.lines(200, 80);
-    let short = page.lines(200, 10);
+    // The panel of a laptop terminal, a narrow but tall one, and a short one.
+    let laptop = page.content(127, 30);
+    let narrow = page.content(80, 60);
+    let short = page.content(127, 20);
 
     // Assert
-    let has_qr_code = |lines: &[ratatui::text::Line<'_>]| {
-        lines.iter().any(|line| line.to_string() == first_qr_row)
-    };
-    assert!(has_qr_code(&tall));
-    assert!(!has_qr_code(&short));
-    let relay_row = tall
+    let texts =
+        |lines: &[Line<'_>]| -> Vec<String> { lines.iter().map(ToString::to_string).collect() };
+    let laptop_text = texts(&laptop.lines);
+    let narrow_text = texts(&narrow.lines);
+    let short_text = texts(&short.lines);
+    assert_eq!(laptop.placement, QrPlacement::Beside);
+    assert_eq!(laptop.qr_code, qr_code.as_slice());
+    assert!(!laptop_text.contains(&qr_code[0]));
+    assert!(
+        laptop_text
+            .iter()
+            .any(|line| line.starts_with("Scan the code or open the link"))
+    );
+    assert!(laptop_text.iter().any(|line| line.contains("l: sign out")));
+    assert_eq!(narrow.placement, QrPlacement::Below);
+    assert!(narrow_text.contains(&qr_code[0]));
+    assert_eq!(short.placement, QrPlacement::Hidden);
+    assert!(!short_text.contains(&qr_code[0]));
+    assert!(
+        short_text
+            .iter()
+            .any(|line| line.starts_with("Enlarge the terminal"))
+    );
+    let relay_row = laptop
+        .lines
         .iter()
         .find(|line| line.to_string().starts_with("Relay   Connected"))
         .expect("relay row should render");
     assert_eq!(relay_row.spans[1].style.fg, Some(palette::success()));
+}
+
+#[test]
+fn rendered_page_draws_the_qr_code_beside_the_account() {
+    // Arrange
+    let remote_control = platform_remote_control();
+    let first_qr_row = remote_control
+        .listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.qr_code[0].clone())
+        .expect("relay should have a QR code");
+
+    // Act
+    let text = rendered_text(&registered(), &remote_control, 134, 32);
+
+    // Assert
+    let first_row = text
+        .lines()
+        .find(|row| row.contains(&first_qr_row))
+        .expect("first QR row should render");
+    assert!(first_row.contains("Address https://platform.example"));
+    assert!(text.contains("l: sign out"));
 }
