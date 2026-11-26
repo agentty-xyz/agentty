@@ -149,7 +149,7 @@ pub(crate) struct AppClients {
     pub(super) agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     pub(super) project_discovery_home: Option<PathBuf>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
-    /// Starts the loopback listener behind the Remote tab.
+    /// Starts the remote-control server behind the Platform tab.
     pub(super) remote_control_launcher: Arc<dyn RemoteControlLauncher>,
     /// Copies remote-control pairing links and mouse selections through the
     /// terminal.
@@ -333,7 +333,7 @@ pub struct App {
     /// `AppMode::View`, or once the panel opens, so a later legitimate
     /// transition reloads again.
     pub(crate) question_reconcile_reload_attempted: Option<SessionId>,
-    /// Owns the Remote tab's listener and its paired-device view.
+    /// Owns the remote-control server and its paired-device view.
     pub(crate) remote_control: crate::app::remote_control::RemoteControl,
     /// Caches generated focused review text per session so it survives mode
     /// switches, is hydrated after restart, and is ready when the user presses
@@ -477,7 +477,6 @@ impl App {
     /// Prepares the tab that was just selected for display.
     fn show_current_tab(&mut self) {
         let shows_remote_control = match self.tabs.current() {
-            Tab::Remote => true,
             Tab::Platform => self.platform.view().is_registered(),
             Tab::Projects | Tab::Sessions | Tab::Settings => false,
         };

@@ -6,7 +6,8 @@ edition.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
-# The relay ships as a container image, not as a crates.io release.
+# Programs that embed the relay depend on it from this repository; it has
+# no crates.io release.
 publish = false
 
 [lints]
@@ -16,11 +17,10 @@ workspace = true
 ag-noise.workspace = true
 async-trait.workspace = true
 axum.workspace = true
-clap.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "signal"] }
+tokio = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
 futures-util.workspace = true

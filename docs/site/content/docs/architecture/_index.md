@@ -24,4 +24,4 @@ boundaries, orchestration, and change paths.
 - [Execution Graphs](@/docs/architecture/execution-graphs.md) documents static graph
   snapshots, dispatch, exact result handoffs, and recovery.
 - [Remote Control Design](@/docs/architecture/remote-control-design.md) documents the
-  remote-control transports, keys, relay trust model, and design decisions.
+  remote-control relay transport, keys, platform trust model, and design decisions.

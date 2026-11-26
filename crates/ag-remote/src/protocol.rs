@@ -1,6 +1,7 @@
-//! JSON frames exchanged over the remote control WebSocket.
+//! JSON frames exchanged over a device's encrypted stream.
 //!
-//! Every frame is one text message. The client's first frame is
+//! Every frame is one encrypted text message. Fields a side does not know
+//! are ignored, so a newer peer may add them. The client's first frame is
 //! [`ClientFrame::Hello`] or [`ClientFrame::Pair`]. A pairing client first
 //! receives [`ServerFrame::AwaitingApproval`] while the terminal decides.
 //! After the server answers with [`ServerFrame::Welcome`] or
@@ -27,15 +28,11 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
-    /// Authenticates a previously paired device.
+    /// Authenticates a previously paired device by the key its encrypted
+    /// stream proves.
     Hello {
         /// Protocol version the client speaks.
         protocol_version: u32,
-        /// Device token returned by [`ServerFrame::Paired`]. A device
-        /// connected through a relay omits it: its encrypted channel already
-        /// proves its key.
-        #[serde(default)]
-        token: String,
     },
     /// Pairs a new device with a one-time code shown in the terminal.
     Pair {
@@ -659,7 +656,8 @@ pub enum ServerFrame {
         /// Latest host revision.
         revision: u64,
     },
-    /// Pairing succeeded; the client keeps `token` for later connections.
+    /// Pairing succeeded; the device's key authenticates its later
+    /// connections.
     Paired {
         /// Optional requests the server supports, as in
         /// [`ServerFrame::Welcome`].
@@ -671,11 +669,6 @@ pub enum ServerFrame {
         protocol_version: u32,
         /// Host revision at authentication time.
         revision: u64,
-        /// Secret device token. The server keeps only its hash. Absent for
-        /// a device paired through a relay, which authenticates with its
-        /// key instead.
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        token: String,
     },
     /// The server refused the connection and closes it next.
     Rejected {
@@ -689,7 +682,7 @@ pub enum ServerFrame {
         /// Operation outcome.
         result: RemoteResult,
     },
-    /// Authentication with an existing token succeeded.
+    /// A paired device authenticated.
     Welcome {
         /// Optional requests the server supports. A client offers a feature
         /// only when its capability is listed, so it never sends a request

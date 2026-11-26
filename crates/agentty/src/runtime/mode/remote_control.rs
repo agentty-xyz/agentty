@@ -1,11 +1,12 @@
-//! Key handling for the Remote tab's own actions.
+//! Key handling for remote control in a registered Platform tab.
 
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::App;
 
-/// Handles the Remote tab keys that list mode does not share with the other
-/// tabs: pairing codes, relay links, pairing approval, and device removal.
+/// Handles the remote-control keys of a registered Platform tab that list
+/// mode does not share with the other tabs: pairing codes, pairing links,
+/// pairing approval, and device removal.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('n') => app.issue_remote_pairing_code(),

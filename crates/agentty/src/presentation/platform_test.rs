@@ -1,8 +1,12 @@
 //! Platform view projection tests.
 
+use ag_remote::RelayStatus;
+
 use crate::presentation::platform::{
-    PlatformAccess, PlatformAccountView, PlatformSignInView, PlatformState, PlatformView,
+    PlatformAccess, PlatformAccountView, PlatformSignInView, PlatformState, PlatformTabView,
+    PlatformView,
 };
+use crate::presentation::remote_control::{RemoteControlView, RemoteDeviceView, RemoteRelayView};
 
 /// Builds a view of the platform in `state`.
 fn view(state: PlatformState) -> PlatformView {
@@ -76,4 +80,50 @@ fn a_checked_account_offers_keep_on_starting_off() {
     assert_eq!(checking.keep_on_notice, None);
     assert!(!checking.offers_keep_on());
     assert!(answered.offers_keep_on());
+}
+
+#[test]
+fn tab_label_counts_connected_devices_only_while_remote_control_runs() {
+    // Arrange
+    let platform = PlatformView::new("https://platform.example".to_string());
+    let devices = vec![
+        RemoteDeviceView {
+            id: "phone".to_string(),
+            is_connected: true,
+            name: "Phone".to_string(),
+        },
+        RemoteDeviceView {
+            id: "tablet".to_string(),
+            is_connected: false,
+            name: "Tablet".to_string(),
+        },
+    ];
+    let stopped = RemoteControlView {
+        devices: devices.clone(),
+        ..RemoteControlView::default()
+    };
+    let running = RemoteControlView {
+        devices,
+        relay: Some(RemoteRelayView::new(
+            "https://platform.example/pair#code=ABCD".to_string(),
+            RelayStatus::Connected,
+        )),
+        ..RemoteControlView::default()
+    };
+
+    // Act
+    let stopped_label = PlatformTabView {
+        platform: &platform,
+        remote_control: &stopped,
+    }
+    .tab_label();
+    let running_label = PlatformTabView {
+        platform: &platform,
+        remote_control: &running,
+    }
+    .tab_label();
+
+    // Assert
+    assert_eq!(stopped_label, "Platform");
+    assert_eq!(running_label, "Platform (1 online)");
 }

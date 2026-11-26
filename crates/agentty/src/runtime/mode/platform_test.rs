@@ -77,7 +77,7 @@ async fn platform_keys_follow_the_sign_in_state() {
     })
     .await;
     let is_registered = app.platform.view().is_registered();
-    let is_connected = app.remote_control.view().listener.is_some();
+    let is_connected = app.remote_control.view().relay.is_some();
     handle(&mut app, key('n')).await;
     handle(&mut app, key('a')).await;
     let is_kept_on = app
@@ -93,7 +93,7 @@ async fn platform_keys_follow_the_sign_in_state() {
     assert!(is_registered);
     assert!(is_connected);
     assert!(is_kept_on);
-    assert_eq!(app.remote_control.view().listener, None);
+    assert_eq!(app.remote_control.view().relay, None);
     assert_eq!(
         app.platform.view().state,
         PlatformState::SigningOut { notice: None }

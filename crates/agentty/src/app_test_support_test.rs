@@ -10,7 +10,7 @@ pub(crate) use super::project_page::tests::{
     add_listed_project, git_status_updated, hide_project, hold_background_polls,
     insert_loadable_session,
 };
-pub(crate) use super::remote_control::tests::start_fake_listener;
+pub(crate) use super::remote_control::tests::start_fake_remote_control;
 pub(crate) use super::review::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
 pub(crate) use super::service::test_support::{SteerableSessionChannel, TestSessionRunFactory};
 pub(crate) use super::session::{SyncMainOutcome, SyncSessionStartError};

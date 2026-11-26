@@ -12,33 +12,23 @@ use ag_git::{GitClient, RealGitClient};
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, Span};
 use agentty::analytics::Analytics;
-use agentty::app::{
-    AGENTTY_WT_DIR, App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home,
-    platform_instance_name,
-};
-use agentty::domain::remote_url::{parse_platform_url, parse_relay_url};
+use agentty::app::{AGENTTY_WT_DIR, App, AppError, agentty_home, platform_instance_name};
+use agentty::domain::remote_url::parse_platform_url;
 use agentty::infra::db::{
     AppRepositories, DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
 };
 use agentty::infra::platform::{DEFAULT_PLATFORM_URL, HttpPlatformClient};
-use clap::{ArgGroup, Parser};
+use clap::Parser;
 
 /// Command-line options for launching Agentty.
 #[derive(Debug, Parser)]
-#[command(
-    version,
-    about,
-    group(ArgGroup::new("remote_control").args(["remote", "remote_relay"]).multiple(true))
-)]
+#[command(version, about)]
 struct Cli {
     /// Disables `PostHog` usage telemetry; OTLP export to `--otlp-endpoint` is
     /// unaffected.
     #[arg(long)]
     disable_telemetry: bool,
-    /// Preview features enabled for this launch.
-    #[command(flatten)]
-    experimental: ExperimentalFeatures,
     /// Disables automatic application updates.
     #[arg(long)]
     no_update: bool,
@@ -49,9 +39,8 @@ struct Cli {
     /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
     #[arg(long, value_name = "URL")]
     otlp_endpoint: Option<String>,
-    /// Agentty Platform the Platform tab signs in to. Plain `http://` is
-    /// accepted only for this computer. A launch with `--remote-relay`
-    /// contacts no platform.
+    /// Agentty Platform the Platform tab signs in to, which remote control
+    /// runs through. Plain `http://` is accepted only for this computer.
     #[arg(
         long,
         value_name = "URL",
@@ -59,50 +48,6 @@ struct Cli {
         value_parser = parse_platform_url
     )]
     platform_url: String,
-    /// Loopback port that remote control listens on; `0` picks a free port.
-    #[arg(
-        long,
-        value_name = "PORT",
-        default_value_t = DEFAULT_REMOTE_CONTROL_PORT,
-        requires = "remote_control"
-    )]
-    remote_control_port: u16,
-    /// Host name a tunnel uses to reach remote control, such as a
-    /// Tailscale machine name; repeat for several. Loopback names are always
-    /// accepted.
-    #[arg(long, value_name = "HOST", requires = "remote_control")]
-    remote_control_host: Vec<String>,
-    /// Relay that remote control registers with, such as
-    /// `wss://relay.example`, so devices can pair and connect without a
-    /// tunnel. Traffic through it is encrypted end to end. It offers the
-    /// Remote tab on its own, and replaces the Platform tab: the launch then
-    /// contacts no platform.
-    #[arg(long, value_name = "URL", value_parser = parse_relay_url)]
-    remote_relay: Option<String>,
-}
-
-impl Cli {
-    /// Returns whether this launch offers remote control and the Remote tab:
-    /// with `--experimental-remote` or `--remote-relay`.
-    fn offers_remote_control(&self) -> bool {
-        self.experimental.remote || self.remote_relay.is_some()
-    }
-
-    /// Returns whether this launch offers the Platform tab: always, unless
-    /// `--remote-relay` names a relay, which keeps the platform out of the
-    /// launch and its saved sign-in untouched.
-    fn offers_platform(&self) -> bool {
-        self.remote_relay.is_none()
-    }
-}
-
-/// Opt-in preview features, disabled unless their launch flags are present.
-#[derive(Debug, Default, clap::Args)]
-struct ExperimentalFeatures {
-    /// Offers the Remote tab, which lets a paired phone or browser follow
-    /// and reply to sessions through a loopback listener.
-    #[arg(long = "experimental-remote")]
-    remote: bool,
 }
 
 /// Runs the native sandbox helper when a Harness turn started this
@@ -265,24 +210,13 @@ async fn run_application(
             startup.finish(app.as_ref().map_or(Outcome::Failed, |_| Outcome::Completed));
             let mut app = app?;
             app.set_analytics(analytics.clone());
-            let offers_platform = cli.offers_platform();
-            if cli.offers_remote_control() {
-                app.enable_remote_control(
-                    cli.remote_control_port,
-                    cli.remote_control_host,
-                    cli.remote_relay,
-                )
-                .await;
-            }
-            if offers_platform {
-                let client = HttpPlatformClient::new(&cli.platform_url)?;
-                app.enable_platform(
-                    Arc::new(client),
-                    cli.platform_url,
-                    platform_instance_name(&host_name()),
-                )
-                .await;
-            }
+            let client = HttpPlatformClient::new(&cli.platform_url)?;
+            app.enable_platform(
+                Arc::new(client),
+                cli.platform_url,
+                platform_instance_name(&host_name()),
+            )
+            .await;
 
             runtime(&mut app).await
         }),

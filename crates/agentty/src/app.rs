@@ -70,7 +70,6 @@ pub(crate) use core::{AppEvent, AppRuntimeEvent};
 pub use error::AppError;
 pub use platform::platform_instance_name;
 pub use project::ProjectManager;
-pub use remote_control::DEFAULT_REMOTE_CONTROL_PORT;
 pub(crate) use review::ReviewCacheEntry;
 pub use service::AppServices;
 pub use session::{SessionError, SessionManager, SessionState};

@@ -22,32 +22,27 @@ pub enum Tab {
     Sessions,
     /// Settings for the active project.
     Settings,
-    /// Remote control of the active project's sessions, offered only with
-    /// `--experimental-remote` or `--remote-relay`.
-    Remote,
-    /// Sign-in to an Agentty Platform and remote control through its relay,
-    /// offered unless `--remote-relay` names a relay.
+    /// Sign-in to an Agentty Platform and remote control through its relay.
     Platform,
 }
 
 impl Tab {
     /// Every tab in the order they are rendered.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::Projects,
         Self::Sessions,
         Self::Settings,
-        Self::Remote,
         Self::Platform,
     ];
 
     /// Returns the tab's name: its persisted value and its header label,
-    /// which the header extends for [`Tab::Remote`] while devices connect.
+    /// which the header extends for [`Tab::Platform`] while remote control
+    /// runs.
     pub fn title(self) -> &'static str {
         match self {
             Tab::Projects => "Projects",
             Tab::Sessions => "Sessions",
             Tab::Settings => "Settings",
-            Tab::Remote => "Remote",
             Tab::Platform => "Platform",
         }
     }
@@ -67,7 +62,7 @@ impl Tab {
     pub fn scope(self) -> TabScope {
         match self {
             Tab::Projects => TabScope::Global,
-            Tab::Sessions | Tab::Settings | Tab::Remote | Tab::Platform => TabScope::Project,
+            Tab::Sessions | Tab::Settings | Tab::Platform => TabScope::Project,
         }
     }
 }
@@ -76,31 +71,23 @@ impl Tab {
 ///
 /// The derived `Default` initializes `current` to `Tab::default()`, which
 /// selects `Tab::Projects` on a freshly constructed manager, and leaves
-/// [`Tab::Remote`] and [`Tab::Platform`] out of the cycle.
+/// [`Tab::Platform`] out of the cycle.
 #[derive(Default)]
 pub struct TabManager {
     current: Tab,
     /// Whether this launch offers [`Tab::Platform`].
     is_platform_available: bool,
-    /// Whether this launch offers [`Tab::Remote`].
-    is_remote_available: bool,
 }
 
 impl TabManager {
     /// Builds a manager with an explicit starting tab and without
-    /// [`Tab::Remote`] or [`Tab::Platform`].
+    /// [`Tab::Platform`].
     #[must_use]
     pub fn new(current: Tab) -> Self {
         Self {
             current,
             is_platform_available: false,
-            is_remote_available: false,
         }
-    }
-
-    /// Adds [`Tab::Remote`] to the tabs this launch offers.
-    pub fn enable_remote(&mut self) {
-        self.is_remote_available = true;
     }
 
     /// Adds [`Tab::Platform`] to the tabs this launch offers.
@@ -114,7 +101,6 @@ impl TabManager {
         Tab::ALL
             .into_iter()
             .filter(|tab| match tab {
-                Tab::Remote => self.is_remote_available,
                 Tab::Platform => self.is_platform_available,
                 Tab::Projects | Tab::Sessions | Tab::Settings => true,
             })
@@ -122,9 +108,7 @@ impl TabManager {
     }
 
     /// Returns the currently selected tab. A selected tab this launch does
-    /// not offer, such as [`Tab::Remote`] restored from a launch with
-    /// `--experimental-remote` or `--remote-relay`, reads as
-    /// [`Tab::Sessions`].
+    /// not offer reads as [`Tab::Sessions`].
     #[must_use]
     pub fn current(&self) -> Tab {
         if self.available_tabs().contains(&self.current) {

@@ -1604,7 +1604,6 @@ fn tab_page_marker(tab_name: &str) -> &'static str {
         "Projects" => "Activity",
         "Sessions" => SESSIONS_TABLE_HEADER_MARKER,
         "Settings" => "Default Smart Model",
-        "Remote" => "Paired devices",
         "Platform" => "Address ",
         _ => "<unsupported E2E tab>",
     }

@@ -88,7 +88,7 @@ impl MemoryDeviceStore {
         }
     }
 
-    /// Stores one device whose token hashes to `token_hash`.
+    /// Stores one device whose credential digest is `token_hash`.
     pub(crate) fn with_device(self, device_id: &str, token_hash: &str) -> Self {
         self.devices.lock().expect("devices lock").push((
             RemoteDevice {
@@ -103,7 +103,7 @@ impl MemoryDeviceStore {
         self
     }
 
-    /// Returns the stored device identifiers and token hashes.
+    /// Returns the stored device identifiers, names, and credential digests.
     pub(crate) fn stored(&self) -> Vec<(String, String, String)> {
         self.devices
             .lock()
@@ -623,7 +623,6 @@ impl StateFixture {
             },
             entropy,
             shutdown_rx,
-            Vec::new(),
         ));
 
         Self {

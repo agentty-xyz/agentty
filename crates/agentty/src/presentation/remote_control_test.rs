@@ -3,13 +3,12 @@
 use ag_remote::RelayStatus;
 
 use crate::presentation::remote_control::{
-    LIGHT_CELL, RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
-    RemoteRelayView,
+    LIGHT_CELL, RemoteControlView, RemoteDeviceView, RemotePairingRequestView, RemoteRelayView,
 };
 
 /// Builds a view with one connected device, one idle device, and one
 /// pending pairing.
-fn view_with_devices(listener: Option<RemoteListenerView>) -> RemoteControlView {
+fn view_with_devices(relay: Option<RemoteRelayView>) -> RemoteControlView {
     RemoteControlView {
         devices: vec![
             RemoteDeviceView {
@@ -24,13 +23,13 @@ fn view_with_devices(listener: Option<RemoteListenerView>) -> RemoteControlView 
             },
         ],
         error: None,
-        listener,
         notice: None,
         pairing_requests: vec![RemotePairingRequestView {
             confirmation: "K7QX".to_string(),
             device_name: "Laptop".to_string(),
             id: 1,
         }],
+        relay,
         selected_device_index: 0,
     }
 }
@@ -86,23 +85,4 @@ fn connected_device_count_counts_only_connected_devices() {
 
     // Assert
     assert_eq!(connected, 1);
-}
-
-#[test]
-fn tab_label_counts_connected_devices_only_while_listening() {
-    // Arrange
-    let stopped = view_with_devices(None);
-    let listening = view_with_devices(Some(RemoteListenerView {
-        pairing_code: "ABCD-EFGH".to_string(),
-        relay: None,
-        url: "http://127.0.0.1:4646/".to_string(),
-    }));
-
-    // Act
-    let stopped_label = stopped.tab_label();
-    let listening_label = listening.tab_label();
-
-    // Assert
-    assert_eq!(stopped_label, "Remote");
-    assert_eq!(listening_label, "Remote (1 online)");
 }

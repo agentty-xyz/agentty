@@ -1,11 +1,12 @@
-//! Remote tab key handling tests.
+//! Remote-control key handling tests for a registered Platform tab.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::handle;
 use crate::app::App;
+use crate::infra::platform::RemoteControlService;
 
-/// Sends one plain key press to the Remote tab's handler.
+/// Sends one plain key press to the remote-control key handler.
 async fn press(app: &mut App, code: KeyCode) {
     handle(app, KeyEvent::new(code, KeyModifiers::NONE)).await;
 }
@@ -22,56 +23,59 @@ async fn pair_devices(app: &App, ids: &[&str]) {
     }
 }
 
+/// Returns the pairing link shown while remote control runs.
+fn shown_link(app: &App) -> Option<String> {
+    app.remote_control
+        .view()
+        .relay
+        .as_ref()
+        .map(|relay| relay.link.clone())
+}
+
+/// Hands the app a platform relay where nothing listens, so the real server
+/// starts and keeps retrying without reaching anything.
+async fn offer_unreachable_platform_relay(app: &mut App) {
+    app.set_platform_relay(Some(RemoteControlService {
+        pairing_url: "https://platform.example/sessions/".to_string(),
+        relay_url: "ws://127.0.0.1:9".to_string(),
+    }))
+    .await;
+}
+
 #[tokio::test]
-async fn n_replaces_the_code_of_a_running_listener() {
+async fn n_replaces_the_pairing_link_of_running_remote_control() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.enable_remote_control(0, Vec::new(), None).await;
+    offer_unreachable_platform_relay(&mut app).await;
     app.start_remote_control().await;
-    let started = app.remote_control.view().listener.clone();
+    let started = shown_link(&app);
 
     // Act
     press(&mut app, KeyCode::Char('n')).await;
 
     // Assert
-    let started = started.expect("the listener should start");
-    let replaced = app
-        .remote_control
-        .view()
-        .listener
-        .clone()
-        .expect("n should keep the listener running");
-    assert_eq!(replaced.url, started.url);
-    assert_ne!(replaced.pairing_code, started.pairing_code);
+    let started = started.expect("remote control should start");
+    let replaced = shown_link(&app).expect("n should keep remote control running");
+    assert!(started.starts_with("https://platform.example/sessions/#relay="));
+    assert_ne!(replaced, started);
     app.stop_remote_control().await;
 }
 
 #[tokio::test]
-async fn o_and_c_do_nothing_without_a_relay_link() {
+async fn link_and_pairing_keys_do_nothing_while_remote_control_is_off() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.enable_remote_control(0, Vec::new(), None).await;
-    app.start_remote_control().await;
 
     // Act
+    press(&mut app, KeyCode::Char('n')).await;
     press(&mut app, KeyCode::Char('o')).await;
     press(&mut app, KeyCode::Char('c')).await;
-
-    // Assert
-    assert_eq!(app.remote_control.view().notice, None);
-    app.stop_remote_control().await;
-}
-
-#[tokio::test]
-async fn y_and_x_do_nothing_without_pending_pairings() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-
-    // Act
     press(&mut app, KeyCode::Char('y')).await;
     press(&mut app, KeyCode::Char('x')).await;
 
     // Assert
+    assert_eq!(app.remote_control.view().relay, None);
+    assert_eq!(app.remote_control.view().notice, None);
     assert_eq!(app.remote_control.view().pairing_requests, []);
     assert_eq!(app.remote_control.view().error, None);
 }
@@ -81,7 +85,7 @@ async fn d_removes_the_selected_device_and_other_keys_do_nothing() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     pair_devices(&app, &["phone", "tablet"]).await;
-    app.enable_remote_control(0, Vec::new(), None).await;
+    app.refresh_remote_devices().await;
     app.remote_control.select_next_device();
 
     // Act

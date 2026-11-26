@@ -1,6 +1,7 @@
-//! One client connection over a frame transport: authentication, pairing
-//! approval, the tasks that run its requests, and change pushes. What each
-//! request may reach and how it is answered lives in `crate::request`.
+//! One device connection over a frame transport: authentication by the
+//! device key the transport proved, pairing approval, the tasks that run its
+//! requests, and change pushes. What each request may reach and how it is
+//! answered lives in `crate::request`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,13 +14,13 @@ use tokio::task::{self, JoinSet};
 use tokio::time::{Instant, sleep_until, timeout};
 
 use crate::PROTOCOL_VERSION;
-use crate::device::{NewRemoteDevice, RemoteDevice, key_hash, token_hash};
+use crate::device::{NewRemoteDevice, RemoteDevice, key_hash};
 use crate::entropy::random_hex;
 use crate::pairing::random_code;
 use crate::protocol::{ClientFrame, RemoteRequest, RemoteResult, RequestedSessionId, ServerFrame};
 use crate::request::{RequestOrder, RequestPolicy, capabilities, execute};
 use crate::server::{HandshakeSlot, RemoteConnection, ServerState};
-use crate::transport::{CloseCause, FrameTransport, Incoming};
+use crate::transport::{FrameTransport, Incoming};
 
 /// Time a client has to send its first frame.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -41,8 +42,9 @@ const PAIRING_DENIED: &str = "Pairing was denied";
 const PAIRING_TIMED_OUT: &str = "Pairing was not approved in time";
 /// Rejection reason for frames sent while pairing waits for approval.
 const PAIRING_PENDING: &str = "Wait for pairing approval";
-/// Close reason sent to every connection when the server stops.
-const SERVER_STOPPED: &str = "Server stopped";
+/// Rejection reason for a key that no paired device holds. The web client
+/// matches this text to forget a pairing, so it stays as it is.
+const UNKNOWN_DEVICE: &str = "Unknown device token";
 /// Requests one connection may have running at once.
 pub(crate) const MAX_REQUESTS_IN_PROGRESS: usize = 8;
 /// Error returned for a request beyond [`MAX_REQUESTS_IN_PROGRESS`].
@@ -50,14 +52,16 @@ pub(crate) const TOO_MANY_REQUESTS: &str = "Too many requests in progress";
 /// Error returned for a request whose task failed before it could reply.
 const REQUEST_FAILED: &str = "Request failed";
 
-/// Runs one connection until the client leaves, the device is revoked, or
-/// the server stops. `handshake` counts the connection as unauthenticated
-/// until a device authenticates on it, and `proof` says how it does so.
+/// Runs one connection until the device leaves, is revoked, or the server
+/// stops. `handshake` counts the connection as unauthenticated until a
+/// device authenticates on it, and `device` is the key the transport's
+/// encrypted channel was opened with, which identifies the device once its
+/// first frame has arrived over that channel.
 pub(crate) async fn serve<T: FrameTransport>(
     mut transport: T,
     state: Arc<ServerState>,
     handshake: HandshakeSlot,
-    proof: DeviceProof,
+    device: PublicKey,
 ) {
     let _open_socket = state.track_socket();
     let mut revisions = state.revisions();
@@ -66,7 +70,7 @@ pub(crate) async fn serve<T: FrameTransport>(
     let first_incoming = tokio::select! {
         biased;
         () = wait_until_stopping(&mut shutdown_rx) => {
-            transport.close(CloseCause::Stopping, SERVER_STOPPED).await;
+            transport.close().await;
 
             return;
         }
@@ -82,7 +86,7 @@ pub(crate) async fn serve<T: FrameTransport>(
 
         return;
     };
-    let authenticated = match authenticate(&state, frame, &mut revisions, &proof).await {
+    let authenticated = match authenticate(&state, frame, &mut revisions, &device).await {
         Ok(Authentication::Authenticated { connection, reply }) => Ok((connection, reply)),
         Ok(Authentication::PairingRequested(device)) => {
             let Some(decision) = await_approval(
@@ -117,16 +121,6 @@ pub(crate) async fn serve<T: FrameTransport>(
     run(transport, &state, revisions, shutdown_rx, close_rx).await;
 }
 
-/// How a connection proves which device it is.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeviceProof {
-    /// The transport's encrypted channel was opened with this device key.
-    /// The proof holds once the first frame has arrived over that channel.
-    Key(PublicKey),
-    /// The first frame carries the device token.
-    Token,
-}
-
 /// Outcome of a valid first frame.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Authentication {
@@ -146,18 +140,15 @@ pub(crate) enum Authentication {
 pub(crate) struct PairingDevice {
     /// Code the device and the terminal both show.
     pub(crate) confirmation: String,
-    /// Digest stored for the device: of its token, or of its key.
+    /// Digest stored for the device's key.
     pub(crate) credential_hash: String,
     /// Identifier the device receives on approval.
     pub(crate) device_id: String,
     /// Bounded, trimmed device name.
     pub(crate) device_name: String,
-    /// Secret token the device receives on approval; empty for a device
-    /// that authenticates with its key.
-    pub(crate) token: String,
 }
 
-/// Authenticates the first frame.
+/// Authenticates the first frame from the device that holds `device`.
 ///
 /// A known device marks the current host revision as reported. A redeemed
 /// pairing code only prepares credentials; nothing is stored until the host
@@ -166,21 +157,15 @@ pub(crate) async fn authenticate(
     state: &ServerState,
     frame: ClientFrame,
     revisions: &mut watch::Receiver<u64>,
-    proof: &DeviceProof,
+    device: &PublicKey,
 ) -> Result<Authentication, &'static str> {
+    let credential_hash = key_hash(device);
     match frame {
-        ClientFrame::Hello {
-            protocol_version,
-            token,
-        } => {
+        ClientFrame::Hello { protocol_version } => {
             check_protocol_version(protocol_version)?;
-            let credential_hash = match proof {
-                DeviceProof::Key(public_key) => key_hash(public_key),
-                DeviceProof::Token => token_hash(&token),
-            };
             let device = find_device(state, &credential_hash)
                 .await?
-                .ok_or("Unknown device token")?;
+                .ok_or(UNKNOWN_DEVICE)?;
 
             welcome(state, device, revisions).await
         }
@@ -190,17 +175,14 @@ pub(crate) async fn authenticate(
             protocol_version,
         } => {
             check_protocol_version(protocol_version)?;
-            // A key device that already paired, for example after its
-            // `Paired` frame was lost, is welcomed without spending the code.
-            if let DeviceProof::Key(public_key) = proof
-                && let Some(device) = find_device(state, &key_hash(public_key)).await?
-            {
+            // A device that already paired, for example after its `Paired`
+            // frame was lost, is welcomed without spending the code.
+            if let Some(device) = find_device(state, &credential_hash).await? {
                 return welcome(state, device, revisions).await;
             }
             let entropy = state.entropy.as_ref();
-            let (Some(device_id), Some(token), Some(confirmation)) = (
+            let (Some(device_id), Some(confirmation)) = (
                 random_hex(entropy, 16),
-                random_hex(entropy, 32),
                 random_code(entropy, CONFIRMATION_LENGTH),
             ) else {
                 return Err("Cannot generate device credentials");
@@ -208,17 +190,12 @@ pub(crate) async fn authenticate(
             if !state.pairing().redeem(&code) {
                 return Err("Invalid or expired pairing code");
             }
-            let (credential_hash, token) = match proof {
-                DeviceProof::Key(public_key) => (key_hash(public_key), String::new()),
-                DeviceProof::Token => (token_hash(&token), token),
-            };
 
             Ok(Authentication::PairingRequested(PairingDevice {
                 confirmation,
                 credential_hash,
                 device_id,
                 device_name: device_display_name(&device_name),
-                token,
             }))
         }
         ClientFrame::Request { .. } => Err("Authenticate before sending requests"),
@@ -286,7 +263,7 @@ async fn await_approval<T: FrameTransport>(
     let decision = tokio::select! {
         biased;
         () = wait_until_stopping(shutdown_rx) => {
-            transport.close(CloseCause::Stopping, SERVER_STOPPED).await;
+            transport.close().await;
 
             return None;
         }
@@ -294,9 +271,7 @@ async fn await_approval<T: FrameTransport>(
         incoming = transport.receive() => {
             return match incoming {
                 Incoming::Closed => None,
-                Incoming::Binary | Incoming::Control | Incoming::Text(_) => {
-                    Some(Err(PAIRING_PENDING))
-                }
+                Incoming::Binary | Incoming::Text(_) => Some(Err(PAIRING_PENDING)),
             };
         }
     };
@@ -309,7 +284,7 @@ async fn await_approval<T: FrameTransport>(
 }
 
 /// Stores an approved device and returns the connection to register with
-/// the frame that hands the device its token.
+/// the frame that tells the device it is paired.
 ///
 /// Marks the current host revision as reported.
 pub(crate) async fn complete_pairing(
@@ -339,7 +314,6 @@ pub(crate) async fn complete_pairing(
             device_id: device.device_id,
             protocol_version: PROTOCOL_VERSION,
             revision,
-            token: device.token,
         },
     ))
 }
@@ -388,7 +362,7 @@ async fn serve_authenticated<T: FrameTransport>(
         tokio::select! {
             biased;
             () = wait_until_stopping(shutdown_rx) => {
-                transport.close(CloseCause::Stopping, SERVER_STOPPED).await;
+                transport.close().await;
 
                 return;
             }
@@ -417,7 +391,6 @@ async fn serve_authenticated<T: FrameTransport>(
             incoming = transport.receive() => {
                 match handle_incoming(incoming) {
                     MessageOutcome::Closed => return,
-                    MessageOutcome::Ignored => {}
                     MessageOutcome::Rejected(reason) => {
                         reject(transport, reason).await;
 
@@ -547,8 +520,6 @@ impl RequestTasks {
 pub(crate) enum MessageOutcome {
     /// The client left or the transport failed.
     Closed,
-    /// Control traffic that needs no reply.
-    Ignored,
     /// The client broke the protocol; the connection closes.
     Rejected(&'static str),
     /// Run this request and reply to it under `id`.
@@ -572,7 +543,6 @@ pub(crate) fn handle_incoming(incoming: Incoming) -> MessageOutcome {
         },
         Incoming::Binary => MessageOutcome::Rejected("Binary frames are not supported"),
         Incoming::Closed => MessageOutcome::Closed,
-        Incoming::Control => MessageOutcome::Ignored,
     }
 }
 
@@ -621,7 +591,7 @@ async fn send<T: FrameTransport>(transport: &mut T, frame: &ServerFrame) {
     transport.send(text).await;
 }
 
-/// Sends a rejection frame, then closes the transport as rejected.
+/// Sends a rejection frame, then closes the transport.
 async fn reject<T: FrameTransport>(transport: &mut T, reason: &'static str) {
     send(
         transport,
@@ -630,7 +600,7 @@ async fn reject<T: FrameTransport>(transport: &mut T, reason: &'static str) {
         },
     )
     .await;
-    transport.close(CloseCause::Rejected, reason).await;
+    transport.close().await;
 }
 
 #[cfg(test)]

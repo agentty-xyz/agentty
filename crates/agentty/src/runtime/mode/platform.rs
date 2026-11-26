@@ -9,8 +9,8 @@ use crate::runtime::mode::remote_control;
 /// Handles the Platform tab keys that list mode does not share with the
 /// other tabs. While a sign-in waits, `o` and `c` open and copy its page.
 /// Once signed in, `l` signs out, `a` toggles keep on, and a registered
-/// Agentty takes the Remote tab's pairing, link, and device keys for remote
-/// control through the platform's relay.
+/// Agentty takes the pairing, link, and device keys of remote control
+/// through the platform's relay.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) {
     match &app.platform.view().state {
         PlatformState::SigningIn(_) => match key.code {

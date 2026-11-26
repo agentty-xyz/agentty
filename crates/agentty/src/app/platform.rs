@@ -7,9 +7,8 @@
 //! Agentty hands the platform's relay to remote control. Remote control
 //! starts only after an account check the user asked to connect, by signing
 //! in, by `Enter`, or by turning keep on on; keep on, saved with the
-//! sign-in, also connects the check a launch runs. A launch with
-//! `--remote-relay` never enables the platform. The access token goes only
-//! to the platform, never to a relay.
+//! sign-in, also connects the check a launch runs. The access token goes
+//! only to the platform, never to the relay.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -152,8 +151,8 @@ impl Platform {
         }
     }
 
-    /// Returns whether the launch enabled the tab, which a launch with
-    /// `--remote-relay` does not.
+    /// Returns whether the launch enabled the tab, as every launch from the
+    /// command line does.
     pub(crate) fn is_enabled(&self) -> bool {
         self.client.is_some()
     }
@@ -252,7 +251,7 @@ impl App {
         self.platform.instance_name = instance_name;
         self.platform.view = PlatformView::new(platform_url);
         self.tabs.enable_platform();
-        // The tab lists paired devices even without `--experimental-remote`.
+        // The tab lists paired devices before remote control starts.
         self.refresh_remote_devices().await;
         if let Some(stored) = self.stored_platform_sign_in().await {
             self.platform.token = Some(AccessToken::new(stored.access_token));
@@ -280,9 +279,7 @@ impl App {
             }
             PlatformState::SignedIn(account) => match account.access {
                 PlatformAccess::Checking => {}
-                PlatformAccess::Registered { .. }
-                    if self.remote_control.view().listener.is_some() =>
-                {
+                PlatformAccess::Registered { .. } if self.remote_control.view().relay.is_some() => {
                     self.stop_remote_control().await;
                 }
                 // Checks the sign-in and the registration first, so a token
@@ -325,7 +322,7 @@ impl App {
         account.keep_on_notice = saved.is_err().then(|| KEEP_ON_NOT_SAVED.to_string());
         let connects = account.keep_on
             && matches!(account.access, PlatformAccess::Registered { .. })
-            && self.remote_control.view().listener.is_none();
+            && self.remote_control.view().relay.is_none();
         if connects {
             self.refresh_platform(true).await;
         }
@@ -614,7 +611,7 @@ impl App {
         let is_registered = relay.is_some();
         self.set_platform_access(access);
         self.set_platform_relay(relay).await;
-        let is_running = self.remote_control.view().listener.is_some();
+        let is_running = self.remote_control.view().relay.is_some();
         if starts_remote_control && is_registered && !is_running {
             self.start_remote_control().await;
         }

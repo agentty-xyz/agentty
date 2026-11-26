@@ -123,7 +123,7 @@ fn kept_on_test(name: &str, server: &MockServer) -> FeatureTest {
         })
 }
 
-/// Verify a launch without remote flags offers the Platform tab, where
+/// Verify a launch offers the Platform tab, where
 /// `Enter` signs in with a device code and the approved sign-in ends with
 /// remote control running through the platform's relay, with a pairing
 /// link on the platform's page; `Enter` stops it, and `l` signs out and
@@ -184,7 +184,7 @@ async fn platform_tab_sign_in() -> Result<(), Box<dyn std::error::Error>> {
                     assertion::assert_text_in_region(&signed_out, "Settings | Platform", &full);
                     assertion::assert_text_in_region(
                         &signed_out,
-                        "without a tunnel or a relay of your own",
+                        "connects out to the platform's relay",
                         &full,
                     );
                     assertion::assert_text_in_region(

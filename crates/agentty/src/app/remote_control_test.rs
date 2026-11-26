@@ -2,21 +2,19 @@
 //! tests.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use ag_remote::{
     DeviceStore, DeviceStoreError, NewRemoteDevice, PairingRequest, RelayStatus, RemoteConnection,
     RemoteDevice, RemoteError, RemoteHost, RemoteRelayConfig, RemoteServerStatus, StaticKeypair,
-    pairing_link, pairing_link_on_page,
+    pairing_link_on_page,
 };
 use async_trait::async_trait;
-use mockall::predicate::eq;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use super::{DEFAULT_REMOTE_CONTROL_PORT, RemoteControl};
+use super::RemoteControl;
 use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
 };
@@ -24,7 +22,7 @@ use crate::app::graph_reply_decision::ReplyDecision;
 use crate::app::session::SessionGitStatus;
 use crate::app::sync::ProjectSyncContext;
 use crate::app::test_support::{add_listed_project, insert_loadable_session};
-use crate::app::{App, AppEvent, AppRuntimeEvent, ProjectSyncPhase, ProjectSyncStatus, Tab};
+use crate::app::{App, AppEvent, AppRuntimeEvent, ProjectSyncPhase, ProjectSyncStatus};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::session::{
     ForgeKind, QueuedMessage, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session,
@@ -35,18 +33,16 @@ use crate::infra::browser::MockBrowserClient;
 use crate::infra::platform::RemoteControlService;
 use crate::infra::remote_control::{MockRemoteControlLauncher, RemoteControlServer};
 use crate::infra::terminal_clipboard::MockTerminalClipboard;
-use crate::presentation::remote_control::{
-    RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
-};
+use crate::presentation::remote_control::{RemoteDeviceView, RemotePairingRequestView};
 use crate::test_support;
 
-/// Calls the fake listener received, in order.
+/// Calls the fake server received, in order.
 type CallLog = Arc<Mutex<Vec<String>>>;
 
-/// Pairing request the fake listener reports as already settled.
+/// Pairing request the fake server reports as already settled.
 const GONE_REQUEST_ID: u64 = 99;
 
-/// Scripted listener that records calls and publishes test-driven status.
+/// Scripted server that records calls and publishes test-driven status.
 struct FakeServer {
     calls: CallLog,
     codes: Mutex<Vec<Option<String>>>,
@@ -56,10 +52,6 @@ struct FakeServer {
 
 #[async_trait]
 impl RemoteControlServer for FakeServer {
-    fn local_addr(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], DEFAULT_REMOTE_CONTROL_PORT))
-    }
-
     fn issue_pairing_code(&self) -> Result<String, RemoteError> {
         self.codes
             .lock()
@@ -108,7 +100,7 @@ impl RemoteControlServer for FakeServer {
     }
 }
 
-/// Handles a test keeps to drive and observe one fake listener.
+/// Handles a test keeps to drive and observe one fake server.
 struct FakeServerProbe {
     calls: CallLog,
     host: Arc<Mutex<Option<RemoteHost>>>,
@@ -116,10 +108,9 @@ struct FakeServerProbe {
     status_tx: watch::Sender<RemoteServerStatus>,
 }
 
-/// Builds a launcher that starts one fake listener on `port`, issuing
-/// `codes` in order before `LAST-CODE`.
+/// Builds a launcher that starts one fake server, issuing `codes` in order
+/// before `LAST-CODE`.
 fn fake_launcher(
-    port: u16,
     codes: Vec<Option<String>>,
     revoke_result: Result<(), String>,
 ) -> (MockRemoteControlLauncher, FakeServerProbe) {
@@ -138,18 +129,12 @@ fn fake_launcher(
     let mut launcher = MockRemoteControlLauncher::new();
     launcher
         .expect_start()
-        .with(
-            eq(port),
-            mockall::predicate::always(),
-            mockall::predicate::always(),
-            mockall::predicate::always(),
-        )
         .times(1)
-        .return_once(move |_, _, relay, host| {
+        .return_once(move |relay, host| {
             *captured_host.lock().expect("host lock") = Some(host);
-            *captured_relay.lock().expect("relay lock") = relay;
+            *captured_relay.lock().expect("relay lock") = Some(relay);
 
-            Ok(Box::new(server) as Box<dyn RemoteControlServer>)
+            Box::new(server) as Box<dyn RemoteControlServer>
         });
 
     (
@@ -188,13 +173,13 @@ fn remote_control_with_links(
     )
 }
 
-/// Starts a fake listener for `app` with one connected device, so the
+/// Starts a fake server for `app` with one connected device, so the
 /// foreground cycle checks what the session API reports, and returns the
-/// revisions the listener follows with the current one marked seen.
+/// revisions the server follows with the current one marked seen.
 /// Replaces any earlier remote control, so earlier revision subscriptions
 /// no longer follow it.
-pub(crate) async fn start_fake_listener(app: &mut App) -> watch::Receiver<u64> {
-    let (mut revisions, probe) = start_listener_without_devices(app).await;
+pub(crate) async fn start_fake_remote_control(app: &mut App) -> watch::Receiver<u64> {
+    let (mut revisions, probe) = start_server_without_devices(app).await;
     probe.status_tx.send_replace(connected("phone"));
     apply_events_until_device_connects(app).await;
     revisions.borrow_and_update();
@@ -202,58 +187,71 @@ pub(crate) async fn start_fake_listener(app: &mut App) -> watch::Receiver<u64> {
     revisions
 }
 
-/// Applies background app events until the listener reports a connection,
+/// Applies background app events until the server reports a connection,
 /// whether or not the device is paired in the app database. The same step
-/// marks a paired device connected in the Remote tab.
+/// marks a paired device connected in the Platform tab.
 async fn apply_events_until_device_connects(app: &mut App) {
     apply_events_until(app, |app| !app.remote_control.connections.is_empty()).await;
 }
 
-/// Starts a fake listener for `app` that no device has connected to, and
+/// Starts a fake server for `app` that no device has connected to, and
 /// returns the revisions it follows, with the current one marked seen, and
-/// the listener's probe.
-async fn start_listener_without_devices(app: &mut App) -> (watch::Receiver<u64>, FakeServerProbe) {
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(app, launcher).await;
+/// the server's probe.
+async fn start_server_without_devices(app: &mut App) -> (watch::Receiver<u64>, FakeServerProbe) {
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(app, launcher);
     app.start_remote_control().await;
     let mut revisions = probe
         .host
         .lock()
         .expect("host lock")
         .take()
-        .expect("listener should receive a host")
+        .expect("server should receive a host")
         .revisions;
     revisions.borrow_and_update();
 
     (revisions, probe)
 }
 
-/// Replaces the app's remote control with `launcher` over the app database.
-async fn install_launcher(app: &mut App, launcher: MockRemoteControlLauncher) {
-    app.remote_control = remote_control(app, launcher);
-    app.enable_remote_control(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), None)
-        .await;
+/// Replaces the app's remote control with `launcher` over the app
+/// database, with the platform's relay available.
+fn install_launcher(app: &mut App, launcher: MockRemoteControlLauncher) {
+    install_launcher_with_links(
+        app,
+        launcher,
+        MockBrowserClient::new(),
+        MockTerminalClipboard::new(),
+    );
 }
 
-/// Replaces the app's remote control with a relay-linked one over
-/// `launcher`, `browser`, and `clipboard`.
-async fn install_relay_launcher(
+/// Replaces the app's remote control with one over `launcher`, `browser`,
+/// and `clipboard`, with the platform's relay available.
+fn install_launcher_with_links(
     app: &mut App,
     launcher: MockRemoteControlLauncher,
     browser: MockBrowserClient,
     clipboard: MockTerminalClipboard,
 ) {
     app.remote_control = remote_control_with_links(app, launcher, browser, clipboard);
-    app.enable_remote_control(
-        DEFAULT_REMOTE_CONTROL_PORT,
-        Vec::new(),
-        Some(RELAY_URL.to_string()),
-    )
-    .await;
+    app.remote_control.platform_relay = Some(platform_relay());
 }
 
-/// Relay the relay-linked tests register with.
-const RELAY_URL: &str = "wss://relay.example/";
+/// Returns the relay a platform offers.
+fn platform_relay() -> RemoteControlService {
+    RemoteControlService {
+        pairing_url: "https://platform.example/sessions/".to_string(),
+        relay_url: "wss://relay.platform.example".to_string(),
+    }
+}
+
+/// Returns the pairing link the view shows, while remote control runs.
+fn shown_link(app: &App) -> Option<String> {
+    app.remote_control
+        .view()
+        .relay
+        .as_ref()
+        .map(|relay| relay.link.clone())
+}
 
 /// Stores one paired device directly in the app database.
 async fn pair_device(app: &App, id: &str, name: &str) {
@@ -299,7 +297,7 @@ fn connected(device_id: &str) -> RemoteServerStatus {
             device_name: device_id.to_string(),
         }],
         pairing_requests: Vec::new(),
-        relay: None,
+        relay: RelayStatus::Connecting,
     }
 }
 
@@ -315,137 +313,79 @@ fn pairing(request_ids: &[u64]) -> RemoteServerStatus {
                 id: *id,
             })
             .collect(),
-        relay: None,
+        relay: RelayStatus::Connecting,
     }
 }
 
 #[tokio::test]
-async fn start_remote_control_starts_listener_on_default_port_and_shows_code() {
+async fn start_remote_control_links_the_platform_relay_and_shows_a_pairing_link() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, _probe) = fake_launcher(
-        DEFAULT_REMOTE_CONTROL_PORT,
-        vec![Some("ABCD-EFGH".to_string())],
-        Ok(()),
-    );
-    install_launcher(&mut app, launcher).await;
+    let (launcher, probe) = fake_launcher(vec![Some("ABCD-EFGH".to_string())], Ok(()));
+    install_launcher(&mut app, launcher);
 
     // Act
     app.start_remote_control().await;
 
     // Assert
+    let relay = probe
+        .relay
+        .lock()
+        .expect("relay lock")
+        .clone()
+        .expect("server should get the platform relay");
+    assert_eq!(relay.url, platform_relay().relay_url);
     let view = app.remote_control.view();
+    let shown = view.relay.as_ref().expect("relay should be shown");
     assert_eq!(
-        view.listener,
-        Some(RemoteListenerView {
-            pairing_code: "ABCD-EFGH".to_string(),
-            relay: None,
-            url: "http://127.0.0.1:4646/".to_string(),
-        })
+        shown.link,
+        pairing_link_on_page(
+            &platform_relay().pairing_url,
+            &platform_relay().relay_url,
+            relay.instance_key.public(),
+            "ABCD-EFGH",
+        )
     );
+    assert_eq!(shown.status, RelayStatus::Connecting);
     assert_eq!(view.error, None);
     assert_eq!(view.devices, []);
 }
 
 #[tokio::test]
-async fn reopening_remote_control_keeps_listener_and_replaces_code() {
+async fn reopening_remote_control_keeps_the_server_and_replaces_the_code() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, _probe) = fake_launcher(
-        DEFAULT_REMOTE_CONTROL_PORT,
-        vec![Some("FIRST-CODE".to_string())],
-        Ok(()),
-    );
-    install_launcher(&mut app, launcher).await;
+    let (launcher, _probe) = fake_launcher(vec![Some("FIRST-CODE".to_string())], Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
 
     // Act
     app.start_remote_control().await;
 
     // Assert
-    let pairing_code = app
-        .remote_control
-        .view()
-        .listener
-        .as_ref()
-        .map(|listener| listener.pairing_code.clone());
-    assert_eq!(pairing_code.as_deref(), Some("LAST-CODE"));
+    assert!(shown_link(&app).is_some_and(|link| link.ends_with("&code=LAST%2DCODE")));
 }
 
 #[tokio::test]
-async fn start_remote_control_reports_start_failure() {
-    // Arrange
+async fn start_remote_control_without_the_platform_relay_starts_nothing() {
+    // Arrange: a launcher that expects no start.
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let mut launcher = MockRemoteControlLauncher::new();
-    launcher
-        .expect_start()
-        .times(1)
-        .return_once(|_, _, _, _| Err("Port 4646 is in use".to_string()));
-    install_launcher(&mut app, launcher).await;
+    app.remote_control = remote_control(&app, MockRemoteControlLauncher::new());
 
     // Act
     app.start_remote_control().await;
 
     // Assert
-    let view = app.remote_control.view();
-    assert_eq!(view.listener, None);
-    assert_eq!(view.error.as_deref(), Some("Port 4646 is in use"));
-}
-
-#[tokio::test]
-async fn enable_remote_control_selects_the_listener_port() {
-    // Arrange
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, _probe) = fake_launcher(0, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
-    app.enable_remote_control(0, Vec::new(), None).await;
-
-    // Act
-    app.start_remote_control().await;
-
-    // Assert
-    assert!(app.remote_control.view().listener.is_some());
-}
-
-#[tokio::test]
-async fn enable_remote_control_passes_allowed_hosts_to_the_listener() {
-    // Arrange
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    let mut launcher = MockRemoteControlLauncher::new();
-    launcher
-        .expect_start()
-        .with(
-            eq(DEFAULT_REMOTE_CONTROL_PORT),
-            eq(vec!["box.tailnet.ts.net".to_string()]),
-            eq(None),
-            mockall::predicate::always(),
-        )
-        .times(1)
-        .return_once(|_, _, _, _| Err("stop here".to_string()));
-    install_launcher(&mut app, launcher).await;
-    app.enable_remote_control(
-        DEFAULT_REMOTE_CONTROL_PORT,
-        vec!["box.tailnet.ts.net".to_string()],
-        None,
-    )
-    .await;
-
-    // Act
-    app.start_remote_control().await;
-
-    // Assert
-    assert_eq!(
-        app.remote_control.view().error.as_deref(),
-        Some("stop here")
-    );
+    assert_eq!(app.remote_control.view().relay, None);
+    assert_eq!(app.remote_control.view().error, None);
 }
 
 #[tokio::test]
 async fn pending_pairings_are_shown_then_approved_or_denied_oldest_first() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     let generation = app.remote_control.generation;
     app.apply_remote_control_status(generation, pairing(&[1, 2]))
@@ -486,8 +426,8 @@ async fn settling_a_pairing_that_already_ended_reports_it() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     app.settle_remote_pairing(true);
-    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, _probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     let generation = app.remote_control.generation;
     app.apply_remote_control_status(generation, pairing(&[GONE_REQUEST_ID]))
@@ -508,8 +448,8 @@ async fn settling_a_pairing_that_already_ended_reports_it() {
 async fn stopping_clears_pending_pairings() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, _probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     let generation = app.remote_control.generation;
     app.apply_remote_control_status(generation, pairing(&[1]))
@@ -523,37 +463,26 @@ async fn stopping_clears_pending_pairings() {
 }
 
 #[tokio::test]
-async fn start_remote_control_without_the_flag_reports_how_to_enable_it() {
-    // Arrange
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    app.remote_control = remote_control(&app, MockRemoteControlLauncher::new());
-
-    // Act
-    app.start_remote_control().await;
-
-    // Assert
-    assert!(!app.remote_control.is_enabled());
-    assert_eq!(app.remote_control.view().listener, None);
-    assert_eq!(
-        app.remote_control.view().error.as_deref(),
-        Some("Remote control needs `agentty --experimental-remote` or `--remote-relay`.")
-    );
-}
-
-#[tokio::test]
 async fn pairing_code_failure_is_reported_and_code_is_ignored_while_off() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     app.issue_remote_pairing_code();
     let view_while_off = app.remote_control.view().clone();
-    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, vec![None], Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, _probe) = fake_launcher(vec![None], Ok(()));
+    install_launcher(&mut app, launcher);
 
-    // Act
+    // Act: the relay link's status arrives while no link is shown.
     app.start_remote_control().await;
+    let generation = app.remote_control.generation;
+    let status = RemoteServerStatus {
+        relay: RelayStatus::Connected,
+        ..RemoteServerStatus::default()
+    };
+    app.apply_remote_control_status(generation, status).await;
 
     // Assert
-    assert_eq!(view_while_off.listener, None);
+    assert_eq!(view_while_off.relay, None);
+    assert_eq!(app.remote_control.view().relay, None);
     assert_eq!(
         app.remote_control.view().error.as_deref(),
         Some("Cannot generate a secure pairing code")
@@ -561,13 +490,13 @@ async fn pairing_code_failure_is_reported_and_code_is_ignored_while_off() {
 }
 
 #[tokio::test]
-async fn listener_status_marks_connected_devices() {
+async fn server_status_marks_connected_devices() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     pair_device(&app, "phone", "Phone").await;
     pair_device(&app, "tablet", "Tablet").await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
 
     // Act
@@ -598,9 +527,9 @@ async fn a_device_connected_before_forwarding_starts_reaches_the_host() {
     // before the host subscribes to its status.
     let (mut app, _base_dir) = test_support::new_test_app().await;
     pair_device(&app, "phone", "Phone").await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
     probe.status_tx.send_replace(connected("phone"));
-    install_launcher(&mut app, launcher).await;
+    install_launcher(&mut app, launcher);
 
     // Act
     app.start_remote_control().await;
@@ -612,12 +541,12 @@ async fn a_device_connected_before_forwarding_starts_reaches_the_host() {
 }
 
 #[tokio::test]
-async fn status_from_a_stopped_listener_is_ignored() {
+async fn status_from_a_stopped_server_is_ignored() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     pair_device(&app, "phone", "Phone").await;
-    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, _probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     let stale_generation = 1;
     app.stop_remote_control().await;
@@ -641,8 +570,8 @@ async fn stop_remote_control_shuts_down_and_disconnects_devices() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     pair_device(&app, "phone", "Phone").await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     probe.status_tx.send_replace(connected("phone"));
     apply_events_until_device_connects(&mut app).await;
@@ -653,18 +582,18 @@ async fn stop_remote_control_shuts_down_and_disconnects_devices() {
 
     // Assert
     let view = app.remote_control.view();
-    assert_eq!(view.listener, None);
+    assert_eq!(view.relay, None);
     assert_eq!(view.connected_device_count(), 0);
     assert_eq!(view.devices.len(), 1);
     assert_eq!(*probe.calls.lock().expect("calls lock"), ["shutdown"]);
 }
 
 #[tokio::test]
-async fn status_forwarding_ends_once_the_listener_is_gone() {
+async fn status_forwarding_ends_once_the_server_is_gone() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     app.stop_remote_control().await;
 
@@ -676,20 +605,19 @@ async fn status_forwarding_ends_once_the_listener_is_gone() {
     app.process_pending_app_events().await;
 
     // Assert
-    assert_eq!(app.remote_control.view().listener, None);
+    assert_eq!(app.remote_control.view().relay, None);
     assert_eq!(app.remote_control.view().connected_device_count(), 0);
 }
 
 #[tokio::test]
-async fn revoke_remote_device_uses_the_running_listener() {
+async fn revoke_remote_device_uses_the_running_server() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     let (launcher, probe) = fake_launcher(
-        DEFAULT_REMOTE_CONTROL_PORT,
         Vec::new(),
         Err("Could not remove the device: gone".to_string()),
     );
-    install_launcher(&mut app, launcher).await;
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
 
     // Act
@@ -763,7 +691,7 @@ async fn device_store_failures_are_reported() {
 }
 
 #[tokio::test]
-async fn listener_sessions_are_limited_to_the_remote_scope() {
+async fn server_sessions_are_limited_to_the_remote_scope() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     let project_id = app.active_project_id();
@@ -779,8 +707,8 @@ async fn listener_sessions_are_limited_to_the_remote_scope() {
         )
         .await
         .expect("session should persist");
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     let sessions = probe
         .host
@@ -813,8 +741,8 @@ async fn listener_sessions_are_limited_to_the_remote_scope() {
 async fn publish_session_change_advances_the_remote_revision() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_launcher(&mut app, launcher).await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     let mut revisions = probe
         .host
@@ -1050,7 +978,7 @@ fn review_request() -> ReviewRequest {
 /// Builds an app that loads the running `session-1` and the reviewed
 /// `session-2`, with a listener running, and returns the revisions the
 /// listener follows.
-async fn listening_app_with_sessions() -> (App, tempfile::TempDir, watch::Receiver<u64>) {
+async fn connected_app_with_sessions() -> (App, tempfile::TempDir, watch::Receiver<u64>) {
     let (mut app, base_dir) = Box::pin(test_support::new_test_app()).await;
     app.sessions.push_session(test_support::session_fixture(
         "session-1",
@@ -1058,7 +986,7 @@ async fn listening_app_with_sessions() -> (App, tempfile::TempDir, watch::Receiv
     ));
     app.sessions
         .push_session(test_support::session_fixture("session-2", Status::Review));
-    let revisions = Box::pin(start_fake_listener(&mut app)).await;
+    let revisions = Box::pin(start_fake_remote_control(&mut app)).await;
 
     (app, base_dir, revisions)
 }
@@ -1067,7 +995,7 @@ async fn listening_app_with_sessions() -> (App, tempfile::TempDir, watch::Receiv
 async fn each_reported_change_advances_the_remote_revision_once_after_the_cycle_check() {
     for change in ReportedChange::ALL {
         // Arrange
-        let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+        let (mut app, _base_dir, mut revisions) = connected_app_with_sessions().await;
         let initial_revision = *revisions.borrow_and_update();
 
         // Act
@@ -1093,7 +1021,7 @@ async fn reported_changes_leave_the_remote_revision_alone_while_no_device_is_con
         "session-1",
         Status::InProgress,
     ));
-    let (mut revisions, _probe) = start_listener_without_devices(&mut app).await;
+    let (mut revisions, _probe) = start_server_without_devices(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
 
     // Act
@@ -1115,7 +1043,7 @@ async fn the_first_connection_tells_a_device_that_already_read_to_read_again() {
         "session-1",
         Status::InProgress,
     ));
-    let (mut revisions, probe) = start_listener_without_devices(&mut app).await;
+    let (mut revisions, probe) = start_server_without_devices(&mut app).await;
     let read_revision = *revisions.borrow_and_update();
     let generation = app.remote_control.generation;
 
@@ -1148,7 +1076,7 @@ async fn the_first_connection_tells_a_device_that_already_read_to_read_again() {
 #[tokio::test]
 async fn the_check_stops_when_the_last_device_leaves_and_restarts_on_reconnection() {
     // Arrange
-    let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+    let (mut app, _base_dir, mut revisions) = connected_app_with_sessions().await;
     let generation = app.remote_control.generation;
     let initial_revision = *revisions.borrow_and_update();
 
@@ -1176,7 +1104,7 @@ async fn the_check_stops_when_the_last_device_leaves_and_restarts_on_reconnectio
 }
 
 #[tokio::test]
-async fn reported_changes_leave_the_remote_revision_alone_while_no_listener_runs() {
+async fn reported_changes_leave_the_remote_revision_alone_while_remote_control_is_off() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     app.sessions.push_session(test_support::session_fixture(
@@ -1199,7 +1127,7 @@ async fn reported_changes_leave_the_remote_revision_alone_while_no_listener_runs
 #[tokio::test]
 async fn viewed_page_and_project_list_changes_advance_the_remote_revision_once_each() {
     // Arrange
-    let (mut app, base_dir, mut revisions) = listening_app_with_sessions().await;
+    let (mut app, base_dir, mut revisions) = connected_app_with_sessions().await;
     let initial_revision = *revisions.borrow_and_update();
     // Each step ends with the check the foreground cycle makes.
     let mut revision_after = |app: &mut App| {
@@ -1234,7 +1162,7 @@ async fn viewed_page_and_project_list_changes_advance_the_remote_revision_once_e
 #[tokio::test]
 async fn the_last_device_leaving_drops_the_viewed_pages() {
     // Arrange
-    let (mut app, base_dir, _revisions) = listening_app_with_sessions().await;
+    let (mut app, base_dir, _revisions) = connected_app_with_sessions().await;
     let generation = app.remote_control.generation;
     let other_project_id = add_listed_project(&mut app, &base_dir, "other").await;
     // A device's request loads the page and hands it to the background
@@ -1272,9 +1200,9 @@ async fn the_last_device_leaving_drops_the_viewed_pages() {
 }
 
 #[tokio::test]
-async fn stopping_the_listener_stops_the_reported_state_check() {
+async fn stopping_remote_control_stops_the_reported_state_check() {
     // Arrange
-    let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+    let (mut app, _base_dir, mut revisions) = connected_app_with_sessions().await;
     app.stop_remote_control().await;
     let stopped_revision = *revisions.borrow_and_update();
 
@@ -1291,7 +1219,7 @@ async fn stopping_the_listener_stops_the_reported_state_check() {
 #[tokio::test]
 async fn status_line_and_queued_action_changes_advance_the_remote_revision_once_each() {
     // Arrange
-    let (mut app, _base_dir, mut revisions) = listening_app_with_sessions().await;
+    let (mut app, _base_dir, mut revisions) = connected_app_with_sessions().await;
     let initial_revision = *revisions.borrow_and_update();
 
     // Act
@@ -1410,7 +1338,7 @@ async fn shown_focused_review_changes_advance_the_remote_revision_once_each() {
     let (mut app, _base_dir) = test_support::new_test_app().await;
     app.sessions
         .push_session(test_support::session_fixture("session-1", Status::Review));
-    let mut revisions = start_fake_listener(&mut app).await;
+    let mut revisions = start_fake_remote_control(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
 
     // Act
@@ -1455,20 +1383,14 @@ async fn shown_focused_review_changes_advance_the_remote_revision_once_each() {
 async fn relay_that_does_not_admit_this_instance_stays_shown_across_new_codes() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, _probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_relay_launcher(
-        &mut app,
-        launcher,
-        MockBrowserClient::new(),
-        MockTerminalClipboard::new(),
-    )
-    .await;
+    let (launcher, _probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
     app.start_remote_control().await;
     let generation = app.remote_control.generation;
 
     // Act
     let status = RemoteServerStatus {
-        relay: Some(RelayStatus::NotAdmitted),
+        relay: RelayStatus::NotAdmitted,
         ..RemoteServerStatus::default()
     };
     app.apply_remote_control_status(generation, status).await;
@@ -1478,31 +1400,24 @@ async fn relay_that_does_not_admit_this_instance_stays_shown_across_new_codes() 
     let relay_status = app
         .remote_control
         .view()
-        .listener
+        .relay
         .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
         .map(|relay| relay.status);
     assert_eq!(relay_status, Some(RelayStatus::NotAdmitted));
 }
 
 #[tokio::test]
-async fn relay_listener_gets_a_saved_key_and_shows_a_pairing_link() {
+async fn the_server_gets_a_saved_key_and_shows_its_relay_state_and_qr_code() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_relay_launcher(
-        &mut app,
-        launcher,
-        MockBrowserClient::new(),
-        MockTerminalClipboard::new(),
-    )
-    .await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
 
     // Act
     app.start_remote_control().await;
     let generation = app.remote_control.generation;
     let status = RemoteServerStatus {
-        relay: Some(RelayStatus::Connected),
+        relay: RelayStatus::Connected,
         ..RemoteServerStatus::default()
     };
     app.apply_remote_control_status(generation, status).await;
@@ -1514,8 +1429,7 @@ async fn relay_listener_gets_a_saved_key_and_shows_a_pairing_link() {
         .lock()
         .expect("relay lock")
         .clone()
-        .expect("listener should get a relay");
-    assert_eq!(relay.url, RELAY_URL);
+        .expect("server should get a relay");
     let stored = app
         .services
         .db()
@@ -1528,20 +1442,24 @@ async fn relay_listener_gets_a_saved_key_and_shows_a_pairing_link() {
     let relay_view = app
         .remote_control
         .view()
-        .listener
+        .relay
         .clone()
-        .and_then(|listener| listener.relay)
         .expect("relay should be shown");
     assert_eq!(relay_view.status, RelayStatus::Connected);
     assert_eq!(
         relay_view.link,
-        pairing_link(RELAY_URL, relay.instance_key.public(), "LAST-CODE")
+        pairing_link_on_page(
+            &platform_relay().pairing_url,
+            &platform_relay().relay_url,
+            relay.instance_key.public(),
+            "LAST-CODE",
+        )
     );
     assert_ne!(relay_view.qr_code, Vec::<String>::new());
 }
 
 #[tokio::test]
-async fn relay_listener_reuses_the_saved_key() {
+async fn the_server_reuses_the_saved_key() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     let saved = StaticKeypair::generate().expect("key should generate");
@@ -1558,14 +1476,8 @@ async fn relay_listener_reuses_the_saved_key() {
         )
         .await
         .expect("setting should save");
-    let (launcher, probe) = fake_launcher(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), Ok(()));
-    install_relay_launcher(
-        &mut app,
-        launcher,
-        MockBrowserClient::new(),
-        MockTerminalClipboard::new(),
-    )
-    .await;
+    let (launcher, probe) = fake_launcher(Vec::new(), Ok(()));
+    install_launcher(&mut app, launcher);
 
     // Act
     app.start_remote_control().await;
@@ -1576,7 +1488,7 @@ async fn relay_listener_reuses_the_saved_key() {
 }
 
 #[tokio::test]
-async fn invalid_saved_key_stops_the_listener_from_starting() {
+async fn invalid_saved_key_stops_the_server_from_starting() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     app.services
@@ -1585,22 +1497,16 @@ async fn invalid_saved_key_stops_the_listener_from_starting() {
         .upsert_setting(SettingName::RemoteInstanceKey, "not a key")
         .await
         .expect("setting should save");
-    install_relay_launcher(
-        &mut app,
-        MockRemoteControlLauncher::new(),
-        MockBrowserClient::new(),
-        MockTerminalClipboard::new(),
-    )
-    .await;
+    install_launcher(&mut app, MockRemoteControlLauncher::new());
 
     // Act
     app.start_remote_control().await;
 
     // Assert
-    assert_eq!(app.remote_control.view().listener, None);
+    assert_eq!(app.remote_control.view().relay, None);
     assert_eq!(
         app.remote_control.view().error.as_deref(),
-        Some("The stored remote key is invalid.")
+        Some("The stored instance key is invalid.")
     );
 }
 
@@ -1611,11 +1517,7 @@ async fn invalid_saved_key_stops_the_listener_from_starting() {
 async fn link_actions_open_and_copy_the_relay_link() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, _probe) = fake_launcher(
-        DEFAULT_REMOTE_CONTROL_PORT,
-        vec![Some("CODE-0001".to_string())],
-        Ok(()),
-    );
+    let (launcher, _probe) = fake_launcher(vec![Some("CODE-0001".to_string())], Ok(()));
     let mut browser = MockBrowserClient::new();
     browser
         .expect_open()
@@ -1646,7 +1548,7 @@ async fn link_actions_open_and_copy_the_relay_link() {
         .times(1)
         .in_sequence(&mut terminal_order)
         .return_const(false);
-    install_relay_launcher(&mut app, launcher, browser, clipboard).await;
+    install_launcher_with_links(&mut app, launcher, browser, clipboard);
     app.start_remote_control().await;
 
     // Act
@@ -1692,7 +1594,6 @@ async fn link_copy_result_is_dropped_once_the_link_changes() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
     let (launcher, _probe) = fake_launcher(
-        DEFAULT_REMOTE_CONTROL_PORT,
         vec![Some("CODE-0001".to_string()), Some("CODE-0002".to_string())],
         Ok(()),
     );
@@ -1701,7 +1602,7 @@ async fn link_copy_result_is_dropped_once_the_link_changes() {
         .expect_copy_through_tmux()
         .times(1)
         .return_const(true);
-    install_relay_launcher(&mut app, launcher, MockBrowserClient::new(), clipboard).await;
+    install_launcher_with_links(&mut app, launcher, MockBrowserClient::new(), clipboard);
     app.start_remote_control().await;
 
     // Act
@@ -1724,68 +1625,26 @@ async fn link_copy_result_is_dropped_once_the_link_changes() {
 }
 
 #[tokio::test]
-async fn enable_remote_control_offers_the_remote_tab_with_paired_devices() {
+async fn showing_remote_control_replaces_the_code_and_drops_old_outcomes() {
     // Arrange
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    pair_device(&app, "phone", "Phone").await;
-    app.tabs.set(Tab::Remote);
-    let tab_before = app.tabs.current();
-    let is_projected_before = app.view_snapshot().remote_control.is_some();
-
-    // Act
-    app.enable_remote_control(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), None)
-        .await;
-
-    // Assert
-    assert_eq!(tab_before, Tab::Sessions);
-    assert!(!is_projected_before);
-    assert_eq!(app.tabs.current(), Tab::Remote);
-    assert_eq!(
-        app.view_snapshot().remote_control.map(|view| &view.devices),
-        Some(&vec![RemoteDeviceView {
-            id: "phone".to_string(),
-            is_connected: false,
-            name: "Phone".to_string(),
-        }])
-    );
-}
-
-#[tokio::test]
-async fn entering_the_remote_tab_replaces_the_code_and_drops_old_outcomes() {
-    // Arrange
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, _probe) = fake_launcher(
-        DEFAULT_REMOTE_CONTROL_PORT,
-        vec![Some("FIRST-CODE".to_string())],
-        Ok(()),
-    );
-    install_launcher(&mut app, launcher).await;
-    app.tabs.set(Tab::Settings);
-    app.next_tab();
-    let listener_while_off = app.remote_control.view().listener.clone();
+    let (launcher, _probe) = fake_launcher(vec![Some("FIRST-CODE".to_string())], Ok(()));
+    install_launcher(&mut app, launcher);
+    app.show_remote_control();
+    let link_while_off = shown_link(&app);
     app.start_remote_control().await;
+    let first_link = shown_link(&app);
     app.remote_control.view.error = Some("stale".to_string());
     app.remote_control.view.notice = Some("stale".to_string());
 
     // Act
-    app.next_tab();
-    let code_on_another_tab = app.remote_control.view().listener.clone();
-    app.previous_tab();
+    app.show_remote_control();
 
     // Assert
     let view = app.remote_control.view();
-    assert_eq!(listener_while_off, None);
-    assert_eq!(
-        code_on_another_tab.map(|listener| listener.pairing_code),
-        Some("FIRST-CODE".to_string())
-    );
-    assert_eq!(app.tabs.current(), Tab::Remote);
-    assert_eq!(
-        view.listener
-            .as_ref()
-            .map(|listener| listener.pairing_code.as_str()),
-        Some("LAST-CODE")
-    );
+    assert_eq!(link_while_off, None);
+    assert!(first_link.is_some_and(|link| link.ends_with("&code=FIRST%2DCODE")));
+    assert!(shown_link(&app).is_some_and(|link| link.ends_with("&code=LAST%2DCODE")));
     assert_eq!(view.error, None);
     assert_eq!(view.notice, None);
 }
@@ -1796,8 +1655,7 @@ async fn device_selection_stays_within_the_paired_devices() {
     let (mut app, _base_dir) = test_support::new_test_app().await;
     pair_device(&app, "phone", "Phone").await;
     pair_device(&app, "tablet", "Tablet").await;
-    app.enable_remote_control(DEFAULT_REMOTE_CONTROL_PORT, Vec::new(), None)
-        .await;
+    app.refresh_remote_devices().await;
 
     // Act
     app.remote_control.select_previous_device();
@@ -1816,115 +1674,59 @@ async fn device_selection_stays_within_the_paired_devices() {
     assert_eq!(app.remote_control.view().selected_device_index, 0);
 }
 
-/// Returns the relay a platform offers.
-fn platform_relay() -> RemoteControlService {
+/// Returns another relay a platform may offer later.
+fn moved_platform_relay() -> RemoteControlService {
     RemoteControlService {
-        pairing_url: "https://platform.example/sessions/".to_string(),
-        relay_url: "wss://relay.platform.example".to_string(),
+        pairing_url: "https://platform.example/pair/".to_string(),
+        relay_url: "wss://relay-2.platform.example".to_string(),
     }
 }
 
-/// Builds a launcher that starts a fresh fake listener on `port` each
-/// time, recording every relay it is linked to.
-fn restartable_launcher(port: u16) -> (MockRemoteControlLauncher, Arc<Mutex<Vec<Option<String>>>>) {
+/// Builds a launcher that starts a fresh fake server each time, recording
+/// every relay it is linked to.
+fn restartable_launcher() -> (MockRemoteControlLauncher, Arc<Mutex<Vec<String>>>) {
     let relays = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&relays);
     let mut launcher = MockRemoteControlLauncher::new();
-    launcher
-        .expect_start()
-        .with(
-            eq(port),
-            mockall::predicate::always(),
-            mockall::predicate::always(),
-            mockall::predicate::always(),
-        )
-        .returning(move |_, _, relay, _| {
-            recorded
-                .lock()
-                .expect("relays lock")
-                .push(relay.map(|relay| relay.url));
-            let (status_tx, _status_rx) = watch::channel(RemoteServerStatus::default());
+    launcher.expect_start().returning(move |relay, _| {
+        recorded.lock().expect("relays lock").push(relay.url);
+        let (status_tx, _status_rx) = watch::channel(RemoteServerStatus::default());
 
-            Ok(Box::new(FakeServer {
-                calls: CallLog::default(),
-                codes: Mutex::new(Vec::new()),
-                revoke_result: Ok(()),
-                status_tx,
-            }) as Box<dyn RemoteControlServer>)
-        });
+        Box::new(FakeServer {
+            calls: CallLog::default(),
+            codes: Mutex::new(Vec::new()),
+            revoke_result: Ok(()),
+            status_tx,
+        }) as Box<dyn RemoteControlServer>
+    });
 
     (launcher, relays)
 }
 
 #[tokio::test]
-async fn the_platform_relay_alone_starts_remote_control_on_a_free_port_and_pairs_on_its_page() {
-    // Arrange: `--experimental-remote` is off.
+async fn a_new_platform_relay_waits_while_off_and_moves_running_remote_control() {
+    // Arrange: remote control is off when the platform's relay first
+    // changes.
     let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, probe) = fake_launcher(0, Vec::new(), Ok(()));
+    let (launcher, relays) = restartable_launcher();
     app.remote_control = remote_control(&app, launcher);
     app.set_platform_relay(Some(platform_relay())).await;
-
-    // Act
-    app.start_remote_control().await;
-    let link = app
-        .remote_control
-        .view()
-        .listener
-        .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
-        .map(|relay| relay.link.clone());
-    app.set_platform_relay(None).await;
-    let listener_after = app.remote_control.view().listener.clone();
-    app.start_remote_control().await;
-
-    // Assert
-    let relay = probe
-        .relay
-        .lock()
-        .expect("relay lock")
-        .clone()
-        .expect("listener should get the platform relay");
-    assert_eq!(relay.url, platform_relay().relay_url);
-    assert_eq!(
-        link,
-        Some(pairing_link_on_page(
-            &platform_relay().pairing_url,
-            &platform_relay().relay_url,
-            relay.instance_key.public(),
-            "LAST-CODE",
-        ))
-    );
-    assert_eq!(listener_after, None);
-    assert!(
-        probe
-            .calls
-            .lock()
-            .expect("calls lock")
-            .contains(&"shutdown".to_string())
-    );
-    assert_eq!(
-        app.remote_control.view().error.as_deref(),
-        Some("Remote control needs `agentty --experimental-remote` or `--remote-relay`.")
-    );
-}
-
-#[tokio::test]
-async fn a_running_listener_moves_to_the_platform_relay_and_back() {
-    // Arrange
-    let (mut app, _base_dir) = test_support::new_test_app().await;
-    let (launcher, relays) = restartable_launcher(DEFAULT_REMOTE_CONTROL_PORT);
-    install_launcher(&mut app, launcher).await;
+    let started_while_off = relays.lock().expect("relays lock").len();
     app.start_remote_control().await;
 
     // Act
-    app.set_platform_relay(Some(platform_relay())).await;
-    app.set_platform_relay(Some(platform_relay())).await;
+    app.set_platform_relay(Some(moved_platform_relay())).await;
+    app.set_platform_relay(Some(moved_platform_relay())).await;
+    let moved_link = shown_link(&app);
     app.set_platform_relay(None).await;
 
     // Assert
+    assert_eq!(started_while_off, 0);
     assert_eq!(
         *relays.lock().expect("relays lock"),
-        vec![None, Some(platform_relay().relay_url), None]
+        vec![platform_relay().relay_url, moved_platform_relay().relay_url]
     );
-    assert!(app.remote_control.view().listener.is_some());
+    assert!(moved_link.is_some_and(|link| link.starts_with("https://platform.example/pair/#")));
+    assert_eq!(app.remote_control.view().relay, None);
+    assert_eq!(app.remote_control.view().error, None);
 }

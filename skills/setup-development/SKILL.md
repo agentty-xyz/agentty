@@ -55,9 +55,6 @@ prerequisites and backend authentication; this skill covers contributor tooling 
 - **`ag-release` tests:** its npm package tests install and run the package with Node.js
   18 or newer and `npm`, which GitHub-hosted runners provide.
 
-- **`ag-remote` tests:** the web client tests run its JavaScript with Node.js 22 or
-  newer, which GitHub-hosted runners provide.
-
 - **Timing collector:** changes under `.github/actions/test-timing/` or to the hook
   catalog also run `test-timing-action`, which requires Node.js 24. GitHub-hosted
   runners provide it, and the JavaScript action uses the runner's Node.js runtime inside
@@ -76,13 +73,13 @@ prerequisites and backend authentication; this skill covers contributor tooling 
   Session replay starts only after allowing analytics and requires Session Replay to be
   enabled in the PostHog project's settings.
 
-- **Design gallery:** changes to `design/`, the docs site's styles, templates, or
-  scripts, or the remote client's assets run the `design-gallery` hook, which needs
-  Zola, Node.js, and a Chromium-based browser: Google Chrome or Chromium in its usual
-  install path, a headless shell that Playwright installed, or any of them named by
-  `CHROME_PATH`. Changes to the gallery check itself run `design-gallery-check-test`,
-  which needs Node.js 22.8 or newer for its coverage flags. GitHub-hosted runners
-  provide Node.js and Chrome, and the workflow installs Zola.
+- **Design gallery:** changes to `design/` or the docs site's styles, templates, or
+  scripts run the `design-gallery` hook, which needs Zola, Node.js, and a Chromium-based
+  browser: Google Chrome or Chromium in its usual install path, a headless shell that
+  Playwright installed, or any of them named by `CHROME_PATH`. Changes to the gallery
+  check itself run `design-gallery-check-test`, which needs Node.js 22.8 or newer for
+  its coverage flags. GitHub-hosted runners provide Node.js and Chrome, and the workflow
+  installs Zola.
 
 - **Feature recording:** intentional recording also needs a running Podman environment;
   follow `skills/refresh-feature-recordings/references/recording.md` for the canonical

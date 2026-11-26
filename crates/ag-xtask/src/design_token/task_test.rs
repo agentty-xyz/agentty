@@ -39,8 +39,7 @@ fn tokens() -> String {
             "text": { "$value": white }
         },
         "surfaces": {
-            "docs-site": { "glyph": { "hot": { "$type": "color", "$value": white } } },
-            "remote-client": { "font": { "mono": { "$type": "fontFamily", "$value": "monospace" } } }
+            "docs-site": { "glyph": { "hot": { "$type": "color", "$value": white } } }
         },
         "$extensions": {
             "xyz.agentty.fontFaces": [{
@@ -89,17 +88,17 @@ impl Fixture {
             "a { color: var(--color-text); }\n",
         );
         fixture.write(
-            "crates/ag-remote/assets/app.css",
+            "docs/site/static/search.css",
             "a { color: var(--color-text); }\n",
         );
         fixture.write("design/mark.svg", MARK);
         fixture.write_bytes("design/favicon.ico", &ICON);
         fixture.write(
-            "crates/ag-remote/assets/app.js",
+            "docs/site/static/theme.js",
             "const bg = getComputedStyle(root).getPropertyValue('--color-bg');\n",
         );
         fixture.write(
-            "crates/ag-remote/assets/index.html",
+            "docs/site/templates/base.html",
             "<meta name=\"theme-color\" content=\"#000000\">\n<script>const a = \
              'green';</script>\n",
         );
@@ -214,14 +213,14 @@ fn generation_writes_every_stylesheet_and_a_check_then_passes() {
     assert_eq!(
         generated.as_deref(),
         Ok(
-            "Design token stylesheets generated (tokens: 4, font faces: 1; 6 hand-written \
+            "Design token stylesheets generated (tokens: 3, font faces: 1; 6 hand-written \
              stylesheets, scripts, and templates use no raw colour)."
         )
     );
     assert_eq!(
         checked.as_deref(),
         Ok(
-            "Design token stylesheets are current (tokens: 4, font faces: 1; 6 hand-written \
+            "Design token stylesheets are current (tokens: 3, font faces: 1; 6 hand-written \
              stylesheets, scripts, and templates use no raw colour)."
         )
     );
@@ -250,29 +249,20 @@ fn generation_writes_every_stylesheet_and_a_check_then_passes() {
     assert!(
         fonts.contains("  src: url(\"data:font/woff2;base64,d09GMmZvbnQ=\") format(\"woff2\");\n")
     );
-    for surface in [
-        "docs/site/sass/_fonts.scss",
-        "crates/ag-remote/assets/fonts.css",
-    ] {
-        assert_eq!(
-            fixture.file(surface),
-            Some(fonts.replacen(
-                "/* Generated from tokens.json. Do not edit. */",
-                "/* Generated from design/tokens.json by `cargo run -p ag-xtask -- \
-                 design-tokens`. Do not edit. */",
-                1
-            ))
-        );
-    }
+    assert_eq!(
+        fixture.file("docs/site/sass/_fonts.scss"),
+        Some(fonts.replacen(
+            "/* Generated from tokens.json. Do not edit. */",
+            "/* Generated from design/tokens.json by `cargo run -p ag-xtask -- design-tokens`. Do \
+             not edit. */",
+            1
+        ))
+    );
     let copy = format!(
         "/* Generated from design/base.css by `cargo run -p ag-xtask -- design-tokens`. Do not \
          edit. */\n{BASE}"
     );
-    assert_eq!(
-        fixture.file("docs/site/sass/_base.scss"),
-        Some(copy.clone())
-    );
-    assert_eq!(fixture.file("crates/ag-remote/assets/base.css"), Some(copy));
+    assert_eq!(fixture.file("docs/site/sass/_base.scss"), Some(copy));
     assert_eq!(
         fixture.file("design/tokens.css").as_deref(),
         Some(
@@ -284,11 +274,6 @@ fn generation_writes_every_stylesheet_and_a_check_then_passes() {
         fixture
             .file("docs/site/sass/_tokens.scss")
             .is_some_and(|text| text.contains("  --glyph-hot: #ffffff;\n"))
-    );
-    assert!(
-        fixture
-            .file("crates/ag-remote/assets/tokens.css")
-            .is_some_and(|text| text.contains("  --font-mono: monospace;\n"))
     );
 }
 
@@ -306,7 +291,7 @@ fn check_reports_stale_and_missing_stylesheets() {
     fixture.write("design/base.css", "b {\n  color: var(--color-bg);\n}\n");
     fixture.write_bytes("design/favicon.ico", &[1]);
     fixture.write(
-        "crates/ag-remote/assets/index.html",
+        "docs/site/templates/base.html",
         "<p>\n<meta name=\"theme-color\" content=\"#ffffff\">\n",
     );
 
@@ -321,10 +306,8 @@ fn check_reports_stale_and_missing_stylesheets() {
             "docs/site/sass/_tokens.scss is missing; run `cargo run -p ag-xtask -- design-tokens`",
             "docs/site/sass/_base.scss is stale; run `cargo run -p ag-xtask -- design-tokens`",
             "docs/site/static/favicon.ico is stale; run `cargo run -p ag-xtask -- design-tokens`",
-            "crates/ag-remote/assets/base.css is stale; run `cargo run -p ag-xtask -- \
-             design-tokens`",
-            "crates/ag-remote/assets/index.html:2: theme-color #ffffff is stale; run `cargo run \
-             -p ag-xtask -- design-tokens`",
+            "docs/site/templates/base.html:2: theme-color #ffffff is stale; run `cargo run -p \
+             ag-xtask -- design-tokens`",
         ]
     );
 }
@@ -334,13 +317,17 @@ fn raw_colours_contrast_failures_and_unknown_surfaces_fail_both_modes() {
     // Arrange
     let mut fixture = Fixture::new();
     let tokens = tokens()
-        .replace("\"remote-client\"", "\"print\"")
+        .replace(
+            "\"surfaces\":{",
+            "\"surfaces\":{\"print\":{\"font\":{\"mono\":{\"$type\":\"fontFamily\",\"$value\":\"\
+             monospace\"}}},",
+        )
         .replace("\"minimum\":4.5", "\"minimum\":22");
     fixture.write("design/tokens.json", &tokens);
     fixture.write("docs/site/sass/site.scss", "a {\n  color: red;\n}\n");
-    fixture.write("crates/ag-remote/assets/app.css", "a { color: #fff; }\n");
+    fixture.write("docs/site/static/search.css", "a { color: #fff; }\n");
     fixture.write(
-        "crates/ag-remote/assets/app.js",
+        "docs/site/static/theme.js",
         "// '#000' in a comment\nconst red = '#ff0000';\n",
     );
     fixture.write(
@@ -361,12 +348,12 @@ fn raw_colours_contrast_failures_and_unknown_surfaces_fail_both_modes() {
         "design/tokens.json: surface print has no generated stylesheet",
         "green: {color.text} on {color.bg} (Text) is 21.00:1, below 22:1; change a colour",
         "dark: {color.text} on {color.bg} (Text) is 21.00:1, below 22:1; change a colour",
-        "crates/ag-remote/assets/app.css:1: raw colour #fff; add it to design/tokens.json and use \
-         its custom property",
-        "crates/ag-remote/assets/app.js:2: raw colour #ff0000; add it to design/tokens.json and \
-         use its custom property",
         "docs/site/sass/site.scss:2: raw colour red; add it to design/tokens.json and use its \
          custom property",
+        "docs/site/static/search.css:1: raw colour #fff; add it to design/tokens.json and use its \
+         custom property",
+        "docs/site/static/theme.js:2: raw colour #ff0000; add it to design/tokens.json and use \
+         its custom property",
         "docs/site/templates/page.html:2: raw colour #fff; add it to design/tokens.json and use \
          its custom property",
         "docs/site/templates/page.html:5: raw colour rgba(); add it to design/tokens.json and use \
@@ -388,7 +375,7 @@ fn theme_color_metas_need_the_page_background_token() {
 
     // Assert
     let expected = [
-        "crates/ag-remote/assets/index.html: a theme-color meta takes --color-bg from \
+        "docs/site/templates/base.html: a theme-color meta takes --color-bg from \
          design/tokens.json, which has none",
         "docs/site/templates/seo.html: a theme-color meta takes --color-bg from \
          design/tokens.json, which has none",
@@ -476,14 +463,10 @@ fn a_surface_that_replaces_the_page_background_gets_it_in_its_own_metas() {
             .file("docs/site/templates/seo.html")
             .is_some_and(|text| text.contains("content=\"#ffffff\"") && !text.contains("#000000"))
     );
-    assert_eq!(
+    assert!(
         fixture
-            .file("crates/ag-remote/assets/index.html")
-            .as_deref(),
-        Some(
-            "<meta name=\"theme-color\" content=\"#000000\">\n<script>const a = \
-             'green';</script>\n"
-        )
+            .file("design/tokens.css")
+            .is_some_and(|text| text.contains("  --color-bg: #000000;\n"))
     );
 }
 
@@ -525,7 +508,7 @@ fn host_failures_stop_generation_and_checks() {
     );
     let mut unreadable_stylesheet = Fixture::new();
     unreadable_stylesheet.failures.insert(
-        PathBuf::from("crates/ag-remote/assets/app.css"),
+        PathBuf::from("docs/site/static/search.css"),
         io::ErrorKind::PermissionDenied,
     );
     let mut no_inventory = Fixture::new();
@@ -551,7 +534,7 @@ fn host_failures_stop_generation_and_checks() {
         [
             Some("Failed to write repo/design/tokens.css: permission denied".to_owned()),
             Some("Failed to read repo/design/tokens.css: denied".to_owned()),
-            Some("Failed to read repo/crates/ag-remote/assets/app.css: denied".to_owned()),
+            Some("Failed to read repo/docs/site/static/search.css: denied".to_owned()),
             Some("inventory failed".to_owned()),
             Some("Failed to read repo/design/base.css: denied".to_owned()),
         ]

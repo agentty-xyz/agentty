@@ -2,10 +2,9 @@
 
 use ag_noise::{Handshake, PublicKey, Session, StaticKeypair};
 
-use crate::transport::{CloseCause, FrameTransport, Incoming};
+use crate::transport::{FrameTransport, Incoming};
 
-/// Largest frame accepted from a device, in bytes: as large as a local
-/// device's.
+/// Largest frame accepted from a device, in bytes.
 const MAX_FRAME_BYTES: usize = crate::server::MAX_MESSAGE_SIZE;
 
 /// Ordered, reliable carrier of binary messages, such as a relay stream.
@@ -78,7 +77,7 @@ impl<Carrier: MessageCarrier> FrameTransport for EncryptedTransport<Carrier> {
 
     /// The carrier has no close reason the device could trust, so a
     /// rejected device learns the reason from the frame sent before this.
-    async fn close(&mut self, _cause: CloseCause, _reason: &'static str) {
+    async fn close(&mut self) {
         self.carrier.close().await;
     }
 }

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use ag_remote::RelayStatus;
 use ratatui::widgets::{Paragraph, TableState};
 
 use super::{
@@ -31,9 +32,7 @@ use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::platform::{PlatformTabView, PlatformView};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
-use crate::presentation::remote_control::{
-    RemoteControlView, RemoteDeviceView, RemoteListenerView,
-};
+use crate::presentation::remote_control::{RemoteControlView, RemoteDeviceView, RemoteRelayView};
 use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
@@ -249,25 +248,14 @@ fn render_list_tab(
     current_tab: Tab,
     settings_screen: Option<&SettingsScreenSnapshot>,
 ) -> (String, ReasoningLevel) {
-    render_list_tab_with_remote(current_tab, settings_screen, None)
+    render_list_tab_with_platform(current_tab, settings_screen, None)
 }
 
-/// Renders one list tab, offering the Remote tab when `remote_control` is
+/// Renders one list tab, offering the Platform tab when `platform` is
 /// present.
-fn render_list_tab_with_remote(
+fn render_list_tab_with_platform(
     current_tab: Tab,
     settings_screen: Option<&SettingsScreenSnapshot>,
-    remote_control: Option<&RemoteControlView>,
-) -> (String, ReasoningLevel) {
-    render_list_tab_with_optional_tabs(current_tab, settings_screen, remote_control, None)
-}
-
-/// Renders one list tab, offering the Remote tab when `remote_control` is
-/// present and the Platform tab when `platform` is.
-fn render_list_tab_with_optional_tabs(
-    current_tab: Tab,
-    settings_screen: Option<&SettingsScreenSnapshot>,
-    remote_control: Option<&RemoteControlView>,
     platform: Option<PlatformTabView<'_>>,
 ) -> (String, ReasoningLevel) {
     let backend = ratatui::backend::TestBackend::new(120, 30);
@@ -293,7 +281,6 @@ fn render_list_tab_with_optional_tabs(
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &projects,
-        remote_control,
         session_git_statuses: &HashMap::new(),
         session_live_usage: &HashMap::new(),
         sessions: &sessions,
@@ -345,7 +332,6 @@ fn render_list_backed_mode_with_live_usage(
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],
-        remote_control: None,
         session_git_statuses: &HashMap::new(),
         session_live_usage: live_usage,
         sessions: &sessions,
@@ -668,35 +654,6 @@ fn render_list_background_leaves_settings_tab_blank_without_snapshot() {
 }
 
 #[test]
-fn render_list_background_renders_the_remote_tab_only_when_offered() {
-    // Arrange
-    let remote_control = RemoteControlView {
-        devices: vec![RemoteDeviceView {
-            id: "phone".to_string(),
-            is_connected: true,
-            name: "Phone".to_string(),
-        }],
-        listener: Some(RemoteListenerView {
-            pairing_code: "ABCD-EFGH".to_string(),
-            relay: None,
-            url: "http://127.0.0.1:4646/".to_string(),
-        }),
-        ..RemoteControlView::default()
-    };
-
-    // Act
-    let (offered, _) = render_list_tab_with_remote(Tab::Remote, None, Some(&remote_control));
-    let (hidden, _) = render_list_tab(Tab::Remote, None);
-
-    // Assert
-    assert!(offered.contains(" Settings | Remote (1 online) "));
-    assert!(offered.contains("Remote control"));
-    assert!(offered.contains("ABCD-EFGH"));
-    assert!(hidden.contains(" Sessions | Settings "));
-    assert!(!hidden.contains("Remote"));
-}
-
-#[test]
 fn render_list_background_renders_the_platform_tab_only_when_offered() {
     // Arrange
     let platform = PlatformView::new("https://platform.example".to_string());
@@ -707,7 +664,7 @@ fn render_list_background_renders_the_platform_tab_only_when_offered() {
     };
 
     // Act
-    let (offered, _) = render_list_tab_with_optional_tabs(Tab::Platform, None, None, Some(view));
+    let (offered, _) = render_list_tab_with_platform(Tab::Platform, None, Some(view));
     let (hidden, _) = render_list_tab(Tab::Platform, None);
 
     // Assert
@@ -715,6 +672,34 @@ fn render_list_background_renders_the_platform_tab_only_when_offered() {
     assert!(offered.contains("Agentty Platform"));
     assert!(offered.contains("https://platform.example"));
     assert!(!hidden.contains("Platform"));
+}
+
+#[test]
+fn render_list_background_counts_connected_devices_in_the_platform_label() {
+    // Arrange
+    let platform = PlatformView::new("https://platform.example".to_string());
+    let remote_control = RemoteControlView {
+        devices: vec![RemoteDeviceView {
+            id: "phone".to_string(),
+            is_connected: true,
+            name: "Phone".to_string(),
+        }],
+        relay: Some(RemoteRelayView::new(
+            "https://platform.example/sessions/#code=ABCD".to_string(),
+            RelayStatus::Connected,
+        )),
+        ..RemoteControlView::default()
+    };
+    let view = PlatformTabView {
+        platform: &platform,
+        remote_control: &remote_control,
+    };
+
+    // Act
+    let (rendered, _) = render_list_tab_with_platform(Tab::Sessions, None, Some(view));
+
+    // Assert
+    assert!(rendered.contains(" Settings | Platform (1 online) "));
 }
 
 #[test]
@@ -813,7 +798,6 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
         process_resources: None,
         project_table_state: &mut project_table_state,
         projects: &[],
-        remote_control: None,
         session_git_statuses: &HashMap::new(),
         session_live_usage: &HashMap::new(),
         sessions: &sessions,

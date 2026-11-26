@@ -9,7 +9,7 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::http::Uri;
 
 use super::{Dialer, INITIAL_RETRY_DELAY, REGISTER_PATH, RelayEndpoint, retry_delay_after};
-use crate::relay::{pairing_link, pairing_link_on_page};
+use crate::relay::pairing_link_on_page;
 use crate::source_support::{
     LOOPBACK_GUARD, TLS_HANDSHAKE_RECORD, TlsFixture, loopback_listener, untrusting_tls_config,
 };
@@ -76,26 +76,6 @@ fn pairing_link_on_another_page_keeps_the_page_and_the_fragment_format() {
             "ab".repeat(32)
         )
     );
-}
-
-#[test]
-fn pairing_link_points_at_the_relay_page_and_keeps_secrets_in_the_fragment() {
-    // Arrange
-    let key = PublicKey::from_bytes(&[0xAB; 32]).expect("key should load");
-
-    // Act
-    let secure = pairing_link("wss://relay.example/", &key, "ABCD-EFGH");
-    let plain = pairing_link("ws://127.0.0.1:8787", &key, "ABCD-EFGH");
-
-    // Assert
-    assert_eq!(
-        secure,
-        format!(
-            "https://relay.example/#relay=wss%3A%2F%2Frelay%2Eexample&key={}&code=ABCD%2DEFGH",
-            "ab".repeat(32)
-        )
-    );
-    assert!(plain.starts_with("http://127.0.0.1:8787/#relay=ws%3A%2F%2F127%2E0%2E0%2E1%3A8787&"));
 }
 
 #[test]

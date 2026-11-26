@@ -80,46 +80,32 @@ and accented row text.
 <a id="usage-settings-options"></a> Role pickers ask for model, reasoning, and, for
 Claude or Codex, speed. See [Settings Scope](@/docs/usage/workflow.md#settings-scope).
 
-## Remote
-
-Appears only with `agentty --experimental-remote` or `--remote-relay <URL>`. See
-[Remote Control](@/docs/usage/remote-control.md).
-
-| Key                 | Action                                         |
-| ------------------- | ---------------------------------------------- |
-| `q`                 | Quit after confirmation                        |
-| `s`                 | Sync active project branch                     |
-| `Enter`             | Start remote control, or stop it while it runs |
-| `y`                 | Approve the oldest pairing request             |
-| `x`                 | Deny the oldest pairing request                |
-| `n`                 | Replace the pairing code                       |
-| `o`                 | Open the relay pairing link in this browser    |
-| `c`                 | Copy the relay pairing link                    |
-| `j` / `k`           | Move between paired devices                    |
-| `d`                 | Remove the selected device                     |
-| `Tab` / `Shift+Tab` | Switch to next / previous tab                  |
-| `?`                 | Help                                           |
-
 ## Platform
 
-Appears unless Agentty starts with `--remote-relay`. See
-[Agentty Platform](@/docs/usage/platform.md).
+See [Agentty Platform](@/docs/usage/platform.md) and
+[Remote Control](@/docs/usage/remote-control.md).
 
-| Key                 | Action                                                            |
-| ------------------- | ----------------------------------------------------------------- |
-| `q`                 | Quit after confirmation                                           |
-| `s`                 | Sync active project branch                                        |
-| `Enter`             | Sign in and connect, cancel a sign-in, or check the account again |
-| `o`                 | Open the sign-in page in this browser while signing in            |
-| `c`                 | Copy the sign-in page link while signing in                       |
-| `a`                 | Turn keep on on or off once the account check has answered        |
-| `l`                 | Sign out                                                          |
-| `Tab` / `Shift+Tab` | Switch to next / previous tab                                     |
-| `?`                 | Help                                                              |
+| Key                 | Action                                                                  |
+| ------------------- | ----------------------------------------------------------------------- |
+| `q`                 | Quit after confirmation                                                 |
+| `s`                 | Sync active project branch                                              |
+| `Enter`             | Sign in and connect, cancel a sign-in, check the account, or start/stop |
+| `o`                 | Open the sign-in page or the pairing link in this browser               |
+| `c`                 | Copy the sign-in page link or the pairing link                          |
+| `a`                 | Turn keep on on or off once the account check has answered              |
+| `l`                 | Sign out                                                                |
+| `y`                 | Approve the oldest pairing request                                      |
+| `x`                 | Deny the oldest pairing request                                         |
+| `n`                 | Replace the pairing code                                                |
+| `j` / `k`           | Move between paired devices                                             |
+| `d`                 | Remove the selected device                                              |
+| `Tab` / `Shift+Tab` | Switch to next / previous tab                                           |
+| `?`                 | Help                                                                    |
 
-Once this Agentty is registered, `Enter` starts or stops remote control through the
-platform's relay for this launch, and the [Remote](#remote) keys `y`, `x`, `n`, `o`,
-`c`, `j` / `k`, and `d` act on its pairing link, pairing requests, and devices. With
+While signing in, `o` and `c` act on the sign-in page. Once this Agentty is registered,
+`Enter` starts or stops remote control through the platform's relay for this launch, `y`
+and `x` answer pairing requests, `j` / `k` or the arrow keys and `d` act on the paired
+devices, and, while remote control runs, `n`, `o`, and `c` act on its pairing link. With
 keep on, remote control through the platform starts whenever Agentty starts; see
 [Keep Remote Control On](@/docs/usage/platform.md#usage-platform-keep-on).
 

@@ -1,4 +1,5 @@
-//! Relay that joins remote-control devices to Agentty instances.
+//! Relay that joins remote-control devices to Agentty instances, as a
+//! library that a program embeds.
 //!
 //! An instance keeps one outbound control connection to the relay and dials
 //! one more connection for each device, so it never accepts inbound traffic.
@@ -27,19 +28,10 @@
 //! directions until either side leaves, and closes both sides with the same
 //! reason. `GET /healthz` answers `ok` for liveness probes.
 //!
-//! `GET /` serves the remote-control web client, so the pairing link an
-//! instance shows opens it. The client reads the instance key and the
-//! one-time code from the link's fragment, which browsers never send, and
-//! then opens a device stream. Whoever runs the relay controls the code
-//! this page runs.
-//!
-//! Another web application can serve the same page on its own origin, with
-//! its own navigation and a directory of the Agenttys its users have, from
-//! [`WebClientPage`] and [`web_client_files`]. Its page reaches instances
-//! through this relay as the relay's own page does. The relay accepts
-//! device streams whatever page opened them, so it needs no setting for
-//! that: the streams are encrypted end to end, and each instance approves
-//! each device itself.
+//! The relay serves no page. The program that embeds it serves the web
+//! client devices run, on its own origin, and the relay accepts device
+//! streams whatever page opened them: the streams are encrypted end to end,
+//! and each instance approves each device itself.
 //!
 //! [`RelayLimits`] bounds what clients hold once a request reaches the
 //! relay. It does not cap plain TCP connections or slow request headers, and
@@ -50,20 +42,14 @@ mod admission;
 mod close;
 mod control;
 mod limit;
-mod page;
 mod peer;
 mod registry;
 mod server;
 mod stream;
-mod web_client;
 
-pub use admission::{AdmissionError, AdmissionPolicy, InstanceAllowList};
+pub use admission::{AdmissionError, AdmissionPolicy};
 pub use limit::RelayLimits;
 pub use server::{
     ACCEPT_PATH_PREFIX, CONNECT_PATH_PREFIX, REGISTER_PATH, REGISTERED_MESSAGE, RelayConfig,
     RelayError, RelayHandle, STREAM_MESSAGE_PREFIX, start, start_with_admission,
-};
-pub use web_client::{
-    WebClientError, WebClientFile, WebClientLink, WebClientOptions, WebClientPage,
-    WebClientSection, web_client_files,
 };

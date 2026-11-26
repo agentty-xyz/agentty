@@ -1,33 +1,41 @@
 +++
 title = "Remote Control Design"
-description = "Transports, keys, relay trust model, and the design decisions behind remote control."
+description = "Relay transport, keys, platform trust model, and the design decisions behind remote control."
 weight = 10
 +++
 
 <a id="architecture-remote-control-design"></a> Remote control lets a browser on another
-device drive sessions through one frame protocol over two transports: a loopback
-listener reached through a private tunnel, and a relay that needs no tunnel. This page
-records the design and the decisions behind it.
-[Remote Control](@/docs/usage/remote-control.md) covers how to use it.
+device drive sessions through one frame protocol carried by a relay. Agentty keeps an
+outbound connection to the relay that its [Agentty Platform](@/docs/usage/platform.md)
+names, and the platform serves the web client that devices run. This page records the
+design and the decisions behind it. [Remote Control](@/docs/usage/remote-control.md)
+covers how to use it.
 
 <!-- more -->
 
 ```mermaid
 flowchart LR
-    B["Browser"] -- "tunnel" --> L["Loopback listener"]
-    B -- "encrypted stream" --> R["Relay"]
-    A["Agentty"] -- "outbound connections" --> R
-    L --- A
+    subgraph P[Agentty Platform]
+        W["Web client"]
+        R["Relay"]
+    end
+    B["Browser"] -- "loads" --> W
+    B -- "encrypted stream" --> R
+    A["Agentty"] -- "sign-in, registration" --> P
+    A -- "outbound connections" --> R
 ```
 
 ## Crates
 
-- `ag-remote` owns the frame protocol, pairing, the loopback listener, the embedded web
-  client, and the instance side of the relay link.
+- `ag-remote` owns the frame protocol, pairing, and the instance side of the relay link:
+  it dials the relay, answers each device stream, and serves the device's requests.
 - `ag-noise` owns the handshakes and encrypted sessions. It performs no I/O.
-- `ag-relay` joins a device's connection to one that an Agentty instance dials out, and
-  serves the web client so a pairing link opens it. It keeps no accounts and no
-  database.
+- `ag-relay` is a library that a platform embeds. It joins a device's connection to one
+  that an Agentty instance dials out, and asks the platform's admission policy which
+  instances may register. It keeps no accounts and no database, and serves no page.
+
+The web client is not part of this repository. The platform serves it; it speaks the
+frame protocol and runs the device side of the handshake.
 
 ## Trust model
 
@@ -35,22 +43,23 @@ The relay is untrusted. It learns which instance a device asks for, when they co
 and how much they send. It cannot read or change what they send, and it cannot pair a
 device: pairing still needs the one-time code and an approval in the terminal.
 
-Whoever runs a relay decides which instances may register with it. After an instance
-proves its key, the relay asks an admission policy about its identifier: the `ag-relay`
-binary can admit a fixed list, and a program that embeds the crate can supply its own
-policy. Refusing an instance is the only power this adds; the operator still cannot read
-or change a stream. Agentty tells a refusal apart from other failures by the relay's
-close frame and shows it, without changing the relay protocol.
+The platform decides which instances its relay admits. After an instance proves its key,
+the relay asks the platform's admission policy about its identifier, such as whether an
+account registered it. Refusing an instance is the only power admission adds; it does
+not let the relay read or change a stream. Agentty tells a refusal apart from other
+failures by the relay's close frame and shows it, without changing the relay protocol.
 
-Whoever serves the web client is trusted with the page's code. The relay serves it, so a
-malicious relay operator could serve an altered page. Running your own relay removes
-that party.
+The platform is trusted with the web client's code. On the device's side, encryption
+ends inside that client, so a platform that serves altered code can read and send
+everything the device can, including the pairing code, and can pass the device's key to
+someone else. End-to-end encryption protects the streams from the relay and the network,
+not from the client. Agentty offers no client or relay of its own to remove that party;
+the user chooses which platform holds this trust.
 
-A [platform](@/docs/usage/platform.md) adds an account, not a new path to sessions.
-Agentty signs in with a device code, registers the instance's identifier under the
-account, and its relay admits registered instances. The access token goes only to that
-platform; relays see the same handshake and streams as before. The platform serves the
-pairing page its links open, so it holds the same trust as a relay's page.
+A platform adds an account, not a new path to sessions. Agentty signs in with a device
+code, registers the instance's identifier under the account, and the platform's relay
+admits registered instances. The access token goes only to that platform; the relay sees
+only the handshake and the streams.
 
 ## Keys and handshakes
 
@@ -62,88 +71,48 @@ pairing page its links open, so it holds the same trust as a relay's page.
 - **Device to instance.** Noise `IK`: the device already knows the instance key from the
   pairing link, so one round trip sets up the encrypted session and names the device
   key.
-- **Device identity.** A relay device authenticates with its own key pair, and Agentty
-  stores only a digest of the public key. A device on the loopback listener uses a
-  stored token instead, because that listener relies on the tunnel for encryption.
+- **Device identity.** Every device authenticates with its own key pair, and Agentty
+  stores only a digest of the public key. No device holds a token.
 
 Both patterns use X25519, AES-256-GCM, and SHA-256. Each role has its own prologue, so a
 handshake of one role cannot be replayed as the other.
 
-The pairing link carries the relay address, the instance key, and the one-time code in
-its fragment. Browsers do not send the fragment to the server, so the relay never sees
-the code.
+The pairing link opens the platform's pairing page and carries the relay address, the
+instance key, and the one-time code in its fragment. Browsers do not send the fragment
+to a server, so neither the relay nor the platform's server receives the code; the web
+client reads it from the page's address.
 
 ## Design decisions
 
-### The browser client is plain JavaScript on WebCrypto
+### The handshake stays within WebCrypto
 
-**Context.** A browser that pairs through a relay must run the device side of the Noise
-handshake. It can do that with the Rust implementation compiled to WebAssembly, or with
-JavaScript that calls the browser's own cryptography (WebCrypto).
+**Context.** Devices are browsers. A browser client can run the device side of the Noise
+handshake on the browser's own cryptography (WebCrypto), which can hold the device's
+private key as non-extractable, so that page scripts can use the key but never read it,
+or on code compiled to WebAssembly, which keeps the key as bytes any script in the page
+can read.
 
-**Decision.** The web client implements the device handshake in plain JavaScript on
-WebCrypto, with no build step.
-
-**Why.**
-
-- WebCrypto can hold the device's private key as non-extractable: the browser uses the
-  key, but page scripts can never read it. A script injected into the page can misuse
-  the key while the page is open, but cannot copy it. A WebAssembly build keeps the key
-  as ordinary bytes that any such script can read and send elsewhere.
-- The cryptography is the browser's native implementation and receives fixes with
-  browser updates.
-- The content security policy stays strict. WebAssembly needs the `'wasm-unsafe-eval'`
-  exception.
-- The web client keeps its rule of no build step and no toolchain beyond a browser.
+**Decision.** The Noise patterns use only primitives that WebCrypto provides: X25519,
+AES-256-GCM, and SHA-256.
 
 **Consequences.**
 
-- The Noise patterns use AES-256-GCM, because browsers do not yet ship ChaCha20-Poly1305
-  in WebCrypto by default. `ag-noise` must stay within what WebCrypto provides.
-- Two implementations of the device handshake exist. An integration test runs the
-  JavaScript in Node.js against a real relay and server, so they cannot drift apart.
-- Relay pairing needs a browser with X25519 in WebCrypto, which the major browsers have
-  shipped since early 2025, and a page served over HTTPS or from `localhost`. The
-  loopback listener is unaffected.
-
-**Rejected: `ag-noise` compiled to WebAssembly.** It runs the same handshake code on
-both sides, works in browsers since 2017, and works over plain HTTP. It lost on the
-readable device key, the weaker content security policy, and the extra toolchain.
+- The patterns use AES-256-GCM, because browsers do not yet ship ChaCha20-Poly1305 in
+  WebCrypto by default. `ag-noise` must stay within what WebCrypto provides.
+- Pairing needs a browser with X25519 in WebCrypto, which the major browsers have
+  shipped since early 2025, and a page served over HTTPS.
+- The protocol makes a non-extractable device key possible; whether a device gets one
+  depends on the web client the platform serves and on the browser.
 
 **Revisit when** remote control needs an algorithm that browsers do not provide, such as
-a post-quantum key exchange. A small WebAssembly module for that one primitive would
-then be the narrower change.
-
-### Safari keeps the device key in a weaker form until it can store X25519 keys
-
-**Context.** Safari loses X25519 key objects that a page stores
-([WebKit bug 312279](https://bugs.webkit.org/show_bug.cgi?id=312279)), so a
-non-extractable device key would not survive a reload there. Every browser on iPhone and
-iPad uses Safari's engine.
-
-**Decision.** The Noise patterns stay on X25519. A browser that cannot read back a
-stored key object saves the private half encrypted under a second key that it can store.
-Page scripts could decrypt that copy, so those browsers get the protection the
-WebAssembly alternative would have given everywhere, not the non-extractable key.
-
-**Consequences.**
-
-- Nothing changes when Safari is fixed. The client checks at run time whether a stored
-  key object reads back, and on the first visit after the fix it moves the key to the
-  non-extractable form and deletes the weaker copy. The device stays paired.
-- The fallback can be removed once affected Safari versions are no longer in use.
-
-**Rejected: P-256 keys**, which Safari stores, either for the whole key exchange or as a
-separate signing key that proves the device. Both give Safari the non-extractable key
-now, but move remote control off the standard X25519 suite or add a signature step to
-the protocol for a browser bug that should be temporary.
+a post-quantum key exchange.
 
 ### Capabilities instead of version bumps
 
-**Context.** The relay binary embeds its own copy of the web client, and a self-hosted
-relay updates separately from Agentty. A device can therefore load a page that is older
-or newer than the Agentty it talks to. The server refuses any other `protocol_version`,
-so a version bump would lock out every relay device until both sides match.
+**Context.** The platform serves the web client and updates it separately from each
+Agentty installation. A device can therefore load a page that is older or newer than the
+Agentty it talks to. The server refuses any other `protocol_version`, so a version bump
+would lock out every device until both sides match.
 
 **Decision.** Frame changes stay additive. New fields default when missing and are
 omitted when empty. `welcome` and `paired` carry a `capabilities` list of the optional
@@ -155,34 +124,6 @@ it through `SessionService::supports`. A request with an unknown `method` gets
 **Consequences.** An older page ignores fields and capabilities it does not know. A
 newer page hides what an older server lacks. `PROTOCOL_VERSION` changes only when a
 frame changes meaning or loses a field.
-
-### Markdown is rendered by a DOM builder, not a library
-
-**Context.** Assistant answers are Markdown written by a model, so they are untrusted.
-The web client has no build step and no dependencies, and its content security policy
-allows no inline styles and no other origin.
-
-**Decision.** `markdown.mjs` parses the subset the TUI renders into a tree of plain
-objects, then builds elements from a fixed table of tags with `createElement` and text
-nodes. Raw HTML stays text, links keep only the `http:`, `https:`, and `mailto:`
-schemes, and the page loads no images.
-
-**Why.**
-
-- The page never parses markup from a string, so the contract test that refuses
-  `innerHTML` and its relatives keeps holding for every served file.
-- Safety does not depend on a sanitizer configuration or on a library's update cycle.
-- The parser works in linear passes, caps nesting at 16 levels, and skips answers over
-  256 KB, so a hostile answer cannot freeze the page.
-
-**Consequences.** The renderer differs from CommonMark at the edges: no indented code,
-setext headings, reference links, footnotes, or HTML. Each answer has a `View source`
-toggle for those cases. The Node tests in `crates/ag-remote/tests/web/` cover each
-construct and hostile input.
-
-**Rejected: a Markdown library and a sanitizer**, vendored as files. They cover more of
-CommonMark, but render to an HTML string that the page would have to parse, need a
-sanitizer to make that safe, and add third-party code to update.
 
 ### Remote devices may create, merge, and publish
 
@@ -295,16 +236,26 @@ group. `ag-remote` keeps its own checks.
 The relay keeps only open connections in memory, and a restart only makes clients
 reconnect. Each device gets its own connection pair instead of a shared multiplexed
 channel, so the relay needs no framing of its own and one slow device cannot stall
-another. Limits on what a client can hold replace accounts.
+another. The relay itself keeps no accounts; limits on what a client can hold bound each
+connection.
 
-### No relay is used unless the user chooses one
+### Remote control runs only through a platform
 
-Agentty uses a relay only when started with `--remote-relay`, or when the user connects
-through a platform that offers one: by signing in, by starting remote control in the
-`Platform` tab, or, at launch, only after turning on keep on, which is saved with the
-sign-in and cleared with it. The two never combine: a launch with `--remote-relay` does
-not contact the platform at all. Nothing leaves the computer unless the user chooses a
-relay or a platform.
+**Decision.** Agentty accepts no inbound connections and serves no page. Remote control
+runs only through the relay of the platform Agentty is signed in to, and that platform
+serves the web client. Agentty connects only when the user asks: by signing in, by
+starting remote control in the `Platform` tab, or, at launch, only after turning on keep
+on, which is saved with the sign-in and cleared with it.
+
+**Consequences.**
+
+- Nothing on the computer listens for devices, and every device proves itself with its
+  own key.
+- Remote control needs a platform that offers a relay and admits the account.
+- The platform's web client is trusted with every paired device; see
+  [Trust model](#trust-model).
+- Agentty contacts no platform until the user signs in, and no relay until the user
+  connects.
 
 ### A connection runs up to eight requests at once
 

@@ -20,7 +20,6 @@ use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::platform::PlatformTabView;
-use crate::presentation::remote_control::RemoteControlView;
 use crate::ui::{RenderCacheStore, component, layout, router, style};
 
 /// Focused-review display state projected from the app cache for one visible
@@ -93,9 +92,6 @@ pub struct RenderContext<'a> {
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
-    /// Remote-control listener and paired-device state, or `None` when this
-    /// launch does not offer the Remote tab.
-    pub remote_control: Option<&'a RemoteControlView>,
     /// UI-owned cache resources shared by every page in this frame.
     pub render_cache_store: &'a RenderCacheStore,
     /// Detected session worktree branch names keyed by session id.

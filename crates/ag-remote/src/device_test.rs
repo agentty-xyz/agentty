@@ -1,17 +1,19 @@
-use super::{DeviceStoreError, token_hash};
+use ag_noise::PublicKey;
+
+use super::{DeviceStoreError, key_hash};
 
 #[test]
-fn token_hash_is_lowercase_sha256_hex() {
+fn key_hash_is_the_prefixed_sha256_hex_that_stored_devices_carry() {
     // Arrange
-    let token = "abc";
+    let public_key = PublicKey::from_bytes(&[7; 32]).expect("key should load");
 
     // Act
-    let hash = token_hash(token);
+    let hash = key_hash(&public_key);
 
     // Assert
     assert_eq!(
         hash,
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        "2af71bb3c35db895cab8f7626da7b9d92e7b600a0666d2a5fe0c8aed22ab7480"
     );
 }
 

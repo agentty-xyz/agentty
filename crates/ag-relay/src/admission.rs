@@ -1,7 +1,5 @@
 //! Which instances may register: the policy an embedder supplies.
 
-use std::collections::HashSet;
-
 use async_trait::async_trait;
 
 /// Decides whether an instance may register with the relay.
@@ -32,34 +30,6 @@ pub trait AdmissionPolicy: Send + Sync {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("{0}")]
 pub struct AdmissionError(pub String);
-
-/// Policy that admits only a fixed set of instance identifiers.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InstanceAllowList {
-    instance_ids: HashSet<String>,
-}
-
-impl InstanceAllowList {
-    /// Admits exactly the instances in `instance_ids`, compared ignoring
-    /// ASCII case. An empty list admits no instance.
-    pub fn new(instance_ids: impl IntoIterator<Item = String>) -> Self {
-        let instance_ids = instance_ids
-            .into_iter()
-            .map(|instance_id| instance_id.to_ascii_lowercase())
-            .collect();
-
-        Self { instance_ids }
-    }
-}
-
-#[async_trait]
-impl AdmissionPolicy for InstanceAllowList {
-    async fn admit(&self, instance_id: &str) -> Result<bool, AdmissionError> {
-        Ok(self
-            .instance_ids
-            .contains(&instance_id.to_ascii_lowercase()))
-    }
-}
 
 /// Policy that admits every instance: what [`crate::start`] uses.
 pub(crate) struct AdmitAll;

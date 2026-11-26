@@ -1,7 +1,7 @@
 # ag-relay
 
-Relay for remote control: it joins a device's WebSocket to one that an Agentty instance
-dials out, so the instance needs no open port.
+Relay for remote control, as a library a program embeds: it joins a device's WebSocket
+to one that an Agentty instance dials out, so the instance needs no open port.
 
 ## Boundaries
 
@@ -17,26 +17,20 @@ dials out, so the instance needs no open port.
 - Keep every limit in `RelayLimits`. A new resource a client can hold needs a limit, and
   every send goes through `Peer` so a client that stops reading cannot hold a task.
 - Plain TCP connections and slow request headers are not limited here; the relay is
-  meant to run behind a reverse proxy that terminates TLS. Say so wherever deployment is
-  documented.
-- Keep the crate independent of Agentty application crates. It embeds the web client
-  files from `crates/ag-remote/assets/` by path and only renders the page: it marks it
-  for the relay transport and fills in the options another web application passes to
-  serve it, escaping their text and refusing links to other origins. Change the client
-  there. Page options never grant a device anything, and the content security policy
-  names every origin the page connects to.
+  meant to run behind a reverse proxy that terminates TLS. Say so in the crate
+  documentation.
+- Keep the crate independent of Agentty application crates, and serve no page: the
+  embedder serves the web client devices run.
 
 ## Integration
 
 - Consult `crates/ag-relay/src/lib.rs` for the endpoint and control-message contract.
   Changing a path or control message breaks released Agentty versions; add a new
-  versioned path instead.
+  versioned path instead. Embedders depend on `start`, `start_with_admission`, and the
+  configuration, limit, handle, error, and admission types; change their signatures only
+  as a breaking change.
 
 ## Documentation
 
 Keep `docs/site/content/docs/usage/remote-control.md` aligned when relay behavior,
-limits, or what the relay can observe changes. `container/relay.Containerfile` builds
-the relay's image, and `container/relay-probe.sh` probes it for the `relay-image` hook
-and for `.github/workflows/publish-relay-image.yml`, which publishes it on pushes to
-`main` and for each release. `container/relay.fly.toml` deploys the image on Fly.io;
-keep its port, flags, and health check aligned with the image.
+limits, or what the relay can observe changes.

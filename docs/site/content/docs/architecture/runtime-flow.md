@@ -115,35 +115,36 @@ review requests and watched sessions wait for their project to become active, or
 sync, which refreshes them.
 
 <a id="architecture-runtime-flow-remote-control"></a> The
-[remote-control](@/docs/usage/remote-control.md) listener runs on the foreground
-runtime's Tokio executor but owns no application state. It calls the session API through
-the mailbox like any programmatic caller, under the remote initiator: the foreground
-turn that serves each of its requests answers a project the host does not list, or a
-session that no listed project's page holds, as missing, and refuses any operation
-remote control does not serve. A device's request loads and leases the page of the
-listed project it names, or of a listed session's project, as a session-API caller's
-does, so a device idle past a page's eviction gets the page loaded again by its next
-request. While a device is connected, the session-change revision follows a fingerprint
-of what the session API reports from memory, built from the same helpers the API reads:
-each loaded page's sessions with their list entries and live details and its project
-status, the project list, the host's model choices, the graph replies being decided, and
-what live graph drivers add to stored graph progress. Each foreground cycle, and each
-step of a foreground request that drives the mailbox itself, compares the fingerprint
-once and advances the revision when it differs, however the change was made. A device
-reads as soon as it authenticates, before the host hears of the connection, so the first
-connection takes a new baseline and advances the revision once. The fingerprint reads no
-clock and no database, so it stays unchanged while nothing a device reads changes.
-Explicit publishes remain only for state the database alone holds: session updates,
-which carry transcripts, reloads, mailbox mutations, and admitted graph mutations, which
-write graph tables without a session event. A graph driver reports a session update each
-time a node settles, so remote views follow a pass that runs wave after wave, and graph
-questions change only with one of these. Creation defaults of the host context come from
-stored settings and are not followed. Connected clients then fetch the list and the open
-session again, so remote views converge on durable state instead of replaying events. A
-session diff query captures its diff source in the mailbox and runs Git in a detached
-task that answers the caller directly, so it adds no reducer event. A session file
-listing works the same way: the mailbox captures the worktree folder, or answers from
-the `@`-mention index cache, and a blocking worker walks the worktree.
+[remote-control](@/docs/usage/remote-control.md) server, which serves devices over the
+relay link, runs on the foreground runtime's Tokio executor but owns no application
+state. It calls the session API through the mailbox like any programmatic caller, under
+the remote initiator: the foreground turn that serves each of its requests answers a
+project the host does not list, or a session that no listed project's page holds, as
+missing, and refuses any operation remote control does not serve. A device's request
+loads and leases the page of the listed project it names, or of a listed session's
+project, as a session-API caller's does, so a device idle past a page's eviction gets
+the page loaded again by its next request. While a device is connected, the
+session-change revision follows a fingerprint of what the session API reports from
+memory, built from the same helpers the API reads: each loaded page's sessions with
+their list entries and live details and its project status, the project list, the host's
+model choices, the graph replies being decided, and what live graph drivers add to
+stored graph progress. Each foreground cycle, and each step of a foreground request that
+drives the mailbox itself, compares the fingerprint once and advances the revision when
+it differs, however the change was made. A device reads as soon as it authenticates,
+before the host hears of the connection, so the first connection takes a new baseline
+and advances the revision once. The fingerprint reads no clock and no database, so it
+stays unchanged while nothing a device reads changes. Explicit publishes remain only for
+state the database alone holds: session updates, which carry transcripts, reloads,
+mailbox mutations, and admitted graph mutations, which write graph tables without a
+session event. A graph driver reports a session update each time a node settles, so
+remote views follow a pass that runs wave after wave, and graph questions change only
+with one of these. Creation defaults of the host context come from stored settings and
+are not followed. Connected clients then fetch the list and the open session again, so
+remote views converge on durable state instead of replaying events. A session diff query
+captures its diff source in the mailbox and runs Git in a detached task that answers the
+caller directly, so it adds no reducer event. A session file listing works the same way:
+the mailbox captures the worktree folder, or answers from the `@`-mention index cache,
+and a blocking worker walks the worktree.
 
 ## App Event Reducer
 

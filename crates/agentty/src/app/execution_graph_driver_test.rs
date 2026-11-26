@@ -24,7 +24,7 @@ use super::{driver_session, graph, seed_session};
 use crate::app::execution_graph::{
     GraphDriverRegistration, GraphDriverSession, GraphNodeLeases, SessionStatusGraphRunner,
 };
-use crate::app::test_support::start_fake_listener;
+use crate::app::test_support::start_fake_remote_control;
 use crate::app::{App, AppServices};
 use crate::domain::session::Status;
 use crate::infra::db::GRAPH_NODE_ACTIVITY_OPERATION_KIND;
@@ -261,7 +261,7 @@ async fn unclaimed_checks_wake_resource_blocked_drivers_without_external_events(
 async fn live_driver_changes_advance_the_remote_revision_once_each() {
     // Arrange
     let (mut app, _directory) = crate::test_support::new_test_app().await;
-    let mut revisions = start_fake_listener(&mut app).await;
+    let mut revisions = start_fake_remote_control(&mut app).await;
     let mut budgeted = utility_graph("budgeted", &["first", "second"]);
     for node in &mut budgeted.nodes {
         node.execution.shared_budget_id = Some("calls".into());

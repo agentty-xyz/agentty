@@ -14,6 +14,6 @@ sort_by = "weight"
 - [Forge Authentication](@/docs/usage/forge-authentication.md) - GitHub and GitLab CLI
   setup for branch publishing and review-request publishing.
 - [Remote Control](@/docs/usage/remote-control.md) - Follow and steer sessions from a
-  phone or another computer's browser.
+  phone or another computer's browser through an Agentty Platform.
 - [Agentty Platform](@/docs/usage/platform.md) - Sign in so paired devices reach Agentty
-  through a hosted relay.
+  through the platform's relay.

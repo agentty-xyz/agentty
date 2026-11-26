@@ -2,7 +2,6 @@
 //! against a scripted platform client.
 
 use std::collections::VecDeque;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -116,22 +115,15 @@ fn registering_client(account_checks: usize) -> MockPlatformClient {
     client
 }
 
-/// Builds a launcher that starts `starts` listeners on a free port, each
-/// linked to the platform's relay.
+/// Builds a launcher that starts `starts` servers, each linked to the
+/// platform's relay.
 fn platform_relay_launcher(starts: usize) -> MockRemoteControlLauncher {
     let mut launcher = MockRemoteControlLauncher::new();
     launcher
         .expect_start()
-        .withf(|port, _, relay, _| {
-            *port == 0
-                && relay
-                    .as_ref()
-                    .is_some_and(|relay| relay.url == service().relay_url)
-        })
+        .withf(|relay, _| relay.url == service().relay_url)
         .times(starts)
-        .returning(
-            |_, _, _, _| Ok(Box::new(StubServer::default()) as Box<dyn RemoteControlServer>),
-        );
+        .returning(|_, _| Box::new(StubServer::default()) as Box<dyn RemoteControlServer>);
 
     launcher
 }
@@ -255,9 +247,9 @@ async fn stored_keep_on(app: &App) -> Option<bool> {
     stored["keep_on"].as_bool()
 }
 
-/// Returns whether the remote-control listener runs.
+/// Returns whether remote control runs and shows its pairing link.
 fn is_remote_control_running(app: &App) -> bool {
-    app.remote_control.view().listener.is_some()
+    app.remote_control.view().relay.is_some()
 }
 
 /// Returns whether the signed-in account keeps remote control on.
@@ -587,7 +579,7 @@ async fn an_unreadable_instance_key_stops_registration_and_sign_out_skips_it() {
     assert_eq!(
         access,
         Some(PlatformAccess::Unavailable {
-            message: "The stored remote key is invalid.".to_string(),
+            message: "The stored instance key is invalid.".to_string(),
         })
     );
 }
@@ -1072,9 +1064,9 @@ async fn keep_on_waits_for_the_check_and_starting_or_stopping_never_changes_it()
     app.toggle_platform_keep_on().await;
     let while_checking = is_kept_on(&app);
     sign_in_registered(&mut app).await;
-    app.toggle_remote_control().await;
+    app.start_remote_control().await;
     let started = is_remote_control_running(&app);
-    app.toggle_remote_control().await;
+    app.stop_remote_control().await;
 
     // Assert
     assert!(!while_checking);
@@ -1126,7 +1118,7 @@ async fn sign_out_stops_remote_control_and_clears_keep_on() {
 
 #[tokio::test]
 async fn a_registered_agentty_checks_the_account_then_starts_remote_control_through_its_relay() {
-    // Arrange: without `--experimental-remote`, a free port is enough.
+    // Arrange
     let (mut app, _base_dir) =
         platform_app_with_launcher(registering_client(1), platform_relay_launcher(1)).await;
     sign_in_directly(&mut app, None, PlatformAccess::Checking);
@@ -1151,20 +1143,32 @@ async fn a_registered_agentty_checks_the_account_then_starts_remote_control_thro
     let link = app
         .remote_control
         .view()
-        .listener
+        .relay
         .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
+        .map(|relay| relay.link.clone());
+    app.next_tab();
+    app.previous_tab();
+    let reopened_link = app
+        .remote_control
+        .view()
+        .relay
+        .as_ref()
         .map(|relay| relay.link.clone());
     app.activate_platform().await;
 
-    // Assert
+    // Assert: opening the tab again issued a new code, which the stub
+    // server issues the same.
     assert_eq!(tab, Tab::Platform);
     assert_eq!(checking, Some(PlatformAccess::Checking));
-    assert!(link.is_some_and(|link| link.starts_with("https://platform.example/sessions/#relay=")));
-    assert_eq!(app.remote_control.view().listener, None);
+    assert!(
+        link.as_ref()
+            .is_some_and(|link| link.starts_with("https://platform.example/sessions/#relay="))
+    );
+    assert_eq!(reopened_link, link);
+    assert_eq!(app.remote_control.view().relay, None);
 }
 
-/// Listener that serves nothing and issues one fixed pairing code.
+/// Server that serves nothing and issues one fixed pairing code.
 struct StubServer {
     status_tx: watch::Sender<RemoteServerStatus>,
 }
@@ -1179,10 +1183,6 @@ impl Default for StubServer {
 
 #[async_trait::async_trait]
 impl RemoteControlServer for StubServer {
-    fn local_addr(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 0))
-    }
-
     fn issue_pairing_code(&self) -> Result<String, RemoteError> {
         Ok("ABCD-EFGH".to_string())
     }
