@@ -13,7 +13,7 @@ permissions:
 jobs:
   test:
     name: Run suite
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2604
     env:
       CARGO_TARGET_DIR: target
       TRUNK_API_TOKEN_AVAILABLE: ${{ secrets.TRUNK_API_TOKEN != '' }}
