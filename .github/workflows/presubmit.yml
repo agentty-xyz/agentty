@@ -14,8 +14,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Match postsubmit: `rust-cache` hashes `CARGO_*` variables into its key, so a
-# difference here would stop pull requests from restoring caches saved on `main`.
+# Applies to the coverage job only. That job restores no cache saved on `main`:
+# Blacksmith runners have their own cache, which nothing on `main` fills, so it
+# builds dependencies and downloads the SonarQube scanner on every run.
 env:
   CARGO_TERM_COLOR: always
 
