@@ -182,12 +182,14 @@ also offers `/graph`, except while the session runs a turn or a sync, as in the
 terminal. It turns the box into a `Graph` request: describe the task and send it, and
 Agentty starts generating a
 [graph proposal](@/docs/usage/workflow.md#generated-graph-proposals), which the graph
-summary then shows. `Esc` or the `×` beside `Graph` returns to chat and keeps your text;
-a refused request says why and keeps both. An unsent task stays a `Graph` request when
-you switch sessions or the tab reloads. While the session or this Agentty cannot take a
-graph request, the marker says so and the box sends nothing until you return to chat.
-Nothing runs until you approve the proposal by replying in chat. Home's first message
-for a new session cannot start with `/graph`; open the session first.
+summary then shows. As in the terminal, a request for a session whose graph can still
+run [adds work to that graph](@/docs/usage/workflow.md#adding-work-to-a-running-graph).
+`Esc` or the `×` beside `Graph` returns to chat and keeps your text; a refused request
+says why and keeps both. An unsent task stays a `Graph` request when you switch sessions
+or the tab reloads. While the session or this Agentty cannot take a graph request, the
+marker says so and the box sends nothing until you return to chat. Nothing runs until
+you approve the proposal by replying in chat. Home's first message for a new session
+cannot start with `/graph`; open the session first.
 
 When this Agentty lets devices list a session's files, typing `@` at the start of a word
 lists the files and directories in the session's worktree, best match first, as in the

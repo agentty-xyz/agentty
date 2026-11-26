@@ -158,10 +158,12 @@ sequence, and inputs pinned under an earlier revision stay exact. A full revisio
 that lineage. `GraphExecutor::run_ready` reloads the graph every wave, so a live driver
 dispatches appended nodes once woken.
 
-Expansion starts only from an explicit user request. `GenerateGraphProposalRequest`
-names the target graph and revision, the host captures that revision's snapshot, and a
-read-only run proposes new nodes against it. Approving the exact version appends them in
-the approval transaction, then wakes the retained driver or resumes a stopped one.
+Expansion starts only from an explicit user request. A `GenerateGraphProposalRequest`
+names no target: for every frontend, the host expands the graph that the session's
+newest approved proposal launched while it can still run, captures its current
+revision's snapshot, and a read-only run proposes new nodes against it. Otherwise the
+request proposes a new graph. Approving the exact version appends them in the approval
+transaction, then wakes the retained driver or resumes a stopped one.
 
 ## Focused Review Graph
 

@@ -98,6 +98,10 @@ async fn duplicate_generation_and_approval_receipts_do_not_start_workers() {
                 .returning(|_, _| Ok(false));
         } else {
             repository.expect_get().once().returning(|_, _| Ok(None));
+            repository
+                .expect_list()
+                .once()
+                .returning(|_| Ok(Vec::new()));
             repository.expect_create().once().returning(|_| Ok(false));
         }
         app.services

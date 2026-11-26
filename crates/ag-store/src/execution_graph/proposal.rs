@@ -181,14 +181,11 @@ impl GraphProposalRepository for SqliteGraphRepository {
         }
         let mut transaction = begin_write(&self.pool, "create graph proposal").await?;
         // An expansion captures the exact stored revision it extends.
-        let stored_base = match &state.input.expands {
-            Some(target) => {
-                Self::graph(&mut transaction, &target.graph_id, Some(target.revision)).await?
-            }
+        let stored_base = match &state.base {
+            Some(base) => Self::graph(&mut transaction, &base.id, Some(base.revision)).await?,
             None => None,
         };
         if state.base != stored_base
-            || state.input.expands.is_some() != state.base.is_some()
             || state
                 .base
                 .as_ref()

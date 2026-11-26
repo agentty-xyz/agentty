@@ -9,8 +9,8 @@ use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, TurnPrompt};
 use ag_session::{
     AgentDefinition, AgentSelection, ExecutionGraph, ExecutionGraphStatus,
     GenerateGraphProposalRequest, GraphProposalAction, GraphProposalLimits,
-    GraphProposalResolution, GraphProposalState, GraphProposalTarget, GraphProposalVersion,
-    GraphProposalVersionOutcome, SessionError, StartExecutionGraphRequest,
+    GraphProposalResolution, GraphProposalState, GraphProposalVersion, GraphProposalVersionOutcome,
+    SessionError, StartExecutionGraphRequest,
 };
 use askama::Template;
 use tokio_util::sync::CancellationToken;
@@ -151,10 +151,10 @@ impl App {
             return Ok(());
         }
         Self::require_supported_graph_request(&input)?;
-        let base = match &input.expands {
-            Some(target) => Some(self.expansion_base(&input.session_id, target).await?),
-            None => None,
-        };
+        // Whichever frontend asks, a graph beside the chat that can still run
+        // gains the requested work instead of competing with a second graph
+        // in the worktree.
+        let base = self.expansion_base(&input.session_id).await?;
         let (agent, folder, transcript) =
             self.generation_session(&input.session_id, base.is_some())?;
         let notice = if base.is_some() {
@@ -352,15 +352,15 @@ impl App {
         ))
     }
 
-    /// Returns where a new graph request of `session_id` adds nodes: the
-    /// graph its newest approved proposal launched, at its current revision,
-    /// while that graph can still run. Later proposals that were canceled,
-    /// failed, or are still undecided do not hide that graph. `None` asks for
-    /// a new graph.
-    pub(super) async fn expandable_graph_target(
+    /// Returns the graph a new graph request of `session_id` adds nodes to:
+    /// the graph its newest approved proposal launched, at its current
+    /// revision, while that graph can still run. Later proposals that were
+    /// canceled, failed, or are still undecided do not hide that graph.
+    /// `None` asks for a new graph.
+    async fn expansion_base(
         &self,
         session_id: &str,
-    ) -> Result<Option<GraphProposalTarget>, SessionError> {
+    ) -> Result<Option<ExecutionGraph>, SessionError> {
         let Some(approval) = self
             .services
             .db()
@@ -374,49 +374,20 @@ impl App {
         else {
             return Ok(None);
         };
-        let progress = self.execution_graph_progress(&approval.graph_id).await?;
-
-        Ok(progress
+        let Some(progress) = self
+            .execution_graph_progress(&approval.graph_id)
+            .await?
             .filter(|progress| Self::is_expandable(progress.status))
-            .map(|progress| GraphProposalTarget {
-                graph_id: progress.graph_id,
-                revision: progress.revision,
-            }))
-    }
+        else {
+            return Ok(None);
+        };
 
-    /// Loads the graph `target` names for an expansion of `session_id`. It
-    /// must belong to the session, still be at the requested revision, and
-    /// still be able to run.
-    async fn expansion_base(
-        &self,
-        session_id: &SessionId,
-        target: &GraphProposalTarget,
-    ) -> Result<ExecutionGraph, SessionError> {
-        let graph = self
-            .services
+        self.services
             .db()
             .graphs()
-            .load_graph(&target.graph_id, None)
+            .load_graph(&progress.graph_id, Some(progress.revision))
             .await
-            .map_err(proposal_error)?
-            .filter(|graph| graph.session_id == *session_id)
-            .ok_or_else(|| SessionError::Operation("Graph to expand is missing".into()))?;
-        if graph.revision != target.revision {
-            return Err(SessionError::Operation(
-                "The graph changed; request the expansion again".into(),
-            ));
-        }
-        let is_expandable = self
-            .execution_graph_progress(&graph.id)
-            .await?
-            .is_some_and(|progress| Self::is_expandable(progress.status));
-        if !is_expandable {
-            return Err(SessionError::Operation(
-                "Completed or canceled graphs cannot gain nodes".into(),
-            ));
-        }
-
-        Ok(graph)
+            .map_err(proposal_error)
     }
 
     /// Whether a graph with `status` can still gain nodes.

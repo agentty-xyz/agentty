@@ -15,8 +15,7 @@ use ag_protocol::{
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
     ExecutionGraph, ExecutionGraphStatus, GenerateGraphProposalRequest, GraphExecutionRef,
-    GraphNodeStatus, GraphProposalState, GraphProposalTarget, GraphProposalVersionOutcome,
-    SessionError, StartExecutionGraphRequest,
+    GraphNodeStatus, GraphProposalState, GraphProposalVersionOutcome, StartExecutionGraphRequest,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{GraphAdmission, RunState};
@@ -43,18 +42,12 @@ async fn expansion_proposals_append_nodes_and_run_them_in_the_same_graph() {
     let graph_id = "proposal:base:1";
     wait_for_node(&app, graph_id, "inspect", GraphNodeStatus::Succeeded).await;
 
-    // Act
-    let target = app
-        .expandable_graph_target("sess")
-        .await
-        .expect("target")
-        .expect("graph beside the chat");
-    let input = GenerateGraphProposalRequest {
-        expands: Some(target.clone()),
-        id: "expand".into(),
-        request: TurnPrompt::from_text("Summarize the findings".into()),
-        session_id: "sess".into(),
-    };
+    // Act: the remote client sends no target; the host picks the graph.
+    let input = GenerateGraphProposalRequest::from_text(
+        "expand".into(),
+        "sess".into(),
+        "Summarize the findings".into(),
+    );
     app.drive_session_request(service.generate_graph_proposal(input))
         .await
         .expect("generate expansion");
@@ -66,15 +59,11 @@ async fn expansion_proposals_append_nodes_and_run_them_in_the_same_graph() {
 
     // Assert
     assert_eq!(
-        target,
-        GraphProposalTarget {
-            graph_id: graph_id.into(),
-            revision: NonZeroU64::MIN,
-        }
-    );
-    assert_eq!(
-        expansion.base.as_ref().map(|base| base.id.as_str()),
-        Some(graph_id)
+        expansion
+            .base
+            .as_ref()
+            .map(|base| (base.id.as_str(), base.revision)),
+        Some((graph_id, NonZeroU64::MIN))
     );
     let launch = launch(&expansion);
     assert!(launch.provider_call_limits.is_empty());
@@ -101,10 +90,6 @@ async fn assert_paused_graph_resumes_for_added_nodes(app: &mut App, graph: &Exec
     assert!(!app.has_live_graph_driver(&graph.id));
     let service = app.session_service();
     let input = GenerateGraphProposalRequest {
-        expands: Some(GraphProposalTarget {
-            graph_id: graph.id.clone(),
-            revision: graph.revision,
-        }),
         id: "expand-paused".into(),
         request: TurnPrompt::from_text("Recap the findings".into()),
         session_id: "sess".into(),
@@ -122,7 +107,7 @@ async fn assert_paused_graph_resumes_for_added_nodes(app: &mut App, graph: &Exec
 }
 
 #[tokio::test]
-async fn expansion_requests_need_a_current_graph_that_can_still_run() {
+async fn expansion_requests_target_only_an_existing_graph_that_can_still_run() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
@@ -133,41 +118,22 @@ async fn expansion_requests_need_a_current_graph_that_can_still_run() {
         .save_graph(&graph, None)
         .await
         .expect("graph");
-    let no_proposal = app.expandable_graph_target("sess").await;
-    let paused = expansion_error(&app, &graph.id, graph.revision).await;
-    complete(&app, &graph).await;
-    let mut approved = graph_proposal_state("finished", "sess");
-    approved.version.approval = Some(ag_session::GraphProposalApproval {
-        graph_id: graph.id.clone(),
-        limits: approved.limits.clone(),
-        version: 1,
-    });
-    let mut proposals = ag_store::MockGraphProposalRepository::new();
-    proposals
-        .expect_list()
-        .returning(move |_| Ok(vec![approved.clone()]));
 
     // Act
-    let errors = [
-        expansion_error(&app, "missing", NonZeroU64::MIN).await,
-        expansion_error(&app, &graph.id, NonZeroU64::new(2).expect("revision")).await,
-        expansion_error(&app, &graph.id, graph.revision).await,
-    ];
+    let no_proposal = app.expansion_base("sess").await;
     app.services
-        .set_graph_proposal_repository(Arc::new(proposals));
-    let finished = app.expandable_graph_target("sess").await;
+        .set_graph_proposal_repository(Arc::new(approved_proposals("missing", &[])));
+    let missing = app.expansion_base("sess").await;
+    app.services
+        .set_graph_proposal_repository(Arc::new(approved_proposals(&graph.id, &[])));
+    let paused = app.expansion_base("sess").await;
+    complete(&app, &graph).await;
+    let finished = app.expansion_base("sess").await;
 
     // Assert
     assert_eq!(no_proposal, Ok(None));
-    assert_eq!(paused, None);
-    assert_eq!(
-        errors,
-        [
-            Some("Graph to expand is missing".into()),
-            Some("The graph changed; request the expansion again".into()),
-            Some("Completed or canceled graphs cannot gain nodes".into()),
-        ]
-    );
+    assert_eq!(missing, Ok(None));
+    assert_eq!(paused, Ok(Some(graph)));
     assert_eq!(finished, Ok(None));
 }
 
@@ -183,47 +149,38 @@ async fn expansion_requests_skip_later_unapproved_proposals() {
         .save_graph(&graph, None)
         .await
         .expect("graph");
+    let mut cancelled = graph_proposal_state("expand", "sess");
+    cancelled.version.is_cancelled = true;
+    app.services
+        .set_graph_proposal_repository(Arc::new(approved_proposals(&graph.id, &[cancelled])));
+
+    // Act
+    let base = app.expansion_base("sess").await;
+
+    // Assert
+    assert_eq!(base, Ok(Some(graph)));
+}
+
+/// Lists a proposal approved as `graph_id`, followed by `later` proposals.
+fn approved_proposals(
+    graph_id: &str,
+    later: &[GraphProposalState],
+) -> ag_store::MockGraphProposalRepository {
     let mut approved = graph_proposal_state("base", "sess");
     approved.version.approval = Some(ag_session::GraphProposalApproval {
-        graph_id: graph.id.clone(),
+        graph_id: graph_id.into(),
         limits: approved.limits.clone(),
         version: 1,
     });
-    let mut cancelled = graph_proposal_state("expand", "sess");
-    cancelled.version.is_cancelled = true;
+    let listed: Vec<_> = std::iter::once(approved)
+        .chain(later.iter().cloned())
+        .collect();
     let mut proposals = ag_store::MockGraphProposalRepository::new();
     proposals
         .expect_list()
-        .returning(move |_| Ok(vec![approved.clone(), cancelled.clone()]));
-    app.services
-        .set_graph_proposal_repository(Arc::new(proposals));
+        .returning(move |_| Ok(listed.clone()));
 
-    // Act
-    let target = app.expandable_graph_target("sess").await;
-
-    // Assert
-    assert_eq!(
-        target,
-        Ok(Some(GraphProposalTarget {
-            graph_id: graph.id.clone(),
-            revision: graph.revision,
-        }))
-    );
-}
-
-/// Reports why an expansion of `graph_id` at `revision` cannot start, or
-/// `None` when it can.
-async fn expansion_error(app: &App, graph_id: &str, revision: NonZeroU64) -> Option<String> {
-    let target = GraphProposalTarget {
-        graph_id: graph_id.into(),
-        revision,
-    };
-
-    match app.expansion_base(&"sess".into(), &target).await {
-        Ok(_) => None,
-        Err(SessionError::Operation(message)) => Some(message),
-        Err(error) => Some(error.to_string()),
-    }
+    proposals
 }
 
 /// Relaunching after a restart uses the expanded current revision under the

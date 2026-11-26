@@ -1,7 +1,5 @@
 //! Durable proposal inspection and explicit action contracts.
 
-use std::num::NonZeroU64;
-
 use ag_protocol::{GraphProposalResponse, TurnPrompt, TurnPromptAttachment};
 use serde::{Deserialize, Serialize};
 
@@ -10,13 +8,11 @@ use crate::{
     AgentDefinition, AgentSelection, PermissionMode, SessionId, StartExecutionGraphRequest,
 };
 
-/// Idempotent generation admission; the host captures all other policy.
+/// Idempotent generation admission; the host captures all other policy,
+/// including whether the proposal adds nodes to the session's graph that can
+/// still run or proposes a new graph.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GenerateGraphProposalRequest {
-    /// Launched graph of the same session the proposal adds nodes to, or
-    /// `None` to propose a new graph.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expands: Option<GraphProposalTarget>,
     /// Caller delivery identity, reused on retries.
     pub id: String,
     /// Original user request and provenance.
@@ -31,23 +27,11 @@ impl GenerateGraphProposalRequest {
     #[must_use]
     pub fn from_text(id: String, session_id: SessionId, text: String) -> Self {
         Self {
-            expands: None,
             id,
             request: TurnPrompt::from_text(text),
             session_id,
         }
     }
-}
-
-/// A launched graph at the revision a proposal to expand it was requested
-/// against. Approval appends the proposed nodes only while that revision is
-/// still current.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GraphProposalTarget {
-    /// Graph to expand.
-    pub graph_id: String,
-    /// Revision the proposal extends.
-    pub revision: NonZeroU64,
 }
 
 /// Explicit mutation of an inspected proposal version.
@@ -70,8 +54,9 @@ pub enum GraphProposalAction {
 /// Original immutable host capture, independent of executable graphs.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphProposalState {
-    /// Snapshot of the graph that [`GenerateGraphProposalRequest::expands`]
-    /// names, captured with the request; `None` for a new graph.
+    /// Snapshot of the session graph the proposal adds nodes to, at the
+    /// revision current when the host admitted the request; `None` for a new
+    /// graph. Approval appends the nodes only while that revision is current.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<ExecutionGraph>,
     /// Captured provider and model for generation and execution.
