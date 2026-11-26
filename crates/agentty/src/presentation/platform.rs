@@ -130,8 +130,22 @@ pub enum PlatformAccess {
 pub struct PlatformTabView<'a> {
     /// Sign-in and account state.
     pub platform: &'a PlatformView,
-    /// Listener, pairing, and paired-device state.
+    /// Relay link, pairing, and paired-device state.
     pub remote_control: &'a RemoteControlView,
+}
+
+impl PlatformTabView<'_> {
+    /// Returns the Platform tab's header label, which counts the connected
+    /// devices while remote control runs.
+    pub fn tab_label(&self) -> String {
+        match self.remote_control.relay {
+            Some(_) => format!(
+                "Platform ({} online)",
+                self.remote_control.connected_device_count()
+            ),
+            None => "Platform".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]

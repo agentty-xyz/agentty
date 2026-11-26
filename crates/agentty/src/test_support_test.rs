@@ -343,6 +343,18 @@ impl SessionFixtureBuilder {
     }
 }
 
+/// Starts an in-process relay on a free loopback port, for remote control
+/// to register with.
+pub(crate) async fn start_relay() -> ag_relay::RelayHandle {
+    ag_relay::start(ag_relay::RelayConfig {
+        bind_addr: std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
+        client_address_header: None,
+        limits: ag_relay::RelayLimits::default(),
+    })
+    .await
+    .expect("relay should start on a free port")
+}
+
 /// Builds a running command activity `id` with no facts, for tests to
 /// adjust with struct-update syntax.
 pub(crate) fn activity_event(id: &str) -> ActivityEvent {

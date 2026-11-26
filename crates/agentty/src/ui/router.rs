@@ -29,7 +29,6 @@ use crate::presentation::chatgpt_sign_in::{
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::platform::PlatformTabView;
-use crate::presentation::remote_control::RemoteControlView;
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
 use crate::ui::component::diff_comment_submit_overlay::DiffCommentSubmitOverlay;
@@ -66,9 +65,6 @@ struct RouteSharedContext<'a> {
     process_resources: Option<SessionResources>,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
-    /// Remote-control listener and paired-device state for the Remote tab,
-    /// when this launch offers it.
-    remote_control: Option<&'a RemoteControlView>,
     session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cumulative usage of each session's running turn, folded into the
     /// usage panel.
@@ -270,7 +266,6 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         mru_project_order,
         platform,
         process_resources,
-        remote_control,
         render_cache_store,
         project_table_state,
         projects,
@@ -303,7 +298,6 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
         process_resources,
         project_table_state,
         projects,
-        remote_control,
         session_git_statuses,
         session_live_usage,
         sessions,
@@ -969,8 +963,7 @@ fn render_list_background(
 
     component::tab::Tabs::new(shared.current_tab)
         .process_stats(shared.process_resources)
-        .remote_label(shared.remote_control.map(RemoteControlView::tab_label))
-        .platform(shared.platform.is_some())
+        .platform_label(shared.platform.map(|platform| platform.tab_label()))
         .render(frame, chunks[0]);
 
     match shared.current_tab {
@@ -1006,12 +999,6 @@ fn render_list_background(
                 active_project_name(shared.active_project_id, shared.projects);
             if let Some(settings_screen) = shared.settings_screen {
                 page::setting::SettingsPage::new(settings_screen, active_project_name)
-                    .render(frame, chunks[1]);
-            }
-        }
-        Tab::Remote => {
-            if let Some(remote_control) = shared.remote_control {
-                page::remote_control::RemoteControlPage::new(remote_control)
                     .render(frame, chunks[1]);
             }
         }

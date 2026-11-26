@@ -39,8 +39,7 @@ const THEME_COLOR: &str = "color-bg";
 
 /// Directories of the surfaces' pages, whose scripts and templates must
 /// read colours from the token custom properties too, and their surfaces.
-const PAGE_DIRECTORIES: [(&str, &str); 3] = [
-    ("crates/ag-remote/assets", "remote-client"),
+const PAGE_DIRECTORIES: [(&str, &str); 2] = [
     ("docs/site/static", "docs-site"),
     ("docs/site/templates", "docs-site"),
 ];
@@ -51,7 +50,7 @@ const SHARED_HEADER: &str = "/* Generated from tokens.json. Do not edit. */";
 
 /// Generated files, each surface's stylesheets in the order it loads them.
 /// The brand assets are copied byte for byte.
-const OUTPUTS: [Output; 10] = [
+const OUTPUTS: [Output; 7] = [
     Output {
         content: Content::Tokens {
             header: SHARED_HEADER,
@@ -98,26 +97,6 @@ const OUTPUTS: [Output; 10] = [
             source: "design/mark.svg",
         },
         path: "docs/site/static/mark.svg",
-    },
-    Output {
-        content: Content::Tokens {
-            header: SURFACE_HEADER,
-            surface: Some("remote-client"),
-        },
-        path: "crates/ag-remote/assets/tokens.css",
-    },
-    Output {
-        content: Content::Fonts {
-            header: SURFACE_HEADER,
-        },
-        path: "crates/ag-remote/assets/fonts.css",
-    },
-    Output {
-        content: Content::Copy {
-            header: Some(BASE_HEADER),
-            source: BASE,
-        },
-        path: "crates/ag-remote/assets/base.css",
     },
 ];
 

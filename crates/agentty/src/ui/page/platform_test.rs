@@ -9,8 +9,7 @@ use crate::presentation::platform::{
     PlatformView,
 };
 use crate::presentation::remote_control::{
-    RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
-    RemoteRelayView,
+    RemoteControlView, RemoteDeviceView, RemotePairingRequestView, RemoteRelayView,
 };
 use crate::ui::page::remote_control::QrPlacement;
 use crate::ui::render::Page;
@@ -85,8 +84,9 @@ fn signed_out_page_explains_what_signing_in_gives_and_offers_it() {
     assert!(!text.contains("' on the platform"));
     assert!(text.contains("Address https://platform.example"));
     assert!(text.contains("Account Signed out"));
-    assert!(text.contains("Sign in to connect this Agentty to the platform's relay"));
-    assert!(text.contains("without a tunnel or a relay of your own"));
+    assert!(text.contains("Sign in to use remote control"));
+    assert!(text.contains("connects out to the platform's relay"));
+    assert!(!text.contains("tunnel"));
     assert!(text.contains("grants no device any access"));
     assert!(text.contains("Signed out."));
     assert!(text.contains("Enter: sign in and connect"));
@@ -210,19 +210,15 @@ fn registered_page_shows_remote_control_through_the_platform_relay() {
             is_connected: true,
             name: "Phone".to_string(),
         }],
-        listener: Some(RemoteListenerView {
-            pairing_code: "ABCD-EFGH".to_string(),
-            relay: Some(RemoteRelayView::new(
-                "https://platform.example/sessions/#relay=x".to_string(),
-                RelayStatus::NotAdmitted,
-            )),
-            url: "http://127.0.0.1:50000/".to_string(),
-        }),
         pairing_requests: vec![RemotePairingRequestView {
             confirmation: "K7QX".to_string(),
             device_name: "Laptop".to_string(),
             id: 1,
         }],
+        relay: Some(RemoteRelayView::new(
+            "https://platform.example/sessions/#relay=x".to_string(),
+            RelayStatus::NotAdmitted,
+        )),
         ..RemoteControlView::default()
     };
 
@@ -243,9 +239,9 @@ fn registered_page_shows_remote_control_through_the_platform_relay() {
     assert!(running.contains("https://platform.example/sessions/#relay=x"));
     assert!(running.contains("Confirm K7QX"));
     assert!(running.contains("Phone"));
-    assert!(running.contains("y: approve"));
+    assert!(running.contains("y: approve | x: deny | n: new code | o: open link | c: copy link"));
+    assert!(running.contains("Enter: stop | j/k: move | d: remove"));
     assert!(running.contains("l: sign out"));
-    assert!(!running.contains("127.0.0.1:50000"));
 }
 
 /// Builds remote control through the platform's relay with a pairing link
@@ -263,25 +259,25 @@ fn platform_remote_control() -> RemoteControlView {
             is_connected: true,
             name: "Mac browser".to_string(),
         }],
-        listener: Some(RemoteListenerView {
-            pairing_code: "ABCD-EFGH".to_string(),
-            relay: Some(RemoteRelayView::new(link, RelayStatus::Connected)),
-            url: "http://127.0.0.1:50000/".to_string(),
-        }),
+        relay: Some(RemoteRelayView::new(link, RelayStatus::Connected)),
         ..RemoteControlView::default()
     }
+}
+
+/// Returns the QR code rows of the relay `remote_control` links to.
+fn qr_code(remote_control: &RemoteControlView) -> Vec<String> {
+    remote_control
+        .relay
+        .as_ref()
+        .map(|relay| relay.qr_code.clone())
+        .expect("relay should have a QR code")
 }
 
 #[test]
 fn registered_page_shows_the_qr_code_wherever_it_fits() {
     // Arrange
     let remote_control = platform_remote_control();
-    let qr_code = remote_control
-        .listener
-        .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
-        .map(|relay| relay.qr_code.clone())
-        .expect("relay should have a QR code");
+    let qr_code = qr_code(&remote_control);
     let platform = registered();
     let page = PlatformPage::new(PlatformTabView {
         platform: &platform,
@@ -330,12 +326,7 @@ fn registered_page_shows_the_qr_code_wherever_it_fits() {
 fn rendered_page_draws_the_qr_code_beside_the_account() {
     // Arrange
     let remote_control = platform_remote_control();
-    let first_qr_row = remote_control
-        .listener
-        .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
-        .map(|relay| relay.qr_code[0].clone())
-        .expect("relay should have a QR code");
+    let first_qr_row = qr_code(&remote_control).swap_remove(0);
 
     // Act
     let text = rendered_text(&registered(), &remote_control, 134, 32);
@@ -368,19 +359,10 @@ fn key_hints_stay_whole_beside_a_qr_code_of_any_size() {
              &code=SNXR%2DPNWE"
         );
         let remote_control = RemoteControlView {
-            listener: Some(RemoteListenerView {
-                pairing_code: "SNXR-PNWE".to_string(),
-                relay: Some(RemoteRelayView::new(link, RelayStatus::Connecting)),
-                url: "http://127.0.0.1:50000/".to_string(),
-            }),
+            relay: Some(RemoteRelayView::new(link, RelayStatus::Connecting)),
             ..RemoteControlView::default()
         };
-        let first_qr_row = remote_control
-            .listener
-            .as_ref()
-            .and_then(|listener| listener.relay.as_ref())
-            .map(|relay| relay.qr_code[0].clone())
-            .expect("relay should have a QR code");
+        let first_qr_row = qr_code(&remote_control).swap_remove(0);
 
         // Act
         let text = rendered_text(&platform, &remote_control, 130, 36);

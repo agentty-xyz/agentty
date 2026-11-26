@@ -16,7 +16,6 @@ use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::platform::PlatformTabView;
-use crate::presentation::remote_control::RemoteControlView;
 use crate::presentation::setting::SettingsScreenSnapshot;
 
 /// Focused-review display state for the visible session.
@@ -64,9 +63,6 @@ pub(crate) struct AppViewSnapshot<'a> {
     /// Explicit sync state of the active project only.
     pub(crate) project_sync_status: Option<&'a ProjectSyncStatus>,
     pub(crate) projects: &'a [ProjectListItem],
-    /// Remote-control listener and paired-device state, or `None` unless
-    /// `--experimental-remote` or `--remote-relay` offers the Remote tab.
-    pub(crate) remote_control: Option<&'a RemoteControlView>,
     pub(crate) session_branch_names: &'a HashMap<SessionId, String>,
     pub(crate) session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     pub(crate) session_index_by_id: &'a HashMap<SessionId, usize>,
@@ -131,10 +127,6 @@ impl App {
             project_selected_index: project.selected_index,
             project_sync_status: self.active_project_sync_status(),
             projects: project.project_items,
-            remote_control: self
-                .remote_control
-                .is_enabled()
-                .then(|| self.remote_control.view()),
             session_branch_names: sessions.session_branch_names,
             session_git_statuses: sessions.session_git_statuses,
             session_index_by_id: sessions.session_index_by_id,

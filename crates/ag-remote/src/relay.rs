@@ -29,10 +29,10 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_with_config};
 
-use crate::connection::{self, DeviceProof};
+use crate::connection;
 use crate::dial::{self, RealNetworkClient, TlsTarget};
 use crate::encrypted::{EncryptedTransport, MessageCarrier};
-use crate::server::{ConnectionOrigin, HandshakeSlot, ServerState};
+use crate::server::{HandshakeSlot, ServerState};
 
 /// Path of the control connection.
 const REGISTER_PATH: &str = "/v1/register";
@@ -72,11 +72,13 @@ pub struct RemoteRelayConfig {
 }
 
 /// State of the link to the relay.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RelayStatus {
     /// Registered; devices can reach this instance.
     Connected,
-    /// Not registered: connecting, or waiting to retry.
+    /// Not registered: connecting, or waiting to retry. A server starts
+    /// here.
+    #[default]
     Connecting,
     /// The relay refused the latest registration because its admission
     /// policy does not admit this instance. The link keeps retrying, since
@@ -84,27 +86,14 @@ pub enum RelayStatus {
     NotAdmitted,
 }
 
-/// Builds the link a device opens to pair through the relay at `relay_url`.
-///
-/// `relay_url` is a `ws://` or `wss://` URL. The relay serves the web client
-/// at the same place over `http://` or `https://`, and the client reads the
-/// relay address, `instance_key`, and `pairing_code` from the fragment.
-/// Browsers keep the fragment to themselves, so the relay never sees the
-/// instance key or the one-time code.
-pub fn pairing_link(relay_url: &str, instance_key: &PublicKey, pairing_code: &str) -> String {
-    let relay_url = relay_url.trim_end_matches('/');
-    // `ws://` becomes `http://` and `wss://` becomes `https://`.
-    let page = format!("http{}/", relay_url.get(2..).unwrap_or_default());
-
-    pairing_link_on_page(&page, relay_url, instance_key, pairing_code)
-}
-
 /// Builds the link a device opens to pair through the relay at `relay_url`
-/// from `page`, which serves the web client in place of the relay's own
-/// page, such as a hosted service's pairing page.
+/// from `page`, which serves the web client, such as a platform's pairing
+/// page.
 ///
-/// The link is `page` with the fragment [`pairing_link`] uses, so the web
-/// client reads it alike and `page` never sees the fragment either.
+/// `relay_url` is a `ws://` or `wss://` URL. The client reads the relay
+/// address, `instance_key`, and `pairing_code` from the link's fragment.
+/// Browsers keep the fragment to themselves, so neither `page` nor the relay
+/// sees the one-time code.
 pub fn pairing_link_on_page(
     page: &str,
     relay_url: &str,
@@ -377,23 +366,24 @@ async fn serve_stream(
             opened.ok().flatten()
         }
     };
-    if let Some((transport, proof, handshake)) = opened {
-        connection::serve(transport, state, handshake, proof).await;
+    if let Some((transport, device, handshake)) = opened {
+        connection::serve(transport, state, handshake, device).await;
     }
 }
 
-/// Dials the stream and runs the device handshake on it.
+/// Dials the stream and runs the device handshake on it, returning the
+/// transport with the device key the handshake names.
 async fn open_stream(
     state: &Arc<ServerState>,
     dialer: &Dialer,
     path: &str,
     instance_key: &StaticKeypair,
-) -> Option<(EncryptedTransport<RelayStream>, DeviceProof, HandshakeSlot)> {
-    let handshake = state.reserve_handshake(ConnectionOrigin::Relay)?;
+) -> Option<(EncryptedTransport<RelayStream>, PublicKey, HandshakeSlot)> {
+    let handshake = state.reserve_handshake()?;
     let stream = dialer.open(path).await?;
     let (transport, device) = EncryptedTransport::accept(stream, instance_key).await?;
 
-    Some((transport, DeviceProof::Key(device), handshake))
+    Some((transport, device, handshake))
 }
 
 /// One WebSocket dialed to the relay. A send that times out marks it

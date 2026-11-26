@@ -1,7 +1,6 @@
-//! Remote-control listener boundary over the `ag-remote` server, plus the
+//! Remote-control server boundary over the `ag-remote` server, plus the
 //! `ag-store` persistence of its paired devices.
 
-use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use ag_remote::{
@@ -82,32 +81,17 @@ impl DeviceStore for RepositoryDeviceStore {
     }
 }
 
-/// Starts remote-control listeners on the loopback interface.
+/// Starts remote-control servers, which reach devices only through a relay.
 #[cfg_attr(test, mockall::automock)]
-#[async_trait]
 pub(crate) trait RemoteControlLauncher: Send + Sync {
-    /// Binds `127.0.0.1:port` and serves `host` until the returned server
-    /// shuts down. Port `0` selects a free port. Requests must name a
-    /// loopback host or one of `allowed_hosts`. With `relay`, the server also
-    /// registers with that relay and serves devices that connect through it.
-    ///
-    /// # Errors
-    /// Returns a user-facing message when the listener cannot start.
-    async fn start(
-        &self,
-        port: u16,
-        allowed_hosts: Vec<String>,
-        relay: Option<RemoteRelayConfig>,
-        host: RemoteHost,
-    ) -> Result<Box<dyn RemoteControlServer>, String>;
+    /// Registers with `relay` and serves `host` to the devices that connect
+    /// through it until the returned server shuts down.
+    fn start(&self, relay: RemoteRelayConfig, host: RemoteHost) -> Box<dyn RemoteControlServer>;
 }
 
-/// One running remote-control listener.
+/// One running remote-control server.
 #[async_trait]
 pub(crate) trait RemoteControlServer: Send + Sync {
-    /// Returns the bound address, including a port chosen by the system.
-    fn local_addr(&self) -> SocketAddr;
-
     /// Replaces any active pairing code and returns its display form.
     ///
     /// # Errors
@@ -131,41 +115,21 @@ pub(crate) trait RemoteControlServer: Send + Sync {
     /// Returns a user-facing message when the device cannot be removed.
     async fn revoke_device(&self, device_id: &str) -> Result<(), String>;
 
-    /// Closes every connection and releases the port.
+    /// Leaves the relay and closes every connection.
     async fn shutdown(self: Box<Self>);
 }
 
 /// Production [`RemoteControlLauncher`] backed by [`ag_remote::start`].
 pub(crate) struct RealRemoteControlLauncher;
 
-#[async_trait]
 impl RemoteControlLauncher for RealRemoteControlLauncher {
-    async fn start(
-        &self,
-        port: u16,
-        allowed_hosts: Vec<String>,
-        relay: Option<RemoteRelayConfig>,
-        host: RemoteHost,
-    ) -> Result<Box<dyn RemoteControlServer>, String> {
-        let config = RemoteServerConfig {
-            allowed_hosts,
-            bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-            relay,
-        };
-        let handle = ag_remote::start(config, host)
-            .await
-            .map_err(|error| error.to_string())?;
-
-        Ok(Box::new(handle))
+    fn start(&self, relay: RemoteRelayConfig, host: RemoteHost) -> Box<dyn RemoteControlServer> {
+        Box::new(ag_remote::start(RemoteServerConfig { relay }, host))
     }
 }
 
 #[async_trait]
 impl RemoteControlServer for RemoteServerHandle {
-    fn local_addr(&self) -> SocketAddr {
-        RemoteServerHandle::local_addr(self)
-    }
-
     fn issue_pairing_code(&self) -> Result<String, RemoteError> {
         RemoteServerHandle::issue_pairing_code(self).map(|pairing_code| pairing_code.code)
     }

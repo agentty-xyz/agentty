@@ -379,6 +379,9 @@ control.
   [waits for access](@/docs/usage/platform.md#usage-platform-waitlist), devices cannot
   reach it.
 - Pairing needs an up-to-date browser, from 2025 or later.
+- Safari, including every browser on iPhone and iPad, cannot yet store a device key that
+  page scripts cannot read, so there the platform's page keeps the key in a weaker form,
+  which a script running in the page could read.
 - A project without a current Git branch, such as a detached `HEAD`, cannot take new
   sessions; a device's request for the host details or a new session then fails.
 - When a device first shows a project the terminal does not have open, ahead and behind

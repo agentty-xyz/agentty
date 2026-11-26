@@ -129,7 +129,7 @@ pub(crate) enum AppEvent {
     VersionAvailabilityUpdated {
         latest_available_version: Option<String>,
     },
-    /// Reports the authenticated connections of the remote-control listener
+    /// Reports the authenticated connections of the remote-control server
     /// identified by `generation`.
     RemoteControlStatusUpdated {
         generation: u64,
@@ -450,7 +450,7 @@ pub(super) struct AppEventBatch {
     /// matching decides which completion may start review.
     pub(super) implementer_attempt_successes: Vec<(SessionId, String)>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
-    /// Latest remote-control connections with their listener generation.
+    /// Latest remote-control connections with their server generation.
     pub(super) remote_control_status: Option<(u64, ag_remote::RemoteServerStatus)>,
     /// Latest remote pairing link copy result with its request.
     pub(super) remote_link_copy: Option<(u64, bool)>,

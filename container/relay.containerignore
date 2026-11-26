@@ -1,8 +1,0 @@
-# Build context for `container/relay.Containerfile`, which builds from the
-# repository root: only the workspace manifests and sources. Pass this file
-# with `--ignorefile`, so it applies to that build alone.
-*
-!Cargo.lock
-!Cargo.toml
-!crates
-!rust-toolchain.toml

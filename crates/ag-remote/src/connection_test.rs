@@ -5,12 +5,12 @@ use ag_session::SessionOperation;
 use tokio::sync::watch;
 
 use super::{
-    Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, DeviceProof,
-    MAX_DEVICE_NAME_CHARS, MessageOutcome, PairingDevice, complete_pairing, device_display_name,
+    Authentication, DEFAULT_DEVICE_NAME, DEVICE_STORE_UNAVAILABLE, MAX_DEVICE_NAME_CHARS,
+    MessageOutcome, PairingDevice, UNKNOWN_DEVICE, complete_pairing, device_display_name,
     handle_incoming,
 };
 use crate::PROTOCOL_VERSION;
-use crate::device::{key_hash, token_hash};
+use crate::device::key_hash;
 use crate::protocol::{
     ClientFrame, RemoteGraphAction, RemoteGraphActionRequest, RemoteRequest, ServerFrame,
 };
@@ -20,19 +20,24 @@ use crate::source_support::{
 };
 use crate::transport::Incoming;
 
-/// Authenticates the first frame of a connection that proves itself with a
-/// token.
+/// Authenticates the first frame of a connection opened with
+/// [`device_key`].
 async fn authenticate(
     state: &ServerState,
     frame: ClientFrame,
     revisions: &mut watch::Receiver<u64>,
 ) -> Result<Authentication, &'static str> {
-    super::authenticate(state, frame, revisions, &DeviceProof::Token).await
+    super::authenticate(state, frame, revisions, &device_key()).await
 }
 
-/// Public key of the device that connects through a relay in these tests.
+/// Public key of the device that connects in these tests.
 fn device_key() -> PublicKey {
     PublicKey::from_bytes(&[7; 32]).expect("key should load")
+}
+
+/// A store that holds [`device_key`] as the device `phone`.
+fn store_with_phone() -> MemoryDeviceStore {
+    MemoryDeviceStore::default().with_device("phone", &key_hash(&device_key()))
 }
 
 /// Issues the code `AAAA-AAAA` that [`StateFixture::with_devices`] entropy
@@ -46,10 +51,9 @@ fn issue_code(fixture: &StateFixture) -> String {
         .code
 }
 
-fn hello(token: &str) -> ClientFrame {
+fn hello() -> ClientFrame {
     ClientFrame::Hello {
         protocol_version: PROTOCOL_VERSION,
-        token: token.to_string(),
     }
 }
 
@@ -62,16 +66,14 @@ fn pair(code: &str, device_name: &str) -> ClientFrame {
 }
 
 #[tokio::test]
-async fn hello_with_known_token_welcomes_and_touches_device() {
+async fn hello_from_a_paired_key_welcomes_and_touches_the_device() {
     // Arrange
-    let fixture = StateFixture::with_devices(
-        MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
-    );
+    let fixture = StateFixture::with_devices(store_with_phone());
     let mut revisions = fixture.state.revisions();
     fixture.revisions_tx.send_replace(8);
 
     // Act
-    let authenticated = authenticate(&fixture.state, hello("t"), &mut revisions).await;
+    let authenticated = authenticate(&fixture.state, hello(), &mut revisions).await;
 
     // Assert
     assert_eq!(
@@ -94,32 +96,39 @@ async fn hello_with_known_token_welcomes_and_touches_device() {
 }
 
 #[tokio::test]
-async fn hello_rejects_unknown_token_and_store_failures() {
+async fn hello_rejects_unknown_keys_and_store_failures() {
     // Arrange
     let unknown = StateFixture::with_devices(MemoryDeviceStore::default());
+    let other_key = StateFixture::with_devices(MemoryDeviceStore::default().with_device(
+        "tablet",
+        &key_hash(&PublicKey::from_bytes(&[8; 32]).expect("key should load")),
+    ));
     let find_failure = StateFixture::with_devices(MemoryDeviceStore::failing(&[FIND]));
     let touch_failure = StateFixture::with_devices(
-        MemoryDeviceStore::failing(&[TOUCH]).with_device("phone", &token_hash("t")),
+        MemoryDeviceStore::failing(&[TOUCH]).with_device("phone", &key_hash(&device_key())),
     );
 
     // Act
     let unknown_result =
-        authenticate(&unknown.state, hello("t"), &mut unknown.state.revisions()).await;
+        authenticate(&unknown.state, hello(), &mut unknown.state.revisions()).await;
+    let other_key_result =
+        authenticate(&other_key.state, hello(), &mut other_key.state.revisions()).await;
     let find_result = authenticate(
         &find_failure.state,
-        hello("t"),
+        hello(),
         &mut find_failure.state.revisions(),
     )
     .await;
     let touch_result = authenticate(
         &touch_failure.state,
-        hello("t"),
+        hello(),
         &mut touch_failure.state.revisions(),
     )
     .await;
 
     // Assert
     assert_eq!(unknown_result, Err("Unknown device token"));
+    assert_eq!(other_key_result, Err(UNKNOWN_DEVICE));
     assert_eq!(find_result, Err(DEVICE_STORE_UNAVAILABLE));
     assert_eq!(touch_result, Err(DEVICE_STORE_UNAVAILABLE));
 }
@@ -131,7 +140,6 @@ async fn first_frames_reject_other_protocol_versions() {
     let code = issue_code(&fixture);
     let old_hello = ClientFrame::Hello {
         protocol_version: 0,
-        token: "t".to_string(),
     };
     let new_pair = ClientFrame::Pair {
         code: code.clone(),
@@ -151,32 +159,27 @@ async fn first_frames_reject_other_protocol_versions() {
 }
 
 /// Builds the credentials [`StateFixture::with_devices`] entropy prepares
-/// for `device_name`.
+/// for `device_name` holding [`device_key`].
 fn pairing_device(device_name: &str) -> PairingDevice {
     PairingDevice {
         confirmation: "AAAA".to_string(),
-        credential_hash: token_hash(&"00".repeat(32)),
+        credential_hash: key_hash(&device_key()),
         device_id: "00".repeat(16),
         device_name: device_name.to_string(),
-        token: "00".repeat(32),
     }
 }
 
 #[tokio::test]
-async fn paired_key_device_that_pairs_again_is_welcomed_without_spending_the_code() {
+async fn paired_device_that_pairs_again_is_welcomed_without_spending_the_code() {
     // Arrange
-    let fixture = StateFixture::with_devices(
-        MemoryDeviceStore::default().with_device("phone", &key_hash(&device_key())),
-    );
+    let fixture = StateFixture::with_devices(store_with_phone());
     let code = issue_code(&fixture);
-    let proof = DeviceProof::Key(device_key());
 
     // Act
-    let repaired = super::authenticate(
+    let repaired = authenticate(
         &fixture.state,
         pair(&code, "Phone"),
         &mut fixture.state.revisions(),
-        &proof,
     )
     .await;
 
@@ -187,17 +190,16 @@ async fn paired_key_device_that_pairs_again_is_welcomed_without_spending_the_cod
 }
 
 #[tokio::test]
-async fn key_device_pairing_reports_store_failures() {
+async fn pairing_reports_store_failures_without_spending_the_code() {
     // Arrange
     let fixture = StateFixture::with_devices(MemoryDeviceStore::failing(&[FIND]));
     let code = issue_code(&fixture);
 
     // Act
-    let result = super::authenticate(
+    let result = authenticate(
         &fixture.state,
         pair(&code, "Phone"),
         &mut fixture.state.revisions(),
-        &DeviceProof::Key(device_key()),
     )
     .await;
 
@@ -207,28 +209,23 @@ async fn key_device_pairing_reports_store_failures() {
 }
 
 #[tokio::test]
-async fn key_device_pairs_and_authenticates_without_a_token() {
+async fn device_pairs_and_then_authenticates_with_its_key() {
     // Arrange
     let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let code = issue_code(&fixture);
-    let proof = DeviceProof::Key(device_key());
     let mut revisions = fixture.state.revisions();
 
     // Act
-    let requested =
-        super::authenticate(&fixture.state, pair(&code, "Phone"), &mut revisions, &proof).await;
+    let requested = authenticate(&fixture.state, pair(&code, "Phone"), &mut revisions).await;
     let device = match requested {
         Ok(Authentication::PairingRequested(device)) => Some(device),
         _ => None,
     }
     .expect("pairing should be requested");
-    let token = device.token.clone();
     let paired = complete_pairing(&fixture.state, device, &mut revisions).await;
-    let welcomed =
-        super::authenticate(&fixture.state, hello("ignored"), &mut revisions, &proof).await;
+    let welcomed = authenticate(&fixture.state, hello(), &mut revisions).await;
 
     // Assert
-    assert_eq!(token, "");
     assert!(paired.is_ok());
     assert_eq!(
         fixture.devices.stored(),
@@ -239,35 +236,6 @@ async fn key_device_pairs_and_authenticates_without_a_token() {
         )]
     );
     assert!(matches!(welcomed, Ok(Authentication::Authenticated { .. })));
-}
-
-#[tokio::test]
-async fn a_public_key_presented_as_a_token_authenticates_nothing() {
-    // Arrange
-    let fixture = StateFixture::with_devices(
-        MemoryDeviceStore::default().with_device("phone", &key_hash(&device_key())),
-    );
-    let key_as_token = device_key().to_hex();
-    let other_key = DeviceProof::Key(PublicKey::from_bytes(&[8; 32]).expect("key should load"));
-
-    // Act
-    let with_token = authenticate(
-        &fixture.state,
-        hello(&key_as_token),
-        &mut fixture.state.revisions(),
-    )
-    .await;
-    let with_other_key = super::authenticate(
-        &fixture.state,
-        hello(""),
-        &mut fixture.state.revisions(),
-        &other_key,
-    )
-    .await;
-
-    // Assert
-    assert_eq!(with_token, Err("Unknown device token"));
-    assert_eq!(with_other_key, Err("Unknown device token"));
 }
 
 #[tokio::test]
@@ -293,7 +261,7 @@ async fn pair_with_valid_code_requests_approval_without_storing_a_device() {
 }
 
 #[tokio::test]
-async fn complete_pairing_stores_only_the_token_hash() {
+async fn complete_pairing_stores_the_key_digest_and_sends_no_secret() {
     // Arrange
     let fixture = StateFixture::with_devices(MemoryDeviceStore::default());
     let mut revisions = fixture.state.revisions();
@@ -304,7 +272,6 @@ async fn complete_pairing_stores_only_the_token_hash() {
 
     // Assert
     let device_id = "00".repeat(16);
-    let token = "00".repeat(32);
     assert_eq!(
         paired,
         Ok((
@@ -317,13 +284,12 @@ async fn complete_pairing_stores_only_the_token_hash() {
                 device_id: device_id.clone(),
                 protocol_version: PROTOCOL_VERSION,
                 revision: 8,
-                token: token.clone(),
             },
         ))
     );
     assert_eq!(
         fixture.devices.stored(),
-        [(device_id, "My phone".to_string(), token_hash(&token))]
+        [(device_id, "My phone".to_string(), key_hash(&device_key()))]
     );
     assert!(!revisions.has_changed().expect("sender should be alive"));
 }
@@ -409,16 +375,15 @@ fn device_display_name_trims_bounds_and_defaults() {
 }
 
 #[test]
-fn handle_incoming_rejects_protocol_violations_and_ignores_control_frames() {
+fn handle_incoming_rejects_protocol_violations() {
     // Arrange
-    let repeated_hello = serde_json::to_string(&hello("t")).expect("frame should encode");
+    let repeated_hello = serde_json::to_string(&hello()).expect("frame should encode");
 
     // Act
     let outcomes = [
         handle_incoming(Incoming::Text(repeated_hello)),
         handle_incoming(Incoming::Text("not json".to_string())),
         handle_incoming(Incoming::Binary),
-        handle_incoming(Incoming::Control),
         handle_incoming(Incoming::Closed),
     ];
 
@@ -435,8 +400,7 @@ fn handle_incoming_rejects_protocol_violations_and_ignores_control_frames() {
         outcomes[2],
         MessageOutcome::Rejected("Binary frames are not supported")
     ));
-    assert!(matches!(outcomes[3], MessageOutcome::Ignored));
-    assert!(matches!(outcomes[4], MessageOutcome::Closed));
+    assert!(matches!(outcomes[3], MessageOutcome::Closed));
 }
 
 #[test]
@@ -463,14 +427,11 @@ fn an_unknown_graph_action_keeps_the_connection() {
 #[tokio::test]
 async fn authentication_lists_only_the_capabilities_the_host_serves() {
     // Arrange
-    let fixture = StateFixture::supporting(
-        MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
-        &[SessionOperation::MergeSession],
-    );
+    let fixture = StateFixture::supporting(store_with_phone(), &[SessionOperation::MergeSession]);
     let mut revisions = fixture.state.revisions();
 
     // Act
-    let welcomed = authenticate(&fixture.state, hello("t"), &mut revisions).await;
+    let welcomed = authenticate(&fixture.state, hello(), &mut revisions).await;
     let paired = complete_pairing(&fixture.state, pairing_device("Phone"), &mut revisions).await;
 
     // Assert
@@ -494,7 +455,7 @@ async fn authentication_lists_only_the_capabilities_the_host_serves() {
 async fn capabilities_follow_the_order_of_the_capability_table() {
     // Arrange
     let fixture = StateFixture::supporting(
-        MemoryDeviceStore::default().with_device("phone", &token_hash("t")),
+        store_with_phone(),
         &[
             SessionOperation::GenerateGraphProposal,
             SessionOperation::GraphActions,
@@ -507,7 +468,7 @@ async fn capabilities_follow_the_order_of_the_capability_table() {
     let mut revisions = fixture.state.revisions();
 
     // Act
-    let welcomed = authenticate(&fixture.state, hello("t"), &mut revisions).await;
+    let welcomed = authenticate(&fixture.state, hello(), &mut revisions).await;
 
     // Assert
     let capabilities = match welcomed {

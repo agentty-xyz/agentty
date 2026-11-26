@@ -18,7 +18,8 @@ latest release before reporting a vulnerability that may already have been fixed
 Report suspected vulnerabilities through
 [GitHub's private vulnerability reporting](https://github.com/agentty-xyz/agentty/security/advisories/new).
 Do not open a public issue, discussion, or pull request for an undisclosed security
-vulnerability.
+vulnerability. Report a vulnerability in the remote-control web client that an Agentty
+Platform serves through this same process, although its code is not in this repository.
 
 A security vulnerability is behavior that compromises the confidentiality, integrity, or
 availability of Agentty or the projects it manages. Examples include:

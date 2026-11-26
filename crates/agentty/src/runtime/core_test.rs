@@ -1015,7 +1015,7 @@ async fn run_cycle_advances_the_remote_revision_once_for_a_reported_change() {
             "session-1",
             Status::Review,
         ));
-    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    let mut revisions = crate::app::test_support::start_fake_remote_control(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
     app.services
         .emit_app_event(AppEvent::SessionReasoningLevelUpdated {
@@ -1082,7 +1082,7 @@ async fn run_cycle_advances_the_remote_revision_once_for_a_change_made_by_a_key(
     })
     .await
     .expect("startup Git status should arrive");
-    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    let mut revisions = crate::app::test_support::start_fake_remote_control(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("failed to create terminal");

@@ -45,7 +45,7 @@ fn capture_frames_text_labels_every_capture() {
 #[test]
 fn tab_page_marker_maps_supported_tabs() {
     // Arrange
-    let tab_names = ["Projects", "Sessions", "Settings", "Remote"];
+    let tab_names = ["Projects", "Sessions", "Settings", "Platform"];
 
     // Act
     let markers = tab_names.map(tab_page_marker);
@@ -53,7 +53,7 @@ fn tab_page_marker_maps_supported_tabs() {
     // Assert
     assert_eq!(
         markers,
-        ["Activity", "Timer", "Default Smart Model", "Paired devices"]
+        ["Activity", "Timer", "Default Smart Model", "Address "]
     );
 }
 

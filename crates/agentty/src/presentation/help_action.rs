@@ -307,33 +307,20 @@ pub(crate) fn settings_actions() -> Vec<HelpAction> {
     actions
 }
 
-/// Returns help actions for the Remote tab in the state `view` shows.
-/// These entries are used by the help overlay and include all available
-/// actions.
-pub(crate) fn remote_actions(view: &RemoteControlView) -> Vec<HelpAction> {
-    let mut actions = list_base_actions();
-    actions.extend(remote_control_actions(view));
-    actions.extend(SWITCH_TAB_ACTIONS);
-    actions.push(HelpAction::new("help", "?", "Help"));
-
-    actions
-}
-
-/// Returns the Remote tab's own actions in the state `view` shows: pairing
-/// approval while a device waits, code and link actions while the listener
-/// runs, and device actions once a device is paired.
-pub(crate) fn remote_control_actions(view: &RemoteControlView) -> Vec<HelpAction> {
+/// Returns the remote-control actions of a registered Platform tab in the
+/// state `view` shows: pairing approval while a device waits, code and link
+/// actions while remote control runs, and device actions once a device is
+/// paired.
+fn remote_control_actions(view: &RemoteControlView) -> Vec<HelpAction> {
     let mut actions = Vec::new();
     if !view.pairing_requests.is_empty() {
         actions.push(HelpAction::new("approve", "y", "Approve pairing request"));
         actions.push(HelpAction::new("deny", "x", "Deny pairing request"));
     }
-    if let Some(listener) = &view.listener {
+    if view.relay.is_some() {
         actions.push(HelpAction::new("new code", "n", "New pairing code"));
-        if listener.relay.is_some() {
-            actions.push(HelpAction::new("open link", "o", "Open pairing link"));
-            actions.push(HelpAction::new("copy link", "c", "Copy pairing link"));
-        }
+        actions.push(HelpAction::new("open link", "o", "Open pairing link"));
+        actions.push(HelpAction::new("copy link", "c", "Copy pairing link"));
         actions.push(HelpAction::new("stop", "Enter", "Stop remote control"));
     } else {
         actions.push(HelpAction::new("start", "Enter", "Start remote control"));

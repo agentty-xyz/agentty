@@ -23,7 +23,7 @@ const FILES: [(&str, &str); 8] = [
         "const bg = style.getPropertyValue('--color-bg');\n",
     ),
     (
-        "crates/ag-remote/assets/index.html",
+        "docs/site/templates/head.html",
         "<meta name=\"theme-color\" content=\"#123456\">\n",
     ),
     (
@@ -41,7 +41,7 @@ const FILES: [(&str, &str); 8] = [
         "a { color: var(--color-bg); }\n",
     ),
     (
-        "crates/ag-remote/assets/app.css",
+        "docs/site/static/app.css",
         "a { color: var(--color-bg); }\n",
     ),
 ];
@@ -112,7 +112,7 @@ fn cli_generates_stylesheets_that_the_check_accepts_until_one_goes_stale() {
         .run(&["--check"])
         .expect("check of fresh stylesheets");
     fixture
-        .write("crates/ag-remote/assets/tokens.css", "/* Edited. */\n")
+        .write("docs/site/sass/_tokens.scss", "/* Edited. */\n")
         .expect("hand edit");
     let stale = fixture
         .run(&["--check"])
@@ -125,8 +125,8 @@ fn cli_generates_stylesheets_that_the_check_accepts_until_one_goes_stale() {
         "/* Generated from tokens.json. Do not edit. */\n:root {\n  --color-bg: #000000;\n}\n"
     );
     assert_eq!(
-        fs::read_to_string(fixture.root().join("crates/ag-remote/assets/index.html"))
-            .expect("client page"),
+        fs::read_to_string(fixture.root().join("docs/site/templates/head.html"))
+            .expect("site template"),
         "<meta name=\"theme-color\" content=\"#000000\">\n"
     );
     assert_eq!(
@@ -145,8 +145,7 @@ fn cli_generates_stylesheets_that_the_check_accepts_until_one_goes_stale() {
     assert!(!stale.status.success());
     assert!(
         String::from_utf8_lossy(&stale.stdout).contains(
-            "crates/ag-remote/assets/tokens.css is stale; run `cargo run -p ag-xtask -- \
-             design-tokens`"
+            "docs/site/sass/_tokens.scss is stale; run `cargo run -p ag-xtask -- design-tokens`"
         ),
         "{stale:?}"
     );

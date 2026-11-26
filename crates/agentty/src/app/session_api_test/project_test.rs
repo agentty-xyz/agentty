@@ -23,7 +23,7 @@ use crate::app::session::{SessionGitStatus, session_branch};
 use crate::app::test_support::{
     MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
     SyncSessionStartError, add_listed_project, git_status_updated, hide_project,
-    hold_background_polls, insert_loadable_session, start_fake_listener,
+    hold_background_polls, insert_loadable_session, start_fake_remote_control,
 };
 use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
 use crate::domain::session::Status;
@@ -82,7 +82,7 @@ async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
         }),
         ..idle_project.clone()
     };
-    let mut revisions = start_fake_listener(&mut app).await;
+    let mut revisions = start_fake_remote_control(&mut app).await;
     // Each step ends with the check the foreground cycle makes.
     let mut revision_changed = |app: &mut App| {
         app.publish_reported_state_changes();
@@ -283,7 +283,7 @@ async fn git_status_updates_advance_the_remote_revision_only_when_they_change() 
         ]),
         status: Some((0, 2)),
     };
-    let mut revisions = start_fake_listener(&mut app).await;
+    let mut revisions = start_fake_remote_control(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
 
     // Act: each update ends with the check the foreground cycle makes.
@@ -867,7 +867,7 @@ async fn runtime_backend_reports_a_viewed_projects_counts_from_its_own_current_p
         has_merge_conflict: Some(true),
         remote_status: Some((0, 1)),
     };
-    let mut revisions = start_fake_listener(&mut app).await;
+    let mut revisions = start_fake_remote_control(&mut app).await;
     // Each step ends with the check the foreground cycle makes.
     let mut revision_after = |app: &mut App| {
         app.publish_reported_state_changes();

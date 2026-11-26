@@ -817,7 +817,7 @@ async fn terminal_project_sync_steps_advance_the_remote_revision() {
         .times(2)
         .returning(|_, _, _, _| {});
     app.sync_main_runner = Arc::new(sync_main_runner);
-    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    let mut revisions = crate::app::test_support::start_fake_remote_control(&mut app).await;
     // Each step ends with the check the foreground cycle makes.
     let mut revision = move |app: &mut App| {
         app.publish_reported_state_changes();

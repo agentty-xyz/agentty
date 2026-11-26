@@ -25,7 +25,7 @@ mod project;
 fn client_frames_use_snake_case_type_and_method_tags() {
     // Arrange
     let wire = json!([
-        {"type": "hello", "protocol_version": 1, "token": "secret"},
+        {"type": "hello", "protocol_version": 1},
         {"type": "pair", "protocol_version": 1, "code": "ABCD-EFGH", "device_name": "Phone"},
         {"type": "request", "id": 1, "request": {"method": "list_sessions"}},
         {"type": "request", "id": 2, "request": {"method": "get_session", "session_id": "s"}},
@@ -55,7 +55,6 @@ fn client_frames_use_snake_case_type_and_method_tags() {
         [
             ClientFrame::Hello {
                 protocol_version: 1,
-                token: "secret".to_string(),
             },
             ClientFrame::Pair {
                 code: "ABCD-EFGH".to_string(),
@@ -128,6 +127,37 @@ fn client_frames_use_snake_case_type_and_method_tags() {
         ]
     );
     assert_eq!(encoded, wire);
+}
+
+#[test]
+fn authentication_frames_with_a_token_field_still_parse() {
+    // Arrange: a client or server that also knew device tokens may send
+    // one; the field carries nothing on the relay path.
+    let hello = json!({"type": "hello", "protocol_version": 1, "token": "secret"});
+    let paired = json!({
+        "type": "paired", "device_id": "d", "protocol_version": 1, "revision": 3, "token": "t"
+    });
+
+    // Act
+    let hello: ClientFrame = serde_json::from_value(hello).expect("hello should parse");
+    let paired: ServerFrame = serde_json::from_value(paired).expect("paired should parse");
+
+    // Assert
+    assert_eq!(
+        hello,
+        ClientFrame::Hello {
+            protocol_version: 1
+        }
+    );
+    assert_eq!(
+        paired,
+        ServerFrame::Paired {
+            capabilities: Vec::new(),
+            device_id: "d".to_string(),
+            protocol_version: 1,
+            revision: 3,
+        }
+    );
 }
 
 #[test]
@@ -212,7 +242,6 @@ fn authentication_frames_list_capabilities_and_accept_frames_without_them() {
             device_id: "d".to_string(),
             protocol_version: 1,
             revision: 3,
-            token: String::new(),
         }
     );
 }
@@ -232,7 +261,6 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
             device_id: "d".to_string(),
             protocol_version: 1,
             revision: 3,
-            token: "t".to_string(),
         },
         ServerFrame::Response {
             id: 1,
@@ -272,7 +300,7 @@ fn server_frames_encode_results_as_ok_or_error_objects() {
         encoded,
         json!([
             {"type": "welcome", "device_id": "d", "protocol_version": 1, "revision": 3},
-            {"type": "paired", "device_id": "d", "protocol_version": 1, "revision": 3, "token": "t"},
+            {"type": "paired", "device_id": "d", "protocol_version": 1, "revision": 3},
             {"type": "response", "id": 1, "result": {"ok": {"kind": "accepted"}}},
             {"type": "response", "id": 2, "result": {"error": "Session not found"}},
             {"type": "response", "id": 3, "result": {"ok": {"kind": "session", "session": null}}},

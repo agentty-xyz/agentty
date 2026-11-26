@@ -1,21 +1,22 @@
-//! Remote-control state projected for the Remote tab.
+//! Remote-control state projected for the Platform tab.
 
 use ag_remote::RelayStatus;
 use qrcode::{Color as QrColor, EcLevel, QrCode};
 
-/// Remote-control listener and paired-device state for one frame.
+/// Remote-control pairing and paired-device state for one frame.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemoteControlView {
     /// Paired devices in pairing order, with their live connection state.
     pub devices: Vec<RemoteDeviceView>,
     /// Failure from the latest remote-control action, when any.
     pub error: Option<String>,
-    /// Running listener, or `None` while remote control is off.
-    pub listener: Option<RemoteListenerView>,
     /// Confirmation of the latest link action, such as a copy.
     pub notice: Option<String>,
     /// Devices waiting for approval in arrival order.
     pub pairing_requests: Vec<RemotePairingRequestView>,
+    /// The relay link and its pairing link while remote control runs, or
+    /// `None` while it is off.
+    pub relay: Option<RemoteRelayView>,
     /// Highlighted row in `devices`.
     pub selected_device_index: usize,
 }
@@ -28,29 +29,9 @@ impl RemoteControlView {
             .filter(|device| device.is_connected)
             .count()
     }
-
-    /// Returns the Remote tab's header label, which counts the connected
-    /// devices while the listener runs.
-    pub fn tab_label(&self) -> String {
-        match self.listener {
-            Some(_) => format!("Remote ({} online)", self.connected_device_count()),
-            None => "Remote".to_string(),
-        }
-    }
 }
 
-/// One running remote-control listener.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteListenerView {
-    /// One-time code a new device enters to pair.
-    pub pairing_code: String,
-    /// Relay link, when remote control registers with a relay.
-    pub relay: Option<RemoteRelayView>,
-    /// Loopback URL serving the web client.
-    pub url: String,
-}
-
-/// The relay a running listener registers with.
+/// The relay that running remote control registers with.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteRelayView {
     /// Pairing link a device opens, or scans as a QR code, to pair through

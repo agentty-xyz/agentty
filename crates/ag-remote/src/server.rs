@@ -1,104 +1,24 @@
-//! HTTP listener, embedded web client, and server lifecycle.
+//! Server lifecycle: the relay link, pairing, and the state every connection
+//! shares.
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ag_session::SessionService;
-use axum::Router;
-use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::connection::{self, DeviceProof};
 use crate::device::{DeviceStore, DeviceStoreError};
 use crate::entropy::{Entropy, OsEntropy};
 use crate::pairing::{PairingCode, PairingState};
 use crate::relay::{self, RelayStatus, RemoteRelayConfig};
 
-/// Largest accepted WebSocket message or frame, in bytes, and largest
-/// frame an encrypted device stream reassembles: room for a message whose
-/// images reach the most `crate::request` accepts.
+/// Largest frame an encrypted device stream reassembles, in bytes: room for
+/// a message whose images reach the most `crate::request` accepts.
 pub(crate) const MAX_MESSAGE_SIZE: usize = 10 << 20;
-/// Sockets that may be open without an authenticated device, including
+/// Streams that may be open without an authenticated device, including
 /// pairing requests that wait for approval.
 pub(crate) const MAX_UNAUTHENTICATED_SOCKETS: usize = 8;
-/// Host names every listener answers, regardless of the configured
-/// allowlist.
-const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
-/// Content security policy for every embedded asset. Fonts may only be the
-/// `data:` URIs the stylesheet embeds.
-const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
-                                       font-src data:; connect-src 'self'; img-src 'self'; \
-                                       base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-
-/// Content type of the web client's scripts.
-const SCRIPT: &str = "text/javascript; charset=utf-8";
-
-/// One web client script, served at its file name.
-macro_rules! script {
-    ($file:literal) => {
-        (
-            concat!("/", $file),
-            SCRIPT,
-            include_str!(concat!("../assets/", $file)),
-        )
-    };
-}
-
-/// Web client files by request path, with their content types. The page
-/// refers to the others by relative path, so a relay can serve the same
-/// files under a path prefix.
-const WEB_ASSETS: [(&str, &str, &str); 26] = [
-    (
-        "/",
-        "text/html; charset=utf-8",
-        include_str!("../assets/index.html"),
-    ),
-    // The generated design tokens, font faces, and shared base styles come
-    // first, so the page loads one stylesheet.
-    (
-        "/app.css",
-        "text/css; charset=utf-8",
-        concat!(
-            include_str!("../assets/tokens.css"),
-            include_str!("../assets/fonts.css"),
-            include_str!("../assets/base.css"),
-            include_str!("../assets/app.css")
-        ),
-    ),
-    script!("app.js"),
-    script!("chat.mjs"),
-    script!("composer.mjs"),
-    script!("connection.mjs"),
-    script!("device_key.mjs"),
-    script!("diff.mjs"),
-    script!("directory.mjs"),
-    script!("format.mjs"),
-    script!("graph.mjs"),
-    script!("home.mjs"),
-    script!("image.mjs"),
-    script!("instance.mjs"),
-    script!("markdown.mjs"),
-    script!("mention.mjs"),
-    script!("noise.mjs"),
-    script!("pairings.mjs"),
-    script!("project.mjs"),
-    script!("relay.mjs"),
-    script!("session_list.mjs"),
-    script!("settings.mjs"),
-    script!("shell.mjs"),
-    script!("slash.mjs"),
-    script!("suggest.mjs"),
-    // A classic script the page runs in its head, before the first paint.
-    script!("theme.js"),
-];
 
 /// Host capabilities the server drives.
 pub struct RemoteHost {
@@ -110,28 +30,17 @@ pub struct RemoteHost {
     pub sessions: SessionService,
 }
 
-/// Listener settings.
+/// Server settings.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteServerConfig {
-    /// Host names, without ports, that requests may name in `Host` besides
-    /// `localhost`, `127.0.0.1`, and `::1`, such as a tunnel's host name.
-    /// Matching ignores ASCII case. Any other `Host` is refused, which keeps
-    /// DNS-rebinding pages away from the listener.
-    pub allowed_hosts: Vec<String>,
-    /// Address to bind; port `0` selects a free port.
-    pub bind_addr: SocketAddr,
-    /// Relay to register with, so devices can also connect without reaching
-    /// the listener. Those devices encrypt end to end and pair with their
-    /// own key.
-    pub relay: Option<RemoteRelayConfig>,
+    /// Relay to register with. Devices reach the server only through it,
+    /// encrypt end to end, and pair with their own key.
+    pub relay: RemoteRelayConfig,
 }
 
-/// Failure starting or controlling the server.
+/// Failure controlling the server.
 #[derive(Debug, thiserror::Error)]
 pub enum RemoteError {
-    /// The listener could not bind or report its address.
-    #[error("Cannot listen for remote control: {0}")]
-    Bind(#[source] std::io::Error),
     /// The device store failed.
     #[error("Remote device store failed: {0}")]
     DeviceStore(#[source] DeviceStoreError),
@@ -140,7 +49,7 @@ pub enum RemoteError {
     Entropy,
 }
 
-/// Authenticated connections and pairing requests currently open.
+/// Authenticated connections, pairing requests, and the relay link.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemoteServerStatus {
     /// Open authenticated connections in connection order.
@@ -148,8 +57,8 @@ pub struct RemoteServerStatus {
     /// Devices that redeemed a pairing code and wait for approval, in
     /// arrival order.
     pub pairing_requests: Vec<PairingRequest>,
-    /// State of the relay link; `None` when no relay is configured.
-    pub relay: Option<RelayStatus>,
+    /// State of the relay link.
+    pub relay: RelayStatus,
 }
 
 /// One device waiting for the host to approve its pairing.
@@ -173,81 +82,42 @@ pub struct RemoteConnection {
     pub device_name: String,
 }
 
-/// Starts the server on `config.bind_addr` and returns its control handle.
+/// Starts the server, which registers with `config.relay` and serves the
+/// devices that connect through it, and returns its control handle. The
+/// server opens no listener: it only dials out to the relay.
 ///
-/// # Errors
-/// Returns [`RemoteError::Bind`] when the address cannot be bound.
-pub async fn start(
-    config: RemoteServerConfig,
-    host: RemoteHost,
-) -> Result<RemoteServerHandle, RemoteError> {
-    start_with_entropy(config, host, Arc::new(OsEntropy)).await
+/// # Panics
+/// Panics when called outside a Tokio runtime.
+pub fn start(config: RemoteServerConfig, host: RemoteHost) -> RemoteServerHandle {
+    start_with_entropy(config, host, Arc::new(OsEntropy))
 }
 
 /// Starts the server with an injected randomness source.
-pub(crate) async fn start_with_entropy(
+pub(crate) fn start_with_entropy(
     config: RemoteServerConfig,
     host: RemoteHost,
     entropy: Arc<dyn Entropy>,
-) -> Result<RemoteServerHandle, RemoteError> {
-    let listener = TcpListener::bind(config.bind_addr)
-        .await
-        .map_err(RemoteError::Bind)?;
-    let local_addr = listener.local_addr().map_err(RemoteError::Bind)?;
+) -> RemoteServerHandle {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let state = Arc::new(ServerState::new(
-        host,
-        entropy,
-        shutdown_rx.clone(),
-        config.allowed_hosts,
-    ));
-    let router = WEB_ASSETS
-        .into_iter()
-        .fold(Router::new(), |router, (path, content_type, body)| {
-            router.route(path, get(move || async move { asset(content_type, body) }))
-        })
-        .route("/ws", get(upgrade))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            require_allowed_host,
-        ))
-        .with_state(Arc::clone(&state));
-    let server = tokio::spawn(async move {
-        let mut shutdown_rx = shutdown_rx;
-        let shutdown = async move {
-            let _ = shutdown_rx.wait_for(|is_stopping| *is_stopping).await;
-        };
-        let _ = axum::serve(listener, router)
-            .with_graceful_shutdown(shutdown)
-            .await;
-    });
-    if let Some(relay) = config.relay {
-        tokio::spawn(relay::run(Arc::clone(&state), relay));
-    }
+    let state = Arc::new(ServerState::new(host, entropy, shutdown_rx));
+    let link = tokio::spawn(relay::run(Arc::clone(&state), config.relay));
 
-    Ok(RemoteServerHandle {
-        local_addr,
-        server,
+    RemoteServerHandle {
+        link,
         state,
         stop_signal: StopSignal(shutdown_tx),
-    })
+    }
 }
 
 /// Control handle for a running server. Dropping it stops the server
-/// without waiting; [`Self::shutdown`] also waits for every socket to close.
+/// without waiting; [`Self::shutdown`] also waits for every stream to close.
 pub struct RemoteServerHandle {
-    local_addr: SocketAddr,
-    server: JoinHandle<()>,
+    link: JoinHandle<()>,
     state: Arc<ServerState>,
     stop_signal: StopSignal,
 }
 
 impl RemoteServerHandle {
-    /// Returns the bound listener address.
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
-    }
-
     /// Issues a fresh pairing code, replacing any active one.
     ///
     /// # Errors
@@ -259,13 +129,14 @@ impl RemoteServerHandle {
             .ok_or(RemoteError::Entropy)
     }
 
-    /// Subscribes to open authenticated connections and pairing requests.
+    /// Subscribes to open authenticated connections, pairing requests, and
+    /// the relay link.
     pub fn status(&self) -> watch::Receiver<RemoteServerStatus> {
         self.state.status_tx.subscribe()
     }
 
-    /// Issues the device token for a pending request; false when it is
-    /// unknown or already settled.
+    /// Lets a pending device finish pairing; false when it is unknown or
+    /// already settled.
     pub fn approve_pairing(&self, request_id: u64) -> bool {
         self.state.settle_pairing(request_id, true)
     }
@@ -292,11 +163,11 @@ impl RemoteServerHandle {
         Ok(())
     }
 
-    /// Stops accepting connections, closes every socket, and waits until the
-    /// listener port is released.
+    /// Leaves the relay, closes every stream, and waits until they are
+    /// closed.
     pub async fn shutdown(self) {
         self.stop_signal.stop();
-        let _ = self.server.await;
+        let _ = self.link.await;
         let mut open_sockets = self.state.open_sockets_tx.subscribe();
         let _ = open_sockets.wait_for(|count| *count == 0).await;
     }
@@ -306,7 +177,7 @@ impl RemoteServerHandle {
 struct StopSignal(watch::Sender<bool>);
 
 impl StopSignal {
-    /// Tells the listener and every socket to stop.
+    /// Tells the relay link and every stream to stop.
     fn stop(&self) {
         self.0.send_replace(true);
     }
@@ -318,45 +189,40 @@ impl Drop for StopSignal {
     }
 }
 
-/// State shared by the router and every connection task.
+/// State shared by the relay link and every connection task.
 pub(crate) struct ServerState {
     pub(crate) entropy: Arc<dyn Entropy>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
-    /// Host names answered besides the loopback names.
-    allowed_hosts: Vec<String>,
     connections: Mutex<ConnectionRegistry>,
     host: RemoteHost,
     open_sockets_tx: watch::Sender<usize>,
     pairing: Mutex<PairingState>,
     pairing_requests: Mutex<PairingRequestRegistry>,
-    /// State of the relay link, once a relay task reports it.
-    relay_status: Mutex<Option<RelayStatus>>,
+    /// State of the relay link.
+    relay_status: Mutex<RelayStatus>,
     status_tx: watch::Sender<RemoteServerStatus>,
-    /// Sockets holding a [`HandshakeSlot`], counted per [`ConnectionOrigin`].
-    unauthenticated_sockets: Mutex<[usize; 2]>,
+    /// Streams holding a [`HandshakeSlot`].
+    unauthenticated_sockets: Mutex<usize>,
 }
 
 impl ServerState {
-    /// Creates idle state for `host` that answers `allowed_hosts` besides
-    /// the loopback names.
+    /// Creates idle state for `host`.
     pub(crate) fn new(
         host: RemoteHost,
         entropy: Arc<dyn Entropy>,
         shutdown_rx: watch::Receiver<bool>,
-        allowed_hosts: Vec<String>,
     ) -> Self {
         Self {
-            allowed_hosts,
             connections: Mutex::new(ConnectionRegistry::default()),
             entropy,
             host,
             open_sockets_tx: watch::Sender::new(0),
             pairing: Mutex::new(PairingState::default()),
             pairing_requests: Mutex::new(PairingRequestRegistry::default()),
-            relay_status: Mutex::new(None),
+            relay_status: Mutex::new(RelayStatus::default()),
             shutdown_rx,
             status_tx: watch::Sender::new(RemoteServerStatus::default()),
-            unauthenticated_sockets: Mutex::new([0; 2]),
+            unauthenticated_sockets: Mutex::new(0),
         }
     }
 
@@ -389,7 +255,7 @@ impl ServerState {
         *self
             .relay_status
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(status);
+            .unwrap_or_else(PoisonError::into_inner) = status;
         self.publish_status();
     }
 
@@ -398,26 +264,20 @@ impl ServerState {
         self.pairing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Reserves one of the [`MAX_UNAUTHENTICATED_SOCKETS`] slots of `origin`
-    /// for a connection that has not authenticated, or returns `None` when
-    /// all are taken. Each origin has its own slots, so relay traffic cannot
-    /// lock out the local listener.
-    pub(crate) fn reserve_handshake(
-        self: &Arc<Self>,
-        origin: ConnectionOrigin,
-    ) -> Option<HandshakeSlot> {
+    /// Reserves one of the [`MAX_UNAUTHENTICATED_SOCKETS`] slots for a
+    /// stream that has not authenticated, or returns `None` when all are
+    /// taken.
+    pub(crate) fn reserve_handshake(self: &Arc<Self>) -> Option<HandshakeSlot> {
         let mut unauthenticated = self
             .unauthenticated_sockets
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let count = &mut unauthenticated[origin.index()];
-        if *count >= MAX_UNAUTHENTICATED_SOCKETS {
+        if *unauthenticated >= MAX_UNAUTHENTICATED_SOCKETS {
             return None;
         }
-        *count += 1;
+        *unauthenticated += 1;
 
         Some(HandshakeSlot {
-            origin,
             state: Arc::clone(self),
         })
     }
@@ -468,7 +328,7 @@ impl ServerState {
         pending.is_some_and(|pending| pending.decision_tx.send(is_approved).is_ok())
     }
 
-    /// Removes one pairing request after its socket stops waiting.
+    /// Removes one pairing request after its stream stops waiting.
     fn withdraw_pairing(&self, request_id: u64) {
         self.pairing_registry().entries.remove(&request_id);
         self.publish_status();
@@ -635,28 +495,8 @@ struct RegisteredConnection {
     connection: RemoteConnection,
 }
 
-/// Where an unauthenticated connection came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConnectionOrigin {
-    /// The loopback listener.
-    Local,
-    /// A stream announced by the relay.
-    Relay,
-}
-
-impl ConnectionOrigin {
-    /// Position of this origin's count in the slot counts.
-    fn index(self) -> usize {
-        match self {
-            Self::Local => 0,
-            Self::Relay => 1,
-        }
-    }
-}
-
-/// Keeps one unauthenticated socket counted until it authenticates or ends.
+/// Keeps one unauthenticated stream counted until it authenticates or ends.
 pub(crate) struct HandshakeSlot {
-    origin: ConnectionOrigin,
     state: Arc<ServerState>,
 }
 
@@ -667,12 +507,11 @@ impl Drop for HandshakeSlot {
             .unauthenticated_sockets
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let count = &mut unauthenticated[self.origin.index()];
-        *count = count.saturating_sub(1);
+        *unauthenticated = unauthenticated.saturating_sub(1);
     }
 }
 
-/// Keeps one pairing request listed until it is settled or its socket
+/// Keeps one pairing request listed until it is settled or its stream
 /// stops waiting.
 pub(crate) struct PairingRequestGuard {
     id: u64,
@@ -706,106 +545,6 @@ fn replace_status(status: &mut RemoteServerStatus, next: RemoteServerStatus) -> 
     *status = next;
 
     true
-}
-
-/// Builds one embedded asset response with restrictive headers.
-fn asset(content_type: &'static str, body: &'static str) -> Response {
-    (
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::REFERRER_POLICY, "no-referrer"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        body,
-    )
-        .into_response()
-}
-
-/// Accepts a WebSocket upgrade from a same-origin page or a non-browser
-/// client while an unauthenticated slot is free.
-async fn upgrade(
-    State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-    upgrade: WebSocketUpgrade,
-) -> Response {
-    if !origin_matches_host(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let Some(handshake) = state.reserve_handshake(ConnectionOrigin::Local) else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-
-    upgrade
-        .max_message_size(MAX_MESSAGE_SIZE)
-        .max_frame_size(MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| connection::serve(socket, state, handshake, DeviceProof::Token))
-}
-
-/// Refuses every request whose `Host` is neither loopback nor allowed.
-async fn require_allowed_host(
-    State(state): State<Arc<ServerState>>,
-    request: Request,
-    next: Next,
-) -> Response {
-    if !host_is_allowed(request.headers(), &state.allowed_hosts) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-
-    next.run(request).await
-}
-
-/// Returns whether the `Host` header names a loopback host or one of
-/// `allowed_hosts`, ignoring its port and ASCII case.
-pub(crate) fn host_is_allowed(headers: &HeaderMap, allowed_hosts: &[String]) -> bool {
-    let Some(host) = headers
-        .get(header::HOST)
-        .and_then(|host| host.to_str().ok())
-    else {
-        return false;
-    };
-    let name = host_name(host);
-
-    LOOPBACK_HOSTS
-        .into_iter()
-        .chain(allowed_hosts.iter().map(String::as_str))
-        .any(|allowed| allowed.eq_ignore_ascii_case(name))
-}
-
-/// Strips the port from a `Host` value, unwrapping bracketed IPv6
-/// addresses such as `[::1]:4646`.
-fn host_name(host: &str) -> &str {
-    if let Some(bracketed) = host.strip_prefix('[') {
-        return bracketed
-            .split_once(']')
-            .map_or(bracketed, |(name, _)| name);
-    }
-
-    host.split_once(':').map_or(host, |(name, _)| name)
-}
-
-/// Returns whether the request has no `Origin` or one naming the `Host`.
-///
-/// Browsers always send `Origin` on WebSocket upgrades, so this rejects pages
-/// on other sites that try to reach the local server.
-pub(crate) fn origin_matches_host(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN) else {
-        return true;
-    };
-    let origin_authority = origin.to_str().ok().and_then(|origin| {
-        origin
-            .strip_prefix("http://")
-            .or_else(|| origin.strip_prefix("https://"))
-    });
-    let host = headers
-        .get(header::HOST)
-        .and_then(|host| host.to_str().ok());
-
-    matches!(
-        (origin_authority, host),
-        (Some(origin_authority), Some(host)) if origin_authority.eq_ignore_ascii_case(host)
-    )
 }
 
 #[cfg(test)]

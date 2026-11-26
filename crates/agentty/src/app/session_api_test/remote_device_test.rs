@@ -3,17 +3,19 @@
 //! creates a session there and starts its first turn, whatever project the
 //! terminal shows.
 
-use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::MockAgentChannel;
+use ag_noise::{Handshake, Session};
+use ag_relay::{CONNECT_PATH_PREFIX, RelayHandle};
 use ag_remote::protocol::{
     ClientFrame, RemoteProjectEntry, RemoteRequest, RemoteResponse, RemoteResult,
     RemoteSessionMode, RequestedProjectId, ServerFrame,
 };
 use ag_remote::{
-    DeviceStore, PROTOCOL_VERSION, RemoteHost, RemoteServerConfig, RemoteServerHandle,
+    DeviceStore, PROTOCOL_VERSION, RelayStatus, RemoteHost, RemoteRelayConfig, RemoteServerConfig,
+    RemoteServerHandle, StaticKeypair,
 };
 use futures_util::{SinkExt, StreamExt};
 use tempfile::TempDir;
@@ -28,13 +30,26 @@ use crate::app::test_support::{
 };
 use crate::domain::session::Status;
 use crate::infra::remote_control::RepositoryDeviceStore;
-use crate::test_support::new_test_app;
-
-/// Client side of one remote-control WebSocket.
-type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
+use crate::test_support::{new_test_app, start_relay};
 
 /// Longest wait for an expected frame before the test fails.
 const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// One WebSocket to the relay.
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// A device's encrypted stream to the server through the relay.
+struct Client {
+    session: Session,
+    socket: Socket,
+}
+
+/// The real server registered with an in-process relay as `instance`.
+struct RunningServer {
+    handle: RemoteServerHandle,
+    instance: StaticKeypair,
+    relay: RelayHandle,
+}
 
 #[tokio::test]
 async fn a_paired_device_reaches_a_named_listed_project_through_the_real_server() {
@@ -82,7 +97,8 @@ async fn a_paired_device_reaches_a_named_listed_project_through_the_real_server(
     tokio::time::timeout(FRAME_TIMEOUT, turn_started.notified())
         .await
         .expect("the new session's first turn should start");
-    server.shutdown().await;
+    server.handle.shutdown().await;
+    server.relay.shutdown().await;
 
     // Assert
     assert!(
@@ -193,9 +209,12 @@ fn list_sessions(project_id: Option<i64>) -> RemoteRequest {
     }
 }
 
-/// Starts the real remote-control server on a free loopback port over this
-/// host's remote session service and paired-device store.
-async fn start_server(app: &App) -> RemoteServerHandle {
+/// Starts an in-process relay and the real remote-control server over this
+/// host's remote session service and paired-device store, and waits until
+/// the server is registered with the relay.
+async fn start_server(app: &App) -> RunningServer {
+    let relay = start_relay().await;
+    let instance = StaticKeypair::generate().expect("instance key");
     let (_revision_tx, revisions) = watch::channel(1);
     let host = RemoteHost {
         devices: Arc::new(RepositoryDeviceStore::new(
@@ -204,30 +223,71 @@ async fn start_server(app: &App) -> RemoteServerHandle {
         revisions,
         sessions: app.remote_session_service(),
     };
-
-    ag_remote::start(
+    let handle = ag_remote::start(
         RemoteServerConfig {
-            allowed_hosts: Vec::new(),
-            bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            relay: None,
+            relay: RemoteRelayConfig {
+                instance_key: instance.clone(),
+                url: format!("ws://{}", relay.local_addr()),
+            },
         },
         host,
+    );
+    tokio::time::timeout(
+        FRAME_TIMEOUT,
+        handle
+            .status()
+            .wait_for(|status| status.relay == RelayStatus::Connected),
     )
     .await
-    .expect("remote control should start")
+    .expect("the server should register in time")
+    .expect("the server should stay up");
+
+    RunningServer {
+        handle,
+        instance,
+        relay,
+    }
+}
+
+/// Connects a new device to `server` through its relay and runs the device
+/// handshake.
+async fn connect(server: &RunningServer) -> Client {
+    let url = format!(
+        "ws://{}{CONNECT_PATH_PREFIX}{}",
+        server.relay.local_addr(),
+        server.instance.public().fingerprint()
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .expect("device should connect");
+    let device = StaticKeypair::generate().expect("device key");
+    let mut handshake =
+        Handshake::device_initiator(&device, server.instance.public()).expect("handshake");
+    let first = handshake.write_message().expect("first message");
+    socket
+        .send(Message::Binary(first.into()))
+        .await
+        .expect("first message should send");
+    let second = next_message(&mut socket).await;
+    handshake
+        .read_message(&second)
+        .expect("second message should verify");
+    let session = handshake
+        .into_session(16 << 20)
+        .expect("session should open");
+
+    Client { session, socket }
 }
 
 /// Pairs a device with a fresh code, approving it as the terminal would,
 /// and returns its open client and the capabilities the server offered.
-async fn pair(server: &RemoteServerHandle) -> (Client, Vec<String>) {
+async fn pair(server: &RunningServer) -> (Client, Vec<String>) {
     let code = server
+        .handle
         .issue_pairing_code()
         .expect("pairing code should issue")
         .code;
-    let url = format!("ws://{}/ws", server.local_addr());
-    let (mut client, _) = tokio_tungstenite::connect_async(url)
-        .await
-        .expect("device should connect");
+    let mut client = connect(server).await;
     send(
         &mut client,
         &ClientFrame::Pair {
@@ -243,6 +303,7 @@ async fn pair(server: &RemoteServerHandle) -> (Client, Vec<String>) {
     }
     .expect("pairing should wait for approval");
     let request_id = server
+        .handle
         .status()
         .wait_for(|status| {
             status
@@ -257,7 +318,7 @@ async fn pair(server: &RemoteServerHandle) -> (Client, Vec<String>) {
         .find(|request| request.confirmation == confirmation)
         .map(|request| request.id)
         .expect("pairing request should be listed");
-    assert!(server.approve_pairing(request_id));
+    assert!(server.handle.approve_pairing(request_id));
     let capabilities = match next_frame(&mut client).await {
         ServerFrame::Paired { capabilities, .. } => Some(capabilities),
         _ => None,
@@ -283,25 +344,42 @@ async fn call(client: &mut Client, id: u64, request: RemoteRequest) -> RemoteRes
     }
 }
 
-/// Sends one JSON frame.
+/// Encrypts and sends one JSON frame.
 async fn send(client: &mut Client, frame: &ClientFrame) {
     let text = serde_json::to_string(frame).expect("frame should encode");
-    client
-        .send(Message::Text(text.into()))
-        .await
-        .expect("frame should send");
+    let messages = client
+        .session
+        .seal(text.as_bytes())
+        .expect("frame should seal");
+    for message in messages {
+        client
+            .socket
+            .send(Message::Binary(message.into()))
+            .await
+            .expect("frame should send");
+    }
 }
 
-/// Waits for the next server frame, skipping control messages.
+/// Waits for the next server frame and decrypts it.
 async fn next_frame(client: &mut Client) -> ServerFrame {
     loop {
-        let message = tokio::time::timeout(FRAME_TIMEOUT, client.next())
+        let message = next_message(&mut client.socket).await;
+        if let Some(frame) = client.session.open(&message).expect("frame should open") {
+            return serde_json::from_slice(&frame).expect("frame should decode");
+        }
+    }
+}
+
+/// Waits for the next binary message, skipping keepalive traffic.
+async fn next_message(socket: &mut Socket) -> Vec<u8> {
+    loop {
+        let message = tokio::time::timeout(FRAME_TIMEOUT, socket.next())
             .await
-            .expect("a frame should arrive")
-            .expect("socket should stay open")
-            .expect("frame should read");
-        if let Message::Text(text) = message {
-            return serde_json::from_str(&text).expect("frame should decode");
+            .expect("a message should arrive")
+            .expect("stream should stay open")
+            .expect("message should read");
+        if let Message::Binary(bytes) = message {
+            return bytes.to_vec();
         }
     }
 }

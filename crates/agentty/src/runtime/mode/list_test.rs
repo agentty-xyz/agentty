@@ -21,7 +21,7 @@ use crate::infra::platform::{MockPlatformClient, PlatformError};
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, HelpContext, PromptModeSnapshot,
 };
-use crate::presentation::help_action::{platform_actions, remote_actions, settings_actions};
+use crate::presentation::help_action::{platform_actions, settings_actions};
 use crate::presentation::platform::{PlatformState, PlatformTabView};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::{
@@ -1888,10 +1888,15 @@ async fn press(app: &mut App, code: KeyCode) {
 }
 
 #[tokio::test]
-async fn test_handle_tab_keys_reach_the_remote_tab_once_enabled() {
+async fn test_handle_tab_keys_reach_the_platform_tab_once_enabled() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.enable_remote_control(0, Vec::new(), None).await;
+    app.enable_platform(
+        Arc::new(MockPlatformClient::new()),
+        "https://platform.example".to_string(),
+        "Agentty on box".to_string(),
+    )
+    .await;
     app.tabs.set(Tab::Settings);
 
     // Act
@@ -1905,7 +1910,7 @@ async fn test_handle_tab_keys_reach_the_remote_tab_once_enabled() {
         .await
         .expect("failed to read active tab");
     press(&mut app, KeyCode::Tab).await;
-    let after_remote = app.tabs.current();
+    let after_platform = app.tabs.current();
     handle(
         &mut app,
         KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
@@ -1914,74 +1919,10 @@ async fn test_handle_tab_keys_reach_the_remote_tab_once_enabled() {
     .expect("failed to handle key");
 
     // Assert
-    assert_eq!(after_settings, Tab::Remote);
-    assert_eq!(persisted_tab.as_deref(), Some("Remote"));
-    assert_eq!(after_remote, Tab::Projects);
-    assert_eq!(app.tabs.current(), Tab::Remote);
-}
-
-#[tokio::test]
-async fn test_handle_enter_starts_and_stops_remote_control_on_the_remote_tab() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.enable_remote_control(0, Vec::new(), None).await;
-    app.tabs.set(Tab::Remote);
-
-    // Act
-    press(&mut app, KeyCode::Enter).await;
-    let started = app.remote_control.view().listener.clone();
-    press(&mut app, KeyCode::Char('n')).await;
-    let replaced = app.remote_control.view().listener.clone();
-    press(&mut app, KeyCode::Enter).await;
-
-    // Assert
-    let started = started.expect("Enter should start the listener");
-    let replaced = replaced.expect("n should keep the listener running");
-    assert!(started.url.starts_with("http://127.0.0.1:"));
-    assert_eq!(replaced.url, started.url);
-    assert_ne!(replaced.pairing_code, started.pairing_code);
-    assert_eq!(app.remote_control.view().listener, None);
-    assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
-async fn test_handle_navigation_keys_move_the_remote_device_selection() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    pair_remote_devices(&app, &["phone", "tablet"]).await;
-    app.enable_remote_control(0, Vec::new(), None).await;
-    app.tabs.set(Tab::Remote);
-
-    // Act
-    press(&mut app, KeyCode::Char('j')).await;
-    press(&mut app, KeyCode::Down).await;
-    let after_down = app.remote_control.view().selected_device_index;
-    press(&mut app, KeyCode::Char('k')).await;
-    press(&mut app, KeyCode::Up).await;
-
-    // Assert
-    assert_eq!(after_down, 1);
-    assert_eq!(app.remote_control.view().selected_device_index, 0);
-}
-
-#[tokio::test]
-async fn test_handle_question_mark_opens_remote_help_on_remote_tab() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.enable_remote_control(0, Vec::new(), None).await;
-    app.tabs.set(Tab::Remote);
-
-    // Act
-    press(&mut app, KeyCode::Char('?')).await;
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Help {
-            context: HelpContext::List { ref keybindings },
-            scroll_offset: 0,
-        } if *keybindings == remote_actions(app.remote_control.view())
-    ));
+    assert_eq!(after_settings, Tab::Platform);
+    assert_eq!(persisted_tab.as_deref(), Some("Platform"));
+    assert_eq!(after_platform, Tab::Projects);
+    assert_eq!(app.tabs.current(), Tab::Platform);
 }
 
 #[tokio::test]
@@ -2016,8 +1957,10 @@ async fn test_handle_platform_tab_keys_start_sign_in_open_help_and_move_devices(
     );
     app.mode = AppMode::List;
     press(&mut app, KeyCode::Char('j')).await;
+    press(&mut app, KeyCode::Down).await;
     let after_down = app.remote_control.view().selected_device_index;
     press(&mut app, KeyCode::Char('k')).await;
+    press(&mut app, KeyCode::Up).await;
     press(&mut app, KeyCode::Enter).await;
 
     // Assert

@@ -18,10 +18,11 @@ use crate::ui::page::remote_control::{
 use crate::ui::style::palette;
 
 /// Explains what signing in gives, while signed out.
-const SIGN_IN_PITCH: &str = "Sign in to connect this Agentty to the platform's relay, so devices \
-                             you pair reach it without a tunnel or a relay of your own. Signing \
-                             in grants no device any access: each one still pairs with a one-time \
-                             code that you approve here, and its traffic is encrypted end to end.";
+const SIGN_IN_PITCH: &str = "Sign in to use remote control: this Agentty connects out to the \
+                             platform's relay, and the phones and browsers you pair reach it from \
+                             the platform's page. Signing in grants no device any access: each \
+                             one still pairs with a one-time code that you approve here, and its \
+                             traffic is encrypted end to end.";
 /// Explains what keep on does, under its state.
 const KEEP_ON_HINT: &str =
     "With keep on, remote control through the platform's relay starts whenever Agentty starts.";
@@ -156,11 +157,7 @@ impl<'a> PlatformPage<'a> {
     fn remote_lines(&self, width: usize, placement: QrPlacement) -> Vec<Line<'static>> {
         let remote_control = self.view.remote_control;
         let mut lines = pairing_request_lines(remote_control);
-        let relay = remote_control
-            .listener
-            .as_ref()
-            .and_then(|listener| listener.relay.as_ref());
-        if let Some(relay) = relay {
+        if let Some(relay) = &remote_control.relay {
             lines.push(field_line("Remote", "On", palette::success()));
             lines.extend(relay_lines(relay, placement));
         } else {

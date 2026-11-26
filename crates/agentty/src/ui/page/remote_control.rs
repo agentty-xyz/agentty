@@ -1,5 +1,7 @@
-//! Remote tab page showing the remote-control listener, its pairing code,
-//! and the paired devices, which reach every project the terminal lists.
+//! Remote-control sections of the Platform tab: pairing requests, the relay
+//! link with its QR code, action outcomes, and the paired devices, which
+//! reach every project the terminal lists. Also the bordered section and
+//! QR code layout the tab renders them in.
 
 use ag_remote::RelayStatus;
 use ag_tui_text::text_util::truncate_with_ellipsis;
@@ -10,10 +12,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::presentation::help_action::remote_control_actions;
 use crate::presentation::remote_control::{RemoteControlView, RemoteRelayView};
 use crate::ui::style::palette;
-use crate::ui::{Page, layout, style};
+use crate::ui::{layout, style};
 
 /// Width of the left-hand field labels.
 const LABEL_WIDTH: usize = 8;
@@ -29,88 +30,6 @@ const HINT_SEPARATOR: &str = " | ";
 
 /// Explains how to show a QR code that does not fit.
 const ENLARGE_FOR_QR_CODE: &str = "Enlarge the terminal to show the link as a QR code.";
-
-/// Title of the Remote tab, which names no project: paired devices pick
-/// their own among the projects the terminal lists.
-const TITLE: &str = "Remote control";
-
-/// Renders the Remote tab: remote-control status, pairing, and devices.
-pub struct RemoteControlPage<'a> {
-    view: &'a RemoteControlView,
-}
-
-impl<'a> RemoteControlPage<'a> {
-    /// Creates the page for one frame's remote-control state.
-    pub(crate) fn new(view: &'a RemoteControlView) -> Self {
-        Self { view }
-    }
-
-    /// Lays the page out for content `width` columns wide and `height` rows
-    /// high, with the relay QR code wherever it fits.
-    fn content(&self, width: usize, height: usize) -> PageContent<'a> {
-        PageContent::new(
-            relay_qr_code(self.view),
-            width,
-            height,
-            |text_width, placement| self.lines(text_width, placement),
-        )
-    }
-
-    /// Returns the render lines for text `width` columns wide, with the
-    /// relay QR code at `placement`.
-    fn lines(&self, width: usize, placement: QrPlacement) -> Vec<Line<'static>> {
-        let mut lines = pairing_request_lines(self.view);
-        if let Some(listener) = &self.view.listener {
-            lines.push(field_line("Status", "On", palette::success()));
-            lines.push(field_line("Open", &listener.url, palette::text()));
-            lines.push(field_line(
-                "Code",
-                &listener.pairing_code,
-                palette::warning(),
-            ));
-            lines.push(Line::from(""));
-            lines.push(muted_line(
-                "Open the address on another device through a tunnel that forwards this port, \
-                 then enter the code. The code works once.",
-            ));
-            if let Some(relay) = &listener.relay {
-                lines.extend(relay_lines(relay, placement));
-            }
-        } else {
-            lines.push(field_line("Status", "Off", palette::text_muted()));
-            lines.push(Line::from(""));
-            lines.push(muted_line(
-                "Start remote control to follow and steer the sessions of your projects from a \
-                 paired phone or browser.",
-            ));
-        }
-        lines.extend(outcome_lines(self.view));
-        lines.extend(device_lines(self.view, width));
-
-        lines.push(Line::from(""));
-        lines.extend(hint_lines(&self.hints(), width));
-
-        lines
-    }
-
-    /// Returns the key hints that apply to the current state.
-    fn hints(&self) -> Vec<String> {
-        remote_control_actions(self.view)
-            .iter()
-            .map(|action| format!("{}: {}", action.key, action.footer_label))
-            .collect()
-    }
-}
-
-impl Page for RemoteControlPage<'_> {
-    /// Renders the remote-control state in one bordered section that fills
-    /// the tab page.
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        render_section(frame, area, TITLE, |width, height| {
-            self.content(width, height)
-        });
-    }
-}
 
 /// Where a page puts the relay QR code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,11 +146,11 @@ pub(super) fn render_section<'view>(
     frame.render_widget(Paragraph::new(qr_code), qr_area);
 }
 
-/// Returns the relay QR code rows of `view`, or none without a relay.
+/// Returns the relay QR code rows of `view`, or none while remote control
+/// is off.
 pub(super) fn relay_qr_code(view: &RemoteControlView) -> &[String] {
-    view.listener
+    view.relay
         .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
         .map_or(&[][..], |relay| relay.qr_code.as_slice())
 }
 

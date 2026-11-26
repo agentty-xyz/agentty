@@ -95,7 +95,7 @@ async fn events_pumped_while_a_creation_is_pending_advance_the_remote_revision()
             "session-1",
             Status::Review,
         ));
-    let mut revisions = crate::app::test_support::start_fake_listener(&mut app).await;
+    let mut revisions = crate::app::test_support::start_fake_remote_control(&mut app).await;
     let initial_revision = *revisions.borrow_and_update();
     // A pending creation makes the request's own loop apply app events.
     app.pending_session_creations.insert(

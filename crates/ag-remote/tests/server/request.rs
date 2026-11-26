@@ -14,8 +14,6 @@ use ag_remote::protocol::{
 use ag_remote::test_support::{MemoryDeviceStore, RecordingBackend};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{
     Client, TestResult, TestServer, assert_rejected, hello_frame, next_frame, send,
@@ -31,16 +29,6 @@ async fn call(client: &mut Client, id: u64, request: RemoteRequest) -> TestResul
         } if response_id == id => Ok(result),
         frame => Err(format!("expected response {id}, got {frame:?}").into()),
     }
-}
-
-/// Decodes the next text message as a server frame without a client-side
-/// timeout, so a paused clock can advance to server deadlines.
-async fn next_untimed_frame(client: &mut Client) -> TestResult<ServerFrame> {
-    let Some(Ok(Message::Text(text))) = client.next().await else {
-        return Err("expected a text frame".into());
-    };
-
-    Ok(serde_json::from_str(&text)?)
 }
 
 /// Builds the listing entry of the session `id`.
@@ -119,7 +107,7 @@ fn expected_session() -> RemoteSession {
 async fn each_request_reaches_the_session_service() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let listed = call(
@@ -224,7 +212,7 @@ async fn each_request_reaches_the_session_service() -> TestResult {
 async fn session_graphs_and_their_summary_reach_only_listed_sessions() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let graphs = |session_id: &str, graph_id: Option<&str>| RemoteRequest::GetSessionGraphs {
         graph_id: graph_id.map(str::to_string),
         known: None,
@@ -317,7 +305,7 @@ async fn session_graphs_and_their_summary_reach_only_listed_sessions() -> TestRe
 async fn session_graphs_answer_unchanged_for_the_version_the_device_shows() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let graphs = |known: Option<&str>| RemoteRequest::GetSessionGraphs {
         graph_id: None,
         known: known.map(str::to_string),
@@ -355,7 +343,7 @@ async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_it
 -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let accept = |session_id: &str, snapshot: &str| {
         RemoteRequest::ActOnSessionGraph(RemoteGraphActionRequest {
             action: RemoteGraphAction::Accept,
@@ -386,7 +374,7 @@ async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_it
     let accepted = call(&mut client, 2, accept("session-2", "5eed")).await?;
     let stale = call(&mut client, 3, accept("session-2", "old")).await?;
     let unlisted = call(&mut client, 4, accept("other-project-session", "5eed")).await?;
-    client.send(Message::Text(unknown.into())).await?;
+    client.send_text(unknown).await?;
     let refused = next_frame(&mut client).await?;
     let listed = call(
         &mut client,
@@ -447,7 +435,7 @@ async fn graph_actions_offered_in_the_graphs_response_reach_the_host_bound_to_it
 async fn graph_proposals_reach_listed_sessions_under_an_identity_the_server_mints() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let propose = |session_id: &str, message: &str| RemoteRequest::GenerateGraphProposal {
         message: message.to_string(),
         session_id: session_id.into(),
@@ -486,7 +474,7 @@ async fn graph_proposals_reach_listed_sessions_under_an_identity_the_server_mint
 async fn session_diffs_reach_only_listed_sessions() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let diff = |session_id: &str, path: Option<&str>| RemoteRequest::GetSessionDiff {
         path: path.map(str::to_string),
         session_id: session_id.into(),
@@ -524,7 +512,7 @@ async fn session_diffs_reach_only_listed_sessions() -> TestResult {
 async fn session_file_listings_reach_only_listed_sessions() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let files = |session_id: &str| RemoteRequest::ListSessionFiles {
         session_id: session_id.into(),
     };
@@ -563,7 +551,7 @@ async fn session_file_listings_reach_only_listed_sessions() -> TestResult {
 async fn project_file_listings_name_the_project_checkout() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let listed = call(
@@ -593,7 +581,7 @@ async fn project_file_listings_name_the_project_checkout() -> TestResult {
 async fn host_errors_return_in_the_response_and_keep_the_connection() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let busy = call(
@@ -647,7 +635,7 @@ async fn send_held_message(client: &mut Client, id: u64) -> TestResult {
 async fn a_slow_request_delays_neither_other_requests_nor_change_pushes() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     send_held_message(&mut client, 1).await?;
@@ -680,7 +668,7 @@ async fn a_slow_request_delays_neither_other_requests_nor_change_pushes() -> Tes
 async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let publish = RemoteRequest::PublishSession {
         session_id: "session-1".into(),
     };
@@ -786,7 +774,7 @@ async fn a_pending_publish_blocks_neither_reads_nor_later_changes_to_its_session
 async fn a_request_beyond_eight_in_progress_is_refused() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     for id in 1..=8 {
         send_held_message(&mut client, id).await?;
     }
@@ -847,7 +835,7 @@ async fn responses(client: &mut Client, count: usize) -> TestResult<Vec<(u64, Re
 async fn mutations_of_one_session_reach_the_host_in_arrival_order() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     send_held_message(&mut client, 1).await?;
@@ -905,7 +893,7 @@ fn host_mutations(server: &TestServer) -> Vec<String> {
 async fn a_request_that_panics_gets_an_error_and_releases_its_session() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let message = |id, message: &str| ClientFrame::Request {
         id,
         request: RemoteRequest::SendMessage {
@@ -936,7 +924,7 @@ async fn a_request_that_panics_gets_an_error_and_releases_its_session() -> TestR
 async fn shutdown_waits_for_requests_in_progress() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     send_held_message(&mut client, 1).await?;
     // A reply to a later request shows the held one has started.
     call(
@@ -949,6 +937,8 @@ async fn shutdown_waits_for_requests_in_progress() -> TestResult {
         backend,
         devices: _devices,
         handle,
+        instance: _instance,
+        relay: _relay,
         revisions_tx: _revisions_tx,
     } = server;
 
@@ -971,7 +961,7 @@ async fn shutdown_waits_for_requests_in_progress() -> TestResult {
 async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let session_id = RequestedSessionId::from("other-project-session");
 
     // Act
@@ -1029,7 +1019,7 @@ async fn mutations_of_unlisted_sessions_never_reach_the_host() -> TestResult {
 async fn settings_reach_the_host_and_a_bad_value_never_does() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let settings = |reasoning: &str| RemoteRequest::SetSessionSettings {
         agent: None,
         model: None,
@@ -1063,7 +1053,7 @@ async fn settings_reach_the_host_and_a_bad_value_never_does() -> TestResult {
 async fn sync_session_reaches_the_host_and_returns_its_refusal() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let synced = call(
@@ -1089,7 +1079,7 @@ async fn sync_session_reaches_the_host_and_returns_its_refusal() -> TestResult {
 async fn sync_project_reaches_the_host_and_the_listing_reports_its_progress() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let synced = call(
@@ -1131,7 +1121,7 @@ async fn sync_project_reaches_the_host_and_the_listing_reports_its_progress() ->
 async fn stop_turn_reaches_the_host_for_a_listed_session() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let stopped = call(
@@ -1154,7 +1144,7 @@ async fn stop_turn_reaches_the_host_for_a_listed_session() -> TestResult {
 async fn merge_reaches_the_host_only_for_listed_sessions() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let refused = call(
@@ -1192,7 +1182,7 @@ async fn merge_reaches_the_host_only_for_listed_sessions() -> TestResult {
 async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
 
     // Act
     let host = call(&mut client, 1, RemoteRequest::GetHost { project_id: None }).await?;
@@ -1257,39 +1247,18 @@ async fn new_sessions_go_to_the_active_project_in_a_served_mode() -> TestResult 
 }
 
 #[tokio::test]
-async fn pings_are_ignored_between_requests() -> TestResult {
-    // Arrange
-    let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
-
-    // Act
-    client.send(Message::Ping(vec![1].into())).await?;
-    client.send(Message::Pong(vec![2].into())).await?;
-    let listed = call(
-        &mut client,
-        1,
-        RemoteRequest::ListSessions { project_id: None },
-    )
-    .await?;
-
-    // Assert
-    assert!(matches!(listed, RemoteResult::Ok(_)));
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn protocol_violations_after_authentication_close_the_connection() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut repeated_hello, _device_id, token) = server.pair("Phone").await?;
-    let (mut invalid, _welcome) = server.hello(&token).await?;
-    let (mut binary, _welcome) = server.hello(&token).await?;
+    let (mut repeated_hello, _device_id) = server.pair("Phone").await?;
+    let key = repeated_hello.key().clone();
+    let (mut invalid, _welcome) = server.hello(&key).await?;
+    let (mut binary, _welcome) = server.hello(&key).await?;
 
     // Act
-    send(&mut repeated_hello, &hello_frame(&token)).await?;
-    invalid.send(Message::Text("[]".into())).await?;
-    binary.send(Message::Binary(vec![0].into())).await?;
+    send(&mut repeated_hello, &hello_frame()).await?;
+    invalid.send_text("[]").await?;
+    binary.send_bytes(&[0xFF]).await?;
 
     // Assert
     assert_rejected(&mut repeated_hello, "Connection is already authenticated").await?;
@@ -1301,11 +1270,11 @@ async fn protocol_violations_after_authentication_close_the_connection() -> Test
 async fn unknown_methods_get_an_error_and_keep_the_connection() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let unknown = r#"{"type":"request","id":1,"request":{"method":"rename_session","session_id":"session-1"}}"#;
 
     // Act
-    client.send(Message::Text(unknown.into())).await?;
+    client.send_text(unknown).await?;
     let refused = next_frame(&mut client).await?;
     let listed = call(
         &mut client,
@@ -1332,7 +1301,7 @@ async fn unknown_methods_get_an_error_and_keep_the_connection() -> TestResult {
 async fn bursts_of_host_changes_push_one_changed_frame() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     // Pausing only after pairing keeps the clock from skipping past the
     // pairing round trips while loopback I/O is in flight.
     tokio::time::pause();
@@ -1341,10 +1310,10 @@ async fn bursts_of_host_changes_push_one_changed_frame() -> TestResult {
     // Act
     server.revisions_tx.send_replace(2);
     server.revisions_tx.send_replace(3);
-    let first = next_untimed_frame(&mut client).await?;
+    let first = client.next_untimed_frame().await?;
     let first_elapsed = started.elapsed();
     server.revisions_tx.send_replace(4);
-    let second = next_untimed_frame(&mut client).await?;
+    let second = client.next_untimed_frame().await?;
 
     // Assert
     assert_eq!(first, ServerFrame::Changed { revision: 3 });
@@ -1358,11 +1327,13 @@ async fn bursts_of_host_changes_push_one_changed_frame() -> TestResult {
 async fn requests_keep_working_after_the_host_drops_revisions() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let TestServer {
         backend: _backend,
         devices: _devices,
         handle: _handle,
+        instance: _instance,
+        relay: _relay,
         revisions_tx,
     } = server;
 
@@ -1394,7 +1365,7 @@ fn large_png(bytes: usize) -> String {
 async fn a_message_with_megabytes_of_images_fits_one_frame() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (mut client, _device_id, _token) = server.pair("Phone").await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
     let request = RemoteRequest::SendMessage {
         images: vec![
             RemoteImage {
@@ -1423,15 +1394,15 @@ async fn a_message_with_megabytes_of_images_fits_one_frame() -> TestResult {
 
 /// Starts a server whose host lists the test backend's two projects, and
 /// pairs a device with it.
-async fn paired_with_projects() -> TestResult<(TestServer, Client, String)> {
+async fn paired_with_projects() -> TestResult<(TestServer, Client)> {
     let server = TestServer::start_with(
         MemoryDeviceStore::default(),
         RecordingBackend::with_projects(),
     )
     .await?;
-    let (client, _device_id, token) = server.pair("Phone").await?;
+    let (client, _device_id) = server.pair("Phone").await?;
 
-    Ok((server, client, token))
+    Ok((server, client))
 }
 
 /// The requests about a project, each naming `project_id`.
@@ -1475,13 +1446,14 @@ async fn call_each(
 async fn projects_are_listed_and_named_only_through_the_projects_capability() -> TestResult {
     // Arrange
     let without = TestServer::start().await?;
-    let (mut plain, _device_id, _token) = without.pair("Phone").await?;
-    let (with, mut client, token) = paired_with_projects().await?;
+    let (mut plain, _device_id) = without.pair("Phone").await?;
+    let (with, mut client) = paired_with_projects().await?;
+    let key = client.key().clone();
 
     // Act
     let mut refused = call_each(&mut plain, project_requests("1")).await?;
     refused.push(call(&mut plain, 9, RemoteRequest::ListProjects).await?);
-    let (_again, welcome) = with.hello(&token).await?;
+    let (_again, welcome) = with.hello(&key).await?;
     let listed = call(&mut client, 1, RemoteRequest::ListProjects).await?;
 
     // Assert: a server whose host serves only its active project refuses a
@@ -1522,7 +1494,7 @@ async fn projects_are_listed_and_named_only_through_the_projects_capability() ->
 #[tokio::test]
 async fn a_named_project_the_host_does_not_list_never_reaches_it() -> TestResult {
     // Arrange
-    let (server, mut client, _token) = paired_with_projects().await?;
+    let (server, mut client) = paired_with_projects().await?;
     let mut requests = project_requests("9");
     requests.extend(project_requests("website"));
 
@@ -1542,7 +1514,7 @@ async fn a_named_project_the_host_does_not_list_never_reaches_it() -> TestResult
 #[tokio::test]
 async fn requests_that_name_a_listed_project_reach_that_project() -> TestResult {
     // Arrange: the terminal has `agentty` open.
-    let (server, mut client, _token) = paired_with_projects().await?;
+    let (server, mut client) = paired_with_projects().await?;
 
     // Act
     let results = call_each(&mut client, project_requests("2")).await?;
@@ -1643,7 +1615,7 @@ async fn requests_that_name_a_listed_project_reach_that_project() -> TestResult 
 #[tokio::test]
 async fn requests_without_a_project_follow_the_terminal_s_active_project() -> TestResult {
     // Arrange
-    let (server, mut client, _token) = paired_with_projects().await?;
+    let (server, mut client) = paired_with_projects().await?;
 
     // Act
     let before = call(
@@ -1722,7 +1694,7 @@ async fn requests_without_a_project_follow_the_terminal_s_active_project() -> Te
 async fn session_requests_ask_the_host_once_whether_it_lists_the_session() -> TestResult {
     // Arrange: `session-3` belongs to `website`, which the terminal does
     // not have open.
-    let (server, mut client, _token) = paired_with_projects().await?;
+    let (server, mut client) = paired_with_projects().await?;
 
     // Act
     let loaded = call(

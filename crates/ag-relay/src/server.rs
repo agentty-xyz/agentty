@@ -17,7 +17,7 @@ use tokio::time::timeout;
 use crate::admission::{AdmissionPolicy, AdmitAll};
 use crate::limit::{HandshakeLimiter, RelayLimits};
 use crate::registry::Registry;
-use crate::{control, page, stream};
+use crate::{control, stream};
 
 /// Path of the instance control connection.
 pub const REGISTER_PATH: &str = "/v1/register";
@@ -104,7 +104,7 @@ pub async fn start(config: RelayConfig) -> Result<RelayHandle, RelayError> {
 ///     };
 ///     let policy = Listed(vec!["<instance identifier>".to_string()]);
 ///     let relay = ag_relay::start_with_admission(config, Arc::new(policy)).await?;
-///     tokio::signal::ctrl_c().await?;
+///     // The program serves its own pages beside the relay, then stops it.
 ///     relay.shutdown().await;
 ///
 ///     Ok(())
@@ -136,7 +136,7 @@ pub async fn start_with_admission(
         registry: Registry::new(),
         shutdown_rx,
     });
-    let router = page::routes(Router::new())
+    let router = Router::new()
         .route("/healthz", get(health))
         .route(REGISTER_PATH, get(register))
         .route("/v1/connect/{instance_id}", get(connect))

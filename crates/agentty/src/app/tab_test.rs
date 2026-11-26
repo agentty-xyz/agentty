@@ -10,10 +10,7 @@ fn test_tab_title() {
     let titles = Tab::ALL.map(Tab::title);
 
     // Assert
-    assert_eq!(
-        titles,
-        ["Projects", "Sessions", "Settings", "Remote", "Platform"]
-    );
+    assert_eq!(titles, ["Projects", "Sessions", "Settings", "Platform"]);
 }
 
 #[test]
@@ -30,7 +27,6 @@ fn test_tab_scope_marks_only_projects_as_global() {
             TabScope::Global,
             TabScope::Project,
             TabScope::Project,
-            TabScope::Project,
             TabScope::Project
         ]
     );
@@ -38,13 +34,13 @@ fn test_tab_scope_marks_only_projects_as_global() {
 
 #[test]
 fn test_tab_from_str_parses_persisted_values() {
-    // Arrange
+    // Arrange: an older release may have saved `Remote`, which names no tab.
     let values = [
         ("Projects", Some(Tab::Projects)),
         ("Sessions", Some(Tab::Sessions)),
         ("Settings", Some(Tab::Settings)),
-        ("Remote", Some(Tab::Remote)),
         ("Platform", Some(Tab::Platform)),
+        ("Remote", None),
         ("Invalid", None),
     ];
 
@@ -62,81 +58,65 @@ fn test_tab_as_str_matches_persisted_values() {
     let values = Tab::ALL.map(Tab::as_str);
 
     // Assert
-    assert_eq!(
-        values,
-        ["Projects", "Sessions", "Settings", "Remote", "Platform"]
-    );
+    assert_eq!(values, ["Projects", "Sessions", "Settings", "Platform"]);
 }
 
 #[test]
-fn test_tab_manager_offers_remote_and_platform_only_once_each_is_enabled() {
+fn test_tab_manager_offers_platform_only_once_enabled() {
     // Arrange
-    let mut remote_first = TabManager::default();
-    let mut platform_only = TabManager::default();
+    let mut manager = TabManager::default();
 
     // Act
-    let default_tabs = remote_first.available_tabs();
-    remote_first.enable_remote();
-    let remote_tabs = remote_first.available_tabs();
-    remote_first.enable_platform();
-    let both_tabs = remote_first.available_tabs();
-    platform_only.enable_platform();
-    let platform_tabs = platform_only.available_tabs();
+    let default_tabs = manager.available_tabs();
+    manager.enable_platform();
+    let platform_tabs = manager.available_tabs();
 
     // Assert
     assert_eq!(default_tabs, [Tab::Projects, Tab::Sessions, Tab::Settings]);
-    assert_eq!(
-        remote_tabs,
-        [Tab::Projects, Tab::Sessions, Tab::Settings, Tab::Remote]
-    );
-    assert_eq!(both_tabs, Tab::ALL);
-    assert_eq!(
-        platform_tabs,
-        [Tab::Projects, Tab::Sessions, Tab::Settings, Tab::Platform]
-    );
+    assert_eq!(platform_tabs, Tab::ALL);
 }
 
 #[test]
-fn test_tab_manager_cycles_through_remote_once_enabled() {
+fn test_tab_manager_cycles_through_platform_once_enabled() {
     // Arrange
     let mut manager = TabManager::new(Tab::Settings);
-    manager.enable_remote();
+    manager.enable_platform();
 
     // Act
     manager.next();
     let after_settings = manager.current();
     manager.next();
-    let after_remote = manager.current();
+    let after_platform = manager.current();
     manager.previous();
     let before_projects = manager.current();
 
     // Assert
-    assert_eq!(after_settings, Tab::Remote);
-    assert_eq!(after_remote, Tab::Projects);
-    assert_eq!(before_projects, Tab::Remote);
+    assert_eq!(after_settings, Tab::Platform);
+    assert_eq!(after_platform, Tab::Projects);
+    assert_eq!(before_projects, Tab::Platform);
 }
 
 #[test]
-fn test_tab_manager_reads_unoffered_remote_as_sessions() {
+fn test_tab_manager_reads_unoffered_platform_as_sessions() {
     // Arrange
-    let mut manager = TabManager::new(Tab::Remote);
+    let mut manager = TabManager::new(Tab::Platform);
 
     // Act
     let restored_tab = manager.current();
     manager.next();
     let next_tab = manager.current();
-    manager.set(Tab::Remote);
+    manager.set(Tab::Platform);
     manager.previous();
     let previous_tab = manager.current();
-    manager.set(Tab::Remote);
-    manager.enable_remote();
+    manager.set(Tab::Platform);
+    manager.enable_platform();
     let enabled_tab = manager.current();
 
     // Assert
     assert_eq!(restored_tab, Tab::Sessions);
     assert_eq!(next_tab, Tab::Settings);
     assert_eq!(previous_tab, Tab::Projects);
-    assert_eq!(enabled_tab, Tab::Remote);
+    assert_eq!(enabled_tab, Tab::Platform);
 }
 
 #[test]

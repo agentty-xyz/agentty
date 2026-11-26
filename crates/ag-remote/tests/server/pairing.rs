@@ -1,24 +1,23 @@
-//! Pairing with host approval, token authentication, and handshake
+//! Pairing with host approval, key authentication, and handshake
 //! rejection.
 
 use std::time::Duration;
 
 use ag_remote::protocol::{ClientFrame, RemoteRequest, ServerFrame};
 use ag_remote::{DeviceStore, PROTOCOL_VERSION, PairingRequest, RemoteConnection};
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{TestResult, TestServer, assert_rejected, hello_frame, next_frame, send};
 
 #[tokio::test]
-async fn paired_device_reconnects_with_its_token() -> TestResult {
+async fn paired_device_reconnects_with_its_key() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
-    let (client, device_id, token) = server.pair("Phone").await?;
+    let (client, device_id) = server.pair("Phone").await?;
+    let key = client.key().clone();
     drop(client);
 
     // Act
-    let (_client, welcome) = server.hello(&token).await?;
+    let (_client, welcome) = server.hello(&key).await?;
 
     // Assert
     assert_eq!(
@@ -52,10 +51,6 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
     let devices = server.devices.list_devices().await?;
     assert_eq!(server.devices.device_ids(), [device_id]);
     assert_eq!(
-        server.devices.find_device_by_token_hash(&token).await?,
-        None
-    );
-    assert_eq!(
         devices
             .iter()
             .map(|device| device.last_seen_at)
@@ -73,7 +68,7 @@ async fn status_lists_authenticated_connections_until_they_close() -> TestResult
     let mut status = server.handle.status();
 
     // Act
-    let (client, device_id, _token) = server.pair("Phone").await?;
+    let (client, device_id) = server.pair("Phone").await?;
     let connected = status
         .wait_for(|status| !status.connections.is_empty())
         .await?
@@ -207,14 +202,11 @@ async fn unanswered_pairing_times_out() -> TestResult {
     // Act
     // Reads without a client-side timeout, so the paused clock advances
     // straight to the server's approval deadline.
-    let message = client.next().await;
+    let frame = client.next_untimed_frame().await?;
 
     // Assert
-    let Some(Ok(Message::Text(text))) = message else {
-        return Err(format!("expected a rejection frame, got {message:?}").into());
-    };
     assert_eq!(
-        serde_json::from_str::<ServerFrame>(&text)?,
+        frame,
         ServerFrame::Rejected {
             reason: "Pairing was not approved in time".to_string(),
         }
@@ -278,26 +270,57 @@ async fn frames_sent_while_waiting_are_rejected() -> TestResult {
 }
 
 #[tokio::test]
-async fn unknown_tokens_and_other_versions_are_rejected() -> TestResult {
+async fn unknown_keys_and_other_versions_are_rejected() -> TestResult {
     // Arrange
     let server = TestServer::start().await?;
     let mut unknown = server.connect().await?;
     let mut outdated = server.connect().await?;
 
     // Act
-    send(&mut unknown, &hello_frame("not-a-token")).await?;
+    send(&mut unknown, &hello_frame()).await?;
     send(
         &mut outdated,
         &ClientFrame::Hello {
             protocol_version: PROTOCOL_VERSION + 1,
-            token: "t".to_string(),
         },
     )
     .await?;
 
-    // Assert
+    // Assert: the web client matches this reason to forget a pairing.
     assert_rejected(&mut unknown, "Unknown device token").await?;
     assert_rejected(&mut outdated, "Unsupported protocol version").await
+}
+
+#[tokio::test]
+async fn hello_as_a_released_web_client_sends_it_is_welcomed() -> TestResult {
+    // Arrange: the exact first frames a paired web client sends, also one
+    // that still carries a token field.
+    let server = TestServer::start().await?;
+    let (client, device_id) = server.pair("Phone").await?;
+    let key = client.key().clone();
+    drop(client);
+    let mut plain = server.connect_as(key.clone()).await?;
+    let mut with_token = server.connect_as(key).await?;
+
+    // Act
+    plain
+        .send_text(r#"{"type":"hello","protocol_version":1}"#)
+        .await?;
+    with_token
+        .send_text(r#"{"type":"hello","protocol_version":1,"token":""}"#)
+        .await?;
+    let plain_frame = next_frame(&mut plain).await?;
+    let with_token_frame = next_frame(&mut with_token).await?;
+
+    // Assert
+    for frame in [plain_frame, with_token_frame] {
+        assert!(
+            matches!(frame, ServerFrame::Welcome { device_id: ref id, .. } if *id == device_id),
+            "expected a welcome, got {frame:?}"
+        );
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -317,8 +340,8 @@ async fn first_frame_must_be_hello_or_pair() -> TestResult {
         },
     )
     .await?;
-    invalid_json.send(Message::Text("{".into())).await?;
-    binary.send(Message::Binary(vec![1, 2].into())).await?;
+    invalid_json.send_text("{").await?;
+    binary.send_bytes(&[0xFF, 0xFE]).await?;
 
     // Assert
     assert_rejected(&mut request_first, "Authenticate before sending requests").await?;
@@ -332,21 +355,18 @@ async fn silent_clients_are_rejected_after_the_handshake_timeout() -> TestResult
     let server = TestServer::start().await?;
     let started = tokio::time::Instant::now();
     let mut client = server.connect().await?;
-    // Pausing after the upgrade keeps the clock from skipping ahead while
-    // the connection is still being set up.
+    // Pausing after the device handshake keeps the clock from skipping
+    // ahead while the stream is still being set up.
     tokio::time::pause();
 
     // Act
     // Reads without a client-side timeout, so the paused clock advances
     // straight to the server's handshake deadline.
-    let message = client.next().await;
+    let frame = client.next_untimed_frame().await?;
 
     // Assert
-    let Some(Ok(Message::Text(text))) = message else {
-        return Err(format!("expected a rejection frame, got {message:?}").into());
-    };
     assert_eq!(
-        serde_json::from_str::<ServerFrame>(&text)?,
+        frame,
         ServerFrame::Rejected {
             reason: "Authentication timed out".to_string(),
         }

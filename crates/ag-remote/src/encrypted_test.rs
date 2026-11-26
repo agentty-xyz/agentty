@@ -2,7 +2,7 @@ use ag_noise::{Handshake, Session, StaticKeypair};
 use tokio::sync::mpsc;
 
 use super::{EncryptedTransport, MAX_FRAME_BYTES, MessageCarrier};
-use crate::transport::{CloseCause, FrameTransport, Incoming};
+use crate::transport::{FrameTransport, Incoming};
 
 /// One end of an in-memory carrier.
 struct ChannelCarrier {
@@ -149,9 +149,7 @@ async fn closing_the_transport_closes_the_carrier() {
     send_from_device(&mut ends, b"queued").await;
 
     // Act
-    ends.transport
-        .close(CloseCause::Rejected, "Device revoked")
-        .await;
+    ends.transport.close().await;
     let queued = ends.transport.receive().await;
     let after_queue = ends.transport.receive().await;
 

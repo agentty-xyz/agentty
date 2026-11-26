@@ -1,13 +1,13 @@
-//! Shortcut availability tests for list, settings, remote, session view, and
-//! diff help actions.
+//! Shortcut availability tests for list, settings, platform, session view,
+//! and diff help actions.
 
 use ag_remote::RelayStatus;
 
 use super::{
     DiffReviewCommentHelp, HelpAction, PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability,
     ViewHelpState, ViewSessionState, diff_actions, platform_actions, platform_tab_actions,
-    project_list_actions, remote_actions, remote_control_actions, session_list_actions,
-    session_view_state, settings_actions, view_actions, view_actions_with_review_request,
+    project_list_actions, session_list_actions, session_view_state, settings_actions, view_actions,
+    view_actions_with_review_request,
 };
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Status};
 use crate::presentation::platform::{
@@ -15,8 +15,7 @@ use crate::presentation::platform::{
     PlatformView,
 };
 use crate::presentation::remote_control::{
-    RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
-    RemoteRelayView,
+    RemoteControlView, RemoteDeviceView, RemotePairingRequestView, RemoteRelayView,
 };
 use crate::test_support::SessionFixtureBuilder;
 
@@ -46,8 +45,17 @@ fn test_settings_actions_exclude_new_session_shortcut() {
 }
 
 #[test]
-fn test_remote_actions_follow_the_listener_pairings_and_devices() {
+fn test_registered_platform_actions_follow_remote_control_pairings_and_devices() {
     // Arrange
+    let platform = PlatformView {
+        state: PlatformState::SignedIn(PlatformAccountView {
+            access: PlatformAccess::Registered {
+                name: "Agentty on box".to_string(),
+            },
+            ..PlatformAccountView::checking(None)
+        }),
+        ..PlatformView::new("https://platform.example".to_string())
+    };
     let stopped = RemoteControlView::default();
     let running = RemoteControlView {
         devices: vec![RemoteDeviceView {
@@ -55,32 +63,40 @@ fn test_remote_actions_follow_the_listener_pairings_and_devices() {
             is_connected: true,
             name: "Phone".to_string(),
         }],
-        listener: Some(RemoteListenerView {
-            pairing_code: "ABCD-EFGH".to_string(),
-            relay: Some(RemoteRelayView::new(
-                "https://relay.example/".to_string(),
-                RelayStatus::Connected,
-            )),
-            url: "http://127.0.0.1:4646/".to_string(),
-        }),
         pairing_requests: vec![RemotePairingRequestView {
             confirmation: "K7QX".to_string(),
             device_name: "Laptop".to_string(),
             id: 1,
         }],
+        relay: Some(RemoteRelayView::new(
+            "https://platform.example/sessions/".to_string(),
+            RelayStatus::Connected,
+        )),
         ..RemoteControlView::default()
     };
-    let keys = |actions: Vec<HelpAction>| -> Vec<&'static str> {
-        actions.into_iter().map(|action| action.key).collect()
+    let keys = |remote_control: &RemoteControlView| -> Vec<&'static str> {
+        platform_actions(PlatformTabView {
+            platform: &platform,
+            remote_control,
+        })
+        .into_iter()
+        .map(|action| action.key)
+        .collect()
     };
+    let stopped_actions = platform_tab_actions(PlatformTabView {
+        platform: &platform,
+        remote_control: &stopped,
+    });
 
     // Act
-    let stopped_keys = keys(remote_actions(&stopped));
-    let running_keys = keys(remote_actions(&running));
-    let stopped_start = remote_control_actions(&stopped);
+    let stopped_keys = keys(&stopped);
+    let running_keys = keys(&running);
 
     // Assert
-    assert_eq!(stopped_keys, ["q", "s", "Enter", "Tab", "Shift+Tab", "?"]);
+    assert_eq!(
+        stopped_keys,
+        ["q", "s", "Enter", "a", "l", "Tab", "Shift+Tab", "?"]
+    );
     assert_eq!(
         running_keys,
         [
@@ -94,14 +110,16 @@ fn test_remote_actions_follow_the_listener_pairings_and_devices() {
             "Enter",
             "j/k",
             "d",
+            "a",
+            "l",
             "Tab",
             "Shift+Tab",
             "?"
         ]
     );
     assert_eq!(
-        stopped_start,
-        [HelpAction::new("start", "Enter", "Start remote control")]
+        stopped_actions.first(),
+        Some(&HelpAction::new("start", "Enter", "Start remote control"))
     );
 }
 

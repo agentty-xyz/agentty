@@ -12,8 +12,9 @@ encrypted end to end. Signing in grants no device any access. The platform serve
 code your devices run, so sign in only to one you trust; see
 [Who you trust](@/docs/usage/remote-control.md#usage-remote-control-trust).
 
-The `Platform` tab follows the other tabs on every launch. Agentty contacts the platform
-only after you sign in.
+The `Platform` tab follows the other tabs on every launch. While remote control runs,
+its label counts the connected devices, such as `Platform (1 online)`. Agentty contacts
+the platform only after you sign in.
 
 <!-- more -->
 
