@@ -1,6 +1,9 @@
 # CodeQL default setup reads this file only while the repository's
-# `github-codeql-config-file` custom property is set to
-# `./.github/codeql/codeql-config.yml`; without the property it has no effect.
+# `github-codeql-config-file` custom property names it; without the property
+# it has no effect. Set the property to
+# `remote=agentty-xyz/agentty@main:.github/codeql/codeql-config.yml`: default
+# setup analyzes a pull request's head commit and fails when a local path is
+# missing there, while the `remote=` form always reads the copy on `main`.
 name: Agentty CodeQL configuration
 
 # Analyze production code only. Tests are about two thirds of the Rust
