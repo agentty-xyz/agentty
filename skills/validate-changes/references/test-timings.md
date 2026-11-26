@@ -53,6 +53,13 @@ tests that are now fast or gone only warn; remove their entries. The threshold l
 headroom above the slowest unlisted coverage-run tests (about 3.7 s on loaded runners),
 so it does not flake. The PTY E2E suite is not checked.
 
+The pull-request and merge-queue coverage job runs on a Blacksmith runner, where
+CPU-bound tests take about half as long as on the GitHub-hosted runner of the
+`Postsubmit` coverage job. `Postsubmit` is therefore the stricter check: a test that
+takes 2.5 s or more in a pull-request run can exceed the threshold on `main`. Compare a
+new slow test against a `Postsubmit` report, and keep an allowlist entry until a
+`Postsubmit` run warns that it is stale.
+
 ## Timing Collector
 
 `test-timing-action` checks the collector's lifecycle and failure paths with 100%

@@ -1,6 +1,8 @@
 # Known tests allowed to exceed the `check-slow-tests` threshold in the CI
 # coverage run. Each entry names the nextest binary and test, and why it is
 # slow. Remove an entry once its test is fast; stale entries only warn.
+# Pull-request runs use a runner about twice as fast as the `Postsubmit` one,
+# so only a stale warning from a `Postsubmit` run on `main` shows a test is fast.
 - binary: agentty
   test: app::review_prompt::tests::exhausted_shared_budget_preserves_completed_batches
   reason: Splits an 8 MB diff into review batches until the shared provider-call budget runs out.
