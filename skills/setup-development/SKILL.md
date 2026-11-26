@@ -117,8 +117,9 @@ Cargo uses its CPU-based job default. When running several sessions, set
 Coverage hooks use `target/llvm-cov-target`, separate from ordinary builds, even when
 `CARGO_TARGET_DIR` is set; this makes `cargo-llvm-cov`'s default isolation explicit.
 Override `CARGO_LLVM_COV_TARGET_DIR` to relocate coverage artifacts, keeping it separate
-from the ordinary build directory. Each coverage hook deletes its raw `.profraw`
-profiles when it exits; the report it wrote is what later steps read.
+from the ordinary build directory. Each coverage hook pools its raw `.profraw` profiles
+into a few files per test binary and deletes them when it exits; the report it wrote is
+what later steps read.
 
 ## Handoff
 

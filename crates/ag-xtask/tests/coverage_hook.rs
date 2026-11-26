@@ -19,7 +19,8 @@ const CARGO_STUB: &str = r#"#!/bin/sh
 case "$1" in
 llvm-cov)
   printf '%s\0' "$@" > coverage-arguments
-  printf '%s\n' "${RUSTFLAGS-unset}" "${CARGO_LLVM_COV_TARGET_DIR-unset}" > coverage-environment
+  printf '%s\n' "${RUSTFLAGS-unset}" "${CARGO_LLVM_COV_TARGET_DIR-unset}" \
+    "${LLVM_PROFILE_FILE_NAME-unset}" > coverage-environment
   report=
   while [ "$#" -gt 0 ]; do
     if [ "$1" = --output-path ]; then report=$2; fi
@@ -37,6 +38,14 @@ run)
 esac
 exit 99
 "#;
+
+/// Every cataloged hook that builds and runs instrumented tests.
+const COVERAGE_HOOKS: [&str; 4] = [
+    "coverage",
+    "coverage-focused",
+    "coverage-ag-harness-sandbox",
+    "coverage-ag-harness-features",
+];
 
 const FOCUSED_REPORT: &str = "target/coverage-focused.lcov";
 
@@ -319,14 +328,39 @@ fn generation_and_check_failures_propagate_and_stale_reports_never_pass()
 }
 
 #[test]
+fn coverage_hooks_pool_raw_profiles_instead_of_writing_one_per_process()
+-> Result<(), Box<dyn Error>> {
+    for hook in COVERAGE_HOOKS {
+        // Arrange
+        let fixture = Fixture::new(hook)?;
+
+        // Act
+        let output = fixture.run(&[
+            ("AGENTTY_TEST_PACKAGES", "ag-xtask"),
+            ("AGENTTY_TEST_WRITE_REPORT", "1"),
+            ("LLVM_PROFILE_FILE_NAME", "ambient-%p.profraw"),
+        ])?;
+
+        // Assert
+        assert!(
+            output.status.success(),
+            "{hook}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fixture.lines("coverage-environment")?[2],
+            "agentty-%9m.profraw",
+            "{hook}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coverage_hooks_delete_raw_profiles_after_passing_and_failing_runs() -> Result<(), Box<dyn Error>>
 {
-    for hook in [
-        "coverage",
-        "coverage-focused",
-        "coverage-ag-harness-sandbox",
-        "coverage-ag-harness-features",
-    ] {
+    for hook in COVERAGE_HOOKS {
         for (directory, relocated, coverage_exit) in [
             ("target/llvm-cov-target", false, 0),
             ("target/llvm-cov-target", false, 42),

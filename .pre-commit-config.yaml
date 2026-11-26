@@ -393,6 +393,7 @@ repos:
           env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
           CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          LLVM_PROFILE_FILE_NAME=agentty-%9m.profraw
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --timings --workspace
           --lib --bins --examples --tests
@@ -430,6 +431,7 @@ repos:
           env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
           CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          LLVM_PROFILE_FILE_NAME=agentty-%9m.profraw
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --timings "${package_args[@]}"
           --bins --examples --tests
@@ -459,6 +461,7 @@ repos:
           env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
           CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          LLVM_PROFILE_FILE_NAME=agentty-%9m.profraw
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --locked --timings --profile ci -p ag-harness --test sandbox
           --lib --test public_api --test lifecycle --test telemetry --test benchmark_summary
@@ -498,6 +501,7 @@ repos:
           coverage() { env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
           CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          LLVM_PROFILE_FILE_NAME=agentty-%9m.profraw
           RUSTFLAGS="$coverage_rustflags" cargo llvm-cov "$@"; };
           coverage clean --workspace;
           for features in "" providers-anthropic providers-openai providers-compat providers-anthropic,providers-compat,providers-openai; do

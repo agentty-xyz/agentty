@@ -22,8 +22,15 @@ isolation of coverage build settings from `check-coverage`, and failure propagat
 `clippy-ag-harness-features` and `coverage-ag-harness-features` build every selection
 without default features under selected feature unification, keep it and the coverage
 build settings away from `check-coverage`, and propagate failures.
-`crates/ag-xtask/tests/coverage_hook.rs` also checks that all four coverage hooks delete
-their raw profiles after passing and failing runs.
+`crates/ag-xtask/tests/coverage_hook.rs` also checks that all four coverage hooks pool
+their raw profiles and delete them after passing and failing runs.
+
+The coverage hooks set `LLVM_PROFILE_FILE_NAME` to a name with a `%9m` merge pool and no
+`%p`, so the test processes of one binary merge their counters into at most nine files.
+`cargo-llvm-cov`'s default name adds the process ID: every one of the roughly 10,000
+nextest processes then writes its own profile, gigabytes in total, and the report has to
+merge them all. A test that hands a child process its own profile derives the name from
+the inherited `LLVM_PROFILE_FILE`, keeping the `.profraw` extension and the directory.
 
 `coverage-ag-harness-sandbox` has no other regression coverage; configuration and
 instruction checks are not replacements. Review changes to coverage commands, compiler
