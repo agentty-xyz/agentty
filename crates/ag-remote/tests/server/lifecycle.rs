@@ -4,14 +4,12 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use ag_remote::protocol::{ClientFrame, RemoteRequest, ServerFrame};
+use ag_remote::test_support::{MemoryDeviceStore, RecordingBackend};
 use ag_remote::{DeviceStore, RemoteError, RemoteHost, RemoteServerConfig};
 use ag_session::SessionService;
 use tokio::sync::watch;
 
-use crate::support::{
-    MemoryDeviceStore, RecordingBackend, TestResult, TestServer, assert_rejected, close_frame,
-    next_frame, send,
-};
+use crate::support::{TestResult, TestServer, assert_rejected, close_frame, next_frame, send};
 
 #[tokio::test]
 async fn revoking_a_device_closes_its_connections_and_invalidates_its_token() -> TestResult {

@@ -9,6 +9,7 @@ use ag_relay::{AdmissionError, AdmissionPolicy, CONNECT_PATH_PREFIX, RelayConfig
 use ag_remote::protocol::{
     ClientFrame, RemoteImage, RemoteRequest, RemoteResponse, RemoteResult, ServerFrame,
 };
+use ag_remote::test_support::RecordingBackend;
 use ag_remote::{
     PROTOCOL_VERSION, RelayStatus, RemoteRelayConfig, RemoteServerStatus, StaticKeypair,
 };
@@ -21,8 +22,8 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{
-    Client, RecordingBackend, TestResult, TestServer, relay_limits, start_linked_server,
-    start_relay, start_relay_with_admission, start_server_linked_to,
+    Client, TestResult, TestServer, relay_limits, start_linked_server, start_relay,
+    start_relay_with_admission, start_server_linked_to,
 };
 
 /// Largest frame the test device accepts, in bytes.
@@ -188,7 +189,7 @@ async fn relay_device_pairs_requests_and_reconnects_with_its_key() -> TestResult
             reason: "Unknown device token".to_string()
         }
     );
-    assert_eq!(server.devices.token_hashes().len(), 1);
+    assert_eq!(server.devices.device_ids().len(), 1);
 
     Ok(())
 }

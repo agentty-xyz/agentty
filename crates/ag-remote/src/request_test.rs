@@ -14,7 +14,7 @@ use crate::protocol::{
     RemoteResult, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
 };
 use crate::server::{MAX_MESSAGE_SIZE, ServerState};
-use crate::test_support::{
+use crate::source_support::{
     FailingEntropy, MemoryDeviceStore, RecordingBackend, ReplayEntropy, StateFixture,
 };
 use crate::transport::Incoming;
@@ -77,7 +77,7 @@ async fn reads_and_original_mutations_reach_the_host_for_listed_sessions() {
     }
 
     // Assert
-    let session = crate::test_support::session_fixture(&"session-1".into());
+    let session = crate::source_support::session_fixture(&"session-1".into());
     assert_eq!(
         results,
         [

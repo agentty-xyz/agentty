@@ -12,7 +12,7 @@ use tokio_tungstenite::MaybeTlsStream;
 
 use super::interleave_families;
 use crate::dial::{ATTEMPT_DELAY, NetworkClient, RealNetworkClient, TlsTarget, connect};
-use crate::test_support::{
+use crate::source_support::{
     LOOPBACK_GUARD, TLS_FIXTURE_NAMES, TLS_HANDSHAKE_RECORD, TlsFixture, loopback_listener,
     untrusting_tls_config,
 };

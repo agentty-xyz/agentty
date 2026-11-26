@@ -11,14 +11,14 @@ use ag_remote::protocol::{
     RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionGraph, RemoteSessionMode,
     RemoteSessionSummary, RequestedProjectId, RequestedSessionId, ServerFrame,
 };
+use ag_remote::test_support::{MemoryDeviceStore, RecordingBackend};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::support::{
-    Client, MemoryDeviceStore, RecordingBackend, TestResult, TestServer, assert_rejected,
-    hello_frame, next_frame, send,
+    Client, TestResult, TestServer, assert_rejected, hello_frame, next_frame, send,
 };
 
 /// Sends one request and returns its result.

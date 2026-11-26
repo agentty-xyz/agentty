@@ -55,6 +55,11 @@ through `ag_session::SessionService`.
   deny the pairing requests listed in `RemoteServerStatus`, revoke devices through
   `RemoteServerHandle`, and `shutdown` when remote control is disabled. Consult
   `crates/ag-remote/src/lib.rs` for the contract.
+- The `test-utils` feature exports `test_support`, an in-memory `DeviceStore` and a
+  seeded `SessionBackend` that programs embedding the crate run a real server over in
+  their own tests, as `crates/ag-remote/tests/server/` does. Embedders assert on its
+  seeded data, so changing that data changes the public API. Keep the module to those
+  host ports; listener helpers stay in the tests.
 - Change `crates/ag-remote/assets/noise.mjs` together with `ag-noise`. The tests in
   `crates/ag-remote/tests/server/web_client.rs` run it in Node.js against a real relay
   and server.

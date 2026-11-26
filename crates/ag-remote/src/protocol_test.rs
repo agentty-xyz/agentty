@@ -14,7 +14,7 @@ use crate::protocol::{
     RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession,
     RemoteSessionMode, RemoteSessionSummary, ServerFrame,
 };
-use crate::test_support::{host_fixture, project_status_fixture, session_fixture};
+use crate::source_support::{host_fixture, project_status_fixture, session_fixture};
 
 #[path = "protocol_test/graph_test.rs"]
 mod graph;

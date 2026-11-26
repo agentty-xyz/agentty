@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ag_relay::{WebClientLink, WebClientOptions, WebClientPage, WebClientSection};
+use ag_remote::test_support::{MemoryDeviceStore, RecordingBackend};
 use ag_remote::{StaticKeypair, pairing_link};
 use axum::Router;
 use axum::http::{StatusCode, header};
@@ -22,8 +23,7 @@ use tokio::net::TcpListener;
 use tokio::process::{Child, ChildStdout, Command};
 
 use crate::support::{
-    MemoryDeviceStore, RecordingBackend, TestResult, TestServer, start_linked_server,
-    start_linked_server_over, start_relay,
+    TestResult, TestServer, start_linked_server, start_linked_server_over, start_relay,
 };
 
 /// Directory of the web client's Node scripts and suites.
@@ -884,7 +884,7 @@ async fn web_client_pairs_exchanges_large_frames_and_reconnects_through_the_rela
     assert_eq!(welcomed["type"], "welcome");
     assert_eq!(welcomed["device_id"], paired["device_id"]);
     assert!(succeeded);
-    assert_eq!(server.devices.token_hashes().len(), 1);
+    assert_eq!(server.devices.device_ids().len(), 1);
 
     Ok(())
 }
@@ -1529,7 +1529,7 @@ async fn web_client_app_keeps_a_pairing_saved_by_an_earlier_version_through_the_
         })
     );
     assert!(succeeded);
-    assert_eq!(server.devices.token_hashes().len(), 1);
+    assert_eq!(server.devices.device_ids().len(), 1);
 
     Ok(())
 }

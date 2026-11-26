@@ -100,6 +100,9 @@ ag-worker = { workspace = true, features = ["test-utils"] }
 ag-forge = { workspace = true, features = ["test-utils"] }
 ag-git = { workspace = true, features = ["test-utils"] }
 ag-store = { workspace = true, features = ["test-utils"] }
+# The workspace unifies features (`.cargo/config.toml`), so this also builds
+# the doubles that `ag-remote`'s own server tests start the server with.
+ag-remote = { workspace = true, features = ["test-utils"] }
 ag-relay.workspace = true
 assert_cmd.workspace = true
 futures-util.workspace = true

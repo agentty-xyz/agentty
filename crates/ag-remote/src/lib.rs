@@ -19,6 +19,10 @@
 //! not a token, authenticates it afterwards. [`RemoteServerStatus::relay`]
 //! reports whether the relay link is up, or whether the relay refused to
 //! admit this instance.
+//!
+//! The `test-utils` feature adds the `test_support` module: an in-memory
+//! [`DeviceStore`] and a seeded session backend, so a program that embeds the
+//! crate can run a real server in its own tests.
 
 mod connection;
 mod device;
@@ -46,6 +50,10 @@ pub use server::{
 /// Clients send it in their first frame; the server rejects any other value.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+#[cfg(any(test, feature = "test-utils"))]
+#[path = "host_support_test.rs"]
+pub mod test_support;
+
 #[cfg(test)]
-#[path = "test_support_test.rs"]
-mod test_support;
+#[path = "source_support_test.rs"]
+mod source_support;
