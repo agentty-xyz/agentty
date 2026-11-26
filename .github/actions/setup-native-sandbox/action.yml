@@ -14,7 +14,14 @@ runs:
       shell: bash
       env:
         NATIVE_SANDBOX_ACTION_PATH: ${{ github.action_path }}
-      run: sudo apparmor_parser --replace --skip-cache "$NATIVE_SANDBOX_ACTION_PATH/bwrap.apparmor"
+      # A kernel without AppArmor does not restrict unprivileged user
+      # namespaces through it and has nowhere to load a profile.
+      run: |
+        if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+          sudo apparmor_parser --replace --skip-cache "$NATIVE_SANDBOX_ACTION_PATH/bwrap.apparmor"
+        else
+          echo "AppArmor is not enabled on this kernel; no profile to load."
+        fi
 
     - name: Verify unprivileged namespace startup
       shell: bash
@@ -24,5 +31,7 @@ runs:
           --as-pid-1 --ro-bind / / --proc /proc -- /bin/sh -ec '
             test "$(id -u)" = 0
             grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
-            grep -F unpriv_bwrap /proc/self/attr/current
+            if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+              grep -F unpriv_bwrap /proc/self/attr/current
+            fi
           '

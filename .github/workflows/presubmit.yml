@@ -20,9 +20,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The slowest job of a merge-queue run, so it uses a Blacksmith runner, which
+  # runs it in about half the time and does not wait in GitHub's runner queue.
+  # Postsubmit runs the same hook on a GitHub-hosted runner, which also keeps
+  # the Bubblewrap sandbox tested under AppArmor: Blacksmith's kernel has none.
   coverage:
     name: SonarQube
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2604
     permissions:
       contents: read
       id-token: write
