@@ -12,7 +12,7 @@ use crate::presentation::platform::{
 };
 use crate::ui::Page;
 use crate::ui::page::remote_control::{
-    PageContent, QrPlacement, device_lines, field_line, muted_line, outcome_lines,
+    PageContent, QrPlacement, device_lines, field_line, hint_lines, muted_line, outcome_lines,
     pairing_request_lines, relay_lines, relay_qr_code, render_section,
 };
 use crate::ui::style::palette;
@@ -104,7 +104,7 @@ impl<'a> PlatformPage<'a> {
         }
 
         lines.push(Line::from(""));
-        lines.push(muted_line(&self.help_text()));
+        lines.extend(hint_lines(&self.hints(), width));
 
         lines
     }
@@ -177,13 +177,11 @@ impl<'a> PlatformPage<'a> {
     }
 
     /// Returns the key hints that apply to the current state.
-    fn help_text(&self) -> String {
-        let hints: Vec<String> = platform_tab_actions(self.view)
+    fn hints(&self) -> Vec<String> {
+        platform_tab_actions(self.view)
             .iter()
             .map(|action| format!("{}: {}", action.key, action.footer_label))
-            .collect();
-
-        hints.join(" | ")
+            .collect()
     }
 }
 

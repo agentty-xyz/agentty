@@ -3,7 +3,7 @@
 use ag_remote::RelayStatus;
 use ratatui::text::Line;
 
-use super::{ENLARGE_FOR_QR_CODE, PageContent, QrPlacement, RemoteControlPage};
+use super::{ENLARGE_FOR_QR_CODE, PageContent, QrPlacement, RemoteControlPage, hint_lines};
 use crate::presentation::remote_control::{
     RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
     RemoteRelayView,
@@ -481,4 +481,20 @@ fn stopped_listener_shows_error_empty_devices_and_start_hint() {
     assert!(text.contains("Enter: start"));
     assert!(!text.contains("Enter: stop"));
     assert!(!text.contains("Code"));
+}
+
+#[test]
+fn hint_lines_break_only_between_hints() {
+    // Arrange
+    let hints = ["a: keep on", "l: sign out", "Enter: stop"].map(String::from);
+
+    // Act
+    let one_row = line_texts(&hint_lines(&hints, 200));
+    let wrapped = line_texts(&hint_lines(&hints, 25));
+    let too_narrow = line_texts(&hint_lines(&hints, 5));
+
+    // Assert
+    assert_eq!(one_row, ["a: keep on | l: sign out | Enter: stop"]);
+    assert_eq!(wrapped, ["a: keep on | l: sign out", "Enter: stop"]);
+    assert_eq!(too_narrow, ["a: keep on", "l: sign out", "Enter: stop"]);
 }
