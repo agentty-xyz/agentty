@@ -7,6 +7,138 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.22.0] - 2026-11-26
+
+### Added
+
+- `agentty`: open a per-session usage panel with `/usage`, or `u` in session view, that
+  shows tokens, cache and reasoning detail, estimated cost, and context fill per model
+  and purpose. Plan-billed usage shows its API equivalent (`≈`), and costs that price
+  cached input at the full input price are marked as upper bounds (`≤`).
+- `agentty`: show a running turn's tokens, context fill, and estimated cost in its
+  status line, and the session's context fill and cost on the composer border between
+  turns.
+- `agentty`: show a running turn as one live timeline of messages, reasoning, and tool
+  calls with their results, under a status line that names the current action. A
+  finished turn that called tools gets a summary above its answer: edited files,
+  failures and how the turn recovered from them, and the time it worked.
+- `agentty`: export each turn's and each model request's token usage, cache tokens,
+  estimated cost, and context fill over OTLP, with the `agentty.usage.cost` and
+  `agentty.usage.cache_tokens` counters.
+- `agentty`: let `/graph` add nodes to an execution graph that has not finished instead
+  of starting a second graph; the new nodes spend from the graph's remaining provider
+  calls.
+- `agentty`: let paired devices reach every project the terminal lists: a device can
+  list projects and read, create sessions in, and sync any listed project instead of
+  following the terminal's active project.
+- `agentty`: reuse a per-project cache of crates.io dependencies in sandboxed
+  `ag-harness` sessions, and add the `Share Host Caches` project setting, off by
+  default, that lets sandboxed sessions use the host's Cargo, Go, pip, and npm caches.
+  Its effect is host-wide: a session could plant code that later runs in other projects'
+  builds.
+- `ag-remote`: add the `projects` capability, the `list_projects` request, and an
+  optional `project_id` on project requests.
+- `ag-remote`: add the `test-utils` feature, whose `test_support` module exports
+  `MemoryDeviceStore` and `RecordingBackend`, so a program that embeds `ag-remote` can
+  run a real server in its tests.
+- `ag-session`: add `ProjectScope`, `HostProject`, `ProjectSessions`, and
+  `SessionOperation::Projects`, with `SessionBackend` and `SessionService` methods that
+  list projects and serve, create sessions in, and sync a named project. Hosts that
+  serve only their active project get defaults.
+- `ag-sqlite`: add a crate that owns SQLite opening, WAL creation, locked migrations,
+  and the `begin_write` and `begin_read` transaction helpers for `ag-store` and
+  `ag-harness`.
+- `ag-harness`: report how a command ended with `bash::CommandExit`, including the exit
+  statuses of its final pipeline, plus write line counts, tool-call durations, and a
+  `ToolCallRequested` run event. Add `BashConfig::with_host_cache_directory` and
+  `with_host_cache_file`.
+
+### Changed
+
+- `agentty`: run remote control only through an Agentty Platform; sign in from the
+  `Platform` tab to pair devices (breaking). Devices paired through the loopback
+  listener, a tunnel, or a self-hosted relay can no longer connect: remove them in the
+  `Platform` tab with `d` and pair them again through a platform. Devices already paired
+  through a platform's relay keep working.
+- `agentty`: offer the `Platform` tab on every launch; its label counts connected
+  devices while remote control runs.
+- `agentty`: keep Git metadata read-only for sandboxed `ag-harness` commands. `git add`,
+  `git commit`, `git stash`, and `git checkout -b` fail with a permission error, and
+  Agentty's commit after each turn is the only committer.
+- `agentty`: run read-only execution graph nodes beside the session's serial worker, so
+  independent readers overlap; writing nodes keep their order with chat turns.
+- `agentty`: count a native `ag-harness` run as one provider call against graph and
+  session budgets, the same as one turn attempt of another agent.
+- `agentty`: price cached input at published rates for OpenAI, Muse, Kimi, and Qwen
+  models, and OpenAI prompt-cache writes from GPT-5.6 on at 1.25 times the input price.
+- `agentty`: send the ChatGPT plan prompt cache key as a `session-id` header too, so
+  requests return to their cached prompt prefix.
+- `agentty`: refresh the session header's size and line counts while a turn edits files.
+- `agentty`: leave nested Git repositories in session worktrees out of staging, commits,
+  and the review diff, and stop with an error that names the path when one sits at a
+  gitlink.
+- `agentty`: export Codex's last-request context fill as `agentty.context.input_tokens`
+  on `agent.attempt` spans instead of `agentty.context.last_request.input_tokens`.
+- `agentty`: draw each frame as one synchronized update, so supporting terminals never
+  show a partly drawn frame.
+- `agentty`: show the `Platform` tab's pairing QR code on smaller terminals, and a hint
+  to enlarge the terminal when it cannot fit.
+- `ag-harness`: `bash::CommandOutcome` carries `exit: CommandExit` instead of the
+  `exit_code`, `signal`, and `termination` fields (breaking).
+- `ag-harness`: pin the session temporary directory and writable roots to their identity
+  on macOS, as on Linux, and refuse links and overlapping write grants.
+- `ag-remote`: run only through a relay: `start` is synchronous, opens no listener, and
+  serves no page; `RemoteServerConfig` holds only the relay, and
+  `RemoteServerStatus::relay` is no longer optional; devices authenticate only by their
+  key; and the embedded web client assets are gone (breaking).
+- `ag-relay`: make the relay a library that a platform embeds; it no longer serves a
+  page and has no binary or container image.
+- `ag-contracts`, `ag-agent`, `ag-store`: carry per-model usage, estimated cost, and
+  context fill in turn results, one-shot submissions, and stored turns instead of input
+  and output token totals; add typed activity facts and kinds,
+  `TurnEvent::UsageUpdated`, and `TurnRequest::host_caches`; and remove
+  `TurnEvent::Completed` (breaking).
+- `ag-worker`: name a usage purpose on each `RunScope` (breaking).
+- `ag-session`, `ag-store`: record the graph revision a proposal extends and expand an
+  approved graph in place, and add the `ShareHostCaches` setting (breaking).
+- `ag-git`: add `GitError::EmbeddedRepository` (breaking).
+- `testty`: keep showing the previous screen while a synchronized update is open, as
+  terminals do.
+- workspace: update `clap`, `getrandom`, `regex`, `tokio-rustls`, and `uuid`.
+- release: bump workspace crate metadata and lockfile package versions to `0.22.0`.
+
+### Fixed
+
+- `agentty`: keep each key hint on one row beside the pairing QR code instead of
+  splitting a binding across rows.
+- `agentty`: keep background Git maintenance from pruning a worktree while a session
+  creates it, which could fail the new session.
+- `agentty`: keep a running or queued merge on its own project when the terminal
+  switches projects.
+- `agentty`: reach the relay through another address when one stalls, such as an IPv6
+  route that drops packets.
+- `agentty`: forward termination signals that arrive while the npm launcher starts the
+  binary.
+
+### Removed
+
+- `agentty`: remove the `--experimental-remote`, `--remote-relay`,
+  `--remote-control-port`, `--remote-control-host`, and `--experimental-platform` flags
+  and the `Remote` tab.
+- `ag-remote`: remove the loopback listener, device tokens, `RemoteError::Bind`,
+  `RemoteServerHandle::local_addr`, and `pairing_link` (breaking).
+- `ag-relay`: remove the pairing page, the web-client API, the relay binary with its
+  `--allow-instance` flag, and the `ghcr.io/agentty-xyz/agentty-relay` image.
+- `ag-harness`, `ag-contracts`, `ag-git`: remove `BashConfig::with_git_writes`,
+  `ExecutionPolicy::allows_git_writes` and `git_writes_branch`,
+  `TurnRequest::session_branch`, and `GitClient::head_reference` (breaking).
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.21.0] - 2026-11-23
 
 ### Added
