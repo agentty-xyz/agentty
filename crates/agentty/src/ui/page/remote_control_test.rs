@@ -1,8 +1,9 @@
 //! Remote tab page listener, device, error, and hint rendering tests.
 
 use ag_remote::RelayStatus;
+use ratatui::text::Line;
 
-use super::RemoteControlPage;
+use super::{ENLARGE_FOR_QR_CODE, PageContent, QrPlacement, RemoteControlPage};
 use crate::presentation::remote_control::{
     RemoteControlView, RemoteDeviceView, RemoteListenerView, RemotePairingRequestView,
     RemoteRelayView,
@@ -160,7 +161,7 @@ fn selected_device_row_uses_the_selection_style() {
     let page = RemoteControlPage::new(&view);
 
     // Act
-    let lines = page.lines(40, 40);
+    let lines = page.content(40, 40).lines;
 
     // Assert
     let tablet_line = lines
@@ -200,30 +201,41 @@ fn qr_code(view: &RemoteControlView) -> Vec<String> {
         .expect("relay should have a QR code")
 }
 
+/// Returns the text of `lines`, one string per line.
+fn line_texts(lines: &[Line<'_>]) -> Vec<String> {
+    lines.iter().map(ToString::to_string).collect()
+}
+
 #[test]
-fn relay_listener_shows_status_link_qr_code_and_link_hints() {
+fn relay_listener_puts_the_qr_code_beside_the_text_when_there_is_room() {
     // Arrange
     let view = relay_view(RelayStatus::Connected, Some("Link copied. It works once."));
     let page = RemoteControlPage::new(&view);
+    let qr_code = qr_code(&view);
+    let qr_width = qr_code[0].chars().count();
 
     // Act
-    let lines = page.lines(80, 60);
-    let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    let content = page.content(80, 60);
+    let text = line_texts(&content.lines);
 
     // Assert
-    let relay_index = text
-        .iter()
-        .position(|line| line.starts_with("Relay   Connected"))
-        .expect("relay row should render");
-    assert_eq!(text[relay_index + 1], qr_code(&view)[0]);
-    assert_eq!(
-        lines[relay_index + 1].spans[0].style,
-        style::scannable_code_style()
+    assert_eq!(content.placement, QrPlacement::Beside);
+    assert_eq!(content.qr_code, qr_code.as_slice());
+    assert_eq!(content.text_width, 80 - qr_width - 2);
+    assert!(!text.contains(&qr_code[0]));
+    assert!(
+        text.iter()
+            .any(|line| line.starts_with("Relay   Connected"))
     );
     assert!(
         text.iter()
             .any(|line| line.contains("https://relay.example/#code=ABCD"))
     );
+    assert!(
+        text.iter()
+            .any(|line| line.starts_with("Scan the code or open the link"))
+    );
+    assert!(!text.iter().any(|line| line == ENLARGE_FOR_QR_CODE));
     assert!(
         text.iter()
             .any(|line| line == "Link copied. It works once.")
@@ -235,22 +247,57 @@ fn relay_listener_shows_status_link_qr_code_and_link_hints() {
 }
 
 #[test]
+fn relay_listener_puts_the_qr_code_below_the_relay_when_too_narrow_beside() {
+    // Arrange
+    let view = relay_view(RelayStatus::Connected, None);
+    let page = RemoteControlPage::new(&view);
+    let qr_code = qr_code(&view);
+
+    // Act
+    let content = page.content(60, 60);
+    let text = line_texts(&content.lines);
+
+    // Assert
+    let relay_index = text
+        .iter()
+        .position(|line| line.starts_with("Relay   Connected"))
+        .expect("relay row should render");
+    assert_eq!(content.placement, QrPlacement::Below);
+    assert_eq!(content.text_width, 60);
+    assert_eq!(text[relay_index + 1], qr_code[0]);
+    assert_eq!(
+        content.lines[relay_index + 1].spans[0].style,
+        style::scannable_code_style()
+    );
+    assert!(text[relay_index + 1 + qr_code.len()].starts_with("Link"));
+    assert!(
+        text.iter()
+            .any(|line| line.starts_with("Scan the code or open the link"))
+    );
+}
+
+#[test]
 fn rendered_qr_code_keeps_every_row_intact_and_aligned() {
     // Arrange
     let view = relay_view(RelayStatus::Connected, None);
     let qr_code = qr_code(&view);
 
-    // Act
-    let rows = rendered_rows(&view, 160, 80);
+    for (width, is_beside) in [(160, true), (60, false)] {
+        // Act
+        let rows = rendered_rows(&view, width, 80);
 
-    // Assert
-    let first_row = rows
-        .iter()
-        .position(|row| row.contains(&qr_code[0]))
-        .expect("first QR row should render");
-    let column = rows[first_row].find(&qr_code[0]);
-    for (offset, qr_row) in qr_code.iter().enumerate() {
-        assert_eq!(rows[first_row + offset].find(qr_row.as_str()), column);
+        // Assert
+        let first_row = rows
+            .iter()
+            .position(|row| row.contains(&qr_code[0]))
+            .expect("first QR row should render");
+        let column = rows[first_row].find(&qr_code[0]);
+        for (offset, qr_row) in qr_code.iter().enumerate() {
+            assert_eq!(rows[first_row + offset].find(qr_row.as_str()), column);
+        }
+        // Beside the text, the code starts on the first content row, next to
+        // the status.
+        assert_eq!(rows[first_row].contains("Status  On"), is_beside);
     }
 }
 
@@ -289,18 +336,103 @@ fn relay_qr_code_is_left_out_when_it_does_not_fit() {
     let qr_height = qr_code(&view).len();
 
     // Act
-    let too_short = page.lines(80, qr_height);
-    let too_narrow = page.lines(10, 200);
+    let too_short = page.content(80, qr_height);
+    let too_narrow = page.content(10, 200);
 
     // Assert
-    for lines in [too_short, too_narrow] {
-        let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    for content in [too_short, too_narrow] {
+        let text = line_texts(&content.lines);
         let relay_index = text
             .iter()
             .position(|line| line.starts_with("Relay   Connecting"))
             .expect("relay row should render");
+        assert_eq!(content.placement, QrPlacement::Hidden);
         assert!(text[relay_index + 1].starts_with("Link"));
+        assert!(text.iter().any(|line| line.starts_with("Open the link")));
+        assert!(text.iter().any(|line| line == ENLARGE_FOR_QR_CODE));
     }
+}
+
+#[test]
+fn relay_link_without_a_qr_code_asks_for_no_larger_terminal() {
+    // Arrange
+    let view = RemoteControlView {
+        listener: Some(RemoteListenerView {
+            relay: Some(RemoteRelayView {
+                link: "https://relay.example/#code=ABCD".to_string(),
+                qr_code: Vec::new(),
+                status: RelayStatus::Connected,
+            }),
+            ..listener()
+        }),
+        ..RemoteControlView::default()
+    };
+    let page = RemoteControlPage::new(&view);
+
+    // Act
+    let content = page.content(200, 200);
+    let text = line_texts(&content.lines);
+
+    // Assert
+    assert_eq!(content.placement, QrPlacement::Hidden);
+    assert!(text.iter().any(|line| line.starts_with("Open the link")));
+    assert!(!text.iter().any(|line| line == ENLARGE_FOR_QR_CODE));
+}
+
+/// Builds a page text of one 200-column line, or, below the relay, that
+/// line under `qr_code`'s rows.
+fn sample_lines(qr_code: &[String], placement: QrPlacement) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if placement == QrPlacement::Below {
+        lines.extend(qr_code.iter().map(|row| Line::from(row.clone())));
+    }
+    lines.push(Line::from("word ".repeat(40)));
+
+    lines
+}
+
+#[test]
+fn page_content_places_the_qr_code_where_it_fits_first() {
+    // Arrange
+    // A 10-column, 5-row code and one 200-column line, which takes 6 rows
+    // at 40 columns and 5 at 51 or 52, counting one spare row once wrapped.
+    let qr_code = vec!["x".repeat(10); 5];
+    let cases = [
+        (52, 6, QrPlacement::Beside, 40),
+        (52, 5, QrPlacement::Hidden, 52),
+        (51, 10, QrPlacement::Below, 51),
+        (51, 9, QrPlacement::Hidden, 51),
+        (9, 100, QrPlacement::Hidden, 9),
+    ];
+
+    for (width, height, expected_placement, expected_text_width) in cases {
+        // Act
+        let content = PageContent::new(&qr_code, width, height, |_, placement| {
+            sample_lines(&qr_code, placement)
+        });
+
+        // Assert
+        assert_eq!(
+            (content.placement, content.text_width),
+            (expected_placement, expected_text_width),
+            "{width}x{height}"
+        );
+    }
+}
+
+#[test]
+fn page_content_without_a_qr_code_leaves_it_out() {
+    // Arrange
+    let qr_code: Vec<String> = Vec::new();
+
+    // Act
+    let content = PageContent::new(&qr_code, 200, 200, |_, placement| {
+        sample_lines(&qr_code, placement)
+    });
+
+    // Assert
+    assert_eq!(content.placement, QrPlacement::Hidden);
+    assert_eq!(content.text_width, 200);
 }
 
 #[test]
@@ -310,7 +442,7 @@ fn relay_that_does_not_admit_this_agentty_says_so_in_danger_color() {
     let page = RemoteControlPage::new(&view);
 
     // Act
-    let lines = page.lines(200, 80);
+    let lines = page.content(200, 80).lines;
 
     // Assert
     let relay_index = lines

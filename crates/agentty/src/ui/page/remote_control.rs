@@ -4,7 +4,7 @@
 use ag_remote::RelayStatus;
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
@@ -16,6 +16,15 @@ use crate::ui::{Page, layout, style};
 
 /// Width of the left-hand field labels.
 const LABEL_WIDTH: usize = 8;
+
+/// Fewest text columns a QR code beside the text leaves.
+const MIN_TEXT_WIDTH: usize = 40;
+
+/// Columns between the text and a QR code beside it.
+const QR_GAP: u16 = 2;
+
+/// Explains how to show a QR code that does not fit.
+const ENLARGE_FOR_QR_CODE: &str = "Enlarge the terminal to show the link as a QR code.";
 
 /// Title of the Remote tab, which names no project: paired devices pick
 /// their own among the projects the terminal lists.
@@ -32,21 +41,20 @@ impl<'a> RemoteControlPage<'a> {
         Self { view }
     }
 
-    /// Returns all render lines for content `width` columns wide and
-    /// `height` rows high. The relay QR code is included only when it fits
-    /// beside everything else.
-    fn lines(&self, width: usize, height: usize) -> Vec<Line<'static>> {
-        let lines = self.content_lines(width, &[]);
-        let qr_code = fitting_qr_code(self.view, &lines, width, height);
-        if qr_code.is_empty() {
-            return lines;
-        }
-
-        self.content_lines(width, qr_code)
+    /// Lays the page out for content `width` columns wide and `height` rows
+    /// high, with the relay QR code wherever it fits.
+    fn content(&self, width: usize, height: usize) -> PageContent<'a> {
+        PageContent::new(
+            relay_qr_code(self.view),
+            width,
+            height,
+            |text_width, placement| self.lines(text_width, placement),
+        )
     }
 
-    /// Returns the render lines with `qr_code` rows below the relay status.
-    fn content_lines(&self, width: usize, qr_code: &[String]) -> Vec<Line<'static>> {
+    /// Returns the render lines for text `width` columns wide, with the
+    /// relay QR code at `placement`.
+    fn lines(&self, width: usize, placement: QrPlacement) -> Vec<Line<'static>> {
         let mut lines = pairing_request_lines(self.view);
         if let Some(listener) = &self.view.listener {
             lines.push(field_line("Status", "On", palette::success()));
@@ -62,7 +70,7 @@ impl<'a> RemoteControlPage<'a> {
                  then enter the code. The code works once.",
             ));
             if let Some(relay) = &listener.relay {
-                lines.extend(relay_lines(relay, qr_code));
+                lines.extend(relay_lines(relay, placement));
             }
         } else {
             lines.push(field_line("Status", "Off", palette::text_muted()));
@@ -96,43 +104,133 @@ impl Page for RemoteControlPage<'_> {
     /// Renders the remote-control state in one bordered section that fills
     /// the tab page.
     fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let main_area = layout::tab_page_area(area);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(TITLE)
-            .border_style(style::border_style())
-            .padding(Padding::horizontal(1));
-        let content_area = block.inner(main_area);
-        let lines = self.lines(
-            usize::from(content_area.width).max(1),
-            usize::from(content_area.height),
-        );
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true }).block(block);
-
-        frame.render_widget(paragraph, main_area);
+        render_section(frame, area, TITLE, |width, height| {
+            self.content(width, height)
+        });
     }
 }
 
-/// Returns the relay QR code of `view` when it fits in `width` columns and
-/// `height` rows beside `lines`, or no rows.
-pub(super) fn fitting_qr_code<'view>(
-    view: &'view RemoteControlView,
-    lines: &[Line<'_>],
-    width: usize,
-    height: usize,
-) -> &'view [String] {
-    let qr_code = view
-        .listener
-        .as_ref()
-        .and_then(|listener| listener.relay.as_ref())
-        .map_or(&[][..], |relay| relay.qr_code.as_slice());
-    let qr_width = qr_code.first().map_or(0, |row| row.chars().count());
-    let fits = qr_width <= width && wrapped_row_count(lines, width) + qr_code.len() <= height;
-    if !fits {
-        return &[];
+/// Where a page puts the relay QR code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum QrPlacement {
+    /// Right of the text, which narrows to make room.
+    Beside,
+    /// Below the relay status, among the text rows.
+    Below,
+    /// Left out, because it fits nowhere or the link has none.
+    Hidden,
+}
+
+/// One frame's page layout: the text and where the relay QR code goes.
+pub(super) struct PageContent<'view> {
+    /// Text rows, wrapped to `text_width` columns.
+    pub(super) lines: Vec<Line<'static>>,
+    /// Where the relay QR code goes.
+    pub(super) placement: QrPlacement,
+    /// Relay QR code rows, drawn right of the text while placed beside it.
+    pub(super) qr_code: &'view [String],
+    /// Columns the text wraps to.
+    pub(super) text_width: usize,
+}
+
+impl<'view> PageContent<'view> {
+    /// Lays out a page for content `width` columns wide and `height` rows
+    /// high, where `build_lines` returns the text for a text width and QR
+    /// placement. The relay `qr_code` goes beside the text when both fit,
+    /// else below the relay status when everything still fits, else
+    /// nowhere, so it never pushes text out of view.
+    pub(super) fn new(
+        qr_code: &'view [String],
+        width: usize,
+        height: usize,
+        build_lines: impl Fn(usize, QrPlacement) -> Vec<Line<'static>>,
+    ) -> Self {
+        let qr_width = qr_code.first().map_or(0, |row| row.chars().count());
+        let beside_width = width.saturating_sub(qr_width + usize::from(QR_GAP));
+        let candidates = [
+            (
+                QrPlacement::Beside,
+                beside_width,
+                beside_width >= MIN_TEXT_WIDTH && qr_code.len() <= height,
+            ),
+            (QrPlacement::Below, width, qr_width <= width),
+        ];
+        if !qr_code.is_empty() {
+            for (placement, text_width, qr_fits) in candidates {
+                if !qr_fits {
+                    continue;
+                }
+                let lines = build_lines(text_width, placement);
+                if wrapped_row_count(&lines, text_width) <= height {
+                    return Self {
+                        lines,
+                        placement,
+                        qr_code,
+                        text_width,
+                    };
+                }
+            }
+        }
+
+        Self {
+            lines: build_lines(width, QrPlacement::Hidden),
+            placement: QrPlacement::Hidden,
+            qr_code,
+            text_width: width,
+        }
+    }
+}
+
+/// Renders one bordered section titled `title` that fills the tab page in
+/// `area`. `layout_content` lays the page out for the section's inner
+/// width and height; a QR code placed beside the text is drawn right of
+/// it, top-aligned.
+pub(super) fn render_section<'view>(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    layout_content: impl FnOnce(usize, usize) -> PageContent<'view>,
+) {
+    let main_area = layout::tab_page_area(area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(style::border_style())
+        .padding(Padding::horizontal(1));
+    let content_area = block.inner(main_area);
+    let content = layout_content(
+        usize::from(content_area.width).max(1),
+        usize::from(content_area.height),
+    );
+    let text = Paragraph::new(content.lines).wrap(Wrap { trim: true });
+    frame.render_widget(block, main_area);
+    if content.placement != QrPlacement::Beside {
+        frame.render_widget(text, content_area);
+
+        return;
     }
 
-    qr_code
+    let text_width = u16::try_from(content.text_width).unwrap_or(content_area.width);
+    let [text_area, qr_area] =
+        Layout::horizontal([Constraint::Length(text_width), Constraint::Fill(1)])
+            .spacing(QR_GAP)
+            .areas(content_area);
+    let qr_style = style::scannable_code_style();
+    let qr_code: Vec<Line<'_>> = content
+        .qr_code
+        .iter()
+        .map(|row| Line::from(Span::styled(row.as_str(), qr_style)))
+        .collect();
+    frame.render_widget(text, text_area);
+    frame.render_widget(Paragraph::new(qr_code), qr_area);
+}
+
+/// Returns the relay QR code rows of `view`, or none without a relay.
+pub(super) fn relay_qr_code(view: &RemoteControlView) -> &[String] {
+    view.listener
+        .as_ref()
+        .and_then(|listener| listener.relay.as_ref())
+        .map_or(&[][..], |relay| relay.qr_code.as_slice())
 }
 
 /// Builds the oldest pairing request, with its confirmation code and how
@@ -218,9 +316,9 @@ pub(super) fn device_lines(view: &RemoteControlView, width: usize) -> Vec<Line<'
     lines
 }
 
-/// Builds the relay status, `qr_code` rows in dark-on-light colors, the
-/// pairing link, and how to use them.
-pub(super) fn relay_lines(relay: &RemoteRelayView, qr_code: &[String]) -> Vec<Line<'static>> {
+/// Builds the relay status, the QR code rows in dark-on-light colors while
+/// `placement` puts them below it, the pairing link, and how to use them.
+pub(super) fn relay_lines(relay: &RemoteRelayView, placement: QrPlacement) -> Vec<Line<'static>> {
     let (state, color) = match relay.status {
         RelayStatus::Connected => ("Connected", palette::success()),
         RelayStatus::Connecting => ("Connecting", palette::warning()),
@@ -235,16 +333,27 @@ pub(super) fn relay_lines(relay: &RemoteRelayView, qr_code: &[String]) -> Vec<Li
             Style::default().fg(palette::danger()),
         )));
     }
-    lines.extend(
-        qr_code
-            .iter()
-            .map(|row| Line::from(Span::styled(row.clone(), qr_style))),
-    );
+    if placement == QrPlacement::Below {
+        lines.extend(
+            relay
+                .qr_code
+                .iter()
+                .map(|row| Line::from(Span::styled(row.clone(), qr_style))),
+        );
+    }
     lines.push(field_line("Link", &relay.link, palette::text()));
-    lines.push(muted_line(
-        "Or scan the code or open the link on the other device. Traffic through the relay is \
-         encrypted end to end, and the link works once.",
-    ));
+    let is_hidden = placement == QrPlacement::Hidden;
+    let how_to_pair = if is_hidden {
+        "Open the link on the other device."
+    } else {
+        "Scan the code or open the link on the other device."
+    };
+    lines.push(muted_line(&format!(
+        "{how_to_pair} Traffic through the relay is encrypted end to end, and the link works once."
+    )));
+    if is_hidden && !relay.qr_code.is_empty() {
+        lines.push(muted_line(ENLARGE_FOR_QR_CODE));
+    }
 
     lines
 }

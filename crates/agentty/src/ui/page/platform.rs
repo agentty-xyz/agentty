@@ -5,18 +5,17 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 
 use crate::presentation::help_action::platform_tab_actions;
 use crate::presentation::platform::{
     PlatformAccess, PlatformAccountView, PlatformState, PlatformTabView,
 };
+use crate::ui::Page;
 use crate::ui::page::remote_control::{
-    device_lines, field_line, fitting_qr_code, muted_line, outcome_lines, pairing_request_lines,
-    relay_lines,
+    PageContent, QrPlacement, device_lines, field_line, muted_line, outcome_lines,
+    pairing_request_lines, relay_lines, relay_qr_code, render_section,
 };
 use crate::ui::style::palette;
-use crate::ui::{Page, layout, style};
 
 /// Explains what signing in gives, while signed out.
 const SIGN_IN_PITCH: &str = "Sign in to connect this Agentty to the platform's relay, so devices \
@@ -42,20 +41,20 @@ impl<'a> PlatformPage<'a> {
         Self { view }
     }
 
-    /// Returns all render lines for content `width` columns wide and
-    /// `height` rows high, with the relay QR code only when it fits.
-    fn lines(&self, width: usize, height: usize) -> Vec<Line<'static>> {
-        let lines = self.content_lines(width, &[]);
-        let qr_code = fitting_qr_code(self.view.remote_control, &lines, width, height);
-        if qr_code.is_empty() {
-            return lines;
-        }
-
-        self.content_lines(width, qr_code)
+    /// Lays the page out for content `width` columns wide and `height` rows
+    /// high, with the relay QR code wherever it fits.
+    fn content(&self, width: usize, height: usize) -> PageContent<'a> {
+        PageContent::new(
+            relay_qr_code(self.view.remote_control),
+            width,
+            height,
+            |text_width, placement| self.lines(text_width, placement),
+        )
     }
 
-    /// Returns the render lines with `qr_code` rows below the relay status.
-    fn content_lines(&self, width: usize, qr_code: &[String]) -> Vec<Line<'static>> {
+    /// Returns the render lines for text `width` columns wide, with the
+    /// relay QR code at `placement`.
+    fn lines(&self, width: usize, placement: QrPlacement) -> Vec<Line<'static>> {
         let platform = self.view.platform;
         let mut lines = vec![field_line(
             "Address",
@@ -100,7 +99,7 @@ impl<'a> PlatformPage<'a> {
                 }
             }
             PlatformState::SignedIn(account) => {
-                lines.extend(self.account_lines(account, width, qr_code));
+                lines.extend(self.account_lines(account, width, placement));
             }
         }
 
@@ -116,7 +115,7 @@ impl<'a> PlatformPage<'a> {
         &self,
         account: &PlatformAccountView,
         width: usize,
-        qr_code: &[String],
+        placement: QrPlacement,
     ) -> Vec<Line<'static>> {
         let login = account.login.as_deref().unwrap_or("Signed in");
         let mut lines = vec![field_line("Account", login, palette::text())];
@@ -142,7 +141,7 @@ impl<'a> PlatformPage<'a> {
                 palette::warning(),
             ),
             PlatformAccess::Registered { .. } => {
-                lines.extend(self.remote_lines(width, qr_code));
+                lines.extend(self.remote_lines(width, placement));
 
                 return lines;
             }
@@ -154,7 +153,7 @@ impl<'a> PlatformPage<'a> {
 
     /// Returns remote control through the platform's relay: pairing
     /// requests, the relay link, outcomes, and paired devices.
-    fn remote_lines(&self, width: usize, qr_code: &[String]) -> Vec<Line<'static>> {
+    fn remote_lines(&self, width: usize, placement: QrPlacement) -> Vec<Line<'static>> {
         let remote_control = self.view.remote_control;
         let mut lines = pairing_request_lines(remote_control);
         let relay = remote_control
@@ -163,7 +162,7 @@ impl<'a> PlatformPage<'a> {
             .and_then(|listener| listener.relay.as_ref());
         if let Some(relay) = relay {
             lines.push(field_line("Remote", "On", palette::success()));
-            lines.extend(relay_lines(relay, qr_code));
+            lines.extend(relay_lines(relay, placement));
         } else {
             lines.push(field_line("Remote", "Off", palette::text_muted()));
             lines.push(muted_line(
@@ -192,20 +191,9 @@ impl Page for PlatformPage<'_> {
     /// Renders the platform state in one bordered section that fills the
     /// tab page.
     fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let main_area = layout::tab_page_area(area);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(TITLE)
-            .border_style(style::border_style())
-            .padding(Padding::horizontal(1));
-        let content_area = block.inner(main_area);
-        let lines = self.lines(
-            usize::from(content_area.width).max(1),
-            usize::from(content_area.height),
-        );
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true }).block(block);
-
-        frame.render_widget(paragraph, main_area);
+        render_section(frame, area, TITLE, |width, height| {
+            self.content(width, height)
+        });
     }
 }
 
