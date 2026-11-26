@@ -5,10 +5,14 @@ name: Agentty CodeQL configuration
 
 # Analyze production code only. Tests are about two thirds of the Rust
 # sources, and the Rust analysis is the slowest check on a pull request.
-# The patterns match `sonar.exclusions` in `sonar-project.properties`.
+# The patterns follow `sonar.exclusions` in `sonar-project.properties`, but
+# name the Rust and JavaScript files under `tests/` instead of the whole
+# directory: `crates/ag-harness/tests/sandbox_fixture.c` is the only C source,
+# and the C/C++ analysis fails when it finds no source to analyze.
 paths-ignore:
   - "**/*_test.rs"
   - "**/tests.rs"
-  - "**/tests/**"
+  - "**/tests/**/*.rs"
+  - "**/tests/**/*.mjs"
   - "**/benches/**"
   - "**/*.test.mjs"
