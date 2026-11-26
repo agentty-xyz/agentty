@@ -1,0 +1,14 @@
+# CodeQL default setup reads this file only while the repository's
+# `github-codeql-config-file` custom property is set to
+# `./.github/codeql/codeql-config.yml`; without the property it has no effect.
+name: Agentty CodeQL configuration
+
+# Analyze production code only. Tests are about two thirds of the Rust
+# sources, and the Rust analysis is the slowest check on a pull request.
+# The patterns match `sonar.exclusions` in `sonar-project.properties`.
+paths-ignore:
+  - "**/*_test.rs"
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/benches/**"
+  - "**/*.test.mjs"
