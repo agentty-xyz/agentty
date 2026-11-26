@@ -10,8 +10,7 @@ use ag_protocol::{
 use ag_session::test_support::{graph_proposal, graph_proposal_state};
 use ag_session::{
     ExecutionGraph, GraphProposalAction, GraphProposalReplyOutcome, GraphProposalResolution,
-    GraphProposalState, GraphProposalTarget, GraphProposalVersionOutcome,
-    StartExecutionGraphRequest,
+    GraphProposalState, GraphProposalVersionOutcome, StartExecutionGraphRequest,
 };
 use ag_store::Database;
 
@@ -56,10 +55,6 @@ fn resolved(state: &GraphProposalState) -> Result<GraphProposalVersionOutcome, S
 /// A proposal that adds a `follow` node after `inspect` to `base`.
 fn expansion_state(id: &str, base: &ExecutionGraph) -> GraphProposalState {
     let mut state = graph_proposal_state(id, "session");
-    state.input.expands = Some(GraphProposalTarget {
-        graph_id: base.id.clone(),
-        revision: base.revision,
-    });
     state.base = Some(base.clone());
 
     state
@@ -121,8 +116,8 @@ async fn graph_expansion_approval_appends_to_its_captured_base_once() -> Result<
         .ok_or("base graph")?;
     let expansion = expansion_state("expand", &base);
     let superseded = expansion_state("stale", &base);
-    let mut uncaptured = expansion_state("uncaptured", &base);
-    uncaptured.base = None;
+    let mut foreign = expansion_state("foreign", &base);
+    foreign.input.session_id = "other".into();
     let mut tampered = expansion_state("tampered", &base);
     if let Some(base) = &mut tampered.base {
         base.nodes[0].objective = "Something else".into();
@@ -137,7 +132,7 @@ async fn graph_expansion_approval_appends_to_its_captured_base_once() -> Result<
 
     // Act
     let rejected_captures = [
-        database.graph_proposals().create(&uncaptured).await,
+        database.graph_proposals().create(&foreign).await,
         database.graph_proposals().create(&tampered).await,
     ];
     let approved = database.graph_proposals().approve("expand", 1).await?;

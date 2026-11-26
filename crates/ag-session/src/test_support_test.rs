@@ -63,7 +63,6 @@ pub fn graph_proposal_state(id: &str, session_id: &str) -> crate::GraphProposalS
         base: None,
         definitions: vec![agent_definition("inspector")],
         input: crate::GenerateGraphProposalRequest {
-            expands: None,
             id: id.into(),
             request: ag_protocol::TurnPrompt::from_text("Inspect the requested change".into()),
             session_id: session_id.into(),

@@ -23,9 +23,7 @@ async fn armed_graph_requests_preserve_literal_task_text_and_ignore_empty_input(
     proposals
         .expect_create()
         .times(1)
-        .withf(|state| {
-            state.input.request.text == "query the architecture" && state.input.expands.is_none()
-        })
+        .withf(|state| state.input.request.text == "query the architecture" && state.base.is_none())
         .returning(|_| {
             Err(DbError::InvalidData {
                 entity: "proposal",
@@ -54,6 +52,7 @@ async fn graph_requests_keep_the_draft_when_the_graph_beside_the_chat_is_unreada
     let (mut app, _directory) = new_test_app().await;
     seed_session(&mut app.sessions, app.services.db()).await;
     let mut proposals = MockGraphProposalRepository::new();
+    proposals.expect_get().times(1).returning(|_, _| Ok(None));
     proposals.expect_list().times(1).returning(|_| {
         Err(DbError::InvalidData {
             entity: "proposal",
