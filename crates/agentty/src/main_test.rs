@@ -8,7 +8,7 @@ use std::time::Duration;
 use std::{env, fs};
 
 use agentty::analytics::Analytics;
-use agentty::app::{App, AppError, DEFAULT_REMOTE_CONTROL_PORT, agentty_home};
+use agentty::app::{App, AppError, DEFAULT_REMOTE_CONTROL_PORT, Tab, agentty_home};
 use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
 use agentty::infra::platform::DEFAULT_PLATFORM_URL;
 use clap::Parser;
@@ -45,6 +45,12 @@ async fn root_working_dir_runtime(app: &mut App) -> Result<(), AppError> {
 }
 
 async fn traced_closed_runtime(app: &mut App) -> Result<(), AppError> {
+    let available_tabs = app.tabs.available_tabs();
+    assert!(available_tabs.contains(&Tab::Remote), "{available_tabs:?}");
+    assert!(
+        !available_tabs.contains(&Tab::Platform),
+        "{available_tabs:?}"
+    );
     assert_eq!(
         ag_telemetry::Context::current()
             .get::<ag_telemetry::CaptureToolContent>()
@@ -68,40 +74,24 @@ fn cli_defaults_to_automatic_updates() {
     assert!(!cli.no_update);
     assert!(!cli.otlp_capture_content);
     assert!(!cli.experimental.remote);
-    assert!(!cli.experimental.platform);
 }
 
 #[test]
-fn cli_gates_the_platform_behind_experimental_platform_independently_of_remote() {
+fn cli_parses_the_platform_url_with_a_default() {
     // Arrange / Act
-    let disabled = Cli::try_parse_from(["agentty"]).expect("default arguments");
-    let enabled = Cli::try_parse_from(["agentty", "--experimental-platform"])
-        .expect("--experimental-platform should parse");
-    let local = Cli::try_parse_from([
-        "agentty",
-        "--experimental-platform",
-        "--platform-url",
-        "http://127.0.0.1:8080/",
-    ])
-    .expect("a loopback platform should parse");
-    let url_without_flag =
-        Cli::try_parse_from(["agentty", "--platform-url", "https://platform.example"])
-            .expect_err("a platform URL needs --experimental-platform");
-    let plain_remote = Cli::try_parse_from([
-        "agentty",
-        "--experimental-platform",
-        "--platform-url",
-        "http://platform.example",
-    ])
-    .expect_err("plain http needs a loopback host");
+    let default = Cli::try_parse_from(["agentty"]).expect("default arguments");
+    let custom = Cli::try_parse_from(["agentty", "--platform-url", "https://platform.example"])
+        .expect("a platform URL should parse");
+    let local = Cli::try_parse_from(["agentty", "--platform-url", "http://127.0.0.1:8080/"])
+        .expect("a loopback platform should parse");
+    let plain_remote =
+        Cli::try_parse_from(["agentty", "--platform-url", "http://platform.example"])
+            .expect_err("plain http needs a loopback host");
 
     // Assert
-    assert!(!disabled.experimental.platform);
-    assert!(enabled.experimental.platform);
-    assert!(!enabled.experimental.remote);
-    assert_eq!(enabled.platform_url, "https://platform.agentty.xyz");
+    assert_eq!(default.platform_url, "https://platform.agentty.xyz");
+    assert_eq!(custom.platform_url, "https://platform.example");
     assert_eq!(local.platform_url, "http://127.0.0.1:8080");
-    assert_eq!(url_without_flag.kind(), ErrorKind::MissingRequiredArgument);
     assert_eq!(plain_remote.kind(), ErrorKind::ValueValidation);
 }
 
@@ -158,13 +148,14 @@ fn cli_gates_remote_control_behind_experimental_remote_or_a_relay() {
     let host_without_flag =
         Cli::try_parse_from(["agentty", "--remote-control-host", "box.tailnet.ts.net"])
             .expect_err("a host needs --experimental-remote or --remote-relay");
-    let port_with_platform = Cli::try_parse_from([
+    let port_with_platform_url = Cli::try_parse_from([
         "agentty",
-        "--experimental-platform",
+        "--platform-url",
+        "https://platform.example",
         "--remote-control-port",
         "0",
     ])
-    .expect_err("--experimental-platform does not accept a port");
+    .expect_err("the platform alone does not accept a port");
 
     // Assert
     assert!(!disabled.experimental.remote);
@@ -190,37 +181,22 @@ fn cli_gates_remote_control_behind_experimental_remote_or_a_relay() {
         with_relay.remote_relay.as_deref(),
         Some("wss://relay.example")
     );
-    for error in [port_without_flag, host_without_flag, port_with_platform] {
+    for error in [port_without_flag, host_without_flag, port_with_platform_url] {
         assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 }
 
 #[test]
-fn cli_offers_the_tabs_its_flags_name_and_a_relay_keeps_the_platform_out() {
+fn cli_offers_the_platform_unless_a_relay_keeps_it_out() {
     // Arrange: arguments, then whether remote control and the platform are
     // offered.
     let relay = ["--remote-relay", "wss://relay.example"];
-    let cases: [(Vec<&str>, bool, bool); 7] = [
-        (vec![], false, false),
-        (vec!["--experimental-remote"], true, false),
+    let cases: [(Vec<&str>, bool, bool); 4] = [
+        (vec![], false, true),
+        (vec!["--experimental-remote"], true, true),
         (relay.to_vec(), true, false),
-        (vec!["--experimental-platform"], false, true),
         (
-            vec!["--experimental-platform", "--experimental-remote"],
-            true,
-            true,
-        ),
-        (
-            [&["--experimental-platform"][..], &relay].concat(),
-            true,
-            false,
-        ),
-        (
-            [
-                &["--experimental-platform", "--experimental-remote"][..],
-                &relay,
-            ]
-            .concat(),
+            [&["--experimental-remote"][..], &relay].concat(),
             true,
             false,
         ),
@@ -257,6 +233,7 @@ fn cli_rejects_retired_experimental_flags() {
         "--experimental-graph",
         "--experimental-harness",
         "--experimental-multi-agent",
+        "--experimental-platform",
     ];
 
     for flag in retired_flags {
@@ -688,21 +665,19 @@ async fn startup_from_a_deleted_directory_falls_back_to_the_filesystem_root() {
 }
 
 /// Builds the launch options the telemetry startup child reads from its
-/// environment, with remote control enabled so the full launch wires it.
+/// environment, with a relay so the full launch wires remote control and
+/// leaves the platform out.
 fn telemetry_child_cli() -> Cli {
     Cli {
         disable_telemetry: true,
-        experimental: ExperimentalFeatures {
-            platform: true,
-            remote: true,
-        },
+        experimental: ExperimentalFeatures::default(),
         no_update: true,
         otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
         otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
         platform_url: DEFAULT_PLATFORM_URL.to_string(),
         remote_control_port: DEFAULT_REMOTE_CONTROL_PORT,
         remote_control_host: Vec::new(),
-        remote_relay: None,
+        remote_relay: Some("wss://relay.example".to_string()),
     }
 }
 

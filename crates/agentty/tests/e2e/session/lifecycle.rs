@@ -688,6 +688,7 @@ async fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eR
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("Dark Horizon", 5000)
+                    .compose(&common::switch_to_tab("Platform"))
                     .compose(&common::switch_to_tab("Projects"))
                     .compose(&common::switch_to_tab("Sessions"))
                     .wait_for_text("Review-ready session shortcuts", 5000)

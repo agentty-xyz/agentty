@@ -1507,6 +1507,7 @@ async fn auto_address_review_comments() -> E2eResult {
                     .press_key("q")
                     .step(common::wait_for_session_list())
                     .compose(&common::switch_to_tab_reverse("Projects"))
+                    .compose(&common::switch_to_tab_reverse("Platform"))
                     .compose(&common::switch_to_tab_reverse("Settings"))
                     .compose(&common::move_to_settings_row(
                         common::SettingsRow::AutoAddressComments,

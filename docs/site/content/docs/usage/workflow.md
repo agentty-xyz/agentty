@@ -24,8 +24,8 @@ Agentty restores the last tab on startup.
   with `agentty --experimental-remote` or `--remote-relay <URL>`; see
   [Remote Control](@/docs/usage/remote-control.md).
 - **Platform**: Sign in to an Agentty Platform so paired devices reach Agentty through
-  its hosted relay. The tab appears only with `agentty --experimental-platform`, and not
-  with `--remote-relay`; see [Agentty Platform](@/docs/usage/platform.md).
+  its hosted relay. The tab appears unless Agentty starts with `--remote-relay`; see
+  [Agentty Platform](@/docs/usage/platform.md).
 
 Press `?`, shown as `?: help` in the top bar, to list the shortcuts available on the
 current page. With `NO_COLOR`, selections use bold reverse video.

@@ -154,6 +154,7 @@ async fn tab_key_switches_tabs() -> E2eResult {
                     .capture_labeled("after", "Sessions tab selected")
                     // Restore the persisted startup tab before VHS replays the journey.
                     .compose(&common::switch_to_tab("Settings"))
+                    .compose(&common::switch_to_tab("Platform"))
                     .compose(&common::switch_to_tab("Projects"))
             },
             |frame, report| {
@@ -182,7 +183,7 @@ async fn tab_key_switches_tabs() -> E2eResult {
 /// Verify that pressing Tab cycles through all primary tabs in order.
 ///
 /// Starts on Projects and asserts each successive tab becomes selected:
-/// Sessions and Settings.
+/// Sessions, Settings, and Platform.
 #[tokio::test]
 async fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -204,16 +205,20 @@ async fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("settings", "Settings tab selected")
+                    .compose(&common::switch_to_tab("Platform"))
+                    .wait_for_text("Account Signed out", 5000)
+                    .viewing_pause_ms(2500)
+                    .capture_labeled("platform", "Platform tab selected")
             },
             |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+                    assertion::assert_text_in_region(frame, "Account Signed out", &full);
 
                     assert_eq!(
                         report.captures.len(),
-                        2,
-                        "Expected 2 captures (sessions, settings)"
+                        3,
+                        "Expected 3 captures (sessions, settings, platform)"
                     );
 
                     let sessions_frame = common::frame_from_capture(&report.captures[0]);
@@ -231,7 +236,14 @@ async fn tab_cycles_through_all_tabs() -> E2eResult {
                         "Default Smart Model",
                         &settings_full,
                     );
-                    for tab_frame in [&sessions_frame, &settings_frame] {
+                    let platform_frame = common::frame_from_capture(&report.captures[2]);
+                    let platform_full = Region::full(platform_frame.cols(), platform_frame.rows());
+                    assertion::assert_text_in_region(
+                        &platform_frame,
+                        "Account Signed out",
+                        &platform_full,
+                    );
+                    for tab_frame in [&sessions_frame, &settings_frame, &platform_frame] {
                         let top_bar = Region::new(0, 0, tab_frame.cols(), 1);
                         assertion::assert_text_in_region(tab_frame, "?: help", &top_bar);
                     }
@@ -317,7 +329,7 @@ async fn startup_shows_help_hint_in_top_bar() -> E2eResult {
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
 /// Starts on Projects (first tab), then presses `BackTab` to cycle back
-/// through Settings, Sessions, and Projects.
+/// through Platform, Settings, Sessions, and Projects.
 #[tokio::test]
 async fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
@@ -332,22 +344,34 @@ async fn backtab_cycles_tabs_reverse() -> E2eResult {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab_reverse("Platform"))
+                    .wait_for_text("Account Signed out", 5000)
+                    .viewing_pause_ms(2000)
+                    .capture_labeled("back_to_platform", "Platform tab after first BackTab")
                     .compose(&common::switch_to_tab_reverse("Settings"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_settings", "Settings tab after first BackTab")
+                    .capture_labeled("back_to_settings", "Settings tab after second BackTab")
                     .compose(&common::switch_to_tab_reverse("Sessions"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
+                    .capture_labeled("back_to_sessions", "Sessions tab after third BackTab")
                     .compose(&common::switch_to_tab_reverse("Projects"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_projects", "Projects tab after third BackTab")
+                    .capture_labeled("back_to_projects", "Projects tab after fourth BackTab")
             },
             |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "test-project", &full);
 
-                    let settings_frame = common::frame_from_capture(&report.captures[0]);
+                    let platform_frame = common::frame_from_capture(&report.captures[0]);
+                    let platform_full = Region::full(platform_frame.cols(), platform_frame.rows());
+                    assertion::assert_text_in_region(
+                        &platform_frame,
+                        "Account Signed out",
+                        &platform_full,
+                    );
+
+                    let settings_frame = common::frame_from_capture(&report.captures[1]);
                     let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
                     assertion::assert_text_in_region(
                         &settings_frame,
@@ -355,7 +379,7 @@ async fn backtab_cycles_tabs_reverse() -> E2eResult {
                         &settings_full,
                     );
 
-                    let sessions_frame = common::frame_from_capture(&report.captures[1]);
+                    let sessions_frame = common::frame_from_capture(&report.captures[2]);
                     let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                     assertion::assert_text_in_region(
                         &sessions_frame,
@@ -363,7 +387,7 @@ async fn backtab_cycles_tabs_reverse() -> E2eResult {
                         &sessions_full,
                     );
 
-                    let projects_frame = common::frame_from_capture(&report.captures[2]);
+                    let projects_frame = common::frame_from_capture(&report.captures[3]);
                     let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
                     assertion::assert_text_in_region(
                         &projects_frame,

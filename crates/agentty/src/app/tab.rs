@@ -26,8 +26,7 @@ pub enum Tab {
     /// `--experimental-remote` or `--remote-relay`.
     Remote,
     /// Sign-in to an Agentty Platform and remote control through its relay,
-    /// offered only with `--experimental-platform` and without
-    /// `--remote-relay`.
+    /// offered unless `--remote-relay` names a relay.
     Platform,
 }
 
