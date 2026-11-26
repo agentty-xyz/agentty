@@ -8,6 +8,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::presentation::help_action::remote_control_actions;
 use crate::presentation::remote_control::{RemoteControlView, RemoteRelayView};
@@ -22,6 +23,9 @@ const MIN_TEXT_WIDTH: usize = 40;
 
 /// Columns between the text and a QR code beside it.
 const QR_GAP: u16 = 2;
+
+/// Separates the key hints on one row.
+const HINT_SEPARATOR: &str = " | ";
 
 /// Explains how to show a QR code that does not fit.
 const ENLARGE_FOR_QR_CODE: &str = "Enlarge the terminal to show the link as a QR code.";
@@ -84,19 +88,17 @@ impl<'a> RemoteControlPage<'a> {
         lines.extend(device_lines(self.view, width));
 
         lines.push(Line::from(""));
-        lines.push(muted_line(&self.help_text()));
+        lines.extend(hint_lines(&self.hints(), width));
 
         lines
     }
 
     /// Returns the key hints that apply to the current state.
-    fn help_text(&self) -> String {
-        let hints: Vec<String> = remote_control_actions(self.view)
+    fn hints(&self) -> Vec<String> {
+        remote_control_actions(self.view)
             .iter()
             .map(|action| format!("{}: {}", action.key, action.footer_label))
-            .collect();
-
-        hints.join(" | ")
+            .collect()
     }
 }
 
@@ -384,6 +386,23 @@ pub(super) fn field_line(label: &str, value: &str, color: Color) -> Line<'static
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
     ])
+}
+
+/// Builds the key `hints` as muted rows of at most `width` columns that
+/// break only between hints, so no hint splits across rows.
+pub(super) fn hint_lines(hints: &[String], width: usize) -> Vec<Line<'static>> {
+    let mut rows: Vec<String> = Vec::new();
+    for hint in hints {
+        match rows.last_mut() {
+            Some(row) if row.width() + HINT_SEPARATOR.len() + hint.width() <= width => {
+                row.push_str(HINT_SEPARATOR);
+                row.push_str(hint);
+            }
+            _ => rows.push(hint.clone()),
+        }
+    }
+
+    rows.iter().map(|row| muted_line(row)).collect()
 }
 
 /// Builds one muted explanatory row.

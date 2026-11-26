@@ -348,3 +348,51 @@ fn rendered_page_draws_the_qr_code_beside_the_account() {
     assert!(first_row.contains("Address https://platform.example"));
     assert!(text.contains("l: sign out"));
 }
+
+#[test]
+fn key_hints_stay_whole_beside_a_qr_code_of_any_size() {
+    // Arrange
+    // Pairing links of one length whose keys make QR codes of 45, 49, and
+    // 53 columns, which leave the hints 77, 73, and 69 columns beside them
+    // on a 130-column terminal.
+    let keys = [
+        ("0".repeat(64), 45),
+        ("0123456789abcdef".repeat(4), 49),
+        ("a".repeat(64), 53),
+    ];
+    let platform = registered();
+
+    for (key, qr_width) in keys {
+        let link = format!(
+            "http://127.0.0.1:43785/sessions/#relay=ws%3A%2F%2F127%2E0%2E0%2E1%3A9&key={key}\
+             &code=SNXR%2DPNWE"
+        );
+        let remote_control = RemoteControlView {
+            listener: Some(RemoteListenerView {
+                pairing_code: "SNXR-PNWE".to_string(),
+                relay: Some(RemoteRelayView::new(link, RelayStatus::Connecting)),
+                url: "http://127.0.0.1:50000/".to_string(),
+            }),
+            ..RemoteControlView::default()
+        };
+        let first_qr_row = remote_control
+            .listener
+            .as_ref()
+            .and_then(|listener| listener.relay.as_ref())
+            .map(|relay| relay.qr_code[0].clone())
+            .expect("relay should have a QR code");
+
+        // Act
+        let text = rendered_text(&platform, &remote_control, 130, 36);
+
+        // Assert
+        assert_eq!(first_qr_row.chars().count(), qr_width);
+        let first_row = text
+            .lines()
+            .find(|row| row.contains(&first_qr_row))
+            .expect("first QR row should render");
+        assert!(first_row.contains("Address https://platform.example"));
+        assert!(text.contains("Enter: stop | a: keep on"), "{qr_width}");
+        assert!(text.contains("l: sign out"), "{qr_width}");
+    }
+}
