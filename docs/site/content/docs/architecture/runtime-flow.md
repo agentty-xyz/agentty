@@ -179,11 +179,14 @@ A running turn's streamed output and tool activity share one live-timeline mailb
 arrival order; the mailbox queues one `AppEvent::SessionTurnReady` while none is armed,
 the foreground groups the timeline into steps once per frame while it changes, and
 `AppEvent::SessionTurnCleared` removes it once the saved answer or failure notice
-replaces it. The timeline's current action also feeds the session's progress text, which
-the status line and remote clients show. Post-turn processing saves a turn summary,
-without a model call, before the answer or failure notice. `TurnActivity` builds it from
-its own list of the turn's calls; the timeline supplies only the count of narrated
-steps. Turn summaries are saved history but excluded from provider replay.
+replaces it. Both events name the run, the chat turn or a graph-node attempt, and the
+foreground keeps one timeline slot per run, so turns that overlap in one session never
+replace or clear each other's timeline; the session view shows the first run that has
+steps. The timeline's current action also feeds the session's progress text, which the
+status line and remote clients show. Post-turn processing saves a turn summary, without
+a model call, before the answer or failure notice. `TurnActivity` builds it from its own
+list of the turn's calls; the timeline supplies only the count of narrated steps. Turn
+summaries are saved history but excluded from provider replay.
 
 Harness sessions also stream model output on that path. The agent runtime turns the
 harness run's item events into `TurnEvent::Output` changes, decoding the protocol answer
@@ -268,7 +271,8 @@ The [Command Gateway](@/docs/core-components/control-plane/command-gateway.md) a
 terminal and programmatic mutations; accepted workflows persist
 [messages](@/docs/core-components/durable-components/message.md) and operations before
 workers execute them. [Tasks](@/docs/core-components/durable-components/task.md) and
-execution graphs use the same gateway and serial session worker.
+execution graphs use the same gateway and serial session worker, except that read-only
+graph task conversations run beside it, ordered only by their Env lease.
 
 ```mermaid
 flowchart TD

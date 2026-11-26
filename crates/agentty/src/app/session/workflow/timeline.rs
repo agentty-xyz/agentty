@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
 use crate::domain::session::SessionId;
+use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
 use crate::domain::turn_timeline::{TimelineSnapshot, TurnTimeline};
 
 /// A replaceable live-timeline mailbox shared by a turn producer and the
@@ -19,12 +20,25 @@ use crate::domain::turn_timeline::{TimelineSnapshot, TurnTimeline};
 /// [`Self::snapshot`] and applies later changes through [`Self::refresh`]
 /// once per frame, so a fast stream redraws at most once per frame instead
 /// of waking the event loop for every fragment.
-#[derive(Clone, Debug, Default)]
+///
+/// Its notifications name the run it belongs to, so turns that overlap in
+/// one session, such as graph-node attempts beside a chat turn, keep
+/// separate timelines.
+#[derive(Clone, Debug)]
 pub(crate) struct LiveTurn {
+    run: LiveUsageRun,
     state: Arc<Mutex<LiveTurnState>>,
 }
 
 impl LiveTurn {
+    /// Creates an empty timeline for `run`.
+    pub(crate) fn new(run: LiveUsageRun) -> Self {
+        Self {
+            run,
+            state: Arc::default(),
+        }
+    }
+
     /// Returns the grouped timeline, which is empty before the turn shows
     /// anything, and keeps the notification armed until a
     /// [`Self::refresh`] finds nothing new.
@@ -131,8 +145,16 @@ impl LiveTurn {
     pub(super) fn clear(&self, sender: &mpsc::UnboundedSender<AppEvent>, session_id: &SessionId) {
         if std::mem::take(&mut self.lock().shown) {
             let _ = sender.send(AppEvent::SessionTurnCleared {
-                session_id: session_id.clone(),
+                key: self.key(session_id),
             });
+        }
+    }
+
+    /// Identifies this timeline's run in `session_id`.
+    fn key(&self, session_id: &SessionId) -> LiveUsageKey {
+        LiveUsageKey {
+            run: self.run.clone(),
+            session_id: session_id.clone(),
         }
     }
 
@@ -148,7 +170,7 @@ impl LiveTurn {
         if !state.pending {
             state.pending = sender
                 .send(AppEvent::SessionTurnReady {
-                    session_id: session_id.clone(),
+                    key: self.key(session_id),
                     turn: self.clone(),
                 })
                 .is_ok();
@@ -158,6 +180,13 @@ impl LiveTurn {
     /// Locks the shared state; it stays valid after a panic.
     fn lock(&self) -> MutexGuard<'_, LiveTurnState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Default for LiveTurn {
+    /// Creates an empty timeline for the ordinary session turn.
+    fn default() -> Self {
+        Self::new(LiveUsageRun::SessionTurn)
     }
 }
 

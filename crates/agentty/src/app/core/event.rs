@@ -196,13 +196,17 @@ pub(crate) enum AppEvent {
         /// Session whose comments were requested.
         session_id: SessionId,
     },
-    /// Signals a session turn's live timeline awaiting foreground grouping.
+    /// Signals a running turn's live timeline awaiting foreground grouping;
+    /// `key` names the session and the run, so overlapping turns in one
+    /// session keep separate timelines.
     SessionTurnReady {
-        session_id: SessionId,
+        key: crate::domain::session_usage::LiveUsageKey,
         turn: crate::app::session::LiveTurn,
     },
-    /// Removes a session turn's live timeline once its result is shown.
-    SessionTurnCleared { session_id: SessionId },
+    /// Removes one run's live timeline once its result is shown.
+    SessionTurnCleared {
+        key: crate::domain::session_usage::LiveUsageKey,
+    },
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
@@ -493,8 +497,12 @@ pub(super) struct AppEventBatch {
     /// Retains queued selections for every accepted message before coalescing.
     pub(super) session_turn_starts: Vec<TurnSelection>,
     pub(super) session_turn_started_ids: HashSet<SessionId>,
-    /// Latest live-timeline handle per session, or `None` once cleared.
-    pub(super) session_turn_updates: HashMap<SessionId, Option<crate::app::session::LiveTurn>>,
+    /// Latest live-timeline handle per run, or `None` once cleared, in
+    /// first-arrival order.
+    pub(super) session_turn_updates: Vec<(
+        crate::domain::session_usage::LiveUsageKey,
+        Option<crate::app::session::LiveTurn>,
+    )>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
     pub(super) should_refresh_git_status: bool,
@@ -815,16 +823,16 @@ impl AppEventBatch {
 
     /// Collects a session turn's live timeline, progress, and live usage.
     ///
-    /// The timeline keeps its handle, which the foreground groups when it
-    /// applies the batch and again on later frames; a later clear wins. Live
-    /// usage changes keep their arrival order.
+    /// Each run's timeline keeps its handle, which the foreground groups when
+    /// it applies the batch and again on later frames; a later clear of the
+    /// same run wins. Live usage changes keep their arrival order.
     fn collect_activity_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::SessionTurnReady { session_id, turn } => {
-                self.session_turn_updates.insert(session_id, Some(turn));
+            AppEvent::SessionTurnReady { key, turn } => {
+                self.collect_session_turn_update(key, Some(turn));
             }
-            AppEvent::SessionTurnCleared { session_id } => {
-                self.session_turn_updates.insert(session_id, None);
+            AppEvent::SessionTurnCleared { key } => {
+                self.collect_session_turn_update(key, None);
             }
             AppEvent::SessionProgressUpdated {
                 progress_message,
@@ -842,6 +850,23 @@ impl AppEventBatch {
                     .push(crate::app::session_usage::LiveUsageOp::Recorded { run, session_id });
             }
             _ => unreachable!("only activity events are routed here"),
+        }
+    }
+
+    /// Keeps the latest timeline update of `key`'s run at the position where
+    /// the run first arrived in this batch.
+    fn collect_session_turn_update(
+        &mut self,
+        key: crate::domain::session_usage::LiveUsageKey,
+        turn: Option<crate::app::session::LiveTurn>,
+    ) {
+        match self
+            .session_turn_updates
+            .iter_mut()
+            .find(|(existing, _)| *existing == key)
+        {
+            Some((_, existing)) => *existing = turn,
+            None => self.session_turn_updates.push((key, turn)),
         }
     }
 
@@ -1387,8 +1412,8 @@ impl App {
     /// Applies transient updates after completed-turn snapshots are
     /// synchronized.
     fn apply_session_transient_updates(&mut self, event_batch: &mut AppEventBatch) {
-        for (session_id, turn) in std::mem::take(&mut event_batch.session_turn_updates) {
-            self.sessions.track_live_turn(session_id, turn);
+        for (key, turn) in std::mem::take(&mut event_batch.session_turn_updates) {
+            self.sessions.track_live_turn(key, turn);
         }
         for (session_id, update) in std::mem::take(&mut event_batch.session_generated_turn_updates)
         {

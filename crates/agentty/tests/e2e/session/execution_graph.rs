@@ -88,25 +88,7 @@ async fn seed_graph(env: &BuilderEnv, agent: AgentSelection) -> E2eResult {
 /// accepts the reply decision, and its `implement` turn asks a question,
 /// which shows in chat that the node ran.
 async fn seed_paused_plan_graph(env: &BuilderEnv) -> E2eResult {
-    let workspace = env.agentty_root.join("wt").join("graph-ui");
-    run_git(
-        &env.workdir,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "wt/graph-ui",
-            workspace.to_str().ok_or("UTF-8 fixture worktree path")?,
-        ],
-    )?;
-    common::seed_active_project_setting(env).await?;
-    common::seed_session(
-        env,
-        SessionSeed::regular(SESSION, "claude-haiku-5-5", "main", "Review")
-            .with_title("Graph controls"),
-    )
-    .await?;
-    let database = common::open_database(env).await?;
+    let database = seed_claude_worktree_session(env).await?;
     let definition = AgentDefinition::bundled("planner").ok_or("Bundled planner missing")?;
     let agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55);
     let mut implement = reader_node(agent, &definition, "implement");
@@ -147,36 +129,15 @@ case "$prompt" in
   *) printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Implemented inside the graph.\",\"questions\":[{\"text\":\"Which branch next?\",\"options\":[\"main\",\"release\"]}]}","usage":{"input_tokens":5,"output_tokens":9}}' ;;
 esac
 "#;
-    let executable = env.stub_bin.join("claude");
-    std::fs::write(&executable, script)?;
-    std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o750))?;
 
-    Ok(())
+    install_claude_stub(env, script)
 }
 
 /// Seeds a restored one-node graph whose earlier run spent every call of its
 /// `calls` budget. A provider stub's turn asks a question, which shows in
 /// chat that the node ran.
 async fn seed_spent_budget_graph(env: &BuilderEnv) -> E2eResult {
-    let workspace = env.agentty_root.join("wt").join("graph-ui");
-    run_git(
-        &env.workdir,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "wt/graph-ui",
-            workspace.to_str().ok_or("UTF-8 fixture worktree path")?,
-        ],
-    )?;
-    common::seed_active_project_setting(env).await?;
-    common::seed_session(
-        env,
-        SessionSeed::regular(SESSION, "claude-haiku-5-5", "main", "Review")
-            .with_title("Graph controls"),
-    )
-    .await?;
-    let database = common::open_database(env).await?;
+    let database = seed_claude_worktree_session(env).await?;
     let definition = AgentDefinition::bundled("planner").ok_or("Bundled planner missing")?;
     let agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55);
     let graph = ExecutionGraph {
@@ -197,6 +158,86 @@ IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Checked with added calls.\",\"questions\":[{\"text\":\"Which branch next?\",\"options\":[\"main\",\"release\"]}]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
+
+    install_claude_stub(env, script)
+}
+
+/// Seeds a restored graph of two independent readers that waits for an
+/// explicit resume. Each provider stub turn records its start, waits up to
+/// ten seconds for the other's, then asks in chat whether the other reader
+/// was inside its turn too.
+async fn seed_parallel_readers_graph(env: &BuilderEnv) -> E2eResult {
+    let database = seed_claude_worktree_session(env).await?;
+    let definition = AgentDefinition::bundled("planner").ok_or("Bundled planner missing")?;
+    let agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeHaiku55);
+    let graph = ExecutionGraph {
+        id: "parallel-readers".into(),
+        nodes: vec![
+            reader_node(agent, &definition, "alpha"),
+            reader_node(agent, &definition, "beta"),
+        ],
+        revision: NonZeroU64::MIN,
+        session_id: SESSION.into(),
+    };
+    database
+        .graphs()
+        .launch_graph(&graph, &BTreeMap::from([("calls".into(), 2)]))
+        .await?;
+    let markers = env.agentty_root.join("reader-markers");
+    std::fs::create_dir_all(&markers)?;
+    let markers = markers.to_str().ok_or("UTF-8 marker path")?;
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+IFS= read -r prompt
+case "$prompt" in
+  *'Inspect alpha'*) own=alpha; peer=beta ;;
+  *) own=beta; peer=alpha ;;
+esac
+touch "{markers}/$own"
+waited=0
+while [ ! -e "{markers}/$peer" ] && [ "$waited" -lt 100 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+if [ -e "{markers}/$peer" ]; then result="$own overlapped $peer"; else result="$own ran alone"; fi
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+printf '{{"type":"result","subtype":"success","result":"{{\\"answer\\":\\"\\",\\"questions\\":[{{\\"text\\":\\"%s?\\",\\"options\\":[\\"Yes\\",\\"No\\"]}}]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}\n' "$result"
+"#
+    );
+
+    install_claude_stub(env, &script)
+}
+
+/// Seeds the Claude session whose `wt/graph-ui` worktree graph turns run in.
+async fn seed_claude_worktree_session(
+    env: &BuilderEnv,
+) -> Result<Database, Box<dyn std::error::Error>> {
+    let workspace = env.agentty_root.join("wt").join("graph-ui");
+    run_git(
+        &env.workdir,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/graph-ui",
+            workspace.to_str().ok_or("UTF-8 fixture worktree path")?,
+        ],
+    )?;
+    common::seed_active_project_setting(env).await?;
+    common::seed_session(
+        env,
+        SessionSeed::regular(SESSION, "claude-haiku-5-5", "main", "Review")
+            .with_title("Graph controls"),
+    )
+    .await?;
+
+    Ok(common::open_database(env).await?)
+}
+
+/// Installs `script` as the `claude` provider executable.
+fn install_claude_stub(env: &BuilderEnv, script: &str) -> E2eResult {
     let executable = env.stub_bin.join("claude");
     std::fs::write(&executable, script)?;
     std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o750))?;
@@ -646,11 +687,8 @@ IFS= read -r prompt
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Background turn settled.\",\"questions\":[{{\"text\":\"Background session clarification?\",\"options\":[\"Yes\",\"No\"]}}]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 "#);
-                let executable = env.stub_bin.join("claude");
-                std::fs::write(&executable, script)?;
-                std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o750))?;
 
-                Ok(())
+                install_claude_stub(env, &script)
             })
         })
         .run(
@@ -727,11 +765,8 @@ IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Remote target inspected.\",\"questions\":[{\"text\":\"Which branch next?\",\"options\":[\"main\",\"release\"]}]}","usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
-                let executable = env.stub_bin.join("claude");
-                std::fs::write(&executable, script)?;
-                std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o750))?;
 
-                Ok(())
+                install_claude_stub(env, script)
             })
         })
         .run(
@@ -846,6 +881,46 @@ async fn added_provider_calls_let_an_exhausted_graph_continue() -> E2eResult {
                     for expected in ["Checked with added calls.", "Question 1/1"] {
                         assertion::assert_text_in_region(&continued, expected, &full);
                     }
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn independent_graph_readers_run_at_the_same_time() -> E2eResult {
+    // Arrange
+    FeatureTest::new("parallel_graph_readers")
+        .with_git()
+        .with_terminal_size(120, 30)
+        .setup(|env| Box::pin(seed_parallel_readers_graph(env)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph controls", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("w")
+                    .wait_for_text("parallel-readers", 5000)
+                    .wait_for_text("resume required", 5000)
+                    .press_key("s")
+                    .press_key("q")
+                    .wait_for_text("alpha overlapped beta?", 20000)
+                    .wait_for_text("beta overlapped alpha?", 5000)
+                    .capture_labeled("overlapped", "Both readers ran at the same time")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert: serial readers would leave the first one alone.
+                    let overlapped = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(overlapped.cols(), overlapped.rows());
+                    for expected in ["alpha overlapped beta?", "beta overlapped alpha?"] {
+                        assertion::assert_text_in_region(&overlapped, expected, &full);
+                    }
+                    assertion::assert_not_visible(&overlapped, "ran alone");
                 })
             },
         )

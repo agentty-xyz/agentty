@@ -1,4 +1,5 @@
-//! Graph conversations on the existing serial session worker.
+//! Graph task conversations: writers on the serial session worker, readers
+//! beside it.
 
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
@@ -37,6 +38,24 @@ pub(super) struct GraphTaskCommand {
     pub(super) operation_id: String,
     pub(super) request: GraphRunRequest,
     pub(super) resources: Arc<ag_worker::GraphResources>,
+}
+
+impl GraphTaskCommand {
+    /// Whether this conversation runs beside the session worker instead of
+    /// on its serial mailbox.
+    ///
+    /// Read-only nodes make no host effects, so only their shared Env lease
+    /// orders them against writers and ordinary session work. Their node's
+    /// graph lease owns the session status, so a reader never hides a pending
+    /// chat question behind `InProgress`.
+    pub(super) fn is_reader(&self) -> bool {
+        self.request
+            .dispatch
+            .node
+            .execution
+            .workspace_access
+            .is_read()
+    }
 }
 
 /// A worker completion acknowledges durable settlement, never provider return.
@@ -95,6 +114,14 @@ pub(super) async fn run(
         .lock()
         .map_err(|_| SessionError::Workflow("cancel token lock poisoned".into()))? =
         task.cancellation.as_ref().clone();
+    if task.is_reader() {
+        let result = attempt(context, run_client, task).await;
+        // Provider read-only modes are not a sandbox, so still surface any
+        // change the reader made.
+        post_turn::refresh_channel_diff_stats(&TurnFinalizerContext::from_worker(context)).await;
+
+        return result;
+    }
     let transition = StatusTransition::from_parts(
         context.app_event_tx.clone(),
         context.clock.clone(),
@@ -107,21 +134,7 @@ pub(super) async fn run(
     transition
         .apply_or_invalid_transition(Status::InProgress)
         .await?;
-    let result = async {
-        let environment = tokio::select! {
-            biased;
-            () = task.cancellation.cancelled() => return Err(stopped()),
-            environment = GraphTaskEnvironment::acquire(task) => environment,
-        };
-        *task
-            .completion
-            .environment
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(environment);
-
-        execute(context, run_client, task).await
-    }
-    .await;
+    let result = attempt(context, run_client, task).await;
     let status_result = match &result {
         Ok(()) | Err(SessionError::StoppedByUser(_)) => Ok(Status::Review),
         Err(error) => Err(SessionError::Workflow(error.to_string())),
@@ -130,6 +143,27 @@ pub(super) async fn run(
         .await;
 
     result
+}
+
+/// Waits for the node's Env lease, which completion keeps through
+/// settlement, then runs the attempt.
+async fn attempt(
+    context: &SessionWorkerContext,
+    run_client: Arc<dyn RunClient>,
+    task: &GraphTaskCommand,
+) -> Result<(), SessionError> {
+    let environment = tokio::select! {
+        biased;
+        () = task.cancellation.cancelled() => return Err(stopped()),
+        environment = GraphTaskEnvironment::acquire(task) => environment,
+    };
+    *task
+        .completion
+        .environment
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(environment);
+
+    execute(context, run_client, task).await
 }
 
 /// Completion retains the selected task's leases through durable operation

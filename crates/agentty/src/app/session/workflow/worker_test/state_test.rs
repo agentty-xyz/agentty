@@ -560,7 +560,7 @@ async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
     let turns = events
         .iter()
         .filter_map(|event| match event {
-            AppEvent::SessionTurnReady { session_id, turn } => Some((turn, session_id.as_str())),
+            AppEvent::SessionTurnReady { key, turn } => Some((turn, key.session_id.as_str())),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -586,7 +586,10 @@ async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
     assert_eq!(
         events.last(),
         Some(&AppEvent::SessionTurnCleared {
-            session_id: "session".into(),
+            key: LiveUsageKey {
+                run: LiveUsageRun::SessionTurn,
+                session_id: "session".into(),
+            },
         })
     );
 }
@@ -791,12 +794,21 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
     // Arrange
     let (sender, receiver) = mpsc::unbounded_channel();
     let (app_sender, mut app_receiver) = mpsc::unbounded_channel();
+    let key = LiveUsageKey {
+        run: LiveUsageRun::Attempt("attempt".to_string()),
+        session_id: "session".into(),
+    };
+    let live_usage = LiveUsage::new(
+        mpsc::unbounded_channel().0,
+        key.session_id.clone(),
+        key.run.clone(),
+    );
     let consumer = tokio::spawn(consume_turn_events(
         receiver,
         app_sender,
-        "session".into(),
+        key.session_id.clone(),
         Arc::new(Mutex::new(None)),
-        unobserved_live_usage(),
+        live_usage,
         fixed_clock(),
     ));
 
@@ -810,10 +822,14 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
     let update = app_receiver.recv().await.expect("live update");
 
     // Assert
-    let AppEvent::SessionTurnReady { session_id, turn } = update else {
+    let AppEvent::SessionTurnReady {
+        key: ready_key,
+        turn,
+    } = update
+    else {
         unreachable!("expected a live timeline");
     };
-    assert_eq!(session_id.as_str(), "session");
+    assert_eq!(ready_key, key);
     let running = turn.snapshot();
     assert!(!consumer.is_finished());
 

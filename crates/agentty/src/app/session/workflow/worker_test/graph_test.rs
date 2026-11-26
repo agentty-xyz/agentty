@@ -340,6 +340,28 @@ async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
 }
 
 #[tokio::test]
+async fn graph_readers_run_without_hiding_a_pending_chat_question() {
+    // Arrange: the node's graph lease, not the reader, owns session status.
+    let context = graph_context("reader").await;
+    *context.status.lock().expect("status") = Status::Question;
+    let (task, receiver) = graph_task_fixture(&context, "reader").await;
+
+    // Act
+    let result = SessionWorkerService::process_session_command(
+        &context,
+        &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+        SessionCommand::RunGraphTask(Box::new(task)),
+    )
+    .await
+    .expect("selected");
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    assert!(receiver.await.expect("worker completion").is_ok());
+    assert_eq!(context.current_status(), Status::Question);
+}
+
+#[tokio::test]
 async fn graph_nodes_settle_blank_answers_without_effects_or_success_events() {
     for scenario in [
         "empty-answer",

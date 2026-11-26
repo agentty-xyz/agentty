@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use super::timeline::LiveTurn;
 use crate::app::AppEvent;
 use crate::domain::session::SessionId;
+use crate::domain::session_usage::LiveUsageRun;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_summary::TurnSummary;
 
@@ -30,6 +31,14 @@ pub(super) struct TurnActivity {
 }
 
 impl TurnActivity {
+    /// Creates empty activity whose live timeline belongs to `run`.
+    pub(super) fn for_run(run: LiveUsageRun) -> Self {
+        Self {
+            turn: LiveTurn::new(run),
+            ..Self::default()
+        }
+    }
+
     /// Drains utility activity while its submission runs, retaining only the
     /// bounded per-call state needed for a footer.
     pub(super) async fn collect(

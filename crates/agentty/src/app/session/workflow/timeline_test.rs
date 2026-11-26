@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use super::LiveTurn;
 use crate::app::AppEvent;
 use crate::domain::session::{SessionId, Status};
+use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
 use crate::test_support::activity_event;
 
@@ -27,6 +28,14 @@ impl Fixture {
             sender,
             session_id: SessionId::from("session"),
             turn: LiveTurn::default(),
+        }
+    }
+
+    /// Identifies the fixture timeline's ordinary session turn.
+    fn key(&self) -> LiveUsageKey {
+        LiveUsageKey {
+            run: LiveUsageRun::SessionTurn,
+            session_id: self.session_id.clone(),
         }
     }
 
@@ -92,7 +101,7 @@ fn one_notification_stays_armed_until_a_frame_finds_nothing_new() {
     assert_eq!(
         first,
         [AppEvent::SessionTurnReady {
-            session_id: fixture.session_id.clone(),
+            key: fixture.key(),
             turn: fixture.turn.clone(),
         }]
     );
@@ -166,9 +175,7 @@ fn clearing_sends_one_notice_only_after_the_timeline_showed_something() {
     assert_eq!(empty_snapshot.step_count, 0);
     assert_eq!(
         cleared,
-        [AppEvent::SessionTurnCleared {
-            session_id: fixture.session_id.clone(),
-        }]
+        [AppEvent::SessionTurnCleared { key: fixture.key() }]
     );
 }
 
@@ -198,7 +205,7 @@ async fn foreground_shows_the_timeline_once_per_frame_and_removes_it() {
 
     // Act
     app.apply_app_events(AppEvent::SessionTurnReady {
-        session_id: fixture.session_id.clone(),
+        key: fixture.key(),
         turn: fixture.turn.clone(),
     })
     .await;
@@ -211,10 +218,8 @@ async fn foreground_shows_the_timeline_once_per_frame_and_removes_it() {
     app.clear_redraw();
     app.process_pending_app_events().await;
     let unchanged = app.needs_redraw();
-    app.apply_app_events(AppEvent::SessionTurnCleared {
-        session_id: fixture.session_id.clone(),
-    })
-    .await;
+    app.apply_app_events(AppEvent::SessionTurnCleared { key: fixture.key() })
+        .await;
     let cleared = shown_steps(&app);
 
     // Assert
@@ -234,10 +239,15 @@ fn empty_or_unknown_session_timelines_show_nothing() {
             .status(Status::InProgress)
             .build(),
     ]);
+    let fixture = Fixture::new();
+    let missing = LiveUsageKey {
+        session_id: SessionId::from("missing"),
+        ..fixture.key()
+    };
 
     // Act
-    manager.track_live_turn(SessionId::from("session"), Some(LiveTurn::default()));
-    manager.track_live_turn(SessionId::from("missing"), Some(LiveTurn::default()));
+    manager.track_live_turn(fixture.key(), Some(LiveTurn::default()));
+    manager.track_live_turn(missing, Some(LiveTurn::default()));
 
     // Assert
     assert_eq!(
@@ -246,4 +256,60 @@ fn empty_or_unknown_session_timelines_show_nothing() {
             .get(TransientMessageSlot::Turn),
         None
     );
+}
+
+#[tokio::test]
+async fn overlapping_runs_keep_separate_timelines_in_one_session() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("session")
+            .status(Status::InProgress)
+            .build(),
+    );
+    let chat = Fixture::new();
+    let reader = Fixture {
+        turn: LiveTurn::new(LiveUsageRun::Attempt("reader".to_string())),
+        ..Fixture::new()
+    };
+    let reader_key = LiveUsageKey {
+        run: LiveUsageRun::Attempt("reader".to_string()),
+        ..reader.key()
+    };
+    let unknown_key = LiveUsageKey {
+        run: LiveUsageRun::Attempt("unknown".to_string()),
+        ..reader.key()
+    };
+    reader.start_message(0);
+    chat.start_message(0);
+    chat.start_message(1);
+
+    // Act
+    app.apply_app_events(AppEvent::SessionTurnReady {
+        key: reader_key.clone(),
+        turn: reader.turn.clone(),
+    })
+    .await;
+    app.apply_app_events(AppEvent::SessionTurnReady {
+        key: chat.key(),
+        turn: chat.turn.clone(),
+    })
+    .await;
+    let both_running = shown_steps(&app);
+    app.apply_app_events(AppEvent::SessionTurnCleared { key: reader_key })
+        .await;
+    let reader_cleared = shown_steps(&app);
+    app.apply_app_events(AppEvent::SessionTurnCleared { key: unknown_key })
+        .await;
+    let unknown_cleared = shown_steps(&app);
+    app.apply_app_events(AppEvent::SessionTurnCleared { key: chat.key() })
+        .await;
+    let all_cleared = shown_steps(&app);
+
+    // Assert
+    assert_eq!(both_running, Some(1));
+    assert_eq!(reader_cleared, Some(2));
+    assert_eq!(unknown_cleared, Some(2));
+    assert_eq!(all_cleared, None);
 }

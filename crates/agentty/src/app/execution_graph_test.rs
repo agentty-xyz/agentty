@@ -13,9 +13,10 @@ use ag_protocol::{
 };
 use ag_session::{
     AgentDefinition, AgentKind, AgentModel, AgentSelection, EnvId, ExecutionGraph,
-    ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate, GraphContext, GraphDependency,
-    GraphExecutionProfile, GraphInputBinding, GraphNode, GraphOutput, GraphPostProcessing,
-    GraphResultState, GraphWorkspaceAccess, SessionId, StartExecutionGraphRequest,
+    ExecutionGraphStatus, GraphBlockedReason, GraphCompletionGate, GraphContext,
+    GraphControlRequest, GraphDependency, GraphExecutionProfile, GraphInputBinding, GraphNode,
+    GraphOutput, GraphPostProcessing, GraphResultState, GraphWorkspaceAccess, SessionId,
+    StartExecutionGraphRequest,
 };
 use ag_worker::SessionRunClient;
 use tokio::sync::{Notify, mpsc, watch};
@@ -24,7 +25,7 @@ use super::{GraphDriverSession, GraphNodeLeases, can_still_finish};
 use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::SessionManager;
-use crate::domain::session::{SessionHandles, Status};
+use crate::domain::session::{QueuedMessage, SessionHandles, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::infra::db::{AppRepositories, StoredGraphResult};
 use crate::infra::fs::MockFsClient;
@@ -306,6 +307,215 @@ async fn task_graph_preserves_context_and_waits_for_acceptance_and_ordered_effec
     app.services.wait_for_cleanup_tasks(None).await;
 }
 
+#[tokio::test]
+async fn independent_graph_readers_overlap_beside_the_session_worker() {
+    // Arrange: each reader's turn ends only once both readers are inside
+    // their turns, which serial execution never reaches.
+    let both_started = Arc::new(tokio::sync::Barrier::new(2));
+    let (mut app, _directory) = reader_app(move || {
+        let both_started = both_started.clone();
+        Box::pin(async move {
+            both_started.wait().await;
+            Ok(reader_turn_result())
+        })
+    })
+    .await;
+    let mut graph = graph();
+    graph.nodes = vec![node("first"), node("second")];
+    let service = app.session_service();
+
+    // Act
+    app.drive_session_request(service.start_execution_graph(StartExecutionGraphRequest {
+        graph,
+        provider_call_limits: BTreeMap::from([("calls".into(), 2)]),
+    }))
+    .await
+    .expect("launch");
+    for node_id in ["first", "second"] {
+        app.drive_session_request(tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            wait_result(
+                app.services.db().clone(),
+                app.services.graph_wake.subscribe(),
+                node_id,
+            ),
+        ))
+        .await
+        .expect("readers overlap");
+    }
+
+    // Assert
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn stopping_the_session_cancels_graph_readers_beside_its_worker() {
+    // Arrange: the reader's turn runs until it is canceled.
+    let started = Arc::new(Notify::new());
+    let turn_started = started.clone();
+    let (mut app, _directory) = reader_app(move || {
+        turn_started.notify_one();
+        Box::pin(std::future::pending())
+    })
+    .await;
+    let mut graph = graph();
+    graph.nodes.truncate(1);
+    let service = app.session_service();
+    app.drive_session_request(service.start_execution_graph(StartExecutionGraphRequest {
+        graph,
+        provider_call_limits: BTreeMap::from([("calls".into(), 1)]),
+    }))
+    .await
+    .expect("launch");
+    app.drive_session_request(started.notified()).await;
+    app.sessions.sync_from_handles();
+
+    // Act
+    app.stop_session_turn("sess").await.expect("stop");
+
+    // Assert
+    let db = app.services.db().clone();
+    app.drive_session_request(tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            while db
+                .tasks()
+                .load_task("task-first")
+                .await
+                .expect("task")
+                .expect("present")
+                .attempts[0]
+                .status
+                != ag_session::TaskAttemptStatus::Canceled
+            {
+                tokio::task::yield_now().await;
+            }
+        },
+    ))
+    .await
+    .expect("stop cancels the reader");
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+#[tokio::test]
+async fn canceling_a_graph_reader_keeps_queued_chat_prompts() {
+    // Arrange: the reader's turn runs until it is canceled while a chat
+    // prompt waits for the session's own turns; a question raised meanwhile
+    // pauses the worker, so only a clear could remove the prompt.
+    let started = Arc::new(Notify::new());
+    let turn_started = started.clone();
+    let (mut app, _directory) = reader_app(move || {
+        turn_started.notify_one();
+        Box::pin(std::future::pending())
+    })
+    .await;
+    let mut graph = graph();
+    graph.nodes.truncate(1);
+    let revision = graph.revision;
+    let service = app.session_service();
+    app.drive_session_request(service.start_execution_graph(StartExecutionGraphRequest {
+        graph,
+        provider_call_limits: BTreeMap::from([("calls".into(), 1)]),
+    }))
+    .await
+    .expect("launch");
+    app.drive_session_request(started.notified()).await;
+    let handles = &app.sessions.session_handles()["sess"];
+    *handles.status.lock().expect("status") = Status::Question;
+    let queue = Arc::clone(&handles.queued_messages);
+    let queued_prompt = QueuedMessage::new(1, TurnPrompt::from_text("queued follow-up".into()));
+    queue
+        .lock()
+        .expect("queue")
+        .push_back(queued_prompt.clone());
+    // The reader's context holds one queue handle until its task ends.
+    // Cleanup abandons queued prompts, so the reader's end is observed
+    // directly.
+    let holders_while_reading = Arc::strong_count(&queue);
+
+    // Act
+    app.drive_session_request(service.cancel_execution_graph(GraphControlRequest {
+        graph_id: "graph".into(),
+        revision,
+    }))
+    .await
+    .expect("cancel");
+    app.drive_session_request(tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            while Arc::strong_count(&queue) >= holders_while_reading {
+                tokio::task::yield_now().await;
+            }
+        },
+    ))
+    .await
+    .expect("the reader ends");
+
+    // Assert
+    assert_eq!(*queue.lock().expect("queue"), [queued_prompt]);
+    app.services.wait_for_cleanup_tasks(None).await;
+}
+
+type ReaderTurn = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<TurnResult, ag_contracts::AgentError>> + Send>,
+>;
+
+/// Builds an app whose `sess` session runs graph reader turns through `turn`.
+async fn reader_app(
+    turn: impl Fn() -> ReaderTurn + Clone + Send + Sync + 'static,
+) -> (App, tempfile::TempDir) {
+    let mut factory = MockSessionRunFactory::new();
+    factory.expect_create().once().returning(|id, _| {
+        let mut channel = MockAgentChannel::new();
+        channel
+            .expect_shutdown_session()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        SessionRunClient::from_channel(id.to_string(), Arc::new(channel))
+    });
+    factory
+        .expect_create_graph_task()
+        .returning(move |context_id, _, _| {
+            let turn = turn.clone();
+            let mut channel = MockAgentChannel::new();
+            channel
+                .expect_run_turn()
+                .once()
+                .returning(move |_, mut request, _| {
+                    // Spend the reserved call so no budget clone outlives the
+                    // turn and delays cleanup.
+                    if let Some(budget) = request.provider_call_budget.take() {
+                        budget.consume().expect("reserved provider call");
+                    }
+
+                    turn()
+                });
+            channel
+                .expect_shutdown_session()
+                .returning(|_| Box::pin(async { Ok(()) }));
+            Ok(SessionRunClient::from_channel(
+                context_id.into(),
+                Arc::new(channel),
+            ))
+        });
+    let clients = test_app_clients().with_session_run_factory(Arc::new(factory));
+    let (mut app, directory) = new_test_app_with_clients(clients).await;
+    let git = install_session_worktree(&mut app);
+    app.services.set_git_client(Arc::new(git));
+    seed_session(&mut app.sessions, app.services.db()).await;
+
+    (app, directory)
+}
+
+fn reader_turn_result() -> TurnResult {
+    TurnResult {
+        assistant_message: AgentResponse::plain("read"),
+        context_reset: false,
+        harness_report: None,
+        provider_conversation_id: None,
+        usage: ag_contracts::test_support::token_usage("graph-model", 1, 1),
+    }
+}
+
 async fn queue_sync_behind_selected_graph_writer(
     app: &mut App,
     observed_rx: &mut mpsc::UnboundedReceiver<TurnRequest>,
@@ -510,18 +720,7 @@ fn install_graph_environment(
     effects_entered: &Arc<Notify>,
     effects_release: &Arc<Notify>,
 ) {
-    let mut fs = MockFsClient::new();
-    fs.expect_is_dir().returning(|_| true);
-    app.services.set_fs_client(Arc::new(fs));
-    let mut git = MockGitClient::new();
-    git.expect_detect_git_info()
-        .returning(|_| Box::pin(async { Some("wt/sess".into()) }));
-    git.expect_main_checkout_working_tree()
-        .returning(|_| Box::pin(async { Ok(None) }));
-    git.expect_diff()
-        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
-    git.expect_diff_stats()
-        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
+    let mut git = install_session_worktree(app);
     let entered = effects_entered.clone();
     let release = effects_release.clone();
     git.expect_is_worktree_clean().once().returning(move |_| {
@@ -534,6 +733,25 @@ fn install_graph_environment(
         })
     });
     app.services.set_git_client(Arc::new(git));
+}
+
+/// Installs a filesystem where the `sess` worktree exists and returns the
+/// Git client that validates it, for callers to extend and install.
+fn install_session_worktree(app: &mut App) -> MockGitClient {
+    let mut fs = MockFsClient::new();
+    fs.expect_is_dir().returning(|_| true);
+    app.services.set_fs_client(Arc::new(fs));
+    let mut git = MockGitClient::new();
+    git.expect_detect_git_info()
+        .returning(|_| Box::pin(async { Some("wt/sess".into()) }));
+    git.expect_main_checkout_working_tree()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    git.expect_diff()
+        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    git.expect_diff_stats()
+        .returning(|_, _| Box::pin(async { Ok(DiffStats::default()) }));
+
+    git
 }
 
 async fn assert_reader_result(

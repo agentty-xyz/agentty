@@ -902,11 +902,17 @@ fn background_event_labels_preserve_variant_identity() {
         },
         AppEvent::RefreshGitStatus,
         AppEvent::SessionTurnReady {
-            session_id: session_id.clone(),
+            key: crate::domain::session_usage::LiveUsageKey {
+                run: crate::domain::session_usage::LiveUsageRun::SessionTurn,
+                session_id: session_id.clone(),
+            },
             turn: crate::app::session::LiveTurn::default(),
         },
         AppEvent::SessionTurnCleared {
-            session_id: session_id.clone(),
+            key: crate::domain::session_usage::LiveUsageKey {
+                run: crate::domain::session_usage::LiveUsageRun::SessionTurn,
+                session_id: session_id.clone(),
+            },
         },
         AppEvent::SessionProgressUpdated {
             progress_message: None,

@@ -1485,12 +1485,13 @@ impl App {
     /// guaranteed alive because `run_turn` has not returned yet), and
     /// app-server channels shut down through `shutdown_session`. Both paths
     /// converge on the worker returning a `[Stopped]` error. Background graph
-    /// work, such as proposal generation or a reply decision, is stopped too.
-    /// After signalling, the persisted status is updated to `Review`, the
-    /// in-memory snapshot and shared handle are refreshed, automatic focused
-    /// review is suppressed for the partial turn, and UI events are emitted
-    /// so the user can inspect or continue the session instead of treating it
-    /// as canceled.
+    /// work, such as proposal generation or a reply decision, is stopped too,
+    /// and so are task attempts, including graph readers running beside the
+    /// worker. After signalling, the persisted status is updated to `Review`,
+    /// the in-memory snapshot and shared handle are refreshed, automatic
+    /// focused review is suppressed for the partial turn, and UI events are
+    /// emitted so the user can inspect or continue the session instead of
+    /// treating it as canceled.
     ///
     /// # Errors
     /// Returns an error when the session does not exist, has no running
@@ -1525,6 +1526,7 @@ impl App {
             );
         }
 
+        self.sessions.cancel_session_tasks(session_id);
         if let Some(handles) = self.sessions.session_handles().get(session_id) {
             // Cancel the current turn's token so the worker's `select!`
             // branch fires and triggers graceful channel shutdown. The
