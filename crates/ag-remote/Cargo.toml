@@ -36,3 +36,6 @@ ag-relay.workspace = true
 ag-session = { workspace = true, features = ["test-utils"] }
 rcgen.workspace = true
 tokio = { workspace = true, features = ["net", "test-util"] }
+
+[features]
+test-utils = ["ag-session/test-utils"]

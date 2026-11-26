@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use ag_remote::protocol::{ClientFrame, RemoteRequest, ServerFrame};
-use ag_remote::{PROTOCOL_VERSION, PairingRequest, RemoteConnection};
+use ag_remote::{DeviceStore, PROTOCOL_VERSION, PairingRequest, RemoteConnection};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -49,9 +49,19 @@ async fn paired_device_reconnects_with_its_token() -> TestResult {
             revision: 1,
         }
     );
+    let devices = server.devices.list_devices().await?;
     assert_eq!(server.devices.device_ids(), [device_id]);
-    assert_ne!(server.devices.token_hashes(), [token]);
-    assert_eq!(server.devices.last_seen(), [Some(200)]);
+    assert_eq!(
+        server.devices.find_device_by_token_hash(&token).await?,
+        None
+    );
+    assert_eq!(
+        devices
+            .iter()
+            .map(|device| device.last_seen_at)
+            .collect::<Vec<_>>(),
+        [Some(200)]
+    );
 
     Ok(())
 }

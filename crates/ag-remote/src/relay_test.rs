@@ -10,7 +10,7 @@ use tokio_tungstenite::tungstenite::http::Uri;
 
 use super::{Dialer, INITIAL_RETRY_DELAY, REGISTER_PATH, RelayEndpoint, retry_delay_after};
 use crate::relay::{pairing_link, pairing_link_on_page};
-use crate::test_support::{
+use crate::source_support::{
     LOOPBACK_GUARD, TLS_HANDSHAKE_RECORD, TlsFixture, loopback_listener, untrusting_tls_config,
 };
 

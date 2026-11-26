@@ -5,7 +5,7 @@ use super::{
     PairingState, UNBIASED_BYTE_LIMIT, random_code,
 };
 use crate::entropy::OsEntropy;
-use crate::test_support::{FailingEntropy, ReplayEntropy};
+use crate::source_support::{FailingEntropy, ReplayEntropy};
 
 /// Issues a code from bytes `0..8`, which map to `ABCDEFGH`.
 fn issue_alphabet_prefix(state: &mut PairingState) -> PairingCode {

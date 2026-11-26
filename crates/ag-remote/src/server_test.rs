@@ -13,7 +13,7 @@ use super::{
 use crate::device::{DeviceStore, DeviceStoreError};
 use crate::relay::RelayStatus;
 use crate::server::{RemoteError, RemoteHost, RemoteServerConfig, start_with_entropy};
-use crate::test_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
+use crate::source_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
 
 /// Builds headers carrying only `Host: host`.
 fn host_header(host: &'static str) -> HeaderMap {

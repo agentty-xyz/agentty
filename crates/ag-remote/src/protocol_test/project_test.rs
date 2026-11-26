@@ -15,7 +15,7 @@ use crate::protocol::{
     RemoteProject, RemoteProjectEntry, RemoteRequest, RemoteResponse, RemoteSessionMode,
     RequestedProjectId,
 };
-use crate::test_support::{RecordingBackend, host_fixture};
+use crate::source_support::{RecordingBackend, host_fixture};
 
 /// `RemoteRequest` as a server before `project_id` declared it, with the
 /// same serde attributes, for checking what such a server makes of a newer

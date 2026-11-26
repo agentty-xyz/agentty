@@ -12,7 +12,7 @@ use crate::protocol::{
     RemoteResult, RemoteSessionMode, RequestedProjectId, RequestedSessionId,
 };
 use crate::request::{CAPABILITIES, RequestOrder, RequestPolicy, execute};
-use crate::test_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
+use crate::source_support::{FailingEntropy, MemoryDeviceStore, RecordingBackend, StateFixture};
 
 /// Session every sample names; the test backend never lists it.
 const UNLISTED: &str = "unlisted";

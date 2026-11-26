@@ -16,7 +16,7 @@ use crate::protocol::{
     RemoteGraphProposal, RemoteGraphProposalPhase, RemoteGraphRequirement, RemoteGraphStatus,
     RemoteQuestion, RemoteRequest, RemoteResponse, RemoteSession, RemoteSessionGraph,
 };
-use crate::test_support::session_fixture;
+use crate::source_support::session_fixture;
 
 /// The parts of a `graphs` response, all empty for any other response.
 #[derive(Default)]

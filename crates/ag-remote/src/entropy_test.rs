@@ -1,5 +1,5 @@
 use super::{OsEntropy, random_hex};
-use crate::test_support::FailingEntropy;
+use crate::source_support::FailingEntropy;
 
 #[test]
 fn random_hex_encodes_requested_byte_count() {

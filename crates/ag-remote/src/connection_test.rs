@@ -15,7 +15,7 @@ use crate::protocol::{
     ClientFrame, RemoteGraphAction, RemoteGraphActionRequest, RemoteRequest, ServerFrame,
 };
 use crate::server::{RemoteConnection, ServerState};
-use crate::test_support::{
+use crate::source_support::{
     FIND, FailingEntropy, INSERT, MemoryDeviceStore, RecordingBackend, StateFixture, TOUCH,
 };
 use crate::transport::Incoming;
