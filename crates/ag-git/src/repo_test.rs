@@ -14,10 +14,10 @@ use crate::error::GitError;
 use crate::repo::{
     AsyncGitCommand, GIT_COMMAND_TIMEOUT, NETWORK_GIT_COMMAND_TIMEOUT,
     apply_non_interactive_environment, batch_mode_ssh_command, command_output_detail,
-    format_git_invocation, main_checkout_working_tree, main_checkout_working_tree_sync,
-    main_repo_root, no_submodule_recursion_environment, normalize_repo_url,
-    parse_git_directory_paths, parse_repo_root, repo_root_from_git_dir_async, resolve_git_dir,
-    run_git_command_sync, run_git_command_with_timeout,
+    format_git_invocation, host_configuration_environment, main_checkout_working_tree,
+    main_checkout_working_tree_sync, main_repo_root, normalize_repo_url, parse_git_directory_paths,
+    parse_repo_root, repo_root_from_git_dir_async, resolve_git_dir, run_git_command_sync,
+    run_git_command_with_timeout,
 };
 use crate::telemetry_support::{SpanCapture, attribute, attribute_keys};
 
@@ -73,33 +73,34 @@ fn test_batch_mode_ssh_command_extends_configured_command_or_defaults_to_ssh() {
 }
 
 #[test]
-fn no_submodule_recursion_follows_the_configuration_the_environment_already_passes() {
+fn host_configuration_follows_the_configuration_the_environment_already_passes() {
     // Arrange / Act
-    let alone = no_submodule_recursion_environment(None);
-    let after_two = no_submodule_recursion_environment(Some("2".to_string()));
-    let unparsable = no_submodule_recursion_environment(Some("many".to_string()));
+    let alone = host_configuration_environment(None);
+    let after_two = host_configuration_environment(Some("2".to_string()));
+    let unparsable = host_configuration_environment(Some("many".to_string()));
 
     // Assert
     let pairs = |index: usize, count: &str| {
-        let next = index + 1;
-
-        vec![
-            (
-                format!("GIT_CONFIG_KEY_{index}"),
-                "submodule.recurse".to_string(),
-            ),
-            (format!("GIT_CONFIG_VALUE_{index}"), "false".to_string()),
-            (
-                format!("GIT_CONFIG_KEY_{next}"),
-                "commit.status".to_string(),
-            ),
-            (format!("GIT_CONFIG_VALUE_{next}"), "false".to_string()),
-            ("GIT_CONFIG_COUNT".to_string(), count.to_string()),
+        let mut environment = Vec::new();
+        for (offset, (key, value)) in [
+            ("submodule.recurse", "false"),
+            ("commit.status", "false"),
+            ("maintenance.worktree-prune.auto", "0"),
         ]
+        .into_iter()
+        .enumerate()
+        {
+            let position = index + offset;
+            environment.push((format!("GIT_CONFIG_KEY_{position}"), key.to_string()));
+            environment.push((format!("GIT_CONFIG_VALUE_{position}"), value.to_string()));
+        }
+        environment.push(("GIT_CONFIG_COUNT".to_string(), count.to_string()));
+
+        environment
     };
-    assert_eq!(alone, pairs(0, "2"));
-    assert_eq!(after_two, pairs(2, "4"));
-    assert_eq!(unparsable, pairs(0, "2"));
+    assert_eq!(alone, pairs(0, "3"));
+    assert_eq!(after_two, pairs(2, "5"));
+    assert_eq!(unparsable, pairs(0, "3"));
 }
 
 #[test]
@@ -128,6 +129,59 @@ fn git_commands_never_recurse_into_submodules_whatever_the_repository_configures
 
     // Assert
     assert_eq!(recurse.expect("configured value").trim(), "false");
+}
+
+#[test]
+fn maintenance_a_commit_starts_never_prunes_a_worktree_record_that_is_still_being_added() {
+    // Arrange
+    // `git worktree add` creates `.git/worktrees/<name>` before it writes the
+    // `locked` file that keeps pruning away, so a record caught in between has
+    // only its directory. The repository runs the automatic maintenance a
+    // commit starts with the `worktree-prune` task, as Git's default strategy
+    // does from Git 2.54, and in the foreground, so it finishes before the
+    // commit returns. Local settings override any global ones.
+    let directory = tempdir().expect("repository");
+    let git = |arguments: &[&str]| {
+        Command::new("git")
+            .args(arguments)
+            .current_dir(directory.path())
+            .status()
+            .expect("git")
+            .success()
+    };
+    assert!(git(&["init", "-q"]));
+    for (key, value) in [
+        ("user.name", "Test"),
+        ("user.email", "test@example.com"),
+        ("commit.gpgsign", "false"),
+        ("maintenance.auto", "true"),
+        ("maintenance.autoDetach", "false"),
+        ("maintenance.worktree-prune.enabled", "true"),
+        ("maintenance.worktree-prune.auto", "1"),
+    ] {
+        assert!(git(&["config", key, value]));
+    }
+    let worktrees = directory.path().join(".git/worktrees");
+    let control = worktrees.join("pruned-without-agentty");
+    fs::create_dir_all(&control).expect("control record");
+    assert!(git(&["commit", "-q", "--allow-empty", "-m", "control"]));
+    assert!(
+        !control.exists(),
+        "this Git's automatic maintenance does not prune worktree records"
+    );
+    let record = worktrees.join("being-added");
+    fs::create_dir_all(&record).expect("worktree record");
+
+    // Act
+    let commit = run_git_command_sync(
+        directory.path(),
+        &["commit", "-q", "--allow-empty", "-m", "agentty"],
+        "commit",
+    );
+
+    // Assert
+    commit.expect("commit");
+    assert!(record.is_dir());
 }
 
 #[test]

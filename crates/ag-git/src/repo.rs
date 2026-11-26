@@ -675,7 +675,7 @@ fn apply_non_interactive_environment(command: &mut Command) {
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
         .envs(trusted_history_environment())
-        .envs(no_submodule_recursion_environment(
+        .envs(host_configuration_environment(
             std::env::var("GIT_CONFIG_COUNT").ok(),
         ));
 }
@@ -691,21 +691,23 @@ fn apply_non_interactive_environment_async(command: &mut AsyncCommand) {
         .env("GCM_INTERACTIVE", "never")
         .env("GIT_SSH_COMMAND", git_ssh_command)
         .envs(trusted_history_environment())
-        .envs(no_submodule_recursion_environment(
+        .envs(host_configuration_environment(
             std::env::var("GIT_CONFIG_COUNT").ok(),
         ));
 }
 
-/// Sets [`SUBMODULE_ISOLATION_CONFIGURATION`] through Git's environment
-/// configuration, after the `configured_count` pairs the caller's
-/// environment already passes. The environment overrides every
-/// configuration file, including a user's global `submodule.recurse=true`.
-fn no_submodule_recursion_environment(configured_count: Option<String>) -> Vec<(String, String)> {
+/// Sets [`HOST_GIT_CONFIGURATION`] through Git's environment configuration,
+/// after the `configured_count` pairs the caller's environment already
+/// passes. The environment overrides every configuration file, including a
+/// user's global `submodule.recurse=true`, and Git passes it on to the
+/// commands it starts, such as the background maintenance after a fetch or
+/// a commit.
+fn host_configuration_environment(configured_count: Option<String>) -> Vec<(String, String)> {
     let first = configured_count
         .and_then(|count| count.trim().parse::<usize>().ok())
         .unwrap_or(0);
     let mut environment = Vec::new();
-    for (offset, (key, value)) in SUBMODULE_ISOLATION_CONFIGURATION.iter().enumerate() {
+    for (offset, (key, value)) in HOST_GIT_CONFIGURATION.iter().enumerate() {
         let index = first.saturating_add(offset);
         environment.push((format!("GIT_CONFIG_KEY_{index}"), (*key).to_string()));
         environment.push((format!("GIT_CONFIG_VALUE_{index}"), (*value).to_string()));
@@ -713,20 +715,31 @@ fn no_submodule_recursion_environment(configured_count: Option<String>) -> Vec<(
     environment.push((
         "GIT_CONFIG_COUNT".to_string(),
         first
-            .saturating_add(SUBMODULE_ISOLATION_CONFIGURATION.len())
+            .saturating_add(HOST_GIT_CONFIGURATION.len())
             .to_string(),
     ));
 
     environment
 }
 
-/// Configuration every host Git command runs with, because a session may
-/// have left a repository at a submodule path whose hooks and configuration
-/// would otherwise run: commands such as checkout, reset, fetch, and rebase
-/// never recurse into submodules, and commits, including those a rebase
-/// makes, never print a status, which would run `git status` inside them.
-const SUBMODULE_ISOLATION_CONFIGURATION: [(&str, &str); 2] =
-    [("submodule.recurse", "false"), ("commit.status", "false")];
+/// Configuration every host Git command runs with.
+///
+/// A session may have left a repository at a submodule path whose hooks and
+/// configuration would otherwise run: commands such as checkout, reset,
+/// fetch, and rebase never recurse into submodules, and commits, including
+/// those a rebase makes, never print a status, which would run `git status`
+/// inside them.
+///
+/// The automatic maintenance a fetch, commit, merge, or rebase starts never
+/// prunes worktree records. `git worktree add` creates its record before it
+/// locks it, and a prune in between deletes the record and fails the new
+/// session's checkout; Git's default maintenance strategy prunes from Git
+/// 2.54. Agentty prunes the records of the worktrees it removes itself.
+const HOST_GIT_CONFIGURATION: [(&str, &str); 3] = [
+    ("submodule.recurse", "false"),
+    ("commit.status", "false"),
+    ("maintenance.worktree-prune.auto", "0"),
+];
 
 /// Makes Git read the history the objects record, ignoring `refs/replace`
 /// and grafts, which an agent working in a session can write: otherwise a
