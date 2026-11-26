@@ -717,7 +717,7 @@ pub(super) async fn consume_turn_events(
     live_usage: Arc<LiveUsage>,
     clock: Arc<dyn Clock>,
 ) -> super::activity::TurnActivity {
-    let mut activity = super::activity::TurnActivity::default();
+    let mut activity = super::activity::TurnActivity::for_run(live_usage.key.run.clone());
     let mut active_progress: Option<String> = None;
     let mut latest_thought: Option<String> = None;
     let consumer = TurnEventConsumer {

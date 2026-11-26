@@ -1903,7 +1903,10 @@ fn live_turn_events_change_observable_state() {
     // Arrange
     let mut batch = AppEventBatch::default();
     batch.collect_event(AppEvent::SessionTurnCleared {
-        session_id: "live".into(),
+        key: crate::domain::session_usage::LiveUsageKey {
+            run: crate::domain::session_usage::LiveUsageRun::SessionTurn,
+            session_id: "live".into(),
+        },
     });
 
     // Act

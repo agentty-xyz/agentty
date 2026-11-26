@@ -652,6 +652,9 @@ and the next node it unblocks; it returns to **Review** once the graph finishes 
 for you. A message sent meanwhile starts at once. `Ctrl+C` cancels generation or drops
 an undecided reply.
 
+Independent read-only nodes run at the same time. Nodes that change files run one at a
+time, and never while a read-only node or a chat turn uses the workspace.
+
 Reply in chat to act on a pending proposal. The session model decides what your reply
 means:
 

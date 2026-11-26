@@ -6,10 +6,10 @@ weight = 8
 
 `ag-session` provides pure contracts for static execution graphs. `ag-store` persists
 their revisions, execution links, and exact result versions. `ag-worker` provides a
-deterministic static executor with atomic storage admission. Agentty adapts task
-conversations to its serial session workers and fresh utilities to the concurrent
-utility worker. Focused review and approved `/graph` proposals both run on this
-executor.
+deterministic static executor with atomic storage admission. Agentty adapts writing task
+conversations to its serial session workers, read-only task conversations to a lane
+beside them, and fresh utilities to the concurrent utility worker. Focused review and
+approved `/graph` proposals both run on this executor.
 
 ## Graph and Node Identity
 
@@ -131,6 +131,13 @@ through task conversations. Each task node starts an isolated conversation; its
 responses, provider continuation, and usage persist before effects, and failed effects
 cannot publish a validated output. Ordinary chat history and pending questions remain
 separate.
+
+Writing task nodes run on the session's serial worker, so their effects stay ordered
+with chat turns, sync, and publication. Read-only task nodes run beside it, so
+independent readers overlap each other instead of queuing. Their shared Env lease still
+excludes writers and ordinary session work, which holds the Env exclusively. A reader
+leaves session status to its node's graph lease, so it neither waits for nor hides a
+pending chat question. Stopping the session cancels running readers too.
 
 `SessionService::start_execution_graph` saves and starts a static graph in a prepared
 session. Named provider-call limits are fixed at first launch and every charge and

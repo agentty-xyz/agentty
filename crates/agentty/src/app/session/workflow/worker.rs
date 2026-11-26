@@ -559,13 +559,10 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
                 .cancel_token
                 .lock()
                 .is_ok_and(|token| token.is_cancelled());
-        let outcome = match &result {
-            _ if interrupted => Outcome::Canceled,
-            Some(Ok(())) => Outcome::Completed,
-            Some(Err(SessionError::StoppedByUser(_))) | None => Outcome::Canceled,
-            Some(Err(_)) => Outcome::Failed,
-        };
-        span.finish(outcome);
+        span.finish(SessionWorkerService::work_outcome(
+            interrupted,
+            result.as_ref(),
+        ));
         SessionWorkerService::clear_queued_messages_after_stop(&self.context, result.as_ref());
         self.release_unqueued_message_traces();
     }
@@ -659,6 +656,38 @@ pub(super) struct SessionWorkerContext {
 }
 
 impl SessionWorkerContext {
+    /// Shares one live session's handles with work that runs on
+    /// `session_run`.
+    fn from_runtime(
+        services: &AppServices,
+        runtime: &SessionWorkerRuntime,
+        session_run: SessionRunClient,
+    ) -> Self {
+        Self {
+            app_event_tx: services.event_sender(),
+            available_agent_kinds: services.available_agent_kinds().into(),
+            branch_operation_lock: Arc::clone(&runtime.branch_operation_lock),
+            cancel_token: Arc::clone(&runtime.cancel_token),
+            cargo_cache: services.cargo_cache(),
+            session_run,
+            child_pid: Arc::clone(&runtime.child_pid),
+            clock: services.clock(),
+            db: services.db().clone(),
+            folder: runtime.folder.clone(),
+            fs_client: services.fs_client(),
+            git_client: services.git_client(),
+            graph_activity: services.graph_activity.clone(),
+            harness_models: services.harness_models(),
+            queued_messages: Arc::clone(&runtime.queued_messages),
+            review_request_client: Arc::clone(&runtime.review_request_client),
+            session_update_versions: Arc::clone(&runtime.session_update_versions),
+            session_id: runtime.session_id.clone(),
+            session_agent: runtime.session_agent,
+            status: Arc::clone(&runtime.status),
+            transcript: Arc::clone(&runtime.transcript),
+        }
+    }
+
     /// Returns the submission order of the next queued chat prompt.
     fn next_queued_message_order(&self) -> Option<u64> {
         self.queued_messages
@@ -1495,29 +1524,7 @@ impl SessionWorkerService {
             },
         );
 
-        let context = SessionWorkerContext {
-            app_event_tx: services.event_sender(),
-            available_agent_kinds: services.available_agent_kinds().into(),
-            branch_operation_lock: Arc::clone(&runtime.branch_operation_lock),
-            cancel_token: Arc::clone(&runtime.cancel_token),
-            cargo_cache: services.cargo_cache(),
-            session_run,
-            child_pid: Arc::clone(&runtime.child_pid),
-            clock: services.clock(),
-            db: services.db().clone(),
-            folder: runtime.folder.clone(),
-            fs_client: services.fs_client(),
-            git_client: services.git_client(),
-            graph_activity: services.graph_activity.clone(),
-            harness_models: services.harness_models(),
-            queued_messages: Arc::clone(&runtime.queued_messages),
-            review_request_client: Arc::clone(&runtime.review_request_client),
-            session_update_versions: Arc::clone(&runtime.session_update_versions),
-            session_id: runtime.session_id.clone(),
-            session_agent: runtime.session_agent,
-            status: Arc::clone(&runtime.status),
-            transcript: Arc::clone(&runtime.transcript),
-        };
+        let context = SessionWorkerContext::from_runtime(services, runtime, session_run);
         let worker = SessionWorkerHandle::spawn(
             SessionWorkerHost {
                 graph_resources: Arc::clone(&services.graph_resources),
@@ -1535,6 +1542,46 @@ impl SessionWorkerService {
             .insert(runtime.session_id.clone(), worker.clone());
 
         worker
+    }
+
+    /// Runs one read-only graph conversation beside the session mailbox, with
+    /// the same operation tracking.
+    ///
+    /// Readers neither wait for each other nor queue behind ordinary chat;
+    /// their Env lease alone orders them against writers and session work.
+    /// Each reader owns its cancellation slot and child process, so
+    /// concurrent readers never replace each other's. Session stop and
+    /// cleanup reach it through its registered task cancellation. A stopped
+    /// reader leaves queued chat prompts alone: they wait on the worker's
+    /// turns, which clear them when a session stop interrupts those. A reader
+    /// shares the session worker's execution client but runs its own
+    /// task-owned runtime.
+    fn spawn_graph_reader(
+        &mut self,
+        services: &AppServices,
+        runtime: &SessionWorkerRuntime,
+        command: SessionCommand,
+    ) {
+        self.ensure_session_worker(services, runtime);
+        let session_run = self.session_runs[&runtime.session_id].session_run.clone();
+        let mut context = SessionWorkerContext::from_runtime(services, runtime, session_run);
+        context.cancel_token = Arc::default();
+        context.child_pid = Arc::default();
+        let run_client = services.session_run_client(&runtime.session_id);
+        let trace = ScheduledSessionCommand::trace(&command);
+        let reader = spawn::spawn_detached(async move {
+            let mut span = trace.selected();
+            span.identify("agentty.session.id", context.session_id.to_string());
+            let result = Self::process_session_command(&context, &run_client, command)
+                .with_context(span.context())
+                .await;
+            let interrupted = context
+                .cancel_token
+                .lock()
+                .is_ok_and(|token| token.is_cancelled());
+            span.finish(Self::work_outcome(interrupted, result.as_ref()));
+        });
+        services.track_cleanup_task(reader);
     }
 
     /// Persists one operation and sends its command to the selected worker.
@@ -1602,6 +1649,17 @@ impl SessionWorkerService {
             operation_id.to_string(),
             (session_id.clone(), Arc::downgrade(cancellation)),
         );
+    }
+
+    /// Classifies finished work for its trace; a canceled turn token marks
+    /// work interrupted even when its effects swallowed the cancellation.
+    fn work_outcome(interrupted: bool, result: Option<&Result<(), SessionError>>) -> Outcome {
+        match result {
+            _ if interrupted => Outcome::Canceled,
+            Some(Ok(())) => Outcome::Completed,
+            Some(Err(SessionError::StoppedByUser(_))) | None => Outcome::Canceled,
+            Some(Err(_)) => Outcome::Failed,
+        }
     }
 
     /// Clears pending chat messages when the work just stopped by user action.
@@ -2350,14 +2408,22 @@ impl SessionManager {
                 &operation_id,
                 &cancellation,
             );
-            let command = SessionCommand::RunGraphTask(Box::new(graph_turn::GraphTaskCommand {
+            let task = graph_turn::GraphTaskCommand {
                 cancellation,
                 completion: completion.clone(),
                 factory: services.task_run_factory(),
                 operation_id,
                 request,
                 resources: services.graph_resources.clone(),
-            }));
+            };
+            let is_reader = task.is_reader();
+            let command = SessionCommand::RunGraphTask(Box::new(task));
+            if is_reader {
+                self.worker_service_mut()
+                    .spawn_graph_reader(services, &runtime, command);
+
+                return Ok(());
+            }
             let worker = self
                 .worker_service_mut()
                 .ensure_session_worker(services, &runtime);
@@ -2677,6 +2743,13 @@ impl SessionManager {
 
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
+        self.cancel_session_tasks(session_id);
+        self.worker_service_mut().clear_session_worker(session_id);
+    }
+
+    /// Interrupts every role and graph task attempt the session admitted,
+    /// including graph readers running beside its worker.
+    pub(in crate::app) fn cancel_session_tasks(&mut self, session_id: &str) {
         let operations = self
             .worker_service_mut()
             .task_cancellations
@@ -2687,7 +2760,6 @@ impl SessionManager {
         for operation in operations {
             self.cancel_agent_task_attempt(&operation);
         }
-        self.worker_service_mut().clear_session_worker(session_id);
     }
 
     /// Settles current work and retains pending work until persistence commits.

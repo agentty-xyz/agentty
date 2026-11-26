@@ -23,6 +23,7 @@ use crate::domain::harness::HarnessAvailability;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{SessionHandles, SessionId, SessionSize, Status};
 use crate::domain::session_message::SessionTranscript;
+use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
 use crate::infra::db::AppRepositories;
 use crate::infra::terminal_clipboard::MockTerminalClipboard;
 use crate::infra::tmux::MockTmuxClient;
@@ -878,28 +879,47 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
 }
 
 #[test]
-fn app_event_batch_keeps_latest_live_turn_handle_or_clear_per_session() {
+fn app_event_batch_keeps_latest_live_turn_handle_or_clear_per_run_in_arrival_order() {
     // Arrange
     let mut batch = AppEventBatch::default();
     let turn = crate::app::session::LiveTurn::default();
+    let chat = LiveUsageKey {
+        run: LiveUsageRun::SessionTurn,
+        session_id: "session".into(),
+    };
+    let reader = LiveUsageKey {
+        run: LiveUsageRun::Attempt("reader".to_string()),
+        ..chat.clone()
+    };
+    let other = LiveUsageKey {
+        session_id: "other".into(),
+        ..chat.clone()
+    };
 
     // Act
     batch.collect_event(AppEvent::SessionTurnReady {
-        session_id: "session".into(),
+        key: chat.clone(),
         turn: turn.clone(),
     });
-    batch.collect_event(AppEvent::SessionTurnCleared {
-        session_id: "session".into(),
-    });
     batch.collect_event(AppEvent::SessionTurnReady {
-        session_id: "other".into(),
+        key: reader.clone(),
+        turn: turn.clone(),
+    });
+    batch.collect_event(AppEvent::SessionTurnCleared { key: chat.clone() });
+    batch.collect_event(AppEvent::SessionTurnReady {
+        key: other.clone(),
         turn: turn.clone(),
     });
 
     // Assert
-    assert_eq!(batch.session_turn_updates.len(), 2);
-    assert_eq!(batch.session_turn_updates.get("session"), Some(&None));
-    assert_eq!(batch.session_turn_updates.get("other"), Some(&Some(turn)));
+    assert_eq!(
+        batch.session_turn_updates,
+        [
+            (chat, None),
+            (reader, Some(turn.clone())),
+            (other, Some(turn)),
+        ]
+    );
 }
 
 #[tokio::test]

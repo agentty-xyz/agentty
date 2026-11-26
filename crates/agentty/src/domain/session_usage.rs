@@ -199,10 +199,11 @@ impl LiveUsageRun {
     }
 }
 
-/// Identifies one running turn's live usage.
+/// Identifies one running turn, whose live usage and live timeline the
+/// session shows.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct LiveUsageKey {
-    /// Run that reports the usage.
+    /// Run that reports the usage and timeline.
     pub run: LiveUsageRun,
     /// Session the run belongs to.
     pub session_id: SessionId,

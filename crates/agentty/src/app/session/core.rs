@@ -29,6 +29,7 @@ use crate::domain::session::{
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::session_order::ArchiveAction;
+use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
 use crate::domain::transient_message::{
     GeneratedTurnUpdate, QueuedAction, TransientMessage, TransientMessageAnchor,
     TransientMessageBody, TransientMessageLifecycle, TransientMessageSlot,
@@ -130,9 +131,12 @@ pub struct SessionManager {
     pub(super) active_prompt_outputs: HashMap<SessionId, String>,
     pub(super) default_session_model: AgentModel,
     pub(super) git_client: Arc<dyn git::GitClient>,
+    /// Latest live timeline of each run per session, one slot per run in
+    /// first-shown order; the session view shows the first that has steps.
+    pub(super) live_turn_slots: HashMap<SessionId, Vec<(LiveUsageRun, Arc<TimelineSnapshot>)>>,
     /// Live-timeline handles whose notification the foreground keeps armed
     /// while their timeline still changes each frame.
-    pub(super) live_turns: HashMap<SessionId, LiveTurn>,
+    pub(super) live_turns: HashMap<LiveUsageKey, LiveTurn>,
     pub(super) merge_service: SessionMergeService,
     pub(super) resources: super::resource::ResourceMonitor,
     pub(super) state: SessionState,
@@ -164,6 +168,7 @@ impl SessionManager {
             at_mention_indexes: HashMap::new(),
             default_session_model: defaults.model,
             git_client,
+            live_turn_slots: HashMap::new(),
             live_turns: HashMap::new(),
             merge_service: SessionMergeService,
             state,
@@ -834,17 +839,19 @@ impl SessionManager {
         }
     }
 
-    /// Shows the latest snapshot of a session turn's live timeline and keeps
-    /// its handle for per-frame refreshes, or removes the timeline when
-    /// `turn` is `None`. The timeline is never persisted or replayed to the
-    /// provider.
-    pub(crate) fn track_live_turn(&mut self, session_id: SessionId, turn: Option<LiveTurn>) {
+    /// Records the latest snapshot of one run's live timeline and keeps its
+    /// handle for per-frame refreshes, or removes that run's timeline when
+    /// `turn` is `None`. Runs that overlap in one session, such as graph-node
+    /// attempts beside a chat turn, keep separate slots, so one run's update
+    /// or clear never replaces another's. The timeline is never persisted or
+    /// replayed to the provider.
+    pub(crate) fn track_live_turn(&mut self, key: LiveUsageKey, turn: Option<LiveTurn>) {
         if let Some(turn) = turn {
-            self.show_live_turn(&session_id, Some(turn.snapshot()));
-            self.live_turns.insert(session_id, turn);
+            self.record_live_turn(&key, Some(turn.snapshot()));
+            self.live_turns.insert(key, turn);
         } else {
-            self.show_live_turn(&session_id, None);
-            self.live_turns.remove(&session_id);
+            self.record_live_turn(&key, None);
+            self.live_turns.remove(&key);
         }
     }
 
@@ -853,11 +860,11 @@ impl SessionManager {
     pub(crate) fn refresh_live_turns(&mut self) -> bool {
         let mut live_turns = std::mem::take(&mut self.live_turns);
         let mut changed = false;
-        live_turns.retain(|session_id, turn| {
+        live_turns.retain(|key, turn| {
             let Some(snapshot) = turn.refresh() else {
                 return false;
             };
-            self.show_live_turn(session_id, Some(snapshot));
+            self.record_live_turn(key, Some(snapshot));
             changed = true;
 
             true
@@ -867,13 +874,41 @@ impl SessionManager {
         changed
     }
 
-    /// Replaces or removes a session's live-timeline message; an empty
-    /// timeline removes it.
+    /// Replaces or removes the slot of `key`'s run, then shows the session's
+    /// first run whose timeline has steps.
+    fn record_live_turn(&mut self, key: &LiveUsageKey, snapshot: Option<Arc<TimelineSnapshot>>) {
+        let slots = self
+            .live_turn_slots
+            .entry(key.session_id.clone())
+            .or_default();
+        let position = slots.iter().position(|(run, _)| *run == key.run);
+        match (snapshot, position) {
+            (Some(snapshot), Some(position)) => slots[position].1 = snapshot,
+            (Some(snapshot), None) => slots.push((key.run.clone(), snapshot)),
+            (None, Some(position)) => {
+                slots.remove(position);
+            }
+            (None, None) => {}
+        }
+        let shown = slots
+            .iter()
+            .map(|(_, snapshot)| snapshot)
+            .find(|snapshot| snapshot.step_count > 0)
+            .cloned();
+        if slots.is_empty() {
+            self.live_turn_slots.remove(&key.session_id);
+        }
+
+        self.show_live_turn(&key.session_id, shown);
+    }
+
+    /// Replaces a session's live-timeline message, or removes it when
+    /// `snapshot` is `None`.
     fn show_live_turn(&mut self, session_id: &str, snapshot: Option<Arc<TimelineSnapshot>>) {
         let Some(session) = self.state.session_mut_for_id(session_id) else {
             return;
         };
-        match snapshot.filter(|snapshot| snapshot.step_count > 0) {
+        match snapshot {
             Some(snapshot) => session.transient_messages.upsert(TransientMessage {
                 anchor: TransientMessageAnchor::AfterActiveTurn,
                 body: TransientMessageBody::Timeline(snapshot),

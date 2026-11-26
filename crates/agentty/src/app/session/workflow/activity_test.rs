@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use super::TurnActivity;
 use crate::app::AppEvent;
 use crate::domain::session::SessionId;
+use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
 use crate::test_support::activity_event;
 
 #[test]
@@ -141,7 +142,12 @@ fn live_activity_feeds_the_timeline_and_interrupts_open_calls_when_events_end() 
     assert_eq!(snapshot.steps[0].rows.len(), 1);
     assert_eq!(
         std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>(),
-        [AppEvent::SessionTurnCleared { session_id }]
+        [AppEvent::SessionTurnCleared {
+            key: LiveUsageKey {
+                run: LiveUsageRun::SessionTurn,
+                session_id,
+            },
+        }]
     );
 }
 
