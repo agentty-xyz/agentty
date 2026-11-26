@@ -46,10 +46,12 @@ Include as much of the following information as possible:
 
 ## Remote Control
 
-Remote control is a preview feature that lets a paired browser follow and steer
-sessions, directly or through a relay. A paired device can send prompts that agents run
-with the session's permissions, so pairing, the limited set of things a paired device
-may do, and the encryption between a device and Agentty are security boundaries. See
+Remote control is a preview feature that lets a paired browser follow and steer sessions
+through the relay of an Agentty Platform that Agentty is signed in to, using the web
+client that platform serves. Agentty accepts no inbound connections for it. A paired
+device can send prompts that agents run with the session's permissions, so pairing, the
+limited set of things a paired device may do, and the encryption between a device and
+Agentty are security boundaries. See
 [Remote Control](https://agentty.xyz/docs/usage/remote-control/) for how to use it and
 [Remote Control Design](https://agentty.xyz/docs/architecture/remote-control-design/)
 for its trust model.
@@ -117,49 +119,49 @@ Report these as vulnerabilities:
 - a request from a paired device using one project's checkout or project settings for a
   session or project it does not belong to;
 - a removed device still connecting;
-- a relay that serves the web client unchanged, or anyone on the network path to a relay
-  served over TLS, reading or changing what a device and Agentty exchange, or learning
-  the pairing code;
-- acting as a paired device without its key or token, or as an Agentty instance without
-  its key;
-- a web page from another site connecting to Agentty's listener, or a script running in
-  the web client that neither Agentty nor the relay served; and
+- the relay, or anyone on the network path between a device, the relay, and Agentty,
+  reading or changing what a device and Agentty exchange, or learning the pairing code,
+  from that traffic;
+- acting as a paired device without its key, or as an Agentty instance without its key;
+- Agentty accepting an inbound connection for remote control; and
 - one relay client taking service away from other instances or devices in a way the
-  relay's limits should prevent.
+  limits of `ag-relay` should prevent.
 
 These are known limits, not vulnerabilities:
 
-- Whoever runs a relay serves the web client and can change its code. A changed client
-  can read and send everything the device can, including the pairing code. Use a relay
-  you trust or run your own, and serve it over TLS.
-- A relay sees which instance a device asks for, the network addresses of both, when
+- The platform serves the web client that paired devices run, so whoever operates the
+  platform, or anyone who can change what it serves, can change that code. On the
+  device's side, end-to-end encryption ends inside the web client, so it does not
+  protect against it. A changed client can read and send everything the device can,
+  including the pairing code, and can pass the device's key to someone else, who can
+  then act as that device until it is removed in the terminal. Agentty has no web client
+  or relay of its own to use instead: using remote control means trusting the platform
+  you sign in to with every paired device's access.
+- The relay sees which instance a device asks for, the network addresses of both, when
   they connect, and how much they send.
-- The relay does not limit plain TCP connections or slow request headers. It expects a
-  reverse proxy that terminates TLS and limits connections.
-- Safari, including every browser on iPhone and iPad, cannot yet store a device key that
-  page scripts cannot read. There the key is kept in a weaker form until the browser
-  can.
-- Agentty's own listener does not encrypt. It relies on the private tunnel that reaches
-  it.
+- `ag-relay` does not limit plain TCP connections or slow request headers. A platform
+  that embeds it is expected to put it behind a proxy that terminates TLS and limits
+  connections.
 
 ## Agentty Platform
 
-Signing in to an Agentty Platform, a preview feature, lets paired devices reach Agentty
-through the platform's hosted relay. See
-[Agentty Platform](https://agentty.xyz/docs/usage/platform/). The sign-in grants no
+Signing in to an Agentty Platform, a preview feature, is the only way paired devices
+reach Agentty: through the platform's relay, from the web client the platform serves.
+See [Agentty Platform](https://agentty.xyz/docs/usage/platform/). The sign-in grants no
 device any access: devices still pair with the one-time code, terminal approval, and
-end-to-end encryption described above, and the platform's relay is as untrusted as any
-other. The access token is stored in Agentty's database with the platform that issued
-it, sent only to that platform, and never to a relay or logged.
+end-to-end encryption described above. The platform's relay is untrusted with the
+streams it carries; the platform's web client is trusted, as the known limits under
+"Remote Control" state. The access token is stored in Agentty's database with the
+platform that issued it, sent only to that platform, and never to the relay or logged.
 
 Report these as vulnerabilities:
 
-- a platform access token, device code, or sign-in code reaching a relay, another
+- a platform access token, device code, or sign-in code reaching the relay, another
   platform, a log, or a paired device;
 - a device gaining access to a session because Agentty is signed in, without pairing;
-- Agentty contacting a platform, or dialling its relay, in a launch with
-  `--remote-relay`, or dialling the platform's relay before it registered with the
-  platform; and
+- Agentty contacting a platform that the user has neither signed in to nor started
+  signing in to, dialling any relay but the one named by the platform it is registered
+  with, or dialling that relay before it registered with the platform; and
 - an answer from a platform making the terminal run control sequences, or making Agentty
   open anything but a web page.
 
@@ -167,8 +169,8 @@ These are known limits, not vulnerabilities:
 
 - The platform vouches for which account an instance belongs to; it does not verify that
   the account holds the instance's key.
-- The platform serves the pairing page its links open, so it can change that page's code
-  like a relay operator can.
+- The platform decides which instances its relay admits, and can refuse this Agentty at
+  any time.
 
 ## Response and Disclosure Process
 

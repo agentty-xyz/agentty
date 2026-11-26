@@ -37,7 +37,7 @@ integration tests exercise supported APIs without exposing private implementatio
 | Workspace agents               | `AgentCatalogClient`            |
 | Process sampling               | `ResourceClient`                |
 | Trusted Cargo cache fetches    | `CargoCacheClient`              |
-| Remote-control listener        | `RemoteControlLauncher`         |
+| Remote-control relay link      | `RemoteControlLauncher`         |
 | Paired remote devices          | `DeviceStore`                   |
 | Relay host resolution, dials   | `NetworkClient`                 |
 | Agentty Platform API           | `PlatformClient`                |

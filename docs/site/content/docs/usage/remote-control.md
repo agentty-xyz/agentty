@@ -1,6 +1,6 @@
 +++
 title = "Remote Control"
-description = "Follow and steer Agentty sessions from a phone or another computer's browser."
+description = "Follow and steer Agentty sessions from a phone or another computer's browser through an Agentty Platform."
 weight = 4
 +++
 
@@ -18,9 +18,9 @@ with `/graph`, and act on an execution graph as the terminal's graph inspector d
 web page offers each of these. A device reaches every project in `Projects` and picks
 the one it shows with the [project menu](#usage-remote-control-project).
 
-Remote control is a preview feature. Start Agentty with `--experimental-remote`, or with
-`--remote-relay <URL>` alone to [use a relay](#usage-remote-control-relay), to add the
-`Remote` tab to the right of `Settings`.
+Remote control is a preview feature that runs through an
+[Agentty Platform](@/docs/usage/platform.md): Agentty connects out to the platform's
+relay, and devices connect to the same relay from the page the platform serves.
 
 <!-- more -->
 
@@ -28,33 +28,41 @@ Remote control is a preview feature. Start Agentty with `--experimental-remote`,
 
 <a id="usage-remote-control-start"></a>
 
-1. Start Agentty with `agentty --experimental-remote`.
-1. Press `Tab` in a list until the `Remote` tab opens, then press `Enter`.
-1. The tab shows the address Agentty listens on and a one-time pairing code.
-1. Open the address on the other device, enter the code, and name the device.
+1. Sign in to a platform in the `Platform` tab; see
+   [Sign In](@/docs/usage/platform.md#usage-platform-sign-in). Once the platform
+   registers this Agentty, the sign-in ends with remote control running. Later, press
+   `Enter` in the tab to start or stop it.
+1. The tab shows the relay state, a pairing link, and a QR code of the link. The code
+   sits beside the details, or below the relay state in a narrow terminal; when it fits
+   nowhere, the tab asks you to enlarge the terminal to show it.
+1. Scan the code or open the link on the other device. The platform's pairing page opens
+   with the code filled in: name the device and press `Pair`. On this computer, press
+   `o` to open the link; press `c` to copy it for another device. Copying uses the
+   terminal clipboard; if the terminal does not support it, select the link instead.
 1. The device shows a four-character confirmation code, and the tab shows a pairing
    request with the same code. Press `y` to approve it only when the codes match, or `x`
    to deny it.
 
-The device stays paired, so later visits connect without a code. While the listener
-runs, the tab reads `Remote (1 online)` with the number of connected devices. Pairing
-requests appear only in the tab, so keep it open while you pair a device.
+The link carries a one-time pairing code, so it works once; press `n` for a new one.
+Opening the tab while remote control runs also replaces the code. Pairing requests
+appear only in the tab, so keep it open while you pair a device. The device stays
+paired, so later visits to the platform's page connect without a link.
 
 The tab lists the paired devices. It names no project: a paired device reaches every
-project in `Projects`, whichever one the terminal has open. Opening the tab while the
-listener runs replaces the pairing code, because a code works once.
+project in `Projects`, whichever one the terminal has open.
 
-Remote control stays off until you start it, and it stops when you press `Enter` in the
-tab again or quit Agentty. It does not start again on the next launch. See
-[Keybindings](@/docs/usage/keybindings.md#remote) for the tab's keys.
+Remote control stops when you press `Enter` in the tab again or quit Agentty. It starts
+again on the next launch only with
+[keep on](@/docs/usage/platform.md#usage-platform-keep-on). See
+[Keybindings](@/docs/usage/keybindings.md#platform) for the tab's keys.
 
 ## Use the Page
 
-<a id="usage-remote-control-page"></a> The page lists sessions in a sidebar and shows
-the open session beside it. On a phone or a narrow window, the menu button opens the
-list; the back gesture, `Esc`, or a tap beside the list closes it. The address names the
-open session, so the back gesture returns to the previous one and a reload keeps it
-open.
+<a id="usage-remote-control-page"></a> The platform's page lists sessions in a sidebar
+and shows the open session beside it. On a phone or a narrow window, the menu button
+opens the list; the back gesture, `Esc`, or a tap beside the list closes it. The address
+names the open session, so the back gesture returns to the previous one and a reload
+keeps it open.
 
 The list groups sessions as the terminal does, with the archive collapsed. Type in
 `Filter sessions`, or press `/` to reach it, to match titles; `Esc` clears it. The
@@ -86,8 +94,9 @@ switches to another. The session list, the project line with its branch, counts,
 the pick. The browser remembers only projects you pick yourself, for each Agentty, and
 forgets them when you forget the pairing. If the project the page shows is no longer
 listed, the page goes back to the terminal's project and says
-`The project shown here is no longer listed, so this shows the terminal's project.` On a
-relay page with several Agenttys, each one has its own menu.
+`The project shown here is no longer listed, so this shows the terminal's project.` When
+the page shows [several Agenttys](#usage-remote-control-several), each one has its own
+menu.
 
 When this Agentty lets devices create sessions, the sidebar offers `New session`. Home
 then asks what the agent should work on in the project the page shows and its base
@@ -234,163 +243,49 @@ next to the device offers `Forget this device`. While the connection is down, a 
 says when the page reconnects, and a message you are typing stays in the box until it is
 back.
 
-## Reach Agentty From Another Device
+## Pair Several Agenttys
 
-<a id="usage-remote-control-reach"></a> Agentty listens only on `127.0.0.1`, by default
-on port `4646`. A browser on the same computer can open the address directly. Other
-devices need a private tunnel that forwards that port, such as:
+<a id="usage-remote-control-several"></a> One browser can pair with several Agenttys
+signed in to the same platform: open the pairing link of another Agentty, and it joins
+the ones already paired. Once one Agentty is paired, `Pair another Agentty` in the
+device menu opens the pairing form in the main pane, with your sessions still in the
+sidebar; choose a session or `Back to sessions` to leave it without pairing. The page
+refuses a link for another platform's relay.
 
-- `ssh -L 4646:127.0.0.1:4646 <host>` from a computer that can reach this one over SSH.
-- `tailscale serve 4646` on a Tailscale network.
+The sidebar then lists each Agentty's sessions under its own heading, which names it as
+the platform does, or by the start of its instance identifier, and shows its connection
+state, above its project line with `Sync` and `New session`. The filter, the `All`,
+`Needs you`, and `Running` buttons, and the sessions waiting on home span them all, and
+each waiting session names its Agentty. The address names the Agentty as well as the
+session. Each Agentty connects on its own, so one that is offline or refuses this device
+leaves the others working; the banner names the Agentty it is about, and the footer
+counts how many are connected. The footer's `⋯` button offers `Forget on` each Agentty.
+With one Agentty paired, the page looks as it does without the others.
 
-Agentty accepts requests only for `localhost`, `127.0.0.1`, and `::1`. When a tunnel
-reaches it under another name, such as a Tailscale machine name, add
-`--remote-control-host <HOST>` for that name; repeat the flag for several. Avoid public
-tunnels: anyone who finds the address can try to pair.
-
-Add `--remote-control-port <PORT>` to use another port, or `0` to let the system choose
-a free one.
-
-## Connect Through a Relay
-
-<a id="usage-remote-control-relay"></a> A relay lets devices reach Agentty without a
-tunnel: Agentty connects out to the relay, and devices connect to it too. Start Agentty
-with `--remote-relay <URL>`, such as `--remote-relay wss://relay.example`, and run your
-own `ag-relay` behind a reverse proxy that serves it over TLS, or, as a preview, sign in
-to the [Agentty Platform](@/docs/usage/platform.md) and use its hosted relay.
-`--remote-relay` alone enables remote control and the `Remote` tab, and accepts
-`--remote-control-port` and `--remote-control-host`; a launch with it does not contact
-the platform. The relay's container image is published for `amd64` and `arm64`: each
-release tags it with the version and `latest`, and each commit to `main` tags it `main`.
-The relay listens on port `8787`:
-
-```sh
-podman run --detach --name agentty-relay --publish 127.0.0.1:8787:8787 \
-  ghcr.io/agentty-xyz/agentty-relay:latest --client-address-header X-Real-IP
-```
-
-To build the image yourself instead, run this from a checkout of the Agentty repository:
-
-```sh
-podman build --file container/relay.Containerfile \
-  --ignorefile container/relay.containerignore --tag agentty-relay .
-```
-
-Arguments after the image name go to the relay: behind a proxy, pass
-`--client-address-header` with the header your proxy sets to the client address, so the
-relay's limits count each client separately. The relay carries up to 64 MiB a minute for
-each connected page and closes a connection that goes over, which leaves room for
-several messages with images.
-
-### Run the Relay on Fly.io
-
-<a id="usage-remote-control-relay-fly"></a> Fly.io serves the relay over TLS and limits
-connections, so it needs no other proxy. With `flyctl` signed in, create an app and
-deploy the published image with `relay.fly.toml` from the repository's
-[`container` directory](https://github.com/agentty-xyz/agentty/tree/main/container),
-using a checkout or a downloaded copy of that file:
-
-```sh
-fly apps create <name>
-fly deploy --config container/relay.fly.toml --app <name> --ha=false
-```
-
-Keep the app on exactly one machine: the relay joins a device to Agentty only when both
-reach the same machine. `--ha=false` creates one instead of Fly's default two; do not
-scale it up. Then start Agentty with `--remote-relay wss://<name>.fly.dev`. For your own
-domain, run `fly certs add <domain>` and add the DNS records it prints.
-
-### Admit Only Your Instances
-
-<a id="usage-remote-control-relay-admission"></a> A relay registers every Agentty that
-proves its key. To serve only your own, pass `--allow-instance` with each instance's
-identifier, repeated for several; on Fly.io, add it to the `app` line under
-`[processes]` in `relay.fly.toml`. The relay refuses any other instance, which then
-shows the relay as `Not admitted` and keeps retrying, with waits that grow to 30
-seconds, so it connects once the relay admits it.
-
-The identifier is the SHA-256 digest of the instance key that the pairing link carries
-after `key=`. This prints it:
-
-```sh
-printf '%s' <key> | xxd -r -p | shasum -a 256
-```
-
-### Pair Through the Relay
-
-With a relay, the tab also shows the relay state, a pairing link, and a QR code of the
-link. The code sits beside the details, or below the relay state in a narrow terminal;
-when it fits nowhere, the tab asks you to enlarge the terminal to show it. Scan the code
-or open the link on the other device. The relay's pairing page opens with the code
-filled in: name the device, press `Pair`, then approve the pairing as usual. On this
-computer, press `o` to open the link; press `c` to copy it for another device. Copying
-uses the terminal clipboard; if the terminal does not support it, select the link
-instead. The link carries the pairing code, so it works once.
-
-The browser remembers the pairing, so later visits to the relay's address connect
-without a link. Pairing through a relay needs an up-to-date browser, from 2025 or later,
-and a relay served over HTTPS.
-
-One browser can pair with several Agenttys through the same relay: open the pairing link
-of another Agentty, and it joins the ones already paired; `Back to sessions` on the
-pairing page returns to them without pairing. The sidebar then lists each Agentty's
-sessions under its own heading, which names it by the start of its instance identifier,
-or by the name the page's directory gives it, and shows its connection state, above its
-project line with `Sync` and `New session`. The filter, the `All`, `Needs you`, and
-`Running` buttons, and the sessions waiting on home span them all, and each waiting
-session names its Agentty. The address names the Agentty as well as the session. Each
-Agentty connects on its own, so one that is offline or refuses this device leaves the
-others working; the banner names the Agentty it is about, and the footer counts how many
-are connected. The footer's `⋯` button offers `Forget on` each Agentty. With one Agentty
-paired, the page looks as it does without the others.
-
-Traffic through the relay is encrypted between the device and Agentty. The relay sees
-when devices connect and how much they send, but not what they send. The relay also
-serves the pairing page, so use a relay you trust or run your own.
-
-A device paired through a relay proves itself with its own key instead of a stored
-token. The browser keeps that key where scripts on the page cannot read it. Safari,
-including every browser on iPhone and iPad, cannot store such a key yet, so there the
-key is kept in a form that a script running in the page could read; the page switches to
-the stronger form by itself once Safari supports it. Agentty keeps its relay key in its
-database; removing it unpairs every relay device.
-
-### Serve the Page From Another Web Application
-
-<a id="usage-remote-control-embedded"></a> Another web application can serve the same
-page on its own address, as one section of its site, and reach Agenttys through a relay
-at another address; the `ag-relay` crate's `WebClientPage` renders the page for it and
-names the content security policy it needs. The relay accepts device connections from
-any page, since what they carry is encrypted end to end. Such a page works as the
-relay's own:
-
-- Links to the application's other sections sit at the top of the sidebar, its own badge
-  stands beside the brand, and a link to your account sits under the theme switch.
-- The page pairs in its main pane, beside that sidebar, so the links, the theme switch,
-  and your account stay while it pairs instead of giving way to a full-screen card.
-  Until an Agentty is paired, the sidebar leaves out the session list and the device;
-  they appear once one is.
-- When the application is the [platform](@/docs/usage/platform.md) Agentty signs in to,
-  the pairing link that Agentty's `Platform` tab shows, or its QR code, opens the page
-  directly. The link that the `Remote` tab shows opens the relay's own page, so copy it
-  and paste it into the page's pairing form instead. Once one Agentty is paired,
-  `Pair another Agentty` in the device menu opens the same form in the main pane, with
-  your sessions still in the sidebar; choose a session or `Back to sessions` to leave
-  it. A link to the page itself may leave out the relay, and the page refuses a link for
-  another relay.
-- The page may list the Agenttys of your account that this browser has not paired yet,
-  with when each last connected and how to pair it, and name the paired ones as the
-  application does. When the list says you are signed out, sign in to the application
-  again; the paired Agenttys stay connected meanwhile.
-
-Being listed grants nothing: each Agentty still pairs only through its own link and your
-approval in its terminal. Whoever serves the page controls the code it runs, as for a
-relay's page, so use only an application you trust with your sessions.
+The page may also list the Agenttys of your account that this browser has not paired
+yet, with when each last connected and how to pair it. When the list says you are signed
+out, sign in to the platform again; the paired Agenttys stay connected meanwhile. Being
+listed grants nothing: each Agentty still pairs only through its own link and your
+approval in its terminal.
 
 ## Security
 
 <a id="usage-remote-control-security"></a> A paired device can send prompts that agents
 run with the session's permissions, so treat a pairing like a login.
+
+### Who you trust
+
+<a id="usage-remote-control-trust"></a> Traffic between a device and Agentty is
+encrypted end to end. The relay sees which Agentty a device asks for, the network
+addresses of both, when they connect, and how much they send, but not what they send.
+
+The platform also serves the page your devices run, and on the device's side the
+encryption ends inside that page. Whoever operates the platform, or anyone who can
+change what it serves, can change the page's code. A changed page can read and send
+everything the device can, including the pairing code in the link, and can pass the
+device's key to someone else, who can then act as that device until you remove it.
+Encryption does not protect against the page itself, and Agentty has no page or relay of
+its own to use instead, so sign in only to a platform you trust with your sessions.
 
 ### What a paired device can do
 
@@ -452,12 +347,15 @@ control.
 ### Protections
 
 - A pairing code works once, expires after 10 minutes, and stops working after five
-  wrong attempts. Press `n` in the `Remote` tab for a new code.
+  wrong attempts. Press `n` in the `Platform` tab for a new code.
 - A device becomes paired only after you approve it in the terminal; an unanswered
   request expires after two minutes.
-- Each device gets its own key, which Agentty stores only as a hash. Remove a device in
-  the `Remote` tab with `d`; its open connection closes at once. Keys do not expire, so
-  remove a device you no longer control.
+- Each device proves itself with its own key, and Agentty stores only a digest of the
+  public key. Remove a device in the `Platform` tab with `d`; its open connection closes
+  at once. Keys do not expire, so remove a device you no longer control. Agentty keeps
+  its own instance key in its database; removing that key unpairs every device.
+- Signing in to a platform grants no device any access, and Agentty never sends the
+  platform's access token to the relay or to a device.
 - A device reaches only the projects in `Projects` and the project the terminal has
   open, and only the sessions their lists show: active sessions and the archived ones
   the list shows. Agentty answers a request for any other project or session as if it
@@ -469,16 +367,18 @@ control.
   this computer's Git and forge credentials; it cannot choose a branch name. See
   [Forge Authentication](@/docs/usage/forge-authentication.md) for what publishing
   needs.
-- Web pages from other sites cannot connect, including pages that point their own domain
-  at this computer.
-- Agentty does not encrypt the connection itself. Use a tunnel that does, such as
-  Tailscale or SSH, when the traffic leaves this computer.
+- Agentty accepts no inbound connections: it reaches devices only through the relay of
+  the platform it is signed in to.
 
 ## Limitations
 
 <a id="usage-remote-control-limitations"></a>
 
 - Remote control works only while Agentty is open in a terminal.
+- Remote control needs a platform whose relay admits this Agentty; while your account
+  [waits for access](@/docs/usage/platform.md#usage-platform-waitlist), devices cannot
+  reach it.
+- Pairing needs an up-to-date browser, from 2025 or later.
 - A project without a current Git branch, such as a detached `HEAD`, cannot take new
   sessions; a device's request for the host details or a new session then fails.
 - When a device first shows a project the terminal does not have open, ahead and behind

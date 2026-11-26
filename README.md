@@ -187,12 +187,11 @@ agentty --version    # Show the installed Agentty version
 - **Graphs**: `/graph` requests execution-graph proposals you can inspect, revise, and
   approve before any node runs. See the
   [workflow guide](https://agentty.xyz/docs/usage/workflow/).
-- **Remote control**: `--experimental-remote` adds a preview `Remote` tab that pairs a
-  phone or browser to start, follow, reply to, and merge sessions through a tunnel you
-  provide, and `--remote-relay <URL>` adds it to work through a relay. See
-  [Remote Control](https://agentty.xyz/docs/usage/remote-control/). The `Platform` tab
-  signs in to the Agentty Platform, so paired devices reach Agentty through its hosted
-  relay. See [Agentty Platform](https://agentty.xyz/docs/usage/platform/).
+- **Remote control**: in preview, the `Platform` tab signs in to the Agentty Platform
+  and pairs a phone or browser to start, follow, reply to, and merge sessions through
+  the platform's relay. See
+  [Remote Control](https://agentty.xyz/docs/usage/remote-control/) and
+  [Agentty Platform](https://agentty.xyz/docs/usage/platform/).
 - **Harness**: `/model` lists `ag-harness`, Agentty's built-in agent loop, with local
   models and hosted models that run once their provider key or sign-in is set. Its edit
   mode runs shell commands in the operating system's sandbox where available (Seatbelt

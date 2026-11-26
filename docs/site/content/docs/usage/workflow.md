@@ -20,12 +20,9 @@ Agentty restores the last tab on startup.
   `p` to switch projects. Each row shows a short model name, such as `opus-5.5`, and its
   reasoning level.
 - **Settings**: Configure appearance, model defaults, and launch commands.
-- **Remote**: Pair a phone or browser with the project's sessions. The tab appears only
-  with `agentty --experimental-remote` or `--remote-relay <URL>`; see
+- **Platform**: Sign in to an Agentty Platform and pair a phone or browser through its
+  relay; see [Agentty Platform](@/docs/usage/platform.md) and
   [Remote Control](@/docs/usage/remote-control.md).
-- **Platform**: Sign in to an Agentty Platform so paired devices reach Agentty through
-  its hosted relay. The tab appears unless Agentty starts with `--remote-relay`; see
-  [Agentty Platform](@/docs/usage/platform.md).
 
 Press `?`, shown as `?: help` in the top bar, to list the shortcuts available on the
 current page. With `NO_COLOR`, selections use bold reverse video.

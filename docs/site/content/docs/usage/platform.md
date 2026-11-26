@@ -1,19 +1,19 @@
 +++
 title = "Agentty Platform"
-description = "Sign in to an Agentty Platform so paired devices reach Agentty through its hosted relay."
+description = "Sign in to an Agentty Platform so paired devices reach Agentty through its relay."
 weight = 5
 +++
 
-<a id="usage-platform"></a> Signing in to an Agentty Platform lets devices you pair
-reach this Agentty through the platform's hosted relay, without a tunnel or a relay of
-your own. Pairing works as in [Remote Control](@/docs/usage/remote-control.md): a device
-needs the one-time code, you approve it in the terminal, and its traffic is encrypted
-end to end. Signing in grants no device any access.
+<a id="usage-platform"></a> Signing in to an Agentty Platform is how
+[remote control](@/docs/usage/remote-control.md) reaches this Agentty: devices you pair
+connect through the platform's relay, from the page the platform serves. Pairing still
+needs the one-time code and your approval in the terminal, and a device's traffic is
+encrypted end to end. Signing in grants no device any access. The platform serves the
+code your devices run, so sign in only to one you trust; see
+[Who you trust](@/docs/usage/remote-control.md#usage-remote-control-trust).
 
-The `Platform` tab follows the other tabs. Every launch offers it, with or without
-`--experimental-remote`, except one with `--remote-relay`; see
-[Relay Precedence](#usage-platform-relay-precedence). Agentty contacts the platform only
-after you sign in.
+The `Platform` tab follows the other tabs on every launch. Agentty contacts the platform
+only after you sign in.
 
 <!-- more -->
 
@@ -43,18 +43,14 @@ again.
 remote control through the platform's relay, and again to stop it. Before it starts,
 Agentty checks the account and its registration again, so a revoked sign-in signs out
 instead of connecting. The tab then shows the relay state, a pairing link on the
-platform's pairing page, a QR code of the link where the terminal has room (see
-[Pair Through the Relay](@/docs/usage/remote-control.md#pair-through-the-relay)),
-pairing requests to approve with `y` or deny with `x`, and the paired devices, which `d`
-removes. See [Keybindings](@/docs/usage/keybindings.md#platform) for every key.
+platform's pairing page, a QR code of the link where the terminal has room, pairing
+requests to approve with `y` or deny with `x`, and the paired devices, which `d`
+removes. See
+[Start Remote Control](@/docs/usage/remote-control.md#usage-remote-control-start) to
+pair a device and [Keybindings](@/docs/usage/keybindings.md#platform) for every key.
 
 `Enter` controls only the current launch: remote control is off each time Agentty
 starts, unless you turn on [keep on](#usage-platform-keep-on).
-
-Remote control is the same one as in the `Remote` tab, with the same paired devices.
-With `--experimental-remote` as well, both tabs show it, and it also listens on its
-loopback port as usual. Without that flag, it listens on a free loopback port that only
-this computer can reach, and only the platform's relay is offered.
 
 When the relay shows `Not admitted`, the platform's relay refused this Agentty, for
 example because its registration was removed elsewhere. Agentty keeps retrying and
@@ -75,17 +71,12 @@ Keep on is saved with the sign-in: a new sign-in starts with it off, and signing
 the platform revoking the token, clears it. If it cannot be saved, the tab says so, and
 the change lasts only until Agentty quits.
 
-## Relay Precedence
+## Use Another Platform
 
-<a id="usage-platform-relay-precedence"></a> A relay named with `--remote-relay` always
-wins. A launch with it does not offer the `Platform` tab and does not contact the
-platform: Agentty neither checks the account nor registers with the platform, and leaves
-the saved sign-in for a later launch. Neither relay ever receives the platform's access
-token.
-
-Use `--platform-url <URL>` to sign in to another platform; it defaults to
-`https://platform.agentty.xyz`. Plain `http://` is accepted only for this computer. A
-sign-in saved for another platform, with its keep on, is ignored.
+<a id="usage-platform-url"></a> Use `--platform-url <URL>` to sign in to another
+platform; it defaults to `https://platform.agentty.xyz`. Plain `http://` is accepted
+only for this computer. A sign-in saved for another platform, with its keep on, is
+ignored.
 
 ## Accounts Without Access
 
@@ -102,5 +93,5 @@ revoke the token; you can sign in again once it answers. If the platform does no
 confirm, or the saved sign-in cannot be removed from this computer, the tab says so.
 When the platform revokes the token itself, the tab returns to signed out.
 
-Agentty keeps the token in its database, as it does its relay key, together with the
-platform that issued it, and never sends it to another platform or to any relay.
+Agentty keeps the token in its database, as it does its instance key, together with the
+platform that issued it, and never sends it to another platform or to the relay.
