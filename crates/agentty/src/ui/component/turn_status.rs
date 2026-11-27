@@ -1,7 +1,8 @@
 //! Status line shown above the composer while a turn runs, such as
-//! `⠹ Running cargo test 12s  ·  step 4  ·  turn 1m 5s`.
+//! `⠹ Running a command 12s  ·  step 4  ·  turn 1m 5s`.
 //!
-//! The line names what the turn does now and for how long, the step count,
+//! The line names what the turn does now, without the target the
+//! timeline's running row already shows, and for how long, the step count,
 //! and the whole turn's time, which reads the same source as the composer's
 //! `Timer`. A caller may pass a telemetry line for the slot on its right; as
 //! the pane narrows, the slot, the turn time, the step count, and the
@@ -12,7 +13,7 @@
 use ag_tui_text::text_util;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::domain::turn_timeline::CurrentAction;
 use crate::ui::component::turn_timeline;
@@ -70,11 +71,8 @@ pub(crate) fn turn_status_line(
 
 /// The status line's segments, before they are fitted to a width.
 struct StatusSegments {
-    /// The current action on one line, as the session's progress text
-    /// shows it.
+    /// The current action without its target.
     action: String,
-    /// Columns of `action` that name the action rather than its object.
-    label_width: usize,
     spinner: &'static str,
     step: Option<String>,
     telemetry: Option<Line<'static>>,
@@ -91,14 +89,13 @@ impl StatusSegments {
 
             text_util::format_duration_compact(elapsed_seconds)
         });
-        let (action, label_width) = input.current.map_or_else(
-            || (DEFAULT_ACTION.to_string(), DEFAULT_ACTION.width()),
-            |current| (current.text.clone(), current.label_width),
+        let action = input.current.map_or_else(
+            || DEFAULT_ACTION.to_string(),
+            |current| current.label.clone(),
         );
 
         Self {
             action,
-            label_width,
             spinner: turn_timeline::spinner_glyph(input.spinner_frame),
             step: (input.step_count > 0).then(|| format!("step {}", input.step_count)),
             telemetry: telemetry.filter(|line| {
@@ -136,12 +133,7 @@ impl StatusSegments {
         let muted = Style::default().fg(style::palette::text_muted());
 
         let mut line = Line::from(vec![Span::styled(format!("{} ", self.spinner), warning)]);
-        let (label, detail) = split_at_width(&action, self.label_width);
-        line.spans.push(Span::styled(label, warning));
-        line.spans.push(Span::styled(
-            detail,
-            Style::default().fg(style::palette::text()),
-        ));
+        line.spans.push(Span::styled(action, warning));
         if let Some(timer) = self.timer.take() {
             line.spans.push(Span::styled(format!(" {timer}"), warning));
         }
@@ -173,21 +165,6 @@ impl StatusSegments {
 
         left + self.telemetry.as_ref().map_or(0, |line| line.width() + 2)
     }
-}
-
-/// Splits `text` after its first `width` columns.
-fn split_at_width(text: &str, width: usize) -> (String, String) {
-    let mut head_width = 0;
-    let split = text
-        .char_indices()
-        .find(|(_, character)| {
-            head_width += character.width().unwrap_or(0);
-
-            head_width > width
-        })
-        .map_or(text.len(), |(index, _)| index);
-
-    (text[..split].to_string(), text[split..].to_string())
 }
 
 #[cfg(test)]

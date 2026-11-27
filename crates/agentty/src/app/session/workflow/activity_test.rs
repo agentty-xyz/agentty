@@ -139,7 +139,7 @@ fn live_activity_feeds_the_timeline_and_interrupts_open_calls_when_events_end() 
         "turn-summary v1\n1 step · 1 tool · 1m 3s\nRan\t1 command\n─ Worked 1m 3s · 1 step · 1 \
          tool · 1 interrupted"
     );
-    assert_eq!(snapshot.steps[0].rows.len(), 1);
+    assert_eq!(snapshot.calls.stats.total, 1);
     assert_eq!(
         std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>(),
         [AppEvent::SessionTurnCleared {

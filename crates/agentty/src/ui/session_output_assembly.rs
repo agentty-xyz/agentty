@@ -42,12 +42,13 @@ const USER_PROMPT_TAB_WIDTH: usize = 4;
 /// LRU. Removed messages are pruned on rebuild; content, width, theme, Markdown
 /// version and live graph fingerprints invalidate individual segments.
 ///
-/// The running turn's live timeline is cached per part: each visible step's
-/// narration and thought, and each of its rows, keyed by the turn's
-/// timeline, the step's index in the turn, and the row's position. A part's
-/// revision, the width, theme, and Markdown version invalidate it; parts of
-/// another turn or of hidden or vanished steps and rows are pruned on
-/// rebuild, and all of them go once the session shows no timeline.
+/// The running turn's live timeline is cached per step: each visible step's
+/// narration and thought, keyed by the turn's timeline and the step's index
+/// in the turn. A step's header revision, the width, theme, and Markdown
+/// version invalidate it; steps of another turn or hidden or vanished steps
+/// are pruned on rebuild, and all of them go once the session shows no
+/// timeline. The block of the turn's calls is a few lines and renders
+/// uncached.
 #[derive(Default)]
 pub(crate) struct TranscriptRenderCache {
     entries: RefCell<HashMap<i64, TranscriptRenderEntry>>,
@@ -91,7 +92,7 @@ impl TranscriptRenderCache {
     }
 
     /// Keeps only the cached parts of `snapshot`'s turn and its visible
-    /// steps and rows.
+    /// steps.
     fn retain_timeline(&self, snapshot: Option<&TimelineSnapshot>) {
         self.timeline_parts.borrow_mut().retain(|part, _| {
             snapshot.is_some_and(|snapshot| {
@@ -99,8 +100,7 @@ impl TranscriptRenderCache {
                     && part
                         .step
                         .checked_sub(snapshot.hidden_steps)
-                        .and_then(|index| snapshot.steps.get(index))
-                        .is_some_and(|step| part.row.is_none_or(|row| row < step.rows.len()))
+                        .is_some_and(|index| index < snapshot.steps.len())
             })
         });
     }
@@ -158,11 +158,9 @@ struct TranscriptRenderEntry {
     lines: Arc<OutputLines>,
 }
 
-/// One cached part of a live timeline: a step's narration and thought when
-/// `row` is `None`, else one of its rows.
+/// One cached part of a live timeline: a step's narration and thought.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct TimelinePart {
-    row: Option<usize>,
     /// Index of the step in the turn, counting hidden steps.
     step: usize,
     /// Identity of the turn's timeline, whose revisions restart per turn.
@@ -419,7 +417,9 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
     }
 
     /// Appends a running turn's live timeline, sharing the rendered lines
-    /// of unchanged steps and rows, and records its running rows.
+    /// of unchanged steps, then the block of its calls: their totals, the
+    /// call that finished last, and the calls still running, whose rows it
+    /// records.
     fn append_timeline(&mut self, snapshot: &TimelineSnapshot) {
         let mut timeline = OutputLines::default();
         let mut spinner_rows = Vec::new();
@@ -434,7 +434,6 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
             let step_index = snapshot.hidden_steps + index;
             timeline.append(cache.render_timeline_part(
                 TimelinePart {
-                    row: None,
                     step: step_index,
                     turn: snapshot.id(),
                 },
@@ -448,24 +447,17 @@ impl<'assembly> SessionOutputAssembly<'assembly> {
                     )
                 },
             ));
-            for (row_index, row) in step.rows.iter().enumerate() {
-                if let Some(since) = row.running_since() {
-                    spinner_rows.push(SpinnerRow {
-                        line: timeline.len(),
-                        since,
-                    });
-                }
-                timeline.append(cache.render_timeline_part(
-                    TimelinePart {
-                        row: Some(row_index),
-                        step: step_index,
-                        turn: snapshot.id(),
-                    },
-                    row.revision(),
-                    input,
-                    || turn_timeline::row_lines(row, input.inner_width),
-                ));
+        }
+        let calls = &snapshot.calls;
+        timeline.extend(turn_timeline::stats_line(&calls.stats, input.inner_width));
+        for row in calls.latest.iter().chain(&calls.running) {
+            if let Some(since) = row.running_since {
+                spinner_rows.push(SpinnerRow {
+                    line: timeline.len(),
+                    since,
+                });
             }
+            timeline.extend(turn_timeline::row_lines(row, input.inner_width));
         }
         if timeline.is_empty() {
             return;

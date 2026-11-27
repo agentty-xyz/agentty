@@ -188,7 +188,7 @@ fn show_timeline(session: &mut Session, timeline: &mut TurnTimeline) {
 }
 
 #[test]
-fn test_timeline_cache_keeps_only_visible_steps_and_shares_unchanged_rows() {
+fn test_timeline_cache_keeps_only_visible_steps_and_shares_unchanged_ones() {
     // Arrange
     let mut session = crate::test_support::session_fixture("timeline", Status::InProgress);
     let mut timeline = TurnTimeline::default();
@@ -251,10 +251,10 @@ fn test_timeline_cache_keeps_only_visible_steps_and_shares_unchanged_rows() {
     let cleared = cache.timeline_parts.borrow().len();
 
     // Assert
-    assert_eq!(first_parts, 403);
+    assert_eq!(first_parts, 400);
     assert_eq!(reused, first_parts);
     assert_eq!(hidden_steps, Some(10));
-    assert_eq!(pruned, 403);
+    assert_eq!(pruned, 400);
     assert!(
         cache
             .timeline_parts
@@ -266,7 +266,7 @@ fn test_timeline_cache_keeps_only_visible_steps_and_shares_unchanged_rows() {
 }
 
 #[test]
-fn test_timeline_cache_never_reuses_a_previous_turns_rows() {
+fn test_timeline_cache_never_reuses_a_previous_turns_parts() {
     // Arrange
     let mut session = crate::test_support::session_fixture("turns", Status::InProgress);
     let cache = Rc::new(super::TranscriptRenderCache::default());
@@ -301,7 +301,8 @@ fn test_timeline_cache_never_reuses_a_previous_turns_rows() {
     let second_text = text(&second);
     assert!(second_text.contains("second-command"), "{second_text}");
     assert!(!second_text.contains("first-command"));
-    assert_eq!(cache.timeline_parts.borrow().len(), 2);
+    assert!(second_text.contains("1 tool · 1 command"), "{second_text}");
+    assert_eq!(cache.timeline_parts.borrow().len(), 1);
 }
 
 #[test]

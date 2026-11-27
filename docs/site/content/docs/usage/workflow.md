@@ -452,15 +452,16 @@ Unstarted drafts look up files in the project checkout. See
 [Prompt Input](@/docs/usage/keybindings.md#prompt-input) for editing keys.
 
 During a turn, the output shows a live timeline. Each message the model writes starts a
-`•` step, with its time since the turn started on the right, a dim `✻ Thought` line for
-its reasoning, and one row per tool call: `✓`, `✗`, or a spinner, a verb such as `Ran`
-or `Edit`, what the call acted on, and its result, such as `exit 0`, `+38 −4`, or
-`rejected · <reason>`. Consecutive reads, searches, and listings fold into one
-`Explored` row, a read directly followed by an edit of the same file folds into the
-edit, a failed command keeps its last output lines, a running call shows how long it has
-run, and a finished call that took 5 seconds or more shows its duration. Agent CLIs that
-report no messages show the rows alone. A status line above the composer names what the
-turn does now and for how long, the step count, and the turn's time.
+`•` step, with its time since the turn started on the right, and a dim `✻ Thought` line
+for its reasoning. Below the steps, the turn's tool calls stay compact: one line of
+totals, such as `52 tools · 1 failed · 1 running · 38 commands · 9 reads` followed by
+MCP, skill, and other tool names with their counts, then only the call that finished
+last and the calls still running. Each call row shows `✓`, `✗`, or a spinner, a verb
+such as `Ran` or `Edit`, what the call acted on, and its result, such as `exit 0`,
+`+38 −4`, or `rejected · <reason>`. A failed call keeps its last output lines, a running
+call shows how long it has run, and a finished call that took 5 seconds or more shows
+its duration. A status line above the composer names the kind of action the turn does
+now, such as `Running a command`, and for how long, the step count, and the turn's time.
 
 When a turn that called tools ends, a summary replaces the timeline above its saved
 answer or error notice: `Edited` lists each changed file with its added and removed

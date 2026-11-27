@@ -109,11 +109,7 @@ fn one_notification_stays_armed_until_a_frame_finds_nothing_new() {
     assert_eq!(while_armed, []);
     assert_eq!(
         refreshed.map(|snapshot| (
-            snapshot
-                .steps
-                .iter()
-                .map(|step| step.rows.len())
-                .sum::<usize>(),
+            snapshot.calls.stats.total,
             snapshot
                 .current
                 .as_ref()

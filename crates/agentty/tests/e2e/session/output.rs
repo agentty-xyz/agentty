@@ -1405,16 +1405,16 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                 .write_text("Stream activity demo")
                 .press_key("Enter")
                 .wait_for_text("printf activity-details", 15000)
-                .wait_for_text("posthog/query · SELECT 1", 15000)
-                .wait_for_text("Running { cargo fmt; cargo test; }", 15000)
-                .capture_labeled("running", "Invocations before the answer")
+                .wait_for_text("posthog/query ×1", 15000)
+                .wait_for_text("Running   { cargo fmt; cargo test; }", 15000)
+                .capture_labeled("running", "Totals, the last finished call, and running calls")
                 .compose(&running.release())
                 .wait_for_text("│ group failed", 10000)
-                .wait_for_text("Editing src/example.rs", 10000)
-                .capture_labeled("settled", "Rows update in place")
+                .wait_for_text("Editing a file", 10000)
+                .capture_labeled("settled", "Only the last finished call stays")
                 .compose(&settled.release())
                 .wait_for_text("✓ Edit", 10000)
-                .capture_labeled("thinking", "Finished rows remain between calls")
+                .capture_labeled("thinking", "The last finished call remains between calls")
                 .compose(&thinking.release())
                 // The summary is published before live-row cleanup completes.
                 // Wait for turn finalization before asserting the final frame.
@@ -1447,20 +1447,20 @@ fn wait_for_finalized_live_activity() -> Step {
     )
 }
 
-/// Checks the timeline's rows as calls start and finish, the status line,
-/// and the saved turn summary that replaces them above the answer.
+/// Checks the timeline's call block as calls start and finish: the totals,
+/// only the last finished call, and the running calls, and a status line
+/// that names only the kind of action, then the saved turn summary that
+/// replaces them above the answer.
 fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     let running = common::frame_from_capture(&report.captures[0]);
     let running_full = Region::full(running.cols(), running.rows());
     for row in [
-        "✓ Ran       obsolete-command",
-        "✓ MCP       posthog/query · SELECT 1",
-        "✓ Explored  read example.rs · search \"fn main\"",
+        "7 tools · 3 running · 3 commands · 1 read · 1 search · posthog/query ×1 · review ×1",
+        "✓ Search    fn main",
         "Running   printf activity-details",
         "Skill     review",
         "Running   { cargo fmt; cargo test; }",
-        "2 calls",
-        "Running { cargo fmt; cargo test; } 0s  ·  step 1  ·  turn 0s",
+        "Running a command 0s  ·  step 1  ·  turn 0s",
     ] {
         assertion::assert_text_in_region(&running, row, &running_full);
     }
@@ -1481,7 +1481,13 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
         "{group_row}"
     );
     assert!(group_row.ends_with(" 0s"), "{group_row}");
+    // Earlier finished calls and the running command's text in the status
+    // line are not repeated.
     for hidden in [
+        "obsolete-command",
+        "SELECT 1",
+        "✓ Read",
+        "Running { cargo fmt",
         "hidden-command-tail",
         "Working...",
         "Tools:",
@@ -1494,19 +1500,24 @@ fn assert_live_activity_report(frame: &TerminalFrame, report: &ProofReport) {
     let settled = common::frame_from_capture(&report.captures[1]);
     let settled_full = Region::full(settled.cols(), settled.rows());
     for row in [
-        "✓ Ran       printf activity-details",
-        "✗ Skill     review",
-        "│ first error line",
-        "│ hidden third error line",
+        "8 tools · 2 failed · 1 running · 3 commands · 1 edit · 1 read · 1 search",
         "✗ Ran       { cargo fmt; cargo test; }",
         "│ group failed",
         "Edit      src/example.rs",
-        "Editing src/example.rs",
+        "Editing a file 0s",
     ] {
         assertion::assert_text_in_region(&settled, row, &settled_full);
     }
     let settled_text = settled.all_text();
-    for hidden in ["second output line", "hidden-new-content", "replace_all"] {
+    for hidden in [
+        "printf activity-details",
+        "✗ Skill",
+        "error line",
+        "Editing src/example.rs",
+        "second output line",
+        "hidden-new-content",
+        "replace_all",
+    ] {
         assert!(!settled_text.contains(hidden), "{hidden}");
     }
 

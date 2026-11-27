@@ -1,18 +1,17 @@
-//! Live-timeline reducer and grouping tests covering ordering, exploration
-//! folding, reads folded into edits, discards, failure tails, reasoning,
-//! the current action, backends without narration, and bounds.
+//! Live-timeline reducer and grouping tests covering ordering, the call
+//! digest, discards, failure tails, reasoning, the current action, backends
+//! without narration, and bounds.
 
 use std::time::Duration;
 
 use ag_contracts::{
-    ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
-    LineRange, OutputEvent, OutputKind,
+    ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, OutputEvent,
+    OutputKind,
 };
 
-use super::{input_preview, reasoning_title};
+use super::{RUNNING_ROW_LIMIT, ToolEntry, input_preview, reasoning_title};
 use crate::domain::turn_timeline::{
-    CurrentAction, ExplorePart, RowResult, RowState, TimelineRow, TimelineSnapshot, ToolRow,
-    TurnTimeline,
+    CallStats, CurrentAction, RowResult, RowState, ToolRow, TurnTimeline,
 };
 use crate::test_support::activity_event;
 
@@ -47,34 +46,15 @@ fn call(id: &str, kind: ActivityKind, target: &str, status: ActivityStatus) -> A
     }
 }
 
-/// Returns the rows of every step.
-fn rows(snapshot: &TimelineSnapshot) -> Vec<&TimelineRow> {
-    snapshot.steps.iter().flat_map(|step| &step.rows).collect()
-}
-
-/// Returns how many rows every visible step holds.
-fn row_count(snapshot: &TimelineSnapshot) -> usize {
-    rows(snapshot).len()
-}
-
-/// Returns an exploration row's calls, parts, and whether it runs.
-fn explored(row: &TimelineRow) -> Option<(usize, &[ExplorePart], bool)> {
-    match row {
-        TimelineRow::Explored(group) => Some((
-            group.calls,
-            group.parts.as_slice(),
-            group.running_since.is_some(),
-        )),
-        TimelineRow::Tool(_) => None,
-    }
-}
-
-/// Returns the tool row at `index` among every step's rows.
-fn tool_row(snapshot: &TimelineSnapshot, index: usize) -> &ToolRow {
-    match rows(snapshot)[index] {
-        TimelineRow::Tool(row) => row,
-        TimelineRow::Explored(_) => unreachable!("expected a tool row"),
-    }
+/// Returns the row of every call the timeline holds, in arrival order,
+/// which the snapshot's digest picks from.
+fn call_rows(timeline: &TurnTimeline) -> Vec<ToolRow> {
+    timeline
+        .entries
+        .iter()
+        .filter_map(|entry| entry.kind.tool())
+        .map(ToolEntry::row)
+        .collect()
 }
 
 #[test]
@@ -114,7 +94,7 @@ fn steps_keep_arrival_order_with_reasoning_under_the_narration_it_precedes() {
 
     // Assert
     assert_eq!(snapshot.step_count, 2);
-    assert_eq!(row_count(&snapshot), 1);
+    assert_eq!(snapshot.calls.stats.total, 1);
     assert_eq!(snapshot.steps[0].at_seconds, 0);
     let thought = snapshot.steps[0].thought.as_ref().expect("thought");
     assert_eq!(thought.seconds, Some(6));
@@ -127,176 +107,170 @@ fn steps_keep_arrival_order_with_reasoning_under_the_narration_it_precedes() {
         Some("Reading the tests.")
     );
     assert_eq!(snapshot.steps[1].at_seconds, 71);
-    assert_eq!(snapshot.steps[1].rows, []);
     assert!(!timeline.is_empty());
 }
 
-#[test]
-fn consecutive_successful_explorations_fold_and_failures_stay_apart() {
-    // Arrange
-    let mut timeline = TurnTimeline::default();
-    message(&mut timeline, 0, "Exploring.", 0);
+/// One call update of [`digest_calls`]: its id, kind, target and name,
+/// status, and the Unix milliseconds it arrives.
+type CallUpdate = (
+    &'static str,
+    ActivityKind,
+    &'static str,
+    ActivityStatus,
+    u64,
+);
 
-    // Act
-    for event in [
-        call(
-            "1",
-            ActivityKind::Read,
-            "src/model.rs",
-            ActivityStatus::Completed,
-        ),
-        call(
-            "2",
-            ActivityKind::Read,
-            "src/model.rs",
-            ActivityStatus::Completed,
-        ),
-        call(
-            "3",
-            ActivityKind::Search,
-            "fn main",
-            ActivityStatus::Completed,
-        ),
-        call("4", ActivityKind::List, ".", ActivityStatus::Completed),
-        call(
-            "5",
-            ActivityKind::Read,
-            "crates/composer.rs",
-            ActivityStatus::Completed,
-        ),
-        ActivityEvent {
-            facts: Box::new(ActivityFacts {
-                failure: Some(ActivityFailure::Rejected),
-                reason: Some("outside the repository".into()),
-                target: Some("/etc/passwd".into()),
-                ..ActivityFacts::default()
-            }),
-            ..call("6", ActivityKind::Read, "", ActivityStatus::Failed)
-        },
-        call("7", ActivityKind::Search, "", ActivityStatus::Completed),
-        call("8", ActivityKind::Read, "notes.md", ActivityStatus::Running),
-    ] {
-        timeline.observe_activity(event, 0);
-    }
-    let snapshot = timeline.snapshot();
-
-    // Assert
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 3);
-    let parts = [
-        ExplorePart {
-            items: vec!["model.rs".into(), "composer.rs".into()],
-            label: "read",
-        },
-        ExplorePart {
-            items: vec!["\"fn main\"".into()],
-            label: "search",
-        },
-        ExplorePart {
-            items: vec![".".into()],
-            label: "list",
-        },
-    ];
-    assert_eq!(explored(rows[0]), Some((5, &parts[..], false)));
-    let failed = tool_row(&snapshot, 1);
-    assert_eq!(failed.verb, "Read");
-    assert_eq!(failed.state, RowState::Failed);
-    assert_eq!(
-        failed.result,
-        RowResult::Failed {
-            label: "rejected",
-            reason: Some("outside the repository".into()),
-        }
+/// Returns the calls of a turn that ran every kind of call, with the Unix
+/// milliseconds each update arrives: a read that starts first and finishes
+/// last, finished calls of each kind, and three commands still running.
+fn digest_calls() -> Vec<(ActivityEvent, u64)> {
+    let first_read: CallUpdate = (
+        "1",
+        ActivityKind::Read,
+        "a.rs",
+        ActivityStatus::Running,
+        1_000,
     );
-    let running = [ExplorePart {
-        items: vec!["notes.md".into()],
-        label: "read",
-    }];
-    assert_eq!(explored(rows[2]), Some((2, &running[..], true)));
-    assert_eq!(rows[2].running_since(), Some(0));
+    let last_read: CallUpdate = (
+        "1",
+        ActivityKind::Read,
+        "a.rs",
+        ActivityStatus::Completed,
+        6_000,
+    );
+    let running = ["sleep 1", "sleep 2", "sleep 3"]
+        .into_iter()
+        .zip([3_000, 4_000, 5_000])
+        .map(|(command, at)| -> CallUpdate {
+            (
+                command,
+                ActivityKind::Command,
+                command,
+                ActivityStatus::Running,
+                at,
+            )
+        });
+
+    std::iter::once(first_read)
+        .chain(finished_calls())
+        .chain(running)
+        .chain(std::iter::once(last_read))
+        .map(|(id, kind, target, status, at)| {
+            let event = ActivityEvent {
+                name: target.into(),
+                ..call(id, kind, target, status)
+            };
+
+            (event, at)
+        })
+        .collect()
 }
 
-#[test]
-fn a_read_directly_followed_by_an_edit_of_the_same_file_folds_into_the_edit() {
-    // Arrange
-    let mut timeline = TurnTimeline::default();
-    let ranged_read = |id: &str, path: &str, last: Option<u64>| ActivityEvent {
-        facts: Box::new(ActivityFacts {
-            lines: Some(LineRange { first: 10, last }),
-            target: Some(path.into()),
-            ..ActivityFacts::default()
-        }),
-        ..call(id, ActivityKind::Read, path, ActivityStatus::Completed)
-    };
-    let edit = |id: &str, path: &str| ActivityEvent {
-        facts: Box::new(ActivityFacts {
-            diff_stat: Some(DiffStat {
-                added: 38,
-                removed: 4,
-            }),
-            target: Some(path.into()),
-            ..ActivityFacts::default()
-        }),
-        ..call(
-            id,
+/// Returns finished calls of every other kind, two of one MCP tool among
+/// them, all arriving at Unix millisecond 2,000.
+fn finished_calls() -> Vec<CallUpdate> {
+    [
+        ("2", ActivityKind::Command, "ls", ActivityStatus::Completed),
+        ("3", ActivityKind::Search, "main", ActivityStatus::Completed),
+        ("4", ActivityKind::List, ".", ActivityStatus::Completed),
+        (
+            "5",
+            ActivityKind::WebSearch,
+            "ratatui",
+            ActivityStatus::Completed,
+        ),
+        (
+            "6",
+            ActivityKind::Mcp,
+            "posthog/query",
+            ActivityStatus::Completed,
+        ),
+        ("7", ActivityKind::Skill, "review", ActivityStatus::Failed),
+        (
+            "8",
+            ActivityKind::Mcp,
+            "posthog/query",
+            ActivityStatus::Completed,
+        ),
+        (
+            "9",
             ActivityKind::FileChange,
-            path,
-            ActivityStatus::Completed,
-        )
-    };
+            "b.rs",
+            ActivityStatus::Interrupted,
+        ),
+    ]
+    .into_iter()
+    .map(|(id, kind, target, status)| (id, kind, target, status, 2_000))
+    .collect()
+}
+#[test]
+fn the_digest_counts_every_call_and_shows_only_the_last_finished_and_the_running_ones() {
+    // Arrange
+    let mut timeline = TurnTimeline::default();
+    message(&mut timeline, 0, "Working.", 0);
 
     // Act
-    for event in [
-        call(
-            "0",
-            ActivityKind::Search,
-            "needle",
-            ActivityStatus::Completed,
-        ),
-        ranged_read("1", "./src/a.rs", Some(42)),
-        edit("2", "/repo/src/a.rs"),
-        ranged_read("3", "src/b.rs", None),
-        edit("4", "src/b.rs"),
-        call(
-            "5",
-            ActivityKind::Read,
-            "src/c.rs",
-            ActivityStatus::Completed,
-        ),
-        edit("6", "src/c.rs"),
-        call(
-            "7",
-            ActivityKind::Read,
-            "src/d.rs",
-            ActivityStatus::Completed,
-        ),
-        edit("8", "src/other.rs"),
-    ] {
-        timeline.observe_activity(event, 0);
+    for (event, at) in digest_calls() {
+        timeline.observe_activity(event, at);
     }
     let snapshot = timeline.snapshot();
 
     // Assert
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 6);
-    assert!(matches!(rows[0], TimelineRow::Explored(group) if group.calls == 1));
-    assert_eq!(tool_row(&snapshot, 1).read_first.as_deref(), Some(":10-42"));
     assert_eq!(
-        tool_row(&snapshot, 1).result,
-        RowResult::DiffStat {
-            added: 38,
-            removed: 4
+        snapshot.calls.stats,
+        CallStats {
+            commands: 4,
+            edits: 1,
+            failed: 1,
+            interrupted: 1,
+            listings: 1,
+            reads: 1,
+            running: 3,
+            searches: 1,
+            total: 12,
+            used: vec![("posthog/query".into(), 2), ("review".into(), 1)],
+            web_searches: 1,
         }
     );
-    assert_eq!(tool_row(&snapshot, 2).read_first.as_deref(), Some(":10-"));
-    assert_eq!(tool_row(&snapshot, 3).read_first.as_deref(), Some(""));
-    assert!(matches!(rows[4], TimelineRow::Explored(group) if group.calls == 1));
-    assert_eq!(tool_row(&snapshot, 5).read_first, None);
-    assert_eq!(tool_row(&snapshot, 5).verb, "Edit");
+    let latest = snapshot.calls.latest.as_ref().expect("latest call");
+    assert_eq!((latest.verb, latest.target.as_str()), ("Read", "a.rs"));
+    assert_eq!(latest.state, RowState::Succeeded);
+    let running = snapshot
+        .calls
+        .running
+        .iter()
+        .map(|row| (row.target.as_str(), row.running_since))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        running,
+        [
+            ("sleep 1", Some(3_000)),
+            ("sleep 2", Some(4_000)),
+            ("sleep 3", Some(5_000)),
+        ]
+    );
+    assert_eq!(snapshot.steps.len(), 1);
 }
 
 #[test]
-fn discarded_items_drop_their_narration_and_tool_rows_and_later_updates_still_apply() {
+fn the_digest_shows_at_most_the_earliest_running_calls_and_counts_the_rest() {
+    // Arrange
+    let mut timeline = TurnTimeline::default();
+
+    // Act
+    for index in 0..=RUNNING_ROW_LIMIT {
+        timeline.observe_activity(activity_event(&format!("call-{index}")), 0);
+    }
+    let snapshot = timeline.snapshot();
+
+    // Assert
+    assert_eq!(snapshot.calls.latest, None);
+    assert_eq!(snapshot.calls.running.len(), RUNNING_ROW_LIMIT);
+    assert_eq!(snapshot.calls.stats.running, RUNNING_ROW_LIMIT + 1);
+}
+
+#[test]
+fn discarded_items_drop_their_narration_and_calls_and_later_updates_still_apply() {
     // Arrange
     let mut timeline = TurnTimeline::default();
     message(&mut timeline, 0, "Kept.", 0);
@@ -328,8 +302,11 @@ fn discarded_items_drop_their_narration_and_tool_rows_and_later_updates_still_ap
     assert!(!unknown);
     assert!(discarded);
     assert_eq!(snapshot.step_count, 1);
-    assert_eq!(row_count(&snapshot), 1);
-    assert_eq!(tool_row(&snapshot, 0).state, RowState::Succeeded);
+    assert_eq!(snapshot.calls.stats.total, 1);
+    assert_eq!(
+        snapshot.calls.latest.map(|row| row.state),
+        Some(RowState::Succeeded)
+    );
 }
 
 #[test]
@@ -372,22 +349,22 @@ fn a_streamed_tool_call_row_becomes_its_activity_row() {
     // Assert
     assert!(!delta);
     assert!(!completed);
-    assert_eq!(tool_row(&preparing, 0).verb, "Preparing");
+    assert_eq!(preparing.calls.running[0].verb, "Preparing");
     assert_eq!(
         preparing.current,
         Some(CurrentAction {
-            label_width: 9,
+            label: "Preparing a tool call".into(),
             since: 1_000,
             text: "Preparing a tool call".into(),
         })
     );
-    assert_eq!(row_count(&running), 1);
-    assert_eq!(tool_row(&running, 0).verb, "Running");
-    assert_eq!(tool_row(&running, 0).target, "cargo test");
+    assert_eq!(running.calls.stats.total, 1);
+    assert_eq!(running.calls.running[0].verb, "Running");
+    assert_eq!(running.calls.running[0].target, "cargo test");
     assert_eq!(
         running.current,
         Some(CurrentAction {
-            label_width: 7,
+            label: "Running a command".into(),
             since: 2_000,
             text: "Running cargo test".into(),
         })
@@ -415,7 +392,7 @@ fn failed_commands_report_their_exit_and_keep_their_last_output_lines() {
     let snapshot = timeline.snapshot();
 
     // Assert
-    let row = tool_row(&snapshot, 0);
+    let row = snapshot.calls.latest.expect("finished command");
     assert_eq!(row.verb, "Ran");
     assert_eq!(row.state, RowState::Failed);
     assert_eq!(row.result, RowResult::Exit(101));
@@ -425,7 +402,7 @@ fn failed_commands_report_their_exit_and_keep_their_last_output_lines() {
 }
 
 #[test]
-fn rows_report_each_outcome_and_slow_durations() {
+fn calls_report_each_outcome_and_slow_durations() {
     // Arrange
     let mut timeline = TurnTimeline::default();
     let events = [
@@ -484,11 +461,12 @@ fn rows_report_each_outcome_and_slow_durations() {
         );
         timeline.observe_activity(event, 7_000);
     }
-    let snapshot = timeline.snapshot();
+    let rows = call_rows(&timeline);
 
     // Assert
-    let results = (0..6)
-        .map(|index| tool_row(&snapshot, index).result.clone())
+    let results = rows
+        .iter()
+        .map(|row| row.result.clone())
         .collect::<Vec<_>>();
     assert_eq!(
         results,
@@ -507,10 +485,10 @@ fn rows_report_each_outcome_and_slow_durations() {
             RowResult::None,
         ]
     );
-    assert_eq!(tool_row(&snapshot, 0).duration_seconds, Some(7));
-    assert_eq!(tool_row(&snapshot, 1).duration_seconds, Some(6));
-    assert_eq!(tool_row(&snapshot, 4).state, RowState::Interrupted);
-    assert_eq!(tool_row(&snapshot, 5).verb, "Called");
+    assert_eq!(rows[0].duration_seconds, Some(7));
+    assert_eq!(rows[1].duration_seconds, Some(6));
+    assert_eq!(rows[4].state, RowState::Interrupted);
+    assert_eq!(rows[5].verb, "Called");
 }
 
 #[test]
@@ -558,13 +536,12 @@ fn targets_and_verbs_follow_the_activity_kind() {
         timeline.observe_activity(event, 0);
     }
     let snapshot = timeline.snapshot();
+    let rows = call_rows(&timeline);
 
     // Assert
-    let described = (0..6)
-        .map(|index| {
-            let row = tool_row(&snapshot, index);
-            (row.verb, row.target.as_str())
-        })
+    let described = rows
+        .iter()
+        .map(|row| (row.verb, row.target.as_str()))
         .collect::<Vec<_>>();
     assert_eq!(
         described,
@@ -577,9 +554,41 @@ fn targets_and_verbs_follow_the_activity_kind() {
             ("Edit", "src/a.rs"),
         ]
     );
+    // The progress text names the target; the status line only the kind,
+    // of the latest call that has a row.
+    let current = snapshot.current.expect("running tool");
+    assert_eq!(current.text, "Calling lookup");
+    assert_eq!(current.label, "Calling a tool");
+    let labels = [
+        ActivityKind::Read,
+        ActivityKind::Search,
+        ActivityKind::WebSearch,
+        ActivityKind::List,
+        ActivityKind::Mcp,
+        ActivityKind::Skill,
+        ActivityKind::Tool,
+        ActivityKind::FileChange,
+    ]
+    .map(|kind| {
+        let mut running = TurnTimeline::default();
+        running.observe_activity(call("x", kind, "", ActivityStatus::Running), 0);
+
+        running
+            .current_action()
+            .map_or_default(|current| current.label)
+    });
     assert_eq!(
-        snapshot.current.map(|current| current.text).as_deref(),
-        Some("Editing src/a.rs")
+        labels,
+        [
+            "Reading a file",
+            "Searching",
+            "Searching the web",
+            "Listing files",
+            "Calling an MCP tool",
+            "Using a skill",
+            "Calling a tool",
+            "Editing a file",
+        ]
     );
 }
 
@@ -643,7 +652,7 @@ fn the_current_action_prefers_an_open_reasoning_title_then_a_running_call_then_p
     assert_eq!(
         reasoning,
         Some(CurrentAction {
-            label_width: 20,
+            label: "Weighing the options".into(),
             since: 2_000,
             text: "Weighing the options".into(),
         })
@@ -673,7 +682,7 @@ fn the_current_action_prefers_an_open_reasoning_title_then_a_running_call_then_p
 }
 
 #[test]
-fn backends_without_narration_show_rows_in_one_step_without_a_header() {
+fn backends_without_narration_keep_their_calls_in_one_step_without_a_header() {
     // Arrange
     let mut timeline = TurnTimeline::default();
 
@@ -686,11 +695,11 @@ fn backends_without_narration_show_rows_in_one_step_without_a_header() {
     // Assert
     assert_eq!(snapshot.steps.len(), 1);
     assert_eq!(snapshot.steps[0].narration, None);
-    assert_eq!(snapshot.steps[0].rows.len(), 3);
+    assert_eq!(snapshot.calls.running.len(), 3);
 }
 
 #[test]
-fn the_validated_answer_replaces_its_streamed_message_or_follows_the_rows() {
+fn the_validated_answer_replaces_its_streamed_message_or_follows_the_calls() {
     // Arrange
     let mut timeline = TurnTimeline::default();
     timeline.observe_output(
@@ -761,7 +770,7 @@ fn the_validated_answer_replaces_its_streamed_message_or_follows_the_rows() {
 }
 
 #[test]
-fn rows_steps_and_text_stay_bounded() {
+fn calls_steps_and_text_stay_bounded() {
     // Arrange
     let mut timeline = TurnTimeline::default();
     timeline.observe_output(
@@ -819,7 +828,8 @@ fn rows_steps_and_text_stay_bounded() {
     assert!(!announced_past_limit);
     assert!(!ignored_activity);
     assert!(!dropped);
-    assert_eq!(row_count(&tools), 2_048);
+    assert_eq!(tools.calls.stats.total, 2_048);
+    assert_eq!(tools.calls.running.len(), RUNNING_ROW_LIMIT);
     assert_eq!(
         tools.steps[0]
             .narration
@@ -881,9 +891,97 @@ fn narrated_steps_count_only_evicted_steps_that_narrated() {
     let snapshot = timeline.snapshot();
 
     // Assert: the 4,097th entry evicts the oldest steps, the call-only one
-    // first, and only the evicted steps that narrated still count.
+    // first, and only the evicted steps that narrated still count. The
+    // evicted call still counts in the totals.
     assert_eq!(snapshot.step_count, 4_097);
     assert_eq!(timeline.narrated_steps(), Some(4_096));
+    assert_eq!(
+        (snapshot.calls.stats.total, snapshot.calls.stats.commands),
+        (1, 1)
+    );
+    assert_eq!(snapshot.calls.latest, None);
+}
+
+#[test]
+fn a_call_still_running_when_its_step_is_evicted_settles_once() {
+    // Arrange
+    let mut timeline = TurnTimeline::default();
+    timeline.observe_activity(
+        call("a", ActivityKind::Command, "sleep", ActivityStatus::Running),
+        0,
+    );
+    for id in 0..4_096 {
+        message(&mut timeline, id, &format!("Step {id}."), id * 1_000);
+    }
+    let evicted = timeline.snapshot();
+
+    // Act
+    timeline.observe_activity(
+        call("a", ActivityKind::Command, "sleep", ActivityStatus::Failed),
+        5_000_000,
+    );
+    let settled = timeline.snapshot();
+
+    // Assert: the running call survives eviction without its step
+    // counting twice, and its result replaces it instead of adding a call.
+    assert_eq!(evicted.step_count, 4_097);
+    assert_eq!(timeline.narrated_steps(), Some(4_096));
+    assert_eq!(
+        (evicted.calls.stats.total, evicted.calls.stats.running),
+        (1, 1)
+    );
+    assert_eq!(evicted.calls.running.len(), 1);
+    assert_eq!(settled.step_count, 4_097);
+    assert_eq!(
+        (
+            settled.calls.stats.total,
+            settled.calls.stats.running,
+            settled.calls.stats.failed,
+            settled.calls.stats.commands,
+        ),
+        (1, 0, 1, 1)
+    );
+    assert_eq!(
+        settled.calls.latest.map(|row| row.state),
+        Some(RowState::Failed)
+    );
+}
+
+#[test]
+fn the_status_line_names_a_running_call_that_has_a_row() {
+    // Arrange
+    let mut timeline = TurnTimeline::default();
+    for index in 0..RUNNING_ROW_LIMIT {
+        timeline.observe_activity(
+            call(
+                &format!("read-{index}"),
+                ActivityKind::Read,
+                &format!("{index}.rs"),
+                ActivityStatus::Running,
+            ),
+            0,
+        );
+    }
+
+    // Act
+    timeline.observe_activity(
+        call(
+            "command",
+            ActivityKind::Command,
+            "ls",
+            ActivityStatus::Running,
+        ),
+        1_000,
+    );
+    let snapshot = timeline.snapshot();
+
+    // Assert
+    let last_row = snapshot.calls.running.last().map(|row| row.target.clone());
+    assert_eq!(last_row.as_deref(), Some("2.rs"));
+    assert_eq!(
+        snapshot.current.map(|current| current.text).as_deref(),
+        Some("Reading 2.rs")
+    );
 }
 
 #[test]
@@ -904,15 +1002,21 @@ fn snapshots_reuse_unchanged_steps_and_compare_by_revision() {
         0,
     );
     let changed = timeline.snapshot();
+    timeline.observe_activity(activity_event("call"), 0);
+    let called = timeline.snapshot();
     let other = TurnTimeline::default().snapshot();
 
     // Assert
     assert_eq!(first, unchanged);
     assert_ne!(first, changed);
+    assert_ne!(changed, called);
     assert_ne!(other, TurnTimeline::default().snapshot());
     assert!(std::sync::Arc::ptr_eq(&first.steps[0], &changed.steps[0]));
     assert!(!std::sync::Arc::ptr_eq(&first.steps[1], &changed.steps[1]));
     assert!(changed.steps[1].header_revision > first.steps[1].header_revision);
+    // A call changes only the digest, so its step is reused.
+    assert!(std::sync::Arc::ptr_eq(&changed.steps[1], &called.steps[1]));
+    assert_eq!(called.calls.stats.running, 1);
 }
 
 #[test]
@@ -991,48 +1095,7 @@ fn regrouping_after_a_discard_keeps_finished_reasoning_answers_and_prepared_call
             .map(|narration| &*narration.text),
         Some("Answer.")
     );
-    assert_eq!(tool_row(&snapshot, 0).verb, "Preparing");
-}
-
-#[test]
-fn a_folded_exploration_runs_while_any_of_its_calls_runs_from_the_earliest_start() {
-    // Arrange
-    let mut timeline = TurnTimeline::default();
-
-    // Act
-    timeline.observe_activity(
-        call("read", ActivityKind::Read, "a.rs", ActivityStatus::Running),
-        1_000,
-    );
-    timeline.observe_activity(
-        call(
-            "grep",
-            ActivityKind::Search,
-            "main",
-            ActivityStatus::Running,
-        ),
-        2_000,
-    );
-    timeline.observe_activity(
-        call(
-            "grep",
-            ActivityKind::Search,
-            "main",
-            ActivityStatus::Completed,
-        ),
-        3_000,
-    );
-    let one_running = timeline.snapshot();
-    timeline.observe_activity(
-        call("list", ActivityKind::List, ".", ActivityStatus::Running),
-        4_000,
-    );
-    let two_running = timeline.snapshot();
-
-    // Assert
-    assert_eq!(row_count(&one_running), 1);
-    assert_eq!(rows(&one_running)[0].running_since(), Some(1_000));
-    assert_eq!(rows(&two_running)[0].running_since(), Some(1_000));
+    assert_eq!(snapshot.calls.running[0].verb, "Preparing");
 }
 
 #[test]
@@ -1086,7 +1149,7 @@ fn failure_kinds_name_their_result_and_running_explorations_name_their_action() 
     }
 
     // Act
-    let snapshot = timeline.snapshot();
+    let rows = call_rows(&timeline);
     let actions = [
         (ActivityKind::Search, "needle"),
         (ActivityKind::List, "src"),
@@ -1099,14 +1162,15 @@ fn failure_kinds_name_their_result_and_running_explorations_name_their_action() 
     });
 
     // Assert
-    let labels = (0..4)
-        .map(|index| match &tool_row(&snapshot, index).result {
+    let labels = rows[..4]
+        .iter()
+        .map(|row| match &row.result {
             RowResult::Failed { label, .. } => *label,
             _ => "",
         })
         .collect::<Vec<_>>();
     assert_eq!(labels, ["denied", "timed out", "unavailable", "failed"]);
-    assert_eq!(tool_row(&snapshot, 4).verb, "Searched");
+    assert_eq!(rows[4].verb, "Searched");
     assert_eq!(
         actions,
         [
@@ -1142,7 +1206,7 @@ fn numeric_activity_ids_join_only_a_streamed_call_still_being_prepared() {
     let snapshot = timeline.snapshot();
 
     // Assert
-    assert_eq!(row_count(&snapshot), 3);
+    assert_eq!(snapshot.calls.stats.total, 3);
     assert_eq!(
         snapshot.steps[0]
             .narration

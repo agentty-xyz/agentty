@@ -1,10 +1,11 @@
-//! Live-timeline row rendering tests at narrow, medium, and wide panes.
+//! Live-timeline rendering tests for step headers, the call block's totals
+//! line, and call rows at narrow, medium, and wide panes.
 
 use std::time::Duration;
 
 use ag_contracts::{
     ActivityEvent, ActivityFacts, ActivityFailure, ActivityKind, ActivityStatus, DiffStat,
-    LineRange, OutputEvent, OutputKind,
+    OutputEvent, OutputKind,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -13,14 +14,14 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use super::{header_lines, hidden_steps_line, row_lines, running_time, spinner_glyph};
-use crate::domain::turn_timeline::{TimelineSnapshot, TimelineStep, TurnTimeline};
+use super::{header_lines, hidden_steps_line, row_lines, running_time, spinner_glyph, stats_line};
+use crate::domain::turn_timeline::{CallStats, TimelineSnapshot, ToolRow, TurnTimeline};
 use crate::test_support::activity_event;
 use crate::ui::{markdown, style};
 
-/// Builds the timeline the design shows: narration with reasoning, folded
-/// explorations, a rejected and a successful edit with its read, a slow
-/// command, a failed piped command with its output, and a running command.
+/// Builds the timeline the design shows: narration with reasoning,
+/// explorations, a rejected and a successful edit, a slow command, a failed
+/// piped command with its output, and a running command.
 fn design_timeline() -> TimelineSnapshot {
     let mut timeline = TurnTimeline::default();
     add_exploration_step(&mut timeline);
@@ -123,34 +124,30 @@ fn add_edit_step(timeline: &mut TurnTimeline) {
     );
     timeline.observe_activity(
         ActivityEvent {
-            facts: Box::new(ActivityFacts {
-                lines: Some(LineRange {
-                    first: 1129,
-                    last: Some(1228),
-                }),
-                ..facts(path)
-            }),
+            facts: Box::new(facts(path)),
             kind: ActivityKind::Read,
             status: ActivityStatus::Completed,
             ..activity_event("r3")
         },
         194_000,
     );
-    timeline.observe_activity(
-        ActivityEvent {
-            facts: Box::new(ActivityFacts {
-                diff_stat: Some(DiffStat {
-                    added: 38,
-                    removed: 4,
-                }),
-                ..facts(path)
+    timeline.observe_activity(edit_event(path), 195_000);
+}
+
+/// Returns a successful edit of `path` that added 38 lines and removed 4.
+fn edit_event(path: &str) -> ActivityEvent {
+    ActivityEvent {
+        facts: Box::new(ActivityFacts {
+            diff_stat: Some(DiffStat {
+                added: 38,
+                removed: 4,
             }),
-            kind: ActivityKind::FileChange,
-            status: ActivityStatus::Completed,
-            ..activity_event("e2")
-        },
-        195_000,
-    );
+            ..facts(path)
+        }),
+        kind: ActivityKind::FileChange,
+        status: ActivityStatus::Completed,
+        ..activity_event("e2")
+    }
 }
 
 /// Adds a step with a slow command, a failed piped command, and a running
@@ -205,37 +202,23 @@ fn add_command_step(timeline: &mut TurnTimeline) {
     );
 }
 
-/// Renders the timeline at `width` columns.
-/// Rendered rows of a timeline part, with the indices of running rows.
+/// Rendered rows of a timeline, with the indices of running rows.
 #[derive(Default)]
 struct TimelineLines {
     lines: Vec<Line<'static>>,
     spinner_rows: Vec<usize>,
 }
 
-impl TimelineLines {
-    /// Appends `other`, shifting its running rows.
-    fn append(&mut self, other: &Self) {
-        let offset = self.lines.len();
-        self.lines.extend(other.lines.iter().cloned());
-        self.spinner_rows
-            .extend(other.spinner_rows.iter().map(|row| row + offset));
+/// Renders the timeline at `width` columns the way the session output
+/// assembles it: each step's header, then the call block.
+fn render(snapshot: &TimelineSnapshot, width: usize) -> TimelineLines {
+    let mut lines = TimelineLines::default();
+    for step in &snapshot.steps {
+        lines.lines.extend(header_lines(step, width, None));
     }
-}
-
-/// Renders one step the way the session output assembles it: its header,
-/// then each row.
-fn step_lines(
-    step: &TimelineStep,
-    width: usize,
-    markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-) -> TimelineLines {
-    let mut lines = TimelineLines {
-        lines: header_lines(step, width, markdown_render_cache),
-        spinner_rows: Vec::new(),
-    };
-    for row in &step.rows {
-        if row.running_since().is_some() {
+    lines.lines.extend(stats_line(&snapshot.calls.stats, width));
+    for row in snapshot.calls.latest.iter().chain(&snapshot.calls.running) {
+        if row.running_since.is_some() {
             lines.spinner_rows.push(lines.lines.len());
         }
         lines.lines.extend(row_lines(row, width));
@@ -244,13 +227,21 @@ fn step_lines(
     lines
 }
 
-fn render(snapshot: &TimelineSnapshot, width: usize) -> TimelineLines {
-    let mut lines = TimelineLines::default();
-    for step in &snapshot.steps {
-        lines.append(&step_lines(step, width, None));
-    }
+/// Returns the row of the only call `event` describes, finished or not.
+fn call_row(event: ActivityEvent) -> ToolRow {
+    let mut timeline = TurnTimeline::default();
+    timeline.observe_activity(event, 0);
+    let calls = timeline.snapshot().calls;
 
-    lines
+    calls
+        .latest
+        .or_else(|| calls.running.into_iter().next())
+        .expect("call row")
+}
+
+/// Paints the rows of call `row` at `width` columns.
+fn painted_call(row: &ToolRow, width: u16) -> Vec<String> {
+    painted_rows(&row_lines(row, usize::from(width)), width)
 }
 
 /// Paints `lines` into a `width`-column test terminal and returns its rows.
@@ -280,7 +271,7 @@ fn column(row: &str, needle: &str) -> Option<usize> {
 }
 
 #[test]
-fn wide_panes_align_results_in_a_column_with_times_on_the_right() {
+fn wide_panes_show_steps_then_totals_the_last_finished_call_and_the_running_one() {
     // Arrange
     let snapshot = design_timeline();
 
@@ -297,38 +288,33 @@ fn wide_panes_align_results_in_a_column_with_times_on_the_right() {
         )
     );
     assert!(rows[1].starts_with("  ✻ Thought 6s · Harness models already carry"));
-    assert!(rows[2].starts_with(
-        "  ✓ Explored  read model.rs, composer.rs · search \"Choosing a Model\" · list ."
-    ));
-    assert_eq!(column(&rows[2], "4 calls"), Some(110));
-    assert!(rows[3].ends_with("03:12"));
-    assert!(rows[4].starts_with("  ✗ Edit      crates/agentty/src/domain/composer.rs"));
-    assert!(rows[4].ends_with("rejected · hunk 1 context mismatch at line 1216"));
-    assert_eq!(rows[5], "    │ expected: fn model_rows");
-    assert!(rows[6].ends_with("+38 −4   read :1129-1228 first"));
-    assert_eq!(column(&rows[6], "+38"), Some(110));
-    assert!(rows[7].ends_with("08:02"));
-    assert!(rows[8].starts_with("  ✓ Ran       cargo check -p agentty --tests"));
-    assert_eq!(column(&rows[8], "exit 0"), Some(110));
-    assert!(rows[8].ends_with("36s"));
-    assert!(rows[9].contains("2>&1 | tail -20"));
-    assert!(rows[9].ends_with("exit 101"));
-    assert_eq!(rows[10], "    │ running 58 tests");
-    assert_eq!(rows[12], "    │ test result: FAILED. 56 passed; 2 failed");
+    assert!(rows[2].ends_with("03:12"));
+    assert!(rows[3].ends_with("08:02"));
     assert_eq!(
-        rows[13],
+        rows[4],
+        "  10 tools · 2 failed · 1 running · 3 commands · 2 edits · 3 reads · 1 search · 1 listing"
+    );
+    assert!(rows[5].starts_with("  ✗ Ran       cargo test -p agentty"));
+    assert!(rows[5].ends_with("exit 101"));
+    assert_eq!(column(&rows[5], "exit 101"), Some(110));
+    assert_eq!(rows[6], "    │ running 58 tests");
+    assert_eq!(rows[8], "    │ test result: FAILED. 56 passed; 2 failed");
+    assert_eq!(
+        rows[9],
         format!(
             "  {} Running   cargo test -p agentty --lib domain::composer",
             spinner_glyph(0)
         )
     );
-    assert_eq!(lines.spinner_rows, [13]);
+    assert_eq!(rows.len(), 10);
+    assert_eq!(lines.spinner_rows, [9]);
 }
 
 #[test]
 fn medium_and_narrow_panes_shorten_targets_and_keep_rows_within_the_width() {
     // Arrange
     let snapshot = design_timeline();
+    let edit = call_row(edit_event("crates/agentty/src/domain/composer.rs"));
 
     for width in [100_u16, 80, 40] {
         // Act
@@ -343,14 +329,6 @@ fn medium_and_narrow_panes_shorten_targets_and_keep_rows_within_the_width() {
                 .all(|line| line.width() <= usize::from(width)),
             "{width}: {rows:#?}"
         );
-        let edit = rows
-            .iter()
-            .find(|row| row.starts_with("  ✓ Edit"))
-            .expect("edit row");
-        if width >= 80 {
-            assert!(edit.contains("composer.rs"), "{width}: {edit}");
-            assert!(edit.contains("+38 −4"), "{width}: {edit}");
-        }
         assert_eq!(
             rows[0].contains("00:00"),
             width >= 60,
@@ -358,24 +336,30 @@ fn medium_and_narrow_panes_shorten_targets_and_keep_rows_within_the_width() {
             rows[0]
         );
     }
-    let rows = painted_rows(&render(&snapshot, 80).lines, 80);
+    let narrow = painted_rows(&render(&snapshot, 40).lines, 40);
     assert!(
-        rows.iter().any(|row| row
-            == "  ✓ Edit      crates/agentty/s…composer.rs  +38 −4   read :1129-1228 first"),
-        "{rows:#?}"
+        narrow
+            .iter()
+            .any(|row| row.starts_with("  10 tools") && row.ends_with("...")),
+        "{narrow:#?}"
+    );
+    assert_eq!(
+        painted_call(&edit, 80),
+        ["  ✓ Edit      crates/agentty/src/domain/composer.rs                 +38 −4"]
     );
 }
 
 #[test]
-fn rows_use_semantic_styles() {
+fn rows_and_totals_use_semantic_styles() {
     // Arrange
     let snapshot = design_timeline();
+    let edit = row_lines(&call_row(edit_event("a.rs")), 120);
 
     // Act
     let lines = render(&snapshot, 170).lines;
 
     // Assert
-    let span = |row: usize, text: &str| {
+    let span = |lines: &[Line<'static>], row: usize, text: &str| {
         lines[row]
             .spans
             .iter()
@@ -384,42 +368,99 @@ fn rows_use_semantic_styles() {
             .clone()
     };
     assert_eq!(
-        span(0, "00:00").style.fg,
+        span(&lines, 0, "00:00").style.fg,
         Some(style::palette::text_subtle())
     );
     assert!(
-        span(1, "Thought")
+        span(&lines, 1, "Thought")
             .style
             .add_modifier
             .contains(Modifier::ITALIC)
     );
-    assert_eq!(span(2, "✓").style.fg, Some(style::palette::success()));
+    assert_eq!(
+        span(&lines, 4, "10 tools").style.fg,
+        Some(style::palette::text_subtle())
+    );
+    assert_eq!(
+        span(&lines, 4, "2 failed").style.fg,
+        Some(style::palette::danger())
+    );
+    assert_eq!(
+        span(&lines, 4, "1 running").style.fg,
+        Some(style::palette::warning())
+    );
+    assert_eq!(
+        span(&lines, 5, "✗").style.fg,
+        Some(style::palette::danger())
+    );
+    assert_eq!(
+        span(&lines, 5, "Ran").style.fg,
+        Some(style::palette::danger())
+    );
     assert!(
-        span(2, "Explored")
+        span(&lines, 5, "Ran")
             .style
             .add_modifier
             .contains(Modifier::BOLD)
     );
-    assert_eq!(span(4, "✗").style.fg, Some(style::palette::danger()));
-    assert_eq!(span(4, "Edit").style.fg, Some(style::palette::danger()));
-    assert_eq!(span(4, "rejected").style.fg, Some(style::palette::danger()));
     assert_eq!(
-        span(4, "crates/").style.fg,
-        Some(style::palette::text_muted())
-    );
-    assert_eq!(span(6, "+38").style.fg, Some(style::palette::success()));
-    assert_eq!(span(6, "−4").style.fg, Some(style::palette::danger()));
-    assert_eq!(
-        span(8, "cargo check").style.fg,
+        span(&lines, 5, "cargo test").style.fg,
         Some(style::palette::text())
     );
-    assert_eq!(span(8, "exit 0").style.fg, Some(style::palette::success()));
     assert_eq!(
-        span(13, spinner_glyph(0)).style.fg,
+        span(&lines, 5, "exit 101").style.fg,
+        Some(style::palette::danger())
+    );
+    assert_eq!(
+        span(&lines, 9, spinner_glyph(0)).style.fg,
         Some(style::palette::warning())
+    );
+    assert_eq!(
+        span(&edit, 0, "✓").style.fg,
+        Some(style::palette::success())
+    );
+    assert_eq!(
+        span(&edit, 0, "a.rs").style.fg,
+        Some(style::palette::text_muted())
+    );
+    assert_eq!(
+        span(&edit, 0, "+38").style.fg,
+        Some(style::palette::success())
+    );
+    assert_eq!(
+        span(&edit, 0, "−4").style.fg,
+        Some(style::palette::danger())
     );
 }
 
+#[test]
+fn totals_name_tools_and_outcomes_in_singular_or_plural_and_skip_a_turn_without_calls() {
+    // Arrange
+    let stats = CallStats {
+        interrupted: 1,
+        total: 4,
+        used: vec![("posthog/query".into(), 2)],
+        web_searches: 1,
+        ..CallStats::default()
+    };
+    let single = CallStats {
+        commands: 1,
+        total: 1,
+        ..CallStats::default()
+    };
+
+    // Act
+    let line = stats_line(&stats, 120).map(|line| line.to_string());
+    let single_line = stats_line(&single, 120).map(|line| line.to_string());
+
+    // Assert
+    assert_eq!(
+        line.as_deref(),
+        Some("  4 tools · 1 interrupted · 1 web search · posthog/query ×2")
+    );
+    assert_eq!(single_line.as_deref(), Some("  1 tool · 1 command"));
+    assert_eq!(stats_line(&CallStats::default(), 120), None);
+}
 #[test]
 fn long_reasoning_takes_two_rows_and_open_reasoning_reads_thinking() {
     // Arrange
@@ -445,13 +486,13 @@ fn long_reasoning_takes_two_rows_and_open_reasoning_reads_thinking() {
     assert!(first[0].starts_with("  ✻ Thinking · word word"));
     assert!(first[1].starts_with("               word"));
     assert!(first[1].ends_with("..."));
-    assert!(first[2].contains("Running"));
+    assert_eq!(first.len(), 2);
     assert_eq!(second[0], "  ✻ Thinking · Only a title");
 }
 
-/// Renders step `index` at `width` columns as plain rows.
+/// Renders step `index`'s header at `width` columns as plain rows.
 fn render_step(snapshot: &TimelineSnapshot, index: usize, width: u16) -> Vec<String> {
-    let lines = step_lines(&snapshot.steps[index], usize::from(width), None).lines;
+    let lines = header_lines(&snapshot.steps[index], usize::from(width), None);
 
     painted_rows(&lines, width)
 }
@@ -494,9 +535,9 @@ fn answers_render_as_markdown_and_narration_wraps_with_a_hanging_indent() {
 
     // Act
     let narration = render_step(&snapshot, 0, 40);
-    let empty = step_lines(&snapshot.steps[1], 40, None).lines;
-    let answer = step_lines(&snapshot.steps[2], 40, None).lines;
-    let cached_answer = step_lines(&snapshot.steps[2], 40, Some(&cache)).lines;
+    let empty = header_lines(&snapshot.steps[1], 40, None);
+    let answer = header_lines(&snapshot.steps[2], 40, None);
+    let cached_answer = header_lines(&snapshot.steps[2], 40, Some(&cache));
 
     // Assert
     assert_eq!(narration[0], "• First paragraph that is long enough to");
@@ -508,17 +549,18 @@ fn answers_render_as_markdown_and_narration_wraps_with_a_hanging_indent() {
 }
 
 #[test]
-fn interrupted_signaled_and_preparing_rows_and_hidden_steps_render() {
+fn interrupted_signaled_failed_and_preparing_rows_and_hidden_steps_render() {
     // Arrange
-    let mut timeline = TurnTimeline::default();
-    timeline.observe_output(
+    let mut preparing = TurnTimeline::default();
+    preparing.observe_output(
         OutputEvent::Started {
             id: 0,
             kind: OutputKind::ToolCall,
         },
         0,
     );
-    for event in [
+    let preparing = preparing.snapshot().calls.running.remove(0);
+    let rows = [
         ActivityEvent {
             status: ActivityStatus::Interrupted,
             ..activity_event("interrupted")
@@ -545,48 +587,27 @@ fn interrupted_signaled_and_preparing_rows_and_hidden_steps_render() {
             status: ActivityStatus::Failed,
             ..activity_event("rejected")
         },
-        ActivityEvent {
-            facts: Box::new(ActivityFacts {
-                lines: None,
-                target: Some("b.rs".into()),
-                ..ActivityFacts::default()
-            }),
-            kind: ActivityKind::Read,
-            status: ActivityStatus::Completed,
-            ..activity_event("read")
-        },
-        ActivityEvent {
-            facts: Box::new(ActivityFacts {
-                target: Some("b.rs".into()),
-                ..ActivityFacts::default()
-            }),
-            kind: ActivityKind::FileChange,
-            status: ActivityStatus::Completed,
-            ..activity_event("edit")
-        },
-    ] {
-        timeline.observe_activity(event, 0);
-    }
-    let snapshot = timeline.snapshot();
+    ]
+    .map(call_row);
 
     // Act
-    let rows = render_step(&snapshot, 0, 80);
+    let preparing = painted_call(&preparing, 80);
+    let rows = rows.map(|row| painted_call(&row, 80).remove(0));
 
     // Assert
-    assert!(rows[0].starts_with(&format!("  {} Preparing a tool call", spinner_glyph(0))));
-    assert!(rows[1].starts_with("  ! Ran"));
-    assert!(rows[1].ends_with("interrupted"));
-    assert!(rows[2].ends_with("signal 9"));
-    assert!(rows[3].ends_with("failed"));
-    assert!(rows[4].ends_with("rejected"));
-    assert!(rows[5].ends_with("read first"));
+    assert!(preparing[0].starts_with(&format!("  {} Preparing a tool call", spinner_glyph(0))));
+    assert!(rows[0].starts_with("  ! Ran"));
+    assert!(rows[0].ends_with("interrupted"));
+    assert!(rows[1].ends_with("signal 9"));
+    assert!(rows[2].ends_with("failed"));
+    assert!(rows[3].ends_with("rejected"));
     assert_eq!(hidden_steps_line(1).to_string(), "+1 earlier step");
     assert_eq!(hidden_steps_line(3).to_string(), "+3 earlier steps");
     assert_eq!(spinner_glyph(10), spinner_glyph(0));
 }
 
 #[test]
-fn running_explorations_spin_and_paths_keep_their_file_name_when_cut() {
+fn running_rows_spin_and_paths_keep_their_file_name_when_cut() {
     // Arrange
     let mut timeline = TurnTimeline::default();
     timeline.observe_activity(
@@ -612,16 +633,20 @@ fn running_explorations_spin_and_paths_keep_their_file_name_when_cut() {
     let snapshot = timeline.snapshot();
 
     // Act
-    let lines = step_lines(&snapshot.steps[0], 60, None);
+    let lines = render(&snapshot, 60);
     let rows = painted_rows(&lines.lines, 60);
 
     // Assert
-    assert_eq!(lines.spinner_rows, [0]);
-    assert!(rows[0].starts_with(&format!("  {} Exploring read a.rs", spinner_glyph(0))));
+    assert_eq!(
+        rows[0],
+        "  2 tools · 1 failed · 1 running · 1 edit · 1 read"
+    );
     assert!(
         rows[1].starts_with("  ✗ Edit      a_file_name_longer_than_the..."),
         "{rows:#?}"
     );
+    assert!(rows[2].starts_with(&format!("  {} Read      src/a.rs", spinner_glyph(0))));
+    assert_eq!(lines.spinner_rows, [2]);
 }
 
 #[test]

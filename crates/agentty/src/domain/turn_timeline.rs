@@ -1,12 +1,15 @@
 //! Live timeline of one running turn: the model's narration and reasoning
-//! and its tool calls in arrival order, grouped into display-neutral steps.
+//! grouped into display-neutral steps, and a compact digest of its tool
+//! calls.
 //!
 //! [`TurnTimeline`] reduces a turn's streamed output and activity, stamped
-//! with an injected clock. Each entry keeps only what its row needs, parsed
-//! once when the entry changes, and joins a step as it arrives: a narration
-//! message with the reasoning and tool rows that follow it, or rows alone
-//! for backends that do not narrate. [`TurnTimeline::snapshot`] rebuilds
-//! only the visible steps that changed since the previous snapshot.
+//! with an injected clock. Each entry keeps only what it shows, parsed once
+//! when the entry changes, and joins a step as it arrives: a narration
+//! message with the reasoning and calls that follow it, or calls alone for
+//! backends that do not narrate. [`TurnTimeline::snapshot`] rebuilds only
+//! the visible steps that changed since the previous snapshot, and digests
+//! the calls into their totals, the call that finished last, and the calls
+//! still running, instead of one row per call.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -17,10 +20,11 @@ use ag_contracts::{
     ActivityEvent, ActivityFailure, ActivityKind, ActivityStatus, OutputEvent, OutputKind,
 };
 use serde_json::Value;
-use unicode_width::UnicodeWidthStr;
 
-/// Most tool rows one turn admits; later calls are not shown.
+/// Most calls one turn admits; later calls are neither shown nor counted.
 const TOOL_ROW_LIMIT: usize = 2048;
+/// Most running calls a snapshot shows; the rest are only counted.
+const RUNNING_ROW_LIMIT: usize = 3;
 /// Most entries the timeline keeps before it evicts its oldest steps.
 const ENTRY_LIMIT: usize = 4096;
 /// Entries one eviction frees at least, so evictions stay rare.
@@ -42,6 +46,8 @@ static NEXT_TIMELINE_ID: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug)]
 pub(crate) struct TurnTimeline {
     entries: Vec<Entry>,
+    /// Totals of the calls in evicted steps, as they stood when evicted.
+    evicted_calls: CallStats,
     /// Evicted steps that held narration or reasoning, which the turn
     /// summary counts.
     evicted_narrated_steps: usize,
@@ -69,6 +75,7 @@ impl Default for TurnTimeline {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
+            evicted_calls: CallStats::default(),
             evicted_narrated_steps: 0,
             evicted_steps: 0,
             id: NEXT_TIMELINE_ID.fetch_add(1, Ordering::Relaxed),
@@ -201,8 +208,9 @@ impl TurnTimeline {
     }
 
     /// Returns the visible steps, rebuilding only those that changed since
-    /// the previous snapshot.
+    /// the previous snapshot, and the digest of the turn's calls.
     pub(crate) fn snapshot(&mut self) -> TimelineSnapshot {
+        let calls = self.call_digest();
         let turn_started_at = self.turn_started_at.unwrap_or_default();
         let visible_from = self.steps.len().saturating_sub(STEP_LIMIT);
         let entries = &self.entries;
@@ -220,6 +228,7 @@ impl TurnTimeline {
             .collect();
 
         TimelineSnapshot {
+            calls,
             current: self.current_action(),
             hidden_steps: self.evicted_steps + visible_from,
             id: self.id,
@@ -230,17 +239,51 @@ impl TurnTimeline {
     }
 
     /// Picks what the status line names: the open reasoning's title, else
-    /// the latest running call, else the latest progress text.
+    /// the latest running call the digest shows a row for, else the latest
+    /// progress text.
     pub(crate) fn current_action(&self) -> Option<CurrentAction> {
         let reasoning = self.open_reasoning.values().rev().find_map(Clone::clone);
-        let running = || self.running_tools.values().next_back().cloned();
+        let running = || {
+            self.running_tools
+                .values()
+                .take(RUNNING_ROW_LIMIT)
+                .next_back()
+                .cloned()
+        };
         let progress = || {
             self.progress
                 .as_ref()
-                .map(|(text, since)| CurrentAction::new(text, None, *since))
+                .map(|(text, since)| CurrentAction::new(text, text.clone(), *since))
         };
 
         reasoning.or_else(running).or_else(progress)
+    }
+
+    /// Digests the turn's calls: totals over all of them, evicted ones
+    /// included, the call that finished last, and the earliest calls that
+    /// still run.
+    fn call_digest(&self) -> CallDigest {
+        let mut stats = self.evicted_calls.clone();
+        let mut latest: Option<(u64, &ToolEntry)> = None;
+        let mut running = Vec::new();
+        for tool in self.entries.iter().filter_map(|entry| entry.kind.tool()) {
+            stats.count(tool);
+            if tool.is_running() {
+                if running.len() < RUNNING_ROW_LIMIT {
+                    running.push(tool.row());
+                }
+            } else if let Some(finished_at) = tool.finished_at
+                && latest.is_none_or(|(latest_at, _)| finished_at >= latest_at)
+            {
+                latest = Some((finished_at, tool));
+            }
+        }
+
+        CallDigest {
+            latest: latest.map(|(_, tool)| tool.row()),
+            running,
+            stats,
+        }
     }
 
     /// Records the first event's time as the turn start.
@@ -326,12 +369,15 @@ impl TurnTimeline {
         }
     }
 
-    /// Marks entry `index` changed, so its step is rebuilt.
+    /// Marks entry `index` changed, so a narration or reasoning entry's step
+    /// is rebuilt; calls only change the snapshot's digest.
     fn touch(&mut self, index: usize) {
         self.revision = self.revision.wrapping_add(1);
         let entry = &mut self.entries[index];
         entry.revision = self.revision;
-        self.steps[entry.step].built = None;
+        if entry.kind.tool().is_none() {
+            self.steps[entry.step].built = None;
+        }
     }
 
     /// Tracks the call at `index` with its action while it still runs.
@@ -445,8 +491,10 @@ impl TurnTimeline {
     }
 
     /// Evicts the oldest steps until the timeline is a batch below its
-    /// entry limit, counting them as hidden.
+    /// entry limit, counting them as hidden. Calls still running in them
+    /// stay, grouped into one step, so their results still apply.
     fn evict_oldest_steps(&mut self) {
+        let step_count = self.evicted_steps + self.steps.len();
         let mut evicted_entries = 0;
         let mut evicted_steps = 0;
         let mut evicted_narrated_steps = 0;
@@ -454,17 +502,29 @@ impl TurnTimeline {
             if self.entries.len() - evicted_entries <= ENTRY_LIMIT - ENTRY_EVICTION_BATCH {
                 break;
             }
-            evicted_entries += step.entries.len();
+            evicted_entries += step
+                .entries
+                .iter()
+                .filter(|index| !self.running_tools.contains_key(index))
+                .count();
             evicted_steps += 1;
             evicted_narrated_steps += usize::from(self.is_narrated(step));
         }
-        self.evicted_steps += evicted_steps;
         self.evicted_narrated_steps += evicted_narrated_steps;
         let first_kept = self
             .steps
             .get(evicted_steps)
             .map_or(self.entries.len(), |step| step.entries[0]);
-        self.retain_entries(|index| index >= first_kept);
+        for (index, entry) in self.entries[..first_kept].iter().enumerate() {
+            if let Some(tool) = entry.kind.tool()
+                && !self.running_tools.contains_key(&index)
+            {
+                self.evicted_calls.count(tool);
+            }
+        }
+        let running = std::mem::take(&mut self.running_tools);
+        self.retain_entries(|index| index >= first_kept || running.contains_key(&index));
+        self.evicted_steps = step_count - self.steps.len();
     }
 
     /// Keeps the entries `keep` accepts by index and groups them again.
@@ -512,6 +572,8 @@ impl TurnTimeline {
 /// hashing one costs nothing.
 #[derive(Clone, Debug)]
 pub(crate) struct TimelineSnapshot {
+    /// The turn's calls in compact form.
+    pub(crate) calls: CallDigest,
     /// What the turn is doing now, for the status line.
     pub(crate) current: Option<CurrentAction>,
     /// Earliest steps left out of [`Self::steps`].
@@ -551,34 +613,104 @@ impl Hash for TimelineSnapshot {
 /// What the turn is doing now, such as `Running cargo test`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CurrentAction {
-    /// Columns of `text` that name the action, such as `Running`; the rest
-    /// names its object.
-    pub(crate) label_width: usize,
+    /// The action without what it acts on, such as `Running a command`,
+    /// which the status line shows beside the timeline's own rows.
+    pub(crate) label: String,
     /// Unix milliseconds when the action started.
     pub(crate) since: u64,
-    /// The action on one line, which the status line and the session's
-    /// progress text both show.
+    /// The action with what it acts on, on one line, which the session's
+    /// progress text shows.
     pub(crate) text: String,
 }
 
 impl CurrentAction {
-    /// Joins `label` and its optional `detail` into one line.
-    fn new(label: &str, detail: Option<&str>, since: u64) -> Self {
-        let text = match detail {
-            Some(detail) => format!("{label} {detail}"),
-            None => label.to_string(),
-        };
-
+    /// Returns an action that started at `since`, shown as `label` and
+    /// described in full by `text`.
+    fn new(label: &str, text: String, since: u64) -> Self {
         Self {
-            label_width: label.width(),
+            label: label.to_string(),
             since,
             text,
         }
     }
 }
 
-/// One step: a narration message with the reasoning and calls that follow
-/// it, or calls alone when the backend does not narrate.
+/// A turn's calls in compact form: totals over all of them, the call that
+/// finished last with its outcome, and the earliest calls still running.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CallDigest {
+    /// The call that finished last, or `None` before any finished.
+    pub(crate) latest: Option<ToolRow>,
+    /// Calls being prepared or still running, oldest first, at most
+    /// [`RUNNING_ROW_LIMIT`]; [`CallStats::running`] counts them all.
+    pub(crate) running: Vec<ToolRow>,
+    pub(crate) stats: CallStats,
+}
+
+/// Totals over a turn's calls by kind and outcome.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CallStats {
+    pub(crate) commands: usize,
+    /// File changes, failed ones included.
+    pub(crate) edits: usize,
+    pub(crate) failed: usize,
+    /// Calls that ended without a result.
+    pub(crate) interrupted: usize,
+    pub(crate) listings: usize,
+    pub(crate) reads: usize,
+    /// Calls being prepared or still running.
+    pub(crate) running: usize,
+    pub(crate) searches: usize,
+    /// Every call, whatever its kind or outcome.
+    pub(crate) total: usize,
+    /// MCP, skill, and other tool names with their call counts, in
+    /// first-call order.
+    pub(crate) used: Vec<(String, usize)>,
+    pub(crate) web_searches: usize,
+}
+
+impl CallStats {
+    /// Adds `tool` as it stands now.
+    fn count(&mut self, tool: &ToolEntry) {
+        self.total += 1;
+        let Some(activity) = &tool.activity else {
+            self.running += 1;
+
+            return;
+        };
+        match activity.row.state {
+            RowState::Failed => self.failed += 1,
+            RowState::Interrupted => self.interrupted += 1,
+            RowState::Running => self.running += 1,
+            RowState::Succeeded => {}
+        }
+        let counter = match activity.kind {
+            ActivityKind::Command => &mut self.commands,
+            ActivityKind::FileChange => &mut self.edits,
+            ActivityKind::List => &mut self.listings,
+            ActivityKind::Read => &mut self.reads,
+            ActivityKind::Search => &mut self.searches,
+            ActivityKind::WebSearch => &mut self.web_searches,
+            ActivityKind::Mcp | ActivityKind::Skill | ActivityKind::Tool => {
+                match self
+                    .used
+                    .iter_mut()
+                    .find(|(used, _)| *used == activity.name)
+                {
+                    Some((_, count)) => *count += 1,
+                    None => self.used.push((activity.name.clone(), 1)),
+                }
+
+                return;
+            }
+        };
+        *counter += 1;
+    }
+}
+
+/// One step: a narration message with the reasoning that follows it. A
+/// step's calls show only in the snapshot's [`CallDigest`], so a step of a
+/// backend that does not narrate shows nothing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TimelineStep {
     /// Seconds from the turn's start to the step's first event.
@@ -586,7 +718,6 @@ pub(crate) struct TimelineStep {
     /// Changes whenever the narration or thought changes.
     pub(crate) header_revision: u64,
     pub(crate) narration: Option<Narration>,
-    pub(crate) rows: Vec<TimelineRow>,
     pub(crate) thought: Option<Thought>,
 }
 
@@ -635,70 +766,12 @@ impl Thought {
     }
 }
 
-/// One row under a step.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum TimelineRow {
-    /// Consecutive successful reads, searches, and listings.
-    Explored(ExploreRow),
-    /// One call.
-    Tool(ToolRow),
-}
-
-impl TimelineRow {
-    /// Returns the revision that changes whenever the row's content does.
-    pub(crate) fn revision(&self) -> u64 {
-        match self {
-            Self::Explored(row) => row.revision,
-            Self::Tool(row) => row.revision,
-        }
-    }
-
-    /// Returns the Unix milliseconds the row's call started running, while
-    /// it runs.
-    pub(crate) fn running_since(&self) -> Option<u64> {
-        match self {
-            Self::Explored(row) => row.running_since,
-            Self::Tool(row) => row.running_since,
-        }
-    }
-}
-
-/// Consecutive successful reads, searches, and listings folded into one
-/// row.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExploreRow {
-    /// Calls the row folds.
-    pub(crate) calls: usize,
-    /// What the calls touched, grouped by kind in first-seen order.
-    pub(crate) parts: Vec<ExplorePart>,
-    /// Changes whenever any folded call changes.
-    pub(crate) revision: u64,
-    /// Unix milliseconds the earliest still-running folded call started,
-    /// while any of them runs.
-    pub(crate) running_since: Option<u64>,
-}
-
-/// What one kind of exploration touched, such as the files read.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ExplorePart {
-    /// Distinct targets in first-seen order: file names, quoted queries, or
-    /// listed paths.
-    pub(crate) items: Vec<String>,
-    /// `read`, `search`, or `list`.
-    pub(crate) label: &'static str,
-}
-
 /// One call's row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ToolRow {
     /// Seconds a slow finished call took.
     pub(crate) duration_seconds: Option<u64>,
-    /// Line range of the read of the same file that preceded an edit, such
-    /// as `:10-42`, or empty for a whole-file read.
-    pub(crate) read_first: Option<String>,
     pub(crate) result: RowResult,
-    /// Changes whenever the row's content does.
-    pub(crate) revision: u64,
     /// Unix milliseconds the call started, while it runs.
     pub(crate) running_since: Option<u64>,
     pub(crate) state: RowState,
@@ -841,7 +914,7 @@ impl ReasoningEntry {
     fn title_action(&self, since: u64) -> Option<CurrentAction> {
         self.title
             .as_ref()
-            .map(|title| CurrentAction::new(title, None, since))
+            .map(|title| CurrentAction::new(title, title.clone(), since))
     }
 }
 
@@ -857,19 +930,17 @@ struct ToolEntry {
     started_at: u64,
 }
 
-/// The parts of one activity snapshot a row and its folding need, derived
-/// once when the activity arrives.
+/// The parts of one activity snapshot a row and the call totals need,
+/// derived once when the activity arrives.
 #[derive(Debug)]
 struct ToolActivity {
-    /// Present-tense verb the status line names the running call with.
+    /// Present-tense verb the session's progress text names the running
+    /// call with.
     action: &'static str,
-    /// What an exploration touched, for its folded row.
-    explore: Option<(&'static str, String)>,
-    /// Reported path, compared when a read precedes an edit.
-    path: Option<String>,
-    /// Line range of a successful read, such as `:10-42`, or empty for the
-    /// whole file.
-    read_range: Option<String>,
+    kind: ActivityKind,
+    /// Name of the tool on one line, which the totals count MCP, skill, and
+    /// other tool calls by.
+    name: String,
     row: ToolRow,
 }
 
@@ -908,7 +979,6 @@ impl ToolEntry {
         activity.row.state = RowState::Interrupted;
         activity.row.result = RowResult::Interrupted;
         activity.row.running_since = None;
-        activity.explore = None;
 
         true
     }
@@ -920,28 +990,31 @@ impl ToolEntry {
             .is_none_or(|activity| activity.row.state == RowState::Running)
     }
 
-    /// Describes the running call for the status line.
+    /// Describes the running call for the status line, which names only
+    /// its kind, and for the session's progress text, which also names its
+    /// target.
     fn current_action(&self) -> CurrentAction {
         let Some(activity) = &self.activity else {
-            return CurrentAction::new("Preparing", Some("a tool call"), self.started_at);
+            let label = "Preparing a tool call";
+
+            return CurrentAction::new(label, label.to_string(), self.started_at);
         };
         let target = &activity.row.target;
+        let text = if target.is_empty() {
+            activity.action.to_string()
+        } else {
+            format!("{} {target}", activity.action)
+        };
 
-        CurrentAction::new(
-            activity.action,
-            (!target.is_empty()).then_some(target.as_str()),
-            self.started_at,
-        )
+        CurrentAction::new(ToolActivity::label(activity.kind), text, self.started_at)
     }
 
-    /// Returns the call's row at `revision`.
-    fn row(&self, revision: u64) -> ToolRow {
+    /// Returns the call's row.
+    fn row(&self) -> ToolRow {
         let Some(activity) = &self.activity else {
             return ToolRow {
                 duration_seconds: None,
-                read_first: None,
                 result: RowResult::None,
-                revision,
                 running_since: Some(self.started_at),
                 state: RowState::Running,
                 tail: Vec::new(),
@@ -950,10 +1023,8 @@ impl ToolEntry {
                 verb: "Preparing",
             };
         };
-        let mut row = activity.row.clone();
-        row.revision = revision;
 
-        row
+        activity.row.clone()
     }
 }
 
@@ -968,29 +1039,9 @@ impl ToolActivity {
             ActivityStatus::Running => RowState::Running,
         };
         let target = Self::target(&event);
-        let exploring =
-            event.kind.is_exploration() && matches!(state, RowState::Running | RowState::Succeeded);
-        let explore = exploring.then(|| match event.kind {
-            ActivityKind::Read => ("read", file_name(&target).to_string()),
-            ActivityKind::Search => ("search", format!("\"{target}\"")),
-            _ => ("list", target.clone()),
-        });
-        let read_range = (event.kind == ActivityKind::Read
-            && event.status == ActivityStatus::Completed)
-            .then(|| {
-                event
-                    .facts
-                    .lines
-                    .map_or_else(String::new, |lines| match lines.last {
-                        Some(last) => format!(":{}-{last}", lines.first),
-                        None => format!(":{}-", lines.first),
-                    })
-            });
         let row = ToolRow {
             duration_seconds: Self::slow_duration(&event, started_at, finished_at),
-            read_first: None,
             result: Self::result(&event, state),
-            revision: 0,
             running_since: (state == RowState::Running).then_some(started_at),
             state,
             tail: if state == RowState::Failed {
@@ -1002,12 +1053,12 @@ impl ToolActivity {
             target_is_command: event.kind == ActivityKind::Command,
             verb: Self::verb(event.kind, state),
         };
+        let name = event.name;
 
         Self {
             action: Self::action(event.kind),
-            explore,
-            path: event.facts.target,
-            read_range,
+            kind: event.kind,
+            name: single_line(&name),
             row,
         }
     }
@@ -1021,6 +1072,22 @@ impl ToolActivity {
             ActivityKind::Search | ActivityKind::WebSearch => "Searching",
             ActivityKind::List => "Listing",
             ActivityKind::Mcp | ActivityKind::Skill | ActivityKind::Tool => "Calling",
+        }
+    }
+
+    /// Returns what the status line names a running call of `kind` with,
+    /// leaving its target to the call's own row.
+    fn label(kind: ActivityKind) -> &'static str {
+        match kind {
+            ActivityKind::Command => "Running a command",
+            ActivityKind::FileChange => "Editing a file",
+            ActivityKind::Read => "Reading a file",
+            ActivityKind::Search => "Searching",
+            ActivityKind::WebSearch => "Searching the web",
+            ActivityKind::List => "Listing files",
+            ActivityKind::Mcp => "Calling an MCP tool",
+            ActivityKind::Skill => "Using a skill",
+            ActivityKind::Tool => "Calling a tool",
         }
     }
 
@@ -1160,14 +1227,12 @@ struct StepSlot {
 }
 
 impl StepSlot {
-    /// Builds the step from `entries`, folding reads into the edits that
-    /// follow them and consecutive successful explorations into one row.
+    /// Builds the step's narration and thought from `entries`.
     fn build(&self, entries: &[Entry], turn_started_at: u64) -> TimelineStep {
         let mut step = TimelineStep {
             at_seconds: entries[self.entries[0]].at.saturating_sub(turn_started_at) / 1000,
             header_revision: 0,
             narration: None,
-            rows: Vec::new(),
             thought: None,
         };
         for entry in self.entries.iter().map(|&index| &entries[index]) {
@@ -1187,79 +1252,8 @@ impl StepSlot {
                 EntryKind::Tool(_) => {}
             }
         }
-        let mut explore: Option<ExploreRow> = None;
-        let mut tools = self
-            .entries
-            .iter()
-            .filter_map(|&index| {
-                let entry = &entries[index];
-
-                entry.kind.tool().map(|tool| (entry.revision, tool))
-            })
-            .peekable();
-        while let Some((revision, tool)) = tools.next() {
-            let Some((activity, (label, item))) = tool
-                .activity
-                .as_ref()
-                .and_then(|activity| Some((activity, activity.explore.clone()?)))
-            else {
-                step.rows.extend(explore.take().map(TimelineRow::Explored));
-                step.rows.push(TimelineRow::Tool(tool.row(revision)));
-                continue;
-            };
-            if let Some(read_first) =
-                Self::read_before_edit(activity, tools.peek().map(|(_, edit)| *edit))
-                && let Some((edit_revision, edit)) = tools.next()
-            {
-                step.rows.extend(explore.take().map(TimelineRow::Explored));
-                let mut row = edit.row(edit_revision.max(revision));
-                row.read_first = Some(read_first);
-                step.rows.push(TimelineRow::Tool(row));
-                continue;
-            }
-            let group = explore.get_or_insert_with(|| ExploreRow {
-                calls: 0,
-                parts: Vec::new(),
-                revision: 0,
-                running_since: None,
-            });
-            group.calls += 1;
-            group.revision = group.revision.max(revision);
-            group.running_since = match (group.running_since, activity.row.running_since) {
-                (Some(earlier), Some(later)) => Some(earlier.min(later)),
-                (folded, current) => folded.or(current),
-            };
-            Self::add_explore_item(group, label, item);
-        }
-        step.rows.extend(explore.map(TimelineRow::Explored));
 
         step
-    }
-
-    /// Returns the read range when successful read `read` of a file is
-    /// directly followed by an edit of the same file.
-    fn read_before_edit(read: &ToolActivity, next: Option<&ToolEntry>) -> Option<String> {
-        let range = read.read_range.clone()?;
-        let edit = next?.activity.as_ref()?;
-        let read_path = read.path.as_deref()?;
-        let edit_path = edit.path.as_deref()?;
-
-        (edit.row.verb == "Edit" && same_path(read_path, edit_path)).then_some(range)
-    }
-
-    /// Adds what one exploration touched to `group`.
-    fn add_explore_item(group: &mut ExploreRow, label: &'static str, item: String) {
-        if item.is_empty() || item == "\"\"" {
-            return;
-        }
-        match group.parts.iter_mut().find(|part| part.label == label) {
-            Some(part) if part.items.contains(&item) => {}
-            Some(part) => part.items.push(item),
-            None => group.parts.push(ExplorePart {
-                items: vec![item],
-                label,
-            }),
-        }
     }
 }
 
