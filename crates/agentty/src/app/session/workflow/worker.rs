@@ -2378,7 +2378,7 @@ impl SessionManager {
                     "Graph handoff requires a task attempt".into(),
                 ));
             };
-            let ag_session::EnvId::SessionWorktree(session_id) = &node.env_id;
+            let session_id = node.env_id.session_id();
             self.state.sync_from_handles();
             let session = self.session_or_err(session_id)?;
             if !matches!(
@@ -2455,7 +2455,7 @@ impl SessionManager {
             .load_graph(&record.graph_id, Some(record.graph_revision))
             .await?
             .ok_or_else(|| SessionError::Workflow("Graph snapshot is missing".into()))?;
-        let ag_session::EnvId::SessionWorktree(session_id) = &request.dispatch.node.env_id;
+        let session_id = request.dispatch.node.env_id.session_id();
         if graph.session_id != *session_id
             || !graph.nodes.contains(&request.dispatch.node)
             || services

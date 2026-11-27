@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT session_id AS \"session_id!: String\",\n       id AS \"id!: String\",\n       base_commit,\n       state AS \"state: TaskWorktreeState\",\n       created_at,\n       updated_at\nFROM task_worktree\nWHERE session_id = ?\nORDER BY created_at, id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_worktree",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "id!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_worktree",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "base_commit",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_worktree",
+            "name": "base_commit"
+          }
+        }
+      },
+      {
+        "name": "state: TaskWorktreeState",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_worktree",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_worktree",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_worktree",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "aeee86c423545dcf50083e18b00c306edfe1158cea45f663873b1d5bd8e4b8d3"
+}

@@ -20,6 +20,7 @@ mod task;
 mod task_agent;
 mod task_agent_turn;
 mod task_plan;
+mod task_worktree;
 mod timestamp;
 mod usage;
 
@@ -58,6 +59,11 @@ pub use task::MockTaskRepository;
 pub use task::TaskRepository;
 pub use task_agent::TaskAgentContextRow;
 pub use task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnRow};
+#[cfg(any(test, feature = "test-utils"))]
+pub use task_worktree::MockTaskWorktreeRepository;
+pub use task_worktree::{
+    TaskWorktreeRepository, TaskWorktreeReservation, TaskWorktreeRow, TaskWorktreeState,
+};
 pub use timestamp::TimestampSource;
 pub use usage::{SessionUsageContextRow, SessionUsageRow, UsageRepository};
 

@@ -17,7 +17,8 @@ pub use ag_store::{
     SessionReviewCommentResolutionRow, SessionReviewRequestRow, SessionReviewWatchRow, SessionRow,
     SessionTurnMetadata, SessionUsageContextRow, SessionUsageRow, SettingRepository,
     StoredGraphEvidence, StoredGraphResult, TaskAgentContextRow, TaskAgentHistoryRow,
-    TaskAgentTurnMetadata, TaskAgentTurnRow, TaskRepository, TimestampSource, UsageRepository,
+    TaskAgentTurnMetadata, TaskAgentTurnRow, TaskRepository, TaskWorktreeState, TimestampSource,
+    UsageRepository,
 };
 
 use crate::infra::clock;

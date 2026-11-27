@@ -29,6 +29,7 @@ mod sandbox;
 mod steering;
 pub(super) mod task;
 mod task_turn;
+pub(super) mod task_worktree;
 pub(super) mod timeline;
 pub(super) mod turn;
 pub(super) mod worker;

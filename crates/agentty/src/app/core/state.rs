@@ -2028,10 +2028,7 @@ impl App {
             return Ok(self.projects.working_dir().to_path_buf());
         }
 
-        Ok(self
-            .sessions
-            .load_project_path(&self.services, project_id)
-            .await?)
+        Ok(SessionManager::load_project_path(&self.services, project_id).await?)
     }
 
     /// Starts review assist generation for one session using the

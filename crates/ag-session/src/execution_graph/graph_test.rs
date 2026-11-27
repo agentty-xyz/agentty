@@ -8,7 +8,7 @@ use crate::execution_graph::test_support::{graph, reader, result};
 use crate::{
     EnvId, ExecutionGraph, GraphCompletionGate, GraphContext, GraphContractError, GraphDependency,
     GraphExecutionRef, GraphInputBinding, GraphNode, GraphPostProcessing, GraphResult,
-    GraphResultState, GraphWorkspaceAccess,
+    GraphResultState, GraphWorkspaceAccess, TaskWorktreeId,
 };
 
 type InvalidGraphCase = (fn(&mut ExecutionGraph), GraphContractError);
@@ -54,6 +54,24 @@ fn graphs_reject_empty_and_conflicting_identities() {
         (
             |graph| graph.nodes[0].env_id = EnvId::SessionWorktree("other".into()),
             GraphContractError::ForeignEnv,
+        ),
+        (
+            |graph| {
+                graph.nodes[0].env_id = EnvId::TaskWorktree(TaskWorktreeId {
+                    session_id: "other".into(),
+                    worktree_id: "writer".into(),
+                });
+            },
+            GraphContractError::ForeignEnv,
+        ),
+        (
+            |graph| {
+                graph.nodes[0].env_id = EnvId::TaskWorktree(TaskWorktreeId {
+                    session_id: graph.session_id.clone(),
+                    worktree_id: "writer".into(),
+                });
+            },
+            GraphContractError::UnsupportedEnv,
         ),
         (
             |graph| {

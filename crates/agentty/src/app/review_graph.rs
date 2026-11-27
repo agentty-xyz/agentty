@@ -328,7 +328,7 @@ fn review_graph(
     agent: AgentSelection,
     fragments: usize,
 ) -> ExecutionGraph {
-    let EnvId::SessionWorktree(session_id) = env_id;
+    let session_id = env_id.session_id();
     let node = |id: String, objective: &str, request: String, producers: &[String]| GraphNode {
         agent,
         definition: AgentDefinition {
@@ -525,7 +525,7 @@ impl GraphNodeRunner for ReviewNodeRunner {
         let GraphExecutionRef::UtilityRun { run_id } = &request.dispatch.record.execution else {
             return Err(OneShotError::new("Review node requires a utility run"));
         };
-        let EnvId::SessionWorktree(session_id) = &request.dispatch.node.env_id;
+        let session_id = request.dispatch.node.env_id.session_id();
         let run = RunInfo {
             folder: request.folder.clone(),
             id: run_id.clone(),

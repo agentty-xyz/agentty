@@ -75,6 +75,11 @@ impl AppRepositories {
         self.repositories.task.as_ref()
     }
 
+    /// Returns task worktree Env records and their per-session limit.
+    pub fn task_worktrees(&self) -> &dyn crate::TaskWorktreeRepository {
+        self.repositories.task_worktree.as_ref()
+    }
+
     /// Returns the per-session usage repository.
     pub fn usage(&self) -> &dyn usage::UsageRepository {
         self.repositories.usage.as_ref()
@@ -122,6 +127,10 @@ impl AppRepositories {
                     pool.clone(),
                     Arc::clone(&timestamp_source),
                 )),
+                task_worktree: Arc::new(crate::task_worktree::SqliteTaskWorktreeRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
                 usage: Arc::new(usage::SqliteUsageRepository::new(pool, timestamp_source)),
             }),
         }
@@ -143,6 +152,7 @@ struct RepositorySet {
     session: Arc<dyn session::SessionRepository>,
     setting: Arc<dyn setting::SettingRepository>,
     task: Arc<dyn crate::task::TaskRepository>,
+    task_worktree: Arc<dyn crate::TaskWorktreeRepository>,
     usage: Arc<dyn usage::UsageRepository>,
 }
 

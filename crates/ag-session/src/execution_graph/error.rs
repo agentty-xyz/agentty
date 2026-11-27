@@ -46,6 +46,9 @@ pub enum GraphContractError {
     /// An execution environment is not owned by the graph's session.
     #[error("graph node environment belongs to a different session")]
     ForeignEnv,
+    /// A node references a task worktree, which graphs cannot dispatch yet.
+    #[error("graph nodes cannot run in task worktrees yet")]
+    UnsupportedEnv,
     /// A runtime result does not match the declared input and producer.
     #[error("graph result does not match {0}")]
     ResultMismatch(&'static str),

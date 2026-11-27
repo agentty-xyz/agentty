@@ -15,6 +15,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::task::SessionTranscriptMessageAppend;
+use super::task_worktree::TaskWorktreeResources;
 use super::worker::{SessionCommand, TurnMetadata};
 use super::{
     SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
@@ -267,6 +268,8 @@ struct DeletedSessionCleanup {
     session_id: SessionId,
     staged_draft_root: PathBuf,
     task_runtime_ids: Vec<String>,
+    /// Task worktrees read before the session's records cascade away.
+    task_worktrees: Vec<TaskWorktreeResources>,
     working_dir: PathBuf,
     /// Lane held while the worktree is removed, so deletion never overlaps
     /// another archived-session removal or the startup sweep.
@@ -609,9 +612,7 @@ impl SessionManager {
                 )
             })?;
 
-        let repo_root = self
-            .load_session_repo_root(services, source_session_id)
-            .await?;
+        let repo_root = Self::load_session_repo_root(services, source_session_id).await?;
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
         if services.fs_client().exists(folder.clone()) {
@@ -833,7 +834,7 @@ impl SessionManager {
             return Ok(());
         }
 
-        let repo_root = self.load_session_repo_root(services, session_id).await?;
+        let repo_root = Self::load_session_repo_root(services, session_id).await?;
 
         Self::create_session_worktree(
             services,
@@ -907,7 +908,6 @@ impl SessionManager {
     /// Returns an error if the session project cannot be resolved or no git
     /// repository root can be found for the project path.
     async fn load_session_repo_root(
-        &self,
         services: &AppServices,
         session_id: &str,
     ) -> Result<PathBuf, SessionError> {
@@ -921,7 +921,7 @@ impl SessionManager {
                     "Session project is required to create a worktree".to_string(),
                 )
             })?;
-        let project_path = self.load_project_path(services, project_id).await?;
+        let project_path = Self::load_project_path(services, project_id).await?;
 
         services
             .git_client()
@@ -935,7 +935,6 @@ impl SessionManager {
     /// # Errors
     /// Returns an error if the project row does not exist or cannot be loaded.
     pub(crate) async fn load_project_path(
-        &self,
         services: &AppServices,
         project_id: i64,
     ) -> Result<PathBuf, SessionError> {
@@ -1159,7 +1158,7 @@ impl SessionManager {
         session_agent: AgentSelection,
         session_folder: PathBuf,
     ) -> Result<DraftTitleGenerationContext, SessionError> {
-        let project_working_dir = self.load_project_path(services, project_id).await?;
+        let project_working_dir = Self::load_project_path(services, project_id).await?;
         let title_generation_agent =
             setting::load_default_fast_agent_setting(services, Some(project_id), session_agent)
                 .await;
@@ -2060,6 +2059,16 @@ impl SessionManager {
                 return None;
             }
         };
+        let task_worktrees =
+            match Self::load_task_worktrees(services.db(), services.base_path(), &session_id).await
+            {
+                Ok(worktrees) => worktrees,
+                Err(error) => {
+                    warn!(%session_id, %error, "failed to retain task worktrees before deletion");
+
+                    return None;
+                }
+            };
         if let Ok(handles) = self.session_handles_or_err(&session_id) {
             Self::signal_session_cancellation(services, handles, &session_id).await;
         }
@@ -2094,6 +2103,7 @@ impl SessionManager {
             session_id: session.id,
             staged_draft_root,
             task_runtime_ids,
+            task_worktrees,
             working_dir: projects.working_dir().to_path_buf(),
             worktree_cleanup_lane: services.worktree_cleanup_lane(),
         })
@@ -2112,15 +2122,26 @@ impl SessionManager {
         };
 
         let worktree_cleanup_turn = cleanup.worktree_cleanup_lane.lock().await;
-        let cleanup_errors = Self::cleanup_session_worktree_resources(
+        let mut cleanup_errors = Self::cleanup_session_worktree_resources(
             fs_client.clone(),
-            git_client,
+            Arc::clone(&git_client),
             cleanup.folder,
             cleanup.branch_name,
-            repo_root,
+            repo_root.clone(),
             cleanup.has_git_branch,
         )
         .await;
+        for worktree in cleanup.task_worktrees {
+            cleanup_errors.extend(
+                Self::remove_task_worktree_resources(
+                    fs_client.as_ref(),
+                    git_client.as_ref(),
+                    worktree,
+                    repo_root.clone(),
+                )
+                .await,
+            );
+        }
         drop(worktree_cleanup_turn);
         Self::warn_cleanup_errors(&cleanup.session_id, &cleanup_errors);
         if fs_client.is_dir(cleanup.staged_draft_root.clone())
@@ -3585,18 +3606,57 @@ impl SessionManager {
                     warn!(%session_id, %error, "failed to load canceled task history ownership");
                 }
             }
-            if has_worktree {
+            let task_worktrees = match Self::load_task_worktrees(
+                cleanup_services.db(),
+                cleanup_services.base_path(),
+                &session_id,
+            )
+            .await
+            {
+                Ok(worktrees) => worktrees,
+                Err(error) => {
+                    warn!(%session_id, %error, "failed to load canceled task worktrees");
+
+                    Vec::new()
+                }
+            };
+            if has_worktree || !task_worktrees.is_empty() {
                 let _worktree_cleanup_turn = worktree_cleanup_lane.lock().await;
-                let cleanup_errors = Self::cleanup_session_worktree_resources(
+                // Resolve the repository while the session worktree still
+                // exists, so task branches go even without directories.
+                // Without it, the session's project still names the
+                // repository of every task branch.
+                let mut repo_root = if has_worktree {
+                    git_client.main_repo_root(folder.clone()).await.ok()
+                } else {
+                    None
+                };
+                if repo_root.is_none() && !task_worktrees.is_empty() {
+                    repo_root = Self::load_session_repo_root(&cleanup_services, &session_id)
+                        .await
+                        .ok();
+                }
+                Self::remove_canceled_task_worktrees(
+                    cleanup_services.db(),
                     Arc::clone(&fs_client),
                     Arc::clone(&git_client),
-                    folder,
-                    branch_name,
-                    None,
-                    true,
+                    task_worktrees,
+                    repo_root.clone(),
+                    &session_id,
                 )
                 .await;
-                Self::warn_cleanup_errors(&session_id, &cleanup_errors);
+                if has_worktree {
+                    let cleanup_errors = Self::cleanup_session_worktree_resources(
+                        Arc::clone(&fs_client),
+                        Arc::clone(&git_client),
+                        folder,
+                        branch_name,
+                        repo_root,
+                        true,
+                    )
+                    .await;
+                    Self::warn_cleanup_errors(&session_id, &cleanup_errors);
+                }
             }
 
             Self::cleanup_session_harness_directory(Arc::clone(&fs_client), &session_id).await;
@@ -3688,7 +3748,7 @@ impl SessionManager {
     }
 
     /// Emits debug-visible warnings for best-effort cleanup failures.
-    fn warn_cleanup_errors(session_id: &str, cleanup_errors: &[String]) {
+    pub(super) fn warn_cleanup_errors(session_id: &str, cleanup_errors: &[String]) {
         for cleanup_error in cleanup_errors {
             warn!(session_id = session_id, "{cleanup_error}");
         }

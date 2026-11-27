@@ -195,6 +195,7 @@ async fn repository_parts_support_focused_adapter_injection() {
             session: Arc::clone(&baseline.repositories.session),
             setting: Arc::clone(&baseline.repositories.setting),
             task: Arc::clone(&baseline.repositories.task),
+            task_worktree: Arc::clone(&baseline.repositories.task_worktree),
             usage: Arc::clone(&baseline.repositories.usage),
         }),
     };

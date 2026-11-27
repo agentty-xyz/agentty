@@ -453,6 +453,49 @@ const WORKTREE_AND_REBASE_CASES: &[ContractCase] = &[
         expected: "Ok(()) branch=session",
     },
     ContractCase {
+        operation: "create_worktree from a recorded commit",
+        prepare: add_linked_worktree,
+        observe: |repository| {
+            Box::pin(async move {
+                // A task worktree records the session branch head, then the
+                // session branch moves on before the worktree is created.
+                let session_path = repository.path("session");
+                let recorded =
+                    render_git_observation(run_git(&session_path, &["rev-parse", "HEAD"]));
+                let advanced = run_git(
+                    &session_path,
+                    &[
+                        "commit",
+                        "--quiet",
+                        "--allow-empty",
+                        "-m",
+                        "Advance session",
+                    ],
+                );
+                let task_path = repository.path("session-task");
+                let result = RealGitClient
+                    .create_worktree(
+                        repository.local,
+                        task_path.clone(),
+                        "session-task".to_string(),
+                        recorded.clone(),
+                    )
+                    .await;
+                let task_head = render_git_observation(run_git(&task_path, &["rev-parse", "HEAD"]));
+                let session_head =
+                    render_git_observation(run_git(&session_path, &["rev-parse", "HEAD"]));
+
+                format!(
+                    "{result:?} advanced={} starts_at_record={} session_moved={}",
+                    advanced.is_ok(),
+                    task_head == recorded,
+                    session_head != recorded
+                )
+            })
+        },
+        expected: "Ok(()) advanced=true starts_at_record=true session_moved=true",
+    },
+    ContractCase {
         operation: "remove_worktree",
         prepare: add_linked_worktree,
         observe: |repository| {
