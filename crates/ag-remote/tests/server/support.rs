@@ -2,8 +2,11 @@
 //! in-process relay, with a device that reaches it through that relay.
 
 use std::error::Error;
+use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use ag_noise::{Handshake, Session};
@@ -16,13 +19,14 @@ use ag_remote::{
 };
 use ag_session::{SessionBackend, SessionService};
 use futures_util::{SinkExt, StreamExt};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{WebSocketStream, client_async};
 
 /// One WebSocket to the relay.
-pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type Socket = WebSocketStream<DeviceStream>;
 
 /// Result type for tests and the helpers they share.
 pub(crate) type TestResult<Value = ()> = Result<Value, Box<dyn Error>>;
@@ -337,9 +341,78 @@ pub(crate) async fn open_device_stream(
         relay.local_addr(),
         instance.public().fingerprint()
     );
-    let (socket, _) = connect_async(url).await?;
+    let tcp = TcpStream::connect(relay.local_addr()).await?;
+    let (socket, _) = client_async(url, DeviceStream { tcp }).await?;
 
     Ok(socket)
+}
+
+/// A device's connection to the relay that drops what it writes once the
+/// relay has hung up, as writes to a departed peer are lost.
+///
+/// The relay ends a stream by sending its close frame and dropping the
+/// connection without waiting for the device's echo. Before handing over
+/// each received message, the WebSocket client writes its automatic
+/// replies: a pong for every ping it read and the echo of a close frame.
+/// Once the relay's socket has reset the connection, that write fails and
+/// the client returns the failure in place of frames that already arrived,
+/// such as the rejection sent before the close. Dropping the write lets the
+/// device read those frames and then the end of the stream; a device that
+/// still waits for an answer sees the stream end instead.
+pub(crate) struct DeviceStream {
+    tcp: TcpStream,
+}
+
+impl DeviceStream {
+    /// Reports a write the hung-up relay refused as `written`; any other
+    /// result passes through.
+    fn drop_if_hung_up<Value>(result: io::Result<Value>, written: Value) -> io::Result<Value> {
+        match result {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                ) =>
+            {
+                Ok(written)
+            }
+            result => result,
+        }
+    }
+}
+
+impl AsyncRead for DeviceStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.tcp).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for DeviceStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let written = ready!(Pin::new(&mut self.tcp).poll_write(cx, buf));
+
+        Poll::Ready(Self::drop_if_hung_up(written, buf.len()))
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let flushed = ready!(Pin::new(&mut self.tcp).poll_flush(cx));
+
+        Poll::Ready(Self::drop_if_hung_up(flushed, ()))
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let shut_down = ready!(Pin::new(&mut self.tcp).poll_shutdown(cx));
+
+        Poll::Ready(Self::drop_if_hung_up(shut_down, ()))
+    }
 }
 
 /// Returns the next binary message, skipping keepalive traffic.
