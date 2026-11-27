@@ -965,7 +965,11 @@ async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
                 session_id: "settled-turn".into(),
                 turn,
             });
-            services.emit_app_event(AppEvent::SessionTurnEnded { outcome, turn });
+            services.emit_app_event(AppEvent::SessionTurnEnded {
+                outcome: Some(outcome),
+                session_id: "settled-turn".into(),
+                turn,
+            });
         }));
         for key in ['q', 'y'] {
             event_tx

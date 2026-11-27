@@ -17,6 +17,21 @@ fn view(state: PlatformState) -> PlatformView {
 }
 
 #[test]
+fn only_a_signed_in_view_shows_whether_sync_is_on() {
+    // Arrange
+    let mut signed_in = view(PlatformState::SignedIn(PlatformAccountView::checking(None)));
+    let mut signed_out = PlatformView::new("https://platform.example".to_string());
+
+    // Act
+    signed_in.set_sync(true);
+    signed_out.set_sync(true);
+
+    // Assert
+    assert!(signed_in.account().is_some_and(|account| account.sync));
+    assert_eq!(signed_out.account(), None);
+}
+
+#[test]
 fn only_a_signed_in_view_has_an_account_and_only_a_registered_one_uses_the_relay() {
     // Arrange
     let signed_in = |access| {

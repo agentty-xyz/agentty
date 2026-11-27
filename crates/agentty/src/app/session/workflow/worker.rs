@@ -1798,25 +1798,37 @@ impl SessionWorkerService {
             Self::emit_generated_turn_update(context, GeneratedTurnUpdate::Finished);
         }
 
+        if let Some(turn) = turn_selection {
+            Self::emit_turn_ended(context, turn, &result);
+        }
+
+        Some(result)
+    }
+
+    /// Reports the end of a model turn begun as `turn`, with the outcome
+    /// `result` settles to, or none for a failed turn.
+    fn emit_turn_ended(
+        context: &SessionWorkerContext,
+        turn: TurnSelection,
+        result: &Result<(), SessionError>,
+    ) {
         // Auto-commit can swallow cancellation errors during post-processing.
         // The active turn's token still records the user's interruption.
         let interrupted = context
             .cancel_token
             .lock()
             .is_ok_and(|token| token.is_cancelled());
-        let outcome = match &result {
+        let outcome = match result {
             _ if interrupted => Some(TurnOutcome::Interrupted),
             Ok(()) => Some(TurnOutcome::Finished),
             Err(SessionError::StoppedByUser(_)) => Some(TurnOutcome::Interrupted),
             Err(_) => None,
         };
-        if let (Some(turn), Some(outcome)) = (turn_selection, outcome) {
-            let _ = context
-                .app_event_tx
-                .send(AppEvent::SessionTurnEnded { outcome, turn });
-        }
-
-        Some(result)
+        let _ = context.app_event_tx.send(AppEvent::SessionTurnEnded {
+            outcome,
+            session_id: context.session_id.clone(),
+            turn,
+        });
     }
 
     /// Persists generated context after skip checks and starts generated-turn

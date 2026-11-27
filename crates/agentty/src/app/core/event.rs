@@ -25,6 +25,7 @@ use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
 use crate::analytics::{TurnOutcome, TurnSelection};
 use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
 use crate::app::platform::PlatformUpdate;
+use crate::app::platform_sync::PlatformTaskUpdate;
 use crate::app::project::ProjectContext;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::{
@@ -146,6 +147,9 @@ pub(crate) enum AppEvent {
     /// a finished sign-in, a checked account, or a sign-out. Updates for a
     /// replaced request are ignored.
     PlatformUpdated { update: PlatformUpdate },
+    /// Reports the answer to a background request of the platform's Sync
+    /// about one session's task.
+    PlatformTaskUpdated { update: PlatformTaskUpdate },
     /// Reports that `tmux` did not copy the screen `text` the user selected,
     /// so the foreground asks the terminal to copy it.
     ScreenCopyDeclined { text: String },
@@ -273,10 +277,11 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         turn: TurnSelection,
     },
-    /// Reports a successful or user-interrupted session turn after
-    /// post-processing.
+    /// Reports a session turn ending after post-processing: successful or
+    /// user-interrupted with its `outcome`, or failed without one.
     SessionTurnEnded {
-        outcome: TurnOutcome,
+        outcome: Option<TurnOutcome>,
+        session_id: SessionId,
         turn: TurnSelection,
     },
     /// Indicates review assist output became available for a session.
@@ -463,6 +468,13 @@ pub(super) struct AppEventBatch {
     /// Retains platform progress in arrival order, so a sign-in code
     /// precedes the finished sign-in.
     pub(super) platform_updates: Vec<PlatformUpdate>,
+    /// Sessions whose turns started or ended, in arrival order, so each
+    /// reports its activity to the platform's Sync.
+    pub(super) platform_task_activity: Vec<SessionId>,
+    /// Sessions whose turns ended, in arrival order.
+    pub(super) platform_task_turn_ends: Vec<SessionId>,
+    /// Answers of the platform's Sync in arrival order.
+    pub(super) platform_task_updates: Vec<PlatformTaskUpdate>,
     pub(super) prompt_image_paste_updates: Vec<PromptImagePasteUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
     pub(super) review_progress_updates:
@@ -558,6 +570,8 @@ impl AppEventBatch {
             || self.remote_link_copy.is_some()
             || self.platform_link_copy.is_some()
             || !self.platform_updates.is_empty()
+            || !self.platform_task_updates.is_empty()
+            || !self.platform_task_turn_ends.is_empty()
             || self.update_status.is_some()
             || !self.applied_turns.is_empty()
             || !self.implementer_attempt_successes.is_empty()
@@ -632,11 +646,7 @@ impl AppEventBatch {
                     .push((session_id, update));
             }
             AppEvent::SessionTurnStarted { session_id, turn } => {
-                self.session_turn_starts.push(turn);
-                self.session_turn_started_ids.insert(session_id);
-            }
-            AppEvent::SessionTurnEnded { outcome, turn } => {
-                self.session_turn_ends.push((turn, outcome));
+                self.collect_turn_started(session_id, turn);
             }
             AppEvent::ReviewProgressUpdated {
                 request_id,
@@ -671,6 +681,7 @@ impl AppEventBatch {
                 request_id,
             } => self.collect_platform_link_copied(request_id, is_copied),
             AppEvent::PlatformUpdated { update } => self.platform_updates.push(update),
+            AppEvent::PlatformTaskUpdated { update } => self.platform_task_updates.push(update),
             AppEvent::ScreenCopyDeclined { text } => self.screen_copies_declined.push(text),
             AppEvent::AgentCliVersionsUpdated { agent_clis } => {
                 self.agent_cli_updates = Some(agent_clis);
@@ -744,7 +755,8 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_session_diff_loaded(request_id, result, session_id),
-            event @ (AppEvent::SessionTurnReady { .. }
+            event @ (AppEvent::SessionTurnEnded { .. }
+            | AppEvent::SessionTurnReady { .. }
             | AppEvent::SessionTurnCleared { .. }
             | AppEvent::SessionProgressUpdated { .. }
             | AppEvent::SessionUsageUpdated { .. }
@@ -801,6 +813,7 @@ impl AppEventBatch {
             | AppEvent::RemoteLinkCopied { .. }
             | AppEvent::PlatformLinkCopied { .. }
             | AppEvent::PlatformUpdated { .. }
+            | AppEvent::PlatformTaskUpdated { .. }
             | AppEvent::ScreenCopyDeclined { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::HarnessModelsUpdated { .. }
@@ -816,18 +829,45 @@ impl AppEventBatch {
             | AppEvent::RefreshProjects
             | AppEvent::RefreshGitStatus
             | AppEvent::SessionGeneratedTurnUpdated { .. }
-            | AppEvent::SessionTurnStarted { .. }
-            | AppEvent::SessionTurnEnded { .. } => unreachable!("event was already collected"),
+            | AppEvent::SessionTurnStarted { .. } => unreachable!("event was already collected"),
         }
     }
 
-    /// Collects a session turn's live timeline, progress, and live usage.
+    /// Collects a turn start for analytics and for the activity of the
+    /// session's task on a platform's Sync.
+    fn collect_turn_started(&mut self, session_id: SessionId, turn: TurnSelection) {
+        self.session_turn_starts.push(turn);
+        self.platform_task_activity.push(session_id.clone());
+        self.session_turn_started_ids.insert(session_id);
+    }
+
+    /// Collects a turn end for analytics, when it has an outcome, and for
+    /// the activity of the session's task on a platform's Sync.
+    fn collect_turn_ended(
+        &mut self,
+        outcome: Option<TurnOutcome>,
+        session_id: SessionId,
+        turn: TurnSelection,
+    ) {
+        if let Some(outcome) = outcome {
+            self.session_turn_ends.push((turn, outcome));
+        }
+        self.platform_task_turn_ends.push(session_id);
+    }
+
+    /// Collects a session turn's end, live timeline, progress, and live
+    /// usage.
     ///
     /// Each run's timeline keeps its handle, which the foreground groups when
     /// it applies the batch and again on later frames; a later clear of the
     /// same run wins. Live usage changes keep their arrival order.
     fn collect_activity_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::SessionTurnEnded {
+                outcome,
+                session_id,
+                turn,
+            } => self.collect_turn_ended(outcome, session_id, turn),
             AppEvent::SessionTurnReady { key, turn } => {
                 self.collect_session_turn_update(key, Some(turn));
             }
@@ -1793,6 +1833,16 @@ impl App {
         }
         for update in std::mem::take(&mut event_batch.platform_updates) {
             self.apply_platform_update(update).await;
+        }
+        for update in std::mem::take(&mut event_batch.platform_task_updates) {
+            self.apply_platform_task_update(update).await;
+        }
+        for session_id in std::mem::take(&mut event_batch.platform_task_activity) {
+            self.report_platform_task_activity(&session_id).await;
+        }
+        for session_id in std::mem::take(&mut event_batch.platform_task_turn_ends) {
+            self.report_platform_task_activity(&session_id).await;
+            self.settle_platform_task_notice(&session_id);
         }
         if let Some(options) = event_batch.harness_model_updates.take() {
             match &mut self.mode {

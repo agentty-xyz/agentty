@@ -12,6 +12,7 @@ use tracing::warn;
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
 use crate::app::{App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::input::InputState;
+use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::session::{
     FollowUpTaskAction, PublishBranchAction, ReviewWatchToggle, SessionId, Status,
 };
@@ -114,6 +115,9 @@ struct ViewSessionSnapshot {
     fork_session: ViewActionState,
     merge_session_branch: ViewActionState,
     open_worktree: ViewActionState,
+    /// Choice the session offers while its task on the platform's Sync
+    /// holds it back.
+    platform_task_choice: Option<PlatformTaskChoice>,
     publish_pull_request_action: Option<PublishBranchAction>,
     review_comments: ViewActionState,
     review_watch_toggle: Option<ReviewWatchToggle>,
@@ -147,6 +151,7 @@ impl ViewSessionSnapshot {
                 .selected_follow_up_task_action(&view_context.session_id),
             merge_session_branch: ViewActionState::from_bool(!session.has_review_request()),
             open_worktree: ViewActionState::from_bool(can_open_worktree),
+            platform_task_choice: None,
             publish_pull_request_action: session.publish_pull_request_action(),
             review_comments: ViewActionState::from_bool(
                 session.has_review_request() && session.allows_review_comment_reply(),
@@ -304,6 +309,12 @@ async fn handle_view_key(
         return false;
     }
 
+    if let Some(choice) = view_session_snapshot.platform_task_choice
+        && handle_platform_task_key(app, key, view_context, choice).await
+    {
+        return true;
+    }
+
     if let Some(should_apply_pending_update) = handle_primary_view_key(
         app,
         key,
@@ -326,6 +337,32 @@ async fn handle_view_key(
     .await
     {
         return should_apply_pending_update;
+    }
+
+    true
+}
+
+/// Handles the keys a session offers while its task on the platform's Sync
+/// holds it back: `t` and `n` after a conflict, `s` after an interrupted
+/// check. Returns whether `key` was one of them.
+async fn handle_platform_task_key(
+    app: &mut App,
+    key: KeyEvent,
+    view_context: &ViewContext,
+    choice: PlatformTaskChoice,
+) -> bool {
+    let session_id = &view_context.session_id;
+    match (key.code, choice) {
+        (KeyCode::Char('t'), PlatformTaskChoice::Conflict) => {
+            app.take_over_platform_task(session_id).await;
+        }
+        (KeyCode::Char('n'), PlatformTaskChoice::Conflict) => {
+            app.start_separate_platform_work(session_id).await;
+        }
+        (KeyCode::Char('s'), PlatformTaskChoice::Interrupted) => {
+            app.ask_platform_task_again(session_id).await;
+        }
+        _ => return false,
     }
 
     true
@@ -680,7 +717,11 @@ fn open_or_regenerate_review(
 /// Collects session-specific values used by `handle()` from the active view
 /// row.
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
-    ViewSessionSnapshot::from_sessions(&app.sessions, view_context, app.is_tmux_session())
+    let mut snapshot =
+        ViewSessionSnapshot::from_sessions(&app.sessions, view_context, app.is_tmux_session())?;
+    snapshot.platform_task_choice = app.platform.task_choice(view_context.session_id.as_str());
+
+    Some(snapshot)
 }
 
 /// Applies in-place updates for active view review status/text and scroll
@@ -830,6 +871,7 @@ fn open_view_help_overlay(
             can_start_staged_session: view_session_snapshot.can_start_staged_session(),
             can_steer_queued_messages: view_session_snapshot.can_steer_queued_messages(),
             can_view_review_comments: view_session_snapshot.can_open_review_comments(),
+            platform_task_choice: view_session_snapshot.platform_task_choice,
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
             review_watch_toggle: view_session_snapshot.review_watch_toggle,
             session_id: view_context.session_id.clone(),

@@ -34,5 +34,5 @@ pub use model::{
     ReviewRequestMetadataFieldUpdate, ReviewRequestState, ReviewRequestSummary,
     UpdateReviewRequestInput, is_gitlab_host,
 };
-pub use remote::detect_remote;
+pub use remote::{detect_remote, remote_repository_path};
 pub(crate) use remote::{parse_remote_url, strip_port};

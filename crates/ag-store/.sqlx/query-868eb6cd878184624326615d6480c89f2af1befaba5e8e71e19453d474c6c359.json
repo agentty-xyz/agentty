@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_platform_task\nSET state = 'interrupted'\nWHERE state = 'checking'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "868eb6cd878184624326615d6480c89f2af1befaba5e8e71e19453d474c6c359"
+}

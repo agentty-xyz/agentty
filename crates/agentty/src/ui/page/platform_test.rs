@@ -189,6 +189,7 @@ fn keep_on_shows_its_state_what_it_does_and_an_unsaved_change() {
         keep_on: true,
         keep_on_notice: Some("Could not save keep on.".to_string()),
         login: None,
+        sync: false,
     }));
 
     // Act
@@ -198,6 +199,27 @@ fn keep_on_shows_its_state_what_it_does_and_an_unsaved_change() {
     assert!(text.contains("Keep on On"));
     assert!(text.contains("starts whenever Agentty starts"));
     assert!(text.contains("Could not save keep on."));
+}
+
+#[test]
+fn the_account_shows_in_one_line_whether_the_platform_records_first_messages() {
+    // Arrange
+    let account = |sync| {
+        platform(PlatformState::SignedIn(PlatformAccountView {
+            sync,
+            ..PlatformAccountView::checking(Some("octocat".to_string()))
+        }))
+    };
+
+    // Act
+    let on = rendered_text(&account(true), &RemoteControlView::default(), 200, 30);
+    let off = rendered_text(&account(false), &RemoteControlView::default(), 200, 30);
+
+    // Assert
+    assert!(
+        on.contains("Sync    On: each new session's first message is recorded on the platform")
+    );
+    assert!(off.contains("Sync    Off"));
 }
 
 #[test]

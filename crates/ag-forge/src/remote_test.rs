@@ -2,7 +2,77 @@
 //! redaction.
 
 use crate::model::{ForgeKind, ForgeRemote, ReviewRequestError};
-use crate::remote::{ParsedRemote, detect_remote, display_safe_remote_url, parse_remote_url};
+use crate::remote::{
+    ParsedRemote, detect_remote, display_safe_remote_url, parse_remote_url, remote_repository_path,
+};
+
+#[test]
+fn remote_repository_path_names_any_host_without_scheme_credentials_or_ssh_port() {
+    // Arrange: the remote, then the path it names.
+    let cases = [
+        (
+            "https://github.com/agentty-xyz/agentty.git",
+            Some("github.com/agentty-xyz/agentty"),
+        ),
+        (
+            "git@github.com:agentty-xyz/agentty.git",
+            Some("github.com/agentty-xyz/agentty"),
+        ),
+        (
+            "github.com:agentty-xyz/agentty",
+            Some("github.com/agentty-xyz/agentty"),
+        ),
+        (
+            "ssh://git@Git.Example.com:2222/team/project.git",
+            Some("git.example.com/team/project"),
+        ),
+        (
+            "git+ssh://deploy@git.example.com/team/project",
+            Some("git.example.com/team/project"),
+        ),
+        (
+            "https://user:token@gitlab.example.com/group/sub/deep/project.git/",
+            Some("gitlab.example.com/group/sub/deep/project"),
+        ),
+        (
+            "https://code.example.com:8443/team/project",
+            Some("code.example.com:8443/team/project"),
+        ),
+        (
+            "  https://example.com/project///  ",
+            Some("example.com/project"),
+        ),
+        (
+            "git@example.com:/srv/git/project.git",
+            Some("example.com/srv/git/project"),
+        ),
+        (
+            "https://example.com/caf\u{e9}/project",
+            Some("example.com/caf\u{e9}/project"),
+        ),
+        ("", None),
+        ("/home/user/project", None),
+        ("./project:with-colon", None),
+        ("C:\\work\\project", None),
+        ("file:///home/user/project.git", None),
+        ("https://example.com", None),
+        ("https://example.com/", None),
+        ("https:///team/project", None),
+        ("https://user@:8443/team/project", None),
+        ("https://example.com/team//project", None),
+        ("https://example.com/team/../project", None),
+        ("https://example.com/./project", None),
+        ("https://example.com/.git", None),
+    ];
+
+    for (remote, expected) in cases {
+        // Act
+        let path = remote_repository_path(remote);
+
+        // Assert
+        assert_eq!(path.as_deref(), expected, "remote {remote:?}");
+    }
+}
 
 #[test]
 fn detect_remote_returns_github_remote_for_https_origin() {

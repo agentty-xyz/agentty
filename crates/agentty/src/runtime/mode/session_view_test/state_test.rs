@@ -41,6 +41,7 @@ async fn test_handle_view_key_ignores_status_gated_actions() {
             fork_session: ViewActionState::Disabled,
             merge_session_branch: ViewActionState::Enabled,
             open_worktree: ViewActionState::Disabled,
+            platform_task_choice: None,
             review_comments: ViewActionState::Disabled,
             review_watch_toggle: None,
             start_staged_session: ViewActionState::Disabled,

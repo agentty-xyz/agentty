@@ -133,6 +133,7 @@ async fn help_and_info_overlays_follow_their_background_tick_driven_ui() {
                     can_open_worktree: false,
                     can_start_staged_session: false,
                     can_steer_queued_messages: false,
+                    platform_task_choice: None,
                     can_view_review_comments: false,
                     publish_pull_request_action: None,
                     review_watch_toggle: None,

@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT task.session_id AS \"session_id!: String\", task.state AS \"state: PlatformTaskState\",\n       task.platform_url, task.title, task.brief, task.not_duplicates, task.pending_prompt,\n       task.task_project, task.task_number, task.task_title, task.task_url, task.claim_id,\n       task.holder_session, task.holder_last_active_at\nFROM session_platform_task AS task\nJOIN session ON session.id = task.session_id\nWHERE session.project_id = ? AND task.state != 'resolved'\nORDER BY task.session_id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "state: PlatformTaskState",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "platform_url",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "platform_url"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "brief",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "brief"
+          }
+        }
+      },
+      {
+        "name": "not_duplicates",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "not_duplicates"
+          }
+        }
+      },
+      {
+        "name": "pending_prompt",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "pending_prompt"
+          }
+        }
+      },
+      {
+        "name": "task_project",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_project"
+          }
+        }
+      },
+      {
+        "name": "task_number",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_number"
+          }
+        }
+      },
+      {
+        "name": "task_title",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_title"
+          }
+        }
+      },
+      {
+        "name": "task_url",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_url"
+          }
+        }
+      },
+      {
+        "name": "claim_id",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "claim_id"
+          }
+        }
+      },
+      {
+        "name": "holder_session",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "holder_session"
+          }
+        }
+      },
+      {
+        "name": "holder_last_active_at",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "holder_last_active_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7b1c6128ef16583afd9366fc6718c289edcdf78a3c99db849291783925c853ee"
+}

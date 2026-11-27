@@ -148,6 +148,9 @@ State-specific differences:
   [Active Turns](@/docs/usage/workflow.md#active-turns-and-the-message-queue).
 - **Rebasing**: `Enter` and `p` queue work; cancellation is unavailable.
 - **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer.
+- **Waiting on the platform's Sync**: after a conflict, `t` takes the task over and `n`
+  starts separate work; after a restart that interrupted the check, `s` asks again. See
+  [Sync](@/docs/usage/platform.md#usage-platform-sync).
 - **Question**: Answer through the question panel; `r` is hidden.
 - **Linked review request**: `c` opens comments; local `m` is unavailable.
 - **Merged**: Read-only chat, comments, and diff until manual target sync completes.

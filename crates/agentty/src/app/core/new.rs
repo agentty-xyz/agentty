@@ -563,6 +563,13 @@ impl App {
                 .recover_session_preparations()
                 .await
                 .map_err(Self::startup_recovery_error)?;
+            // A start the platform's Sync did not answer before the quit is
+            // never repeated without the user.
+            repositories
+                .platform_tasks()
+                .recover_platform_tasks()
+                .await
+                .map_err(Self::startup_recovery_error)?;
             SessionManager::fail_unfinished_operations_from_previous_run(
                 repositories,
                 base_path,

@@ -398,6 +398,17 @@ work; it does not submit an empty reply.
 | Title and commit-message generation | Session input and changed turns           |
 | Focused review                      | Eligible changed diff or manual request   |
 | Publish, sync, merge                | User request or ordered workflow          |
+| Platform Sync task requests         | First message, turns, session end         |
+
+<a id="architecture-runtime-flow-platform-sync"></a> While the account answer enables a
+platform's Sync, a session's first message records a `checking` row and sends its start
+request in the background, beside workspace preparation. Every start path, direct or
+through a prepared prompt, checks that row before the first turn and holds the prompt
+until the `PlatformTaskUpdated` event resolves it: a held task or a failure starts the
+session, a conflict waits for the user. Turn start and end events report activity, and
+each session reload finishes or releases the claims of sessions that reached `Merged`,
+`Done`, or `Canceled`, taking each claim from its row first so it is sent once. Startup
+marks unanswered starts `interrupted` instead of repeating them.
 
 All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have bounded
 execution and cleanup, and background results keep their original session and project

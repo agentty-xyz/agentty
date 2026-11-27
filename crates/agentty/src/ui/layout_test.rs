@@ -62,6 +62,7 @@ fn view_help_text(session: &Session, can_open_worktree: bool) -> String {
         can_steer_queued_messages: ViewActionAvailability::from_bool(
             session.can_steer_queued_messages(),
         ),
+        platform_task_choice: None,
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state: help_action::session_view_state(session),
     });

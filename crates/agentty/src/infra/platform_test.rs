@@ -1,5 +1,8 @@
 //! Platform client tests against a fake platform server.
 
+#[path = "platform_test/sync_test.rs"]
+mod sync;
+
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -292,8 +295,41 @@ async fn account_presents_the_token_and_returns_the_offered_relay() {
                 pairing_url: "https://platform.example/sessions/".to_string(),
                 relay_url: "wss://relay.platform.example".to_string(),
             }),
+            sync: false,
         })
     );
+}
+
+#[tokio::test]
+async fn account_offers_sync_only_while_its_entry_is_an_object() {
+    // Arrange: the `sync` entry, then whether Sync is on.
+    let cases = [
+        (Some(json!({})), true),
+        (Some(json!({ "anything": 1 })), true),
+        (Some(json!(null)), false),
+        (Some(json!(true)), false),
+        (None, false),
+    ];
+
+    for (sync, expected) in cases {
+        let mut services = json!({});
+        if let Some(sync) = sync {
+            services["sync"] = sync;
+        }
+        let (_server, client) = fake_platform(
+            "GET",
+            "/api/v1/account",
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "account": { "login": "octocat" }, "services": services })),
+        )
+        .await;
+
+        // Act
+        let account = client.account(&token()).await.expect("account");
+
+        // Assert
+        assert_eq!(account.sync, expected);
+    }
 }
 
 #[tokio::test]
@@ -321,6 +357,7 @@ async fn account_without_a_relay_offers_no_remote_control() {
             Ok(PlatformAccount {
                 login: "octocat".to_string(),
                 remote_control: None,
+                sync: false,
             })
         );
     }

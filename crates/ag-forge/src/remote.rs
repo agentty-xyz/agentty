@@ -24,6 +24,50 @@ pub fn detect_remote(repo_url: &str) -> Result<ForgeRemote, ReviewRequestError> 
     })
 }
 
+/// Returns the `host/path` that names the repository behind the git remote
+/// `repo_url`, on any host: without scheme, `username[:password]@`
+/// userinfo, SSH port, trailing slashes, or trailing `.git`, and with the
+/// host in lowercase. The port of another scheme stays, since it names
+/// another server.
+///
+/// Returns `None` for a local path, a `file://` remote, and a remote whose
+/// host or path is missing or has an empty, `.`, or `..` segment.
+pub fn remote_repository_path(repo_url: &str) -> Option<String> {
+    let trimmed_url = repo_url.trim().trim_end_matches('/');
+    let (authority, path, is_ssh) = if let Some((scheme, scheme_rest)) =
+        trimmed_url.split_once("://")
+    {
+        let (authority, path) = scheme_rest.split_once('/')?;
+        let is_ssh = scheme.eq_ignore_ascii_case("ssh") || scheme.eq_ignore_ascii_case("git+ssh");
+
+        (authority, path, is_ssh)
+    } else {
+        // The scp-like form, `[user@]host:path`; a `/` or `\` before the
+        // first `:` makes it a local path instead.
+        let (authority, path) = trimmed_url.split_once(':')?;
+        if authority.contains(['/', '\\']) {
+            return None;
+        }
+
+        (authority, path, true)
+    };
+    let host = strip_userinfo(authority).to_ascii_lowercase();
+    let host = if is_ssh { strip_port(&host) } else { &host };
+    let path = path.trim_matches('/');
+    let path = path
+        .strip_suffix(".git")
+        .unwrap_or(path)
+        .trim_end_matches('/');
+    let is_host = !strip_port(host).is_empty();
+    let is_path = !path.is_empty()
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|segment| !matches!(segment, "" | "." | ".."));
+
+    (is_host && is_path).then(|| format!("{host}/{path}"))
+}
+
 /// Parsed remote components extracted from one git remote URL.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedRemote {

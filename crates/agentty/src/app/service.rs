@@ -523,9 +523,11 @@ impl AppServices {
             while let Ok(event) = event_rx.try_recv() {
                 match event {
                     AppEvent::SessionTurnStarted { turn, .. } => self.record_turn_start(turn),
-                    AppEvent::SessionTurnEnded { outcome, turn } => {
-                        self.record_turn_end(turn, outcome);
-                    }
+                    AppEvent::SessionTurnEnded {
+                        outcome: Some(outcome),
+                        turn,
+                        ..
+                    } => self.record_turn_end(turn, outcome),
                     AppEvent::PromptImagePasted {
                         update:
                             PromptImagePasteUpdate {
@@ -607,6 +609,7 @@ impl AppServices {
             AppEvent::RemoteLinkCopied { .. } => "RemoteLinkCopied",
             AppEvent::PlatformLinkCopied { .. } => "PlatformLinkCopied",
             AppEvent::PlatformUpdated { .. } => "PlatformUpdated",
+            AppEvent::PlatformTaskUpdated { .. } => "PlatformTaskUpdated",
             AppEvent::ScreenCopyDeclined { .. } => "ScreenCopyDeclined",
             AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
             AppEvent::HarnessModelsUpdated { .. } => "HarnessModelsUpdated",

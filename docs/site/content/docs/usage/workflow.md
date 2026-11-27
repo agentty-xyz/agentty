@@ -105,10 +105,13 @@ minutes is checked about every five minutes until it changes.
 | **Canceled**    | Canceled; worktree removed.                              |
 
 New sessions open the composer while their workspace is prepared; submit right away and
-the prompt waits for setup. If setup fails, press `s` in session view to retry. Prompts
-and images whose turns never began survive restart; review the transcript before
-retrying a turn interrupted during dispatch. Startup restores interrupted rebases to
-**Review**; storage or Git cleanup failures must be resolved before startup finishes.
+the prompt waits for setup. When the platform you are signed in to offers
+[Sync](@/docs/usage/platform.md#usage-platform-sync), the first message also waits for
+the platform's answer, which holds the session back while another session works on the
+same task. If setup fails, press `s` in session view to retry. Prompts and images whose
+turns never began survive restart; review the transcript before retrying a turn
+interrupted during dispatch. Startup restores interrupted rebases to **Review**; storage
+or Git cleanup failures must be resolved before startup finishes.
 
 ### Typical Transitions
 

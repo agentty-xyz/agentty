@@ -681,21 +681,30 @@ async fn turn_end_telemetry_preserves_each_outcome_and_queued_selection() {
     .collect::<Vec<_>>();
     for turn in turns[..2].iter().copied() {
         app.services.emit_app_event(AppEvent::SessionTurnEnded {
-            outcome: TurnOutcome::Finished,
+            outcome: Some(TurnOutcome::Finished),
+            session_id: "session".into(),
             turn,
         });
     }
+    // A failed turn has no outcome to report.
+    app.services.emit_app_event(AppEvent::SessionTurnEnded {
+        outcome: None,
+        session_id: "session".into(),
+        turn: turns[0],
+    });
 
     // Act
     app.apply_app_events(AppEvent::SessionTurnEnded {
-        outcome: TurnOutcome::Interrupted,
+        outcome: Some(TurnOutcome::Interrupted),
+        session_id: "session".into(),
         turn: turns[2],
     })
     .await;
     app.services.wait_for_cleanup_tasks(None).await;
     app.set_analytics(None);
     app.apply_app_events(AppEvent::SessionTurnEnded {
-        outcome: TurnOutcome::Interrupted,
+        outcome: Some(TurnOutcome::Interrupted),
+        session_id: "session".into(),
         turn: turns[2],
     })
     .await;

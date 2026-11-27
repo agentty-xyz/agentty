@@ -691,6 +691,7 @@ fn mode_session_id_uses_view_help_context() {
             can_start_staged_session: false,
             can_steer_queued_messages: false,
             can_view_review_comments: false,
+            platform_task_choice: None,
             publish_pull_request_action: None,
             review_watch_toggle: None,
             scroll_offset: Some(2),

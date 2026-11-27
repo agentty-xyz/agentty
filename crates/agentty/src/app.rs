@@ -33,6 +33,7 @@ mod link_copy;
 mod merge_queue;
 mod message_admission;
 pub(crate) mod platform;
+pub(crate) mod platform_sync;
 mod project;
 mod project_catalog;
 mod project_page;

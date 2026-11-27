@@ -10,6 +10,7 @@
 //! sign-in, also connects the check a launch runs. The access token goes
 //! only to the platform, never to the relay.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,12 +19,15 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
 use crate::app::link_copy::LinkCopy;
+use crate::app::platform_sync::SyncAccess;
 use crate::app::{App, AppEvent, spawn};
+use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::setting::SettingName;
 use crate::infra::browser::BrowserClient;
 use crate::infra::db::{DbError, SettingRepository};
 use crate::infra::platform::{
-    AccessToken, DeviceAuthorization, PlatformClient, PlatformError, RemoteControlService, SignIn,
+    AccessToken, DeviceAuthorization, PlatformAccount, PlatformClient, PlatformError,
+    RemoteControlService, SignIn,
 };
 use crate::infra::terminal_clipboard::TerminalClipboard;
 use crate::presentation::platform::{
@@ -73,6 +77,9 @@ pub(crate) enum PlatformUpdate {
         login: Option<String>,
         /// What this Agentty may use, or why that is unknown.
         result: Result<Access, PlatformError>,
+        /// Whether the account answer enables the platform's Sync; `false`
+        /// when the account could not be read.
+        sync: bool,
     },
     /// The platform answered the sign-out.
     SignedOut {
@@ -116,6 +123,8 @@ pub(crate) struct Platform {
     /// Whether remote control starts once the running account check
     /// confirms the registration.
     starts_remote_control_after_check: bool,
+    /// The platform's Sync as this launch sees it.
+    sync: SyncState,
     /// Running sign-in poll or account check, aborted when a later request
     /// replaces it.
     task: Option<JoinHandle<()>>,
@@ -145,9 +154,50 @@ impl Platform {
             }),
             request_id: 0,
             starts_remote_control_after_check: false,
+            sync: SyncState::default(),
             task: None,
             token: None,
             view: PlatformView::new(String::new()),
+        }
+    }
+
+    /// Returns what a Sync request needs while the latest account answer
+    /// enables the platform's Sync: the client, the token, and the
+    /// platform's address.
+    pub(crate) fn sync_access(&self) -> Option<SyncAccess> {
+        let (true, Some(client), Some(token)) = (self.sync.is_on, &self.client, &self.token) else {
+            return None;
+        };
+
+        Some(SyncAccess {
+            client: Arc::clone(client),
+            platform_url: self.view.platform_url.clone(),
+            token: token.clone(),
+        })
+    }
+
+    /// Treats the platform's Sync as off until the next account answer, as
+    /// a `sync_disabled` answer asks.
+    pub(crate) fn disable_sync(&mut self) {
+        self.sync.is_on = false;
+        self.view.set_sync(false);
+    }
+
+    /// Returns the choice the session `session_id` offers while its
+    /// platform task holds it back.
+    pub(crate) fn task_choice(&self, session_id: &str) -> Option<PlatformTaskChoice> {
+        self.sync.choices.get(session_id).copied()
+    }
+
+    /// Replaces the choice the session `session_id` offers.
+    pub(crate) fn set_task_choice(&mut self, session_id: &str, choice: Option<PlatformTaskChoice>) {
+        match choice {
+            Some(choice) => {
+                self.sync.choices.insert(session_id.to_string(), choice);
+            }
+            None => {
+                self.sync.choices.remove(session_id);
+            }
         }
     }
 
@@ -160,6 +210,11 @@ impl Platform {
     /// Returns the state projected into the Platform tab.
     pub(crate) fn view(&self) -> &PlatformView {
         &self.view
+    }
+
+    /// Returns the name this Agentty asks to be shown as.
+    pub(crate) fn instance_name(&self) -> &str {
+        &self.instance_name
     }
 
     /// Stops any running request and returns the identifier the next one
@@ -193,6 +248,17 @@ impl Platform {
             _ => None,
         }
     }
+}
+
+/// The platform's Sync as this launch sees it.
+#[derive(Default)]
+struct SyncState {
+    /// Choices offered in the sessions whose platform task holds them
+    /// back, by session.
+    choices: HashMap<String, PlatformTaskChoice>,
+    /// Whether the latest account answer enables the platform's Sync, until
+    /// a Sync answer says the platform no longer does.
+    is_on: bool,
 }
 
 impl Drop for Platform {
@@ -384,12 +450,13 @@ impl App {
         let event_tx = self.services.event_sender();
         // Kept, so a sign-out or a later check stops it before it registers.
         self.platform.task = Some(spawn::spawn_detached(async move {
-            let (login, result) = check_account(client.as_ref(), &token, instance).await;
+            let (account, result) = check_account(client.as_ref(), &token, instance).await;
             let _ = event_tx.send(AppEvent::PlatformUpdated {
                 update: PlatformUpdate::Refreshed {
                     request_id,
-                    login,
+                    login: account.as_ref().map(|account| account.login.clone()),
                     result,
+                    sync: account.is_some_and(|account| account.sync),
                 },
             });
         }));
@@ -501,8 +568,10 @@ impl App {
                 request_id,
                 login,
                 result,
+                sync,
             } => {
                 if request_id == self.platform.request_id {
+                    self.apply_platform_sync(sync).await;
                     self.apply_platform_refresh(login, result).await;
                 }
             }
@@ -617,12 +686,34 @@ impl App {
         }
     }
 
-    /// Forgets the token and keep on here, stops remote control through
-    /// the platform, and shows `notice`. Returns the request a sign-out
-    /// reports under.
+    /// Applies whether the latest account answer enables the platform's
+    /// Sync, and once it does, settles the tasks of sessions that ended
+    /// while it did not.
+    async fn apply_platform_sync(&mut self, sync: bool) {
+        self.platform.sync.is_on = sync;
+        self.platform.view.set_sync(sync);
+        if sync {
+            self.settle_platform_tasks().await;
+        }
+    }
+
+    /// Forgets the token, keep on, and every Sync claim here, stops remote
+    /// control through the platform, and shows `notice`. Returns the
+    /// request a sign-out reports under.
+    ///
+    /// The claims are forgotten without a request, since the token they
+    /// would be sent with is gone; the platform then reads their tasks as
+    /// stale.
     async fn forget_platform_sign_in(&mut self, notice: Option<String>) -> u64 {
         let request_id = self.platform.next_request();
         self.platform.token = None;
+        self.platform.sync.is_on = false;
+        let _ = self
+            .services
+            .db()
+            .platform_tasks()
+            .forget_platform_task_claims()
+            .await;
         // An empty value leaves no token, and no keep on, behind.
         let cleared = self
             .services
@@ -718,18 +809,18 @@ async fn poll_until_decided(
 
 /// Reads the account behind `token` and, when the platform offers a relay,
 /// registers this Agentty under the identifier and name `instance` gives.
-/// Returns the login when the account could be read.
+/// Returns the account when it could be read.
 pub(crate) async fn check_account(
     client: &dyn PlatformClient,
     token: &AccessToken,
     instance: (String, String),
-) -> (Option<String>, Result<Access, PlatformError>) {
+) -> (Option<PlatformAccount>, Result<Access, PlatformError>) {
     let account = match client.account(token).await {
         Ok(account) => account,
         Err(error) => return (None, Err(error)),
     };
     let (instance_id, name) = instance;
-    let result = match account.remote_control {
+    let result = match account.remote_control.clone() {
         None => Ok(Access::NoRelay),
         Some(service) => client
             .register_instance(token, &instance_id, &name)
@@ -740,7 +831,7 @@ pub(crate) async fn check_account(
             }),
     };
 
-    (Some(account.login), result)
+    (Some(account), result)
 }
 
 /// Saves `token` as the sign-in for the platform at `platform_url`, with

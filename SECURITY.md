@@ -155,10 +155,29 @@ streams it carries; the platform's web client is trusted, as the known limits un
 "Remote Control" state. The access token is stored in Agentty's database with the
 platform that issued it, sent only to that platform, and never to the relay or logged.
 
+A platform may offer Sync for the signed-in account, its shared record of the work the
+account's sessions do; see
+[Sync](https://agentty.xyz/docs/usage/platform/#usage-platform-sync). Only while the
+latest account answer enables it, Agentty sends that platform, for each new session, the
+first non-blank line of its first message cut to 200 characters, that message cut to
+4,000 characters, the repository's `origin` remote as `host/path` without scheme or
+credentials, and a label of this Agentty's name and the start of the session's
+identifier, before the session starts. Afterwards it reports activity when each turn
+starts and ends, sends the session's title and review request link when the session is
+merged or done, and gives the task up when the session is deleted or canceled. It sends
+no file, diff, or later message. The claim that proves a session holds its task is
+stored in Agentty's database with the platform that issued it and sent only to that
+platform. Agentty has no switch of its own for Sync: signing out is the way to stop it.
+
 Report these as vulnerabilities:
 
 - a platform access token, device code, or sign-in code reaching the relay, another
   platform, a log, or a paired device;
+- a Sync claim reaching anything but the platform that issued it, or a log;
+- repository credentials from the `origin` remote, or anything beyond what the paragraph
+  above lists, reaching a platform;
+- Agentty sending a Sync request while the latest account answer does not enable Sync;
+- text from a platform's Sync answer reaching an agent's prompt;
 - a device gaining access to a session because Agentty is signed in, without pairing;
 - Agentty contacting a platform that the user has neither signed in to nor started
   signing in to, dialling any relay but the one named by the platform it is registered
@@ -172,6 +191,12 @@ These are known limits, not vulnerabilities:
   the account holds the instance's key.
 - The platform decides which instances its relay admits, and can refuse this Agentty at
   any time.
+- A Sync start the platform completed after Agentty stopped waiting, or that Agentty
+  quit before it heard the answer, leaves a task held for the session until the platform
+  reads it as stale or another session takes it over. Signing out forgets held claims
+  without telling the platform, with the same effect.
+- Any session of the account can take a task over from another, and the platform, not
+  Agentty, decides which work counts as the same.
 
 ## Response and Disclosure Process
 

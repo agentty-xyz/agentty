@@ -887,6 +887,9 @@ impl App {
         if self.queue_preparation_prompt(session_id, &prompt).await? {
             return Ok(());
         }
+        if self.platform_task_holds_start(session_id, &prompt).await {
+            return self.save_platform_task_prompt(session_id, &prompt).await;
+        }
         if self
             .sessions
             .session_for_id(session_id)
@@ -984,6 +987,11 @@ impl App {
         if self.queue_preparation_prompt(session_id, &prompt).await? {
             self.retry_workspace_preparation(session_id, "session.create")
                 .await?;
+            return Ok(());
+        }
+        // The staged drafts stay until the platform's Sync answers, which
+        // starts them again.
+        if self.platform_task_holds_start(session_id, &prompt).await {
             return Ok(());
         }
         self.clear_review_output(session_id);
@@ -1411,6 +1419,9 @@ impl App {
     /// state for that session, and schedules list refresh.
     pub async fn delete_selected_session(&mut self) {
         let session_id = self.selected_session().map(|session| session.id.clone());
+        if let Some(session_id) = &session_id {
+            self.release_platform_task_before_delete(session_id).await;
+        }
         self.sessions
             .delete_selected_session(&self.projects, &self.services)
             .await;
@@ -1446,6 +1457,9 @@ impl App {
         {
             let _ = self.cancel_session(session_id).await;
             return;
+        }
+        if let Some(session_id) = &session_id {
+            self.release_platform_task_before_delete(session_id).await;
         }
         self.sessions
             .delete_selected_session_deferred_cleanup(&self.projects, &self.services)
@@ -2008,7 +2022,10 @@ impl App {
     ///
     /// # Errors
     /// Returns an error when the session's project cannot be loaded.
-    async fn session_project_id(&self, session_id: &str) -> Result<i64, AppError> {
+    pub(in crate::app) async fn session_project_id(
+        &self,
+        session_id: &str,
+    ) -> Result<i64, AppError> {
         let session_project_id = self
             .services
             .db()
@@ -2023,7 +2040,10 @@ impl App {
     ///
     /// # Errors
     /// Returns an error when the project cannot be loaded.
-    async fn project_working_dir(&self, project_id: i64) -> Result<PathBuf, AppError> {
+    pub(in crate::app) async fn project_working_dir(
+        &self,
+        project_id: i64,
+    ) -> Result<PathBuf, AppError> {
         if project_id == self.projects.active_project_id() {
             return Ok(self.projects.working_dir().to_path_buf());
         }

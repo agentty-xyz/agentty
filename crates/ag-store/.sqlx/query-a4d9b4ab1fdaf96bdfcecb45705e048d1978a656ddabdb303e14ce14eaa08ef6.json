@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT task.session_id AS \"session_id!: String\", session.status, session.title,\n       review.web_url AS \"review_request_url?: String\"\nFROM session_platform_task AS task\nJOIN session ON session.id = task.session_id\nLEFT JOIN session_review_request AS review ON review.session_id = task.session_id\nWHERE task.claim_id IS NOT NULL AND session.status IN ('Merged', 'Done', 'Canceled')\nORDER BY task.session_id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "review_request_url?: String",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "web_url"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "a4d9b4ab1fdaf96bdfcecb45705e048d1978a656ddabdb303e14ce14eaa08ef6"
+}

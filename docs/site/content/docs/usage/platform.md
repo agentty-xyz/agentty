@@ -72,6 +72,46 @@ Keep on is saved with the sign-in: a new sign-in starts with it off, and signing
 the platform revoking the token, clears it. If it cannot be saved, the tab says so, and
 the change lasts only until Agentty quits.
 
+## Sync
+
+<a id="usage-platform-sync"></a> A platform may offer Sync for your account: a shared
+record of what your sessions are working on, on every computer you are signed in on, so
+that two sessions do not start the same work. Agentty has no setting for it; the
+platform's account answer turns it on or off, and the `Sync` field of the `Platform` tab
+shows which. Signing out turns it off.
+
+While Sync is on, the first message of every new session is checked before the session
+starts, while its workspace is set up:
+
+- **New or matching open work.** The session takes a task and starts. A notice in the
+  session names the task and lists the repository's other work in progress, with the
+  session holding each and when it was last active.
+- **Work another session holds.** The session does not start. Its notice names the task,
+  the session holding it, and when that session was last active. Press `t` to take the
+  task over, which ends the other session's claim, or `n` to start this as separate
+  work. Leave it, and the session stays unstarted with your prompt retained.
+- **Anything else.** When the platform cannot be reached, is slow, or refuses, the
+  session starts without a task and its notice says why. Sync never keeps you from
+  working.
+
+A session that holds a task reports activity when each turn starts and ends, finishes
+the task when it is merged or done, and releases it when it is deleted or canceled. If
+another session took the task over, or it was finished elsewhere, the session says so
+and keeps running without it. If Agentty quits before the platform answers a first
+message, the session waits after the restart; press `s` to ask again.
+
+Agentty sends only the first non-blank line of the first message, cut to 200 characters,
+as the task's title; the message, cut to 4,000 characters, as its brief; the
+repository's `origin` remote as `host/path`, without credentials; and the session's
+label, this Agentty's name and the start of the session's identifier. A finished task
+also gets the session's title and its review request link. Nothing else is sent: no
+file, diff, or later message. A repository without such a remote, or a message without
+text, starts its session without a task. The platform's text is shown only in the
+session; it never reaches an agent's prompt.
+
+Signing out forgets the tasks sessions hold on this computer without telling the
+platform, since the token is gone; the platform then sees them as stale.
+
 ## Use Another Platform
 
 <a id="usage-platform-url"></a> Use `--platform-url <URL>` to sign in to another
