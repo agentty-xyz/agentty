@@ -1110,7 +1110,9 @@ fn app_event_label_names_turn_ends() {
 fn app_event_label_names_platform_task_updates() {
     // Arrange
     let event = AppEvent::PlatformTaskUpdated {
-        update: crate::app::platform_sync::PlatformTaskUpdate::Disabled,
+        update: crate::app::platform_sync::PlatformTaskUpdate::Disabled {
+            ticket: crate::app::platform_sync::SyncTicket::default(),
+        },
     };
 
     // Act

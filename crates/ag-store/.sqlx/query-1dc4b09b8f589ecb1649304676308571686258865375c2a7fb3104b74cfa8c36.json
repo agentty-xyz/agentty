@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT task.session_id AS \"session_id!: String\", session.status, session.title,\n       review.web_url AS \"review_request_url?: String\", task.claim_id AS \"claim_id!: String\",\n       task.task_project AS \"task_project!: String\", task.task_number AS \"task_number!: i64\"\nFROM session_platform_task AS task\nJOIN session ON session.id = task.session_id\nLEFT JOIN session_review_request AS review ON review.session_id = task.session_id\nWHERE task.claim_id IS NOT NULL AND task.platform_url = ? AND task.task_project IS NOT NULL\n      AND task.task_number IS NOT NULL AND session.status IN ('Merged', 'Done', 'Canceled')\nORDER BY task.session_id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "review_request_url?: String",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_request",
+            "name": "web_url"
+          }
+        }
+      },
+      {
+        "name": "claim_id!: String",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "claim_id"
+          }
+        }
+      },
+      {
+        "name": "task_project!: String",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_project"
+          }
+        }
+      },
+      {
+        "name": "task_number!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1dc4b09b8f589ecb1649304676308571686258865375c2a7fb3104b74cfa8c36"
+}

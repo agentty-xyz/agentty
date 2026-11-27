@@ -132,9 +132,12 @@ impl fmt::Debug for PlatformTaskClaim {
     }
 }
 
-/// A held task whose session reached `Merged`, `Done`, or `Canceled`.
+/// A held task whose session reached `Merged`, `Done`, or `Canceled`, with
+/// the claim taken from it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SettledPlatformTask {
+    /// Claim the session held, now taken from its row.
+    pub claim: PlatformTaskClaim,
     /// Address of the session's review request, when it has one.
     pub review_request_url: Option<String>,
     /// Session holding the task.
@@ -211,21 +214,43 @@ pub trait PlatformTaskRepository: Send + Sync {
     /// waiting.
     async fn resolve_platform_task(&self, session_id: &str) -> Result<bool, DbError>;
 
-    /// Removes and returns the session's claim, so it is used at most once.
+    /// Removes and returns the session's claim when the platform at
+    /// `platform_url` issued it, so it is used at most once; a claim from
+    /// another platform stays.
     async fn take_platform_task_claim(
         &self,
         session_id: &str,
+        platform_url: &str,
     ) -> Result<Option<PlatformTaskClaim>, DbError>;
 
-    /// Lists held tasks whose sessions reached `Merged`, `Done`, or
-    /// `Canceled`.
-    async fn load_settled_platform_tasks(&self) -> Result<Vec<SettledPlatformTask>, DbError>;
+    /// Takes the claims the platform at `platform_url` issued for sessions
+    /// that reached `Merged`, `Done`, or `Canceled`, so each is used at
+    /// most once, and lists them with their sessions.
+    async fn take_settled_platform_tasks(
+        &self,
+        platform_url: &str,
+    ) -> Result<Vec<SettledPlatformTask>, DbError>;
 
-    /// Forgets every claim, as a sign-out does.
-    async fn forget_platform_task_claims(&self) -> Result<(), DbError>;
+    /// Forgets every claim the platform at `platform_url` issued, as a
+    /// sign-out does.
+    async fn forget_platform_task_claims(&self, platform_url: &str) -> Result<(), DbError>;
+
+    /// Moves the prompt kept for a session whose first turn did not start
+    /// into its workspace preparation, failed with `error`, where it waits
+    /// for a retry; a session without preparation gets one from
+    /// `start_ref`. Returns whether it moved: a canceled preparation, or
+    /// one holding a prompt already, keeps it here.
+    async fn retain_platform_task_prompt(
+        &self,
+        session_id: &str,
+        start_ref: &str,
+        error: &str,
+    ) -> Result<bool, DbError>;
 
     /// Marks start requests a previous run left unanswered as interrupted,
-    /// so none is repeated without the user.
+    /// so none is repeated without the user, and retains the kept prompt
+    /// of every answered session whose first turn did not start, as
+    /// [`Self::retain_platform_task_prompt`] does.
     async fn recover_platform_tasks(&self) -> Result<(), DbError>;
 }
 
@@ -239,6 +264,70 @@ impl SqlitePlatformTaskRepository {
     /// Creates a repository backed by `pool`.
     pub(crate) fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    /// Moves the kept prompt of `session_id` into its workspace
+    /// preparation within `transaction`, as
+    /// [`PlatformTaskRepository::retain_platform_task_prompt`] describes.
+    async fn retain_prompt_in(
+        transaction: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
+        session_id: &str,
+        start_ref: &str,
+        error: &str,
+    ) -> Result<bool, DbError> {
+        let prompt = sqlx::query_scalar!(
+            r"
+SELECT pending_prompt
+FROM session_platform_task
+WHERE session_id = ?
+",
+            session_id
+        )
+        .fetch_optional(&mut **transaction)
+        .await?
+        .flatten();
+        let Some(prompt) = prompt else {
+            return Ok(false);
+        };
+        sqlx::query!(
+            r"
+INSERT INTO session_preparation (session_id, state, start_ref)
+VALUES (?, 'failed', ?)
+ON CONFLICT(session_id) DO NOTHING
+",
+            session_id,
+            start_ref
+        )
+        .execute(&mut **transaction)
+        .await?;
+        let is_moved = sqlx::query!(
+            r"
+UPDATE session_preparation
+SET prompt = ?, state = 'failed', error = ?
+WHERE session_id = ? AND prompt IS NULL AND state != 'canceled'
+",
+            prompt,
+            error,
+            session_id
+        )
+        .execute(&mut **transaction)
+        .await?
+        .rows_affected()
+            == 1;
+        if is_moved {
+            sqlx::query!(
+                r"
+UPDATE session_platform_task
+SET pending_prompt = NULL
+WHERE session_id = ?
+",
+                session_id
+            )
+            .execute(&mut **transaction)
+            .await?;
+        }
+
+        Ok(is_moved)
     }
 }
 
@@ -345,7 +434,7 @@ SELECT task.session_id AS "session_id!: String", task.state AS "state: PlatformT
        task.holder_session, task.holder_last_active_at
 FROM session_platform_task AS task
 JOIN session ON session.id = task.session_id
-WHERE session.project_id = ? AND task.state != 'resolved'
+WHERE session.project_id = ? AND task.state != 'resolved' AND session.status = 'Draft'
 ORDER BY task.session_id
 "#,
             project_id
@@ -507,6 +596,7 @@ WHERE session_id = ? AND state != 'resolved'
     async fn take_platform_task_claim(
         &self,
         session_id: &str,
+        platform_url: &str,
     ) -> Result<Option<PlatformTaskClaim>, DbError> {
         let mut transaction = begin_write(&self.pool, "take platform task claim").await?;
         let claim = sqlx::query!(
@@ -514,10 +604,11 @@ WHERE session_id = ? AND state != 'resolved'
 SELECT claim_id AS "claim_id!: String", platform_url,
        task_project AS "task_project!: String", task_number AS "task_number!: i64"
 FROM session_platform_task
-WHERE session_id = ? AND claim_id IS NOT NULL AND task_project IS NOT NULL
-      AND task_number IS NOT NULL
+WHERE session_id = ? AND platform_url = ? AND claim_id IS NOT NULL
+      AND task_project IS NOT NULL AND task_number IS NOT NULL
 "#,
-            session_id
+            session_id,
+            platform_url
         )
         .fetch_optional(&mut *transaction)
         .await?;
@@ -525,9 +616,10 @@ WHERE session_id = ? AND claim_id IS NOT NULL AND task_project IS NOT NULL
             r"
 UPDATE session_platform_task
 SET claim_id = NULL
-WHERE session_id = ?
+WHERE session_id = ? AND platform_url = ?
 ",
-            session_id
+            session_id,
+            platform_url
         )
         .execute(&mut *transaction)
         .await?;
@@ -541,32 +633,66 @@ WHERE session_id = ?
         }))
     }
 
-    async fn load_settled_platform_tasks(&self) -> Result<Vec<SettledPlatformTask>, DbError> {
-        let rows = sqlx::query_as!(
-            SettledPlatformTask,
+    async fn take_settled_platform_tasks(
+        &self,
+        platform_url: &str,
+    ) -> Result<Vec<SettledPlatformTask>, DbError> {
+        let mut transaction = begin_write(&self.pool, "take settled platform tasks").await?;
+        let rows = sqlx::query!(
             r#"
 SELECT task.session_id AS "session_id!: String", session.status, session.title,
-       review.web_url AS "review_request_url?: String"
+       review.web_url AS "review_request_url?: String", task.claim_id AS "claim_id!: String",
+       task.task_project AS "task_project!: String", task.task_number AS "task_number!: i64"
 FROM session_platform_task AS task
 JOIN session ON session.id = task.session_id
 LEFT JOIN session_review_request AS review ON review.session_id = task.session_id
-WHERE task.claim_id IS NOT NULL AND session.status IN ('Merged', 'Done', 'Canceled')
+WHERE task.claim_id IS NOT NULL AND task.platform_url = ? AND task.task_project IS NOT NULL
+      AND task.task_number IS NOT NULL AND session.status IN ('Merged', 'Done', 'Canceled')
 ORDER BY task.session_id
-"#
+"#,
+            platform_url
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *transaction)
         .await?;
+        for row in &rows {
+            sqlx::query!(
+                r"
+UPDATE session_platform_task
+SET claim_id = NULL
+WHERE session_id = ?
+",
+                row.session_id
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
 
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .map(|row| SettledPlatformTask {
+                claim: PlatformTaskClaim {
+                    claim_id: row.claim_id,
+                    platform_url: platform_url.to_string(),
+                    task_number: row.task_number.try_into().unwrap_or_default(),
+                    task_project: row.task_project,
+                },
+                review_request_url: row.review_request_url,
+                session_id: row.session_id,
+                status: row.status,
+                title: row.title,
+            })
+            .collect())
     }
 
-    async fn forget_platform_task_claims(&self) -> Result<(), DbError> {
+    async fn forget_platform_task_claims(&self, platform_url: &str) -> Result<(), DbError> {
         sqlx::query!(
             r"
 UPDATE session_platform_task
 SET claim_id = NULL
-WHERE claim_id IS NOT NULL
-"
+WHERE claim_id IS NOT NULL AND platform_url = ?
+",
+            platform_url
         )
         .execute(&self.pool)
         .await?;
@@ -574,7 +700,22 @@ WHERE claim_id IS NOT NULL
         Ok(())
     }
 
+    async fn retain_platform_task_prompt(
+        &self,
+        session_id: &str,
+        start_ref: &str,
+        error: &str,
+    ) -> Result<bool, DbError> {
+        let mut transaction = begin_write(&self.pool, "retain platform task prompt").await?;
+        let is_retained =
+            Self::retain_prompt_in(&mut transaction, session_id, start_ref, error).await?;
+        transaction.commit().await?;
+
+        Ok(is_retained)
+    }
+
     async fn recover_platform_tasks(&self) -> Result<(), DbError> {
+        let mut transaction = begin_write(&self.pool, "recover platform tasks").await?;
         sqlx::query!(
             r"
 UPDATE session_platform_task
@@ -582,12 +723,52 @@ SET state = 'interrupted'
 WHERE state = 'checking'
 "
         )
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
+        let unstarted = sqlx::query!(
+            r#"
+SELECT task.session_id AS "session_id!: String", session.base_branch
+FROM session_platform_task AS task
+JOIN session ON session.id = task.session_id
+WHERE task.state = 'resolved' AND task.pending_prompt IS NOT NULL
+      AND session.status = 'Draft'
+ORDER BY task.session_id
+"#
+        )
+        .fetch_all(&mut *transaction)
+        .await?;
+        for session in unstarted {
+            Self::retain_prompt_in(
+                &mut transaction,
+                &session.session_id,
+                &session.base_branch,
+                INTERRUPTED_START,
+            )
+            .await?;
+        }
+        // A session past its first turn started with its prompt already.
+        sqlx::query!(
+            r"
+UPDATE session_platform_task
+SET pending_prompt = NULL
+WHERE state = 'resolved' AND pending_prompt IS NOT NULL
+      AND EXISTS (
+          SELECT 1 FROM session
+          WHERE session.id = session_platform_task.session_id AND session.status != 'Draft'
+      )
+"
+        )
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
 }
+
+/// Reason recovery gives a first prompt whose turn never started.
+const INTERRUPTED_START: &str =
+    "Agentty quit before this session's first turn started. Your saved prompt is retained.";
 
 #[cfg(test)]
 #[path = "platform_task_test.rs"]

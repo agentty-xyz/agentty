@@ -72,6 +72,7 @@ async fn a_start_sends_only_the_work_and_keeps_the_cleaned_answer() {
         json!({ "number": 9, "title": "Speed up\u{1b} the diff view", "session": "laptop 81ac04", "last_activity_at_ms": 1_767_261_600_000_u64 }),
         json!({ "number": 10, "title": "Unlabelled work", "session": null, "last_activity_at_ms": 5 }),
         json!({ "number": 11, "title": "\u{1b}", "session": "x", "last_activity_at_ms": 5 }),
+        json!({ "number": "twelve", "title": "Unreadable", "last_activity_at_ms": 5 }),
     ];
     for number in 20..40 {
         in_progress.push(json!({
@@ -156,6 +157,7 @@ async fn a_repeated_start_names_the_task_it_takes_over_and_the_work_it_is_not() 
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "task": task_json(&uri),
             "claim_id": CLAIM,
+            "in_progress": "not a list",
         })))
         .expect(1)
         .mount(&server)
@@ -185,6 +187,7 @@ async fn a_task_page_is_kept_only_when_it_is_one_of_the_platform_pages() {
         json!("https://evil.example/sync/projects/agentty/tasks/12"),
         json!(format!("{uri}.evil.example/tasks/12")),
         json!(format!("{uri}/tasks/12\u{1b}")),
+        json!(format!("{uri}/{}", "a".repeat(2100))),
         json!(null),
     ];
 

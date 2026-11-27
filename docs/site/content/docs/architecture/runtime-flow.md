@@ -402,13 +402,16 @@ work; it does not submit an empty reply.
 
 <a id="architecture-runtime-flow-platform-sync"></a> While the account answer enables a
 platform's Sync, a session's first message records a `checking` row and sends its start
-request in the background, beside workspace preparation. Every start path, direct or
-through a prepared prompt, checks that row before the first turn and holds the prompt
-until the `PlatformTaskUpdated` event resolves it: a held task or a failure starts the
-session, a conflict waits for the user. Turn start and end events report activity, and
-each session reload finishes or releases the claims of sessions that reached `Merged`,
+request in the background, beside workspace preparation. Every start of a first turn,
+direct or through a prepared prompt, checks that row and holds the prompt until the
+`PlatformTaskUpdated` event resolves it: a held task or a failure starts the session, a
+conflict waits for the user, whether or not Sync is on by then. Forks reply instead of
+starting, so they take no task. An answer stores its claim only while the sign-in it was
+sent under lasts. Turn start and end events report activity, and each session reload
+finishes or releases the claims this platform issued for sessions that reached `Merged`,
 `Done`, or `Canceled`, taking each claim from its row first so it is sent once. Startup
-marks unanswered starts `interrupted` instead of repeating them.
+marks unanswered starts `interrupted` instead of repeating them, and moves the kept
+prompt of an answered start that never ran into a failed workspace preparation.
 
 All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have bounded
 execution and cleanup, and background results keep their original session and project

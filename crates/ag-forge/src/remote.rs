@@ -32,26 +32,34 @@ pub fn detect_remote(repo_url: &str) -> Result<ForgeRemote, ReviewRequestError> 
 ///
 /// Returns `None` for a local path, a `file://` remote, and a remote whose
 /// host or path is missing or has an empty, `.`, or `..` segment.
+///
+/// Everything up to the last `@` counts as userinfo, so a password holding
+/// `/`, `:`, or `@` never reaches the result; a path holding `@` then names
+/// no repository.
 pub fn remote_repository_path(repo_url: &str) -> Option<String> {
     let trimmed_url = repo_url.trim().trim_end_matches('/');
     let (authority, path, is_ssh) = if let Some((scheme, scheme_rest)) =
         trimmed_url.split_once("://")
     {
-        let (authority, path) = scheme_rest.split_once('/')?;
+        let host_rest = scheme_rest
+            .rsplit_once('@')
+            .map_or(scheme_rest, |(_, host_rest)| host_rest);
+        let (authority, path) = host_rest.split_once('/')?;
         let is_ssh = scheme.eq_ignore_ascii_case("ssh") || scheme.eq_ignore_ascii_case("git+ssh");
 
         (authority, path, is_ssh)
     } else {
         // The scp-like form, `[user@]host:path`; a `/` or `\` before the
-        // first `:` makes it a local path instead.
-        let (authority, path) = trimmed_url.split_once(':')?;
-        if authority.contains(['/', '\\']) {
+        // host makes it a local path instead.
+        let (userinfo, host_rest) = trimmed_url.rsplit_once('@').unwrap_or(("", trimmed_url));
+        let (authority, path) = host_rest.split_once(':')?;
+        if userinfo.contains(['/', '\\']) || authority.contains(['/', '\\']) {
             return None;
         }
 
         (authority, path, true)
     };
-    let host = strip_userinfo(authority).to_ascii_lowercase();
+    let host = authority.to_ascii_lowercase();
     let host = if is_ssh { strip_port(&host) } else { &host };
     let path = path.trim_matches('/');
     let path = path

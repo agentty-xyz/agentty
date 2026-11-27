@@ -162,12 +162,15 @@ latest account answer enables it, Agentty sends that platform, for each new sess
 first non-blank line of its first message cut to 200 characters, that message cut to
 4,000 characters, the repository's `origin` remote as `host/path` without scheme or
 credentials, and a label of this Agentty's name and the start of the session's
-identifier, before the session starts. Afterwards it reports activity when each turn
-starts and ends, sends the session's title and review request link when the session is
-merged or done, and gives the task up when the session is deleted or canceled. It sends
-no file, diff, or later message. The claim that proves a session holds its task is
-stored in Agentty's database with the platform that issued it and sent only to that
-platform. Agentty has no switch of its own for Sync: signing out is the way to stop it.
+identifier, before the session starts; a fork sends nothing, since it takes no task of
+its own. Afterwards it reports activity when each turn starts and ends, sends the
+session's title and review request link when the session is merged or done, and gives
+the task up when the session is canceled, or deleted while Sync is on. It sends no file,
+diff, or later message. The claim that proves a session holds its task is stored in
+Agentty's database with the platform that issued it and sent only to that platform,
+under the sign-in that received it: an answer that arrives after that sign-in ended
+keeps no claim. Agentty has no switch of its own for Sync: signing out is the way to
+stop it.
 
 Report these as vulnerabilities:
 
@@ -194,7 +197,8 @@ These are known limits, not vulnerabilities:
 - A Sync start the platform completed after Agentty stopped waiting, or that Agentty
   quit before it heard the answer, leaves a task held for the session until the platform
   reads it as stale or another session takes it over. Signing out forgets held claims
-  without telling the platform, with the same effect.
+  without telling the platform, and so does deleting a session while Sync is off or
+  before the account answer of a launch, with the same effect.
 - Any session of the account can take a task over from another, and the platform, not
   Agentty, decides which work counts as the same.
 

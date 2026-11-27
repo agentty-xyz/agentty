@@ -50,6 +50,22 @@ fn remote_repository_path_names_any_host_without_scheme_credentials_or_ssh_port(
             "https://example.com/caf\u{e9}/project",
             Some("example.com/caf\u{e9}/project"),
         ),
+        (
+            "https://user:pa/ss@github.com/team/project.git",
+            Some("github.com/team/project"),
+        ),
+        (
+            "https://user:p@ss@github.com/team/project",
+            Some("github.com/team/project"),
+        ),
+        ("http://user:tok@host:8443/x", Some("host:8443/x")),
+        (
+            "user:secret@example.com:team/project",
+            Some("example.com/team/project"),
+        ),
+        ("https://example.com/team/project@v2", None),
+        ("git@example.com:team/a@b", None),
+        ("./checkout@example.com:team", None),
         ("", None),
         ("/home/user/project", None),
         ("./project:with-colon", None),

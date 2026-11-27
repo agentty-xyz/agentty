@@ -45,6 +45,8 @@ const INSTANCE_ID_CHARS: usize = 64;
 const MAX_SYNC_PROJECT_CHARS: usize = 100;
 /// Longest Sync claim accepted, in characters.
 const MAX_SYNC_CLAIM_CHARS: usize = 256;
+/// Longest Sync task page kept, in characters.
+const MAX_SYNC_URL_CHARS: usize = 2048;
 /// Most other tasks in progress kept from one start answer.
 const MAX_SYNC_IN_PROGRESS: usize = 20;
 
@@ -613,7 +615,8 @@ impl PlatformClient for HttpPlatformClient {
             .authorized(Method::PUT, &instance_path(instance_id)?, token)
             .json(&serde_json::json!({ "name": name }));
         let answer: InstanceBody = self.fetch(request).await?;
-        let name = display_text(&answer.name).ok_or(PlatformError::InvalidResponse)?;
+        let name =
+            display_text(&answer.name, MAX_TEXT_CHARS).ok_or(PlatformError::InvalidResponse)?;
         if answer.instance_id != instance_id {
             return Err(PlatformError::InvalidResponse);
         }
@@ -790,20 +793,7 @@ fn sync_error_for(
 /// Returns a session label from an answer fit for the terminal, or `None`
 /// for a missing label or one with nothing printable.
 fn session_label_text(session: Option<&str>) -> Option<String> {
-    session.and_then(|session| sync_text(session, platform_sync::MAX_SESSION_CHARS))
-}
-
-/// Returns `text` without control characters and cut to `max_chars`, or
-/// `None` when nothing printable is left.
-fn sync_text(text: &str, max_chars: usize) -> Option<String> {
-    let text: String = text
-        .chars()
-        .filter(|character| !character.is_control())
-        .collect();
-    let text: String = text.trim().chars().take(max_chars).collect();
-    let text = text.trim_end();
-
-    (!text.is_empty()).then(|| text.to_string())
+    session.and_then(|session| display_text(session, platform_sync::MAX_SESSION_CHARS))
 }
 
 /// Returns the API path of the instance `instance_id`, the hexadecimal
@@ -886,21 +876,24 @@ fn error_for(status: StatusCode, body: &[u8], retry_after: Option<Duration>) -> 
         (StatusCode::BAD_REQUEST, "access_denied") => PlatformError::AccessDenied,
         (StatusCode::BAD_REQUEST, "expired_token") => PlatformError::ExpiredToken,
         _ => PlatformError::Rejected {
-            message: answer.message.as_deref().and_then(display_text),
+            message: answer
+                .message
+                .as_deref()
+                .and_then(|message| display_text(message, MAX_TEXT_CHARS)),
             status: status.as_u16(),
         },
     }
 }
 
-/// Returns `text` without control characters and cut to
-/// [`MAX_TEXT_CHARS`], or `None` when nothing printable is left.
-fn display_text(text: &str) -> Option<String> {
+/// Returns `text` without control characters or outer whitespace, cut to
+/// `max_chars`, or `None` when nothing printable is left.
+fn display_text(text: &str, max_chars: usize) -> Option<String> {
     let text: String = text
         .chars()
         .filter(|character| !character.is_control())
-        .take(MAX_TEXT_CHARS)
         .collect();
-    let text = text.trim();
+    let text: String = text.trim().chars().take(max_chars).collect();
+    let text = text.trim_end();
 
     (!text.is_empty()).then(|| text.to_string())
 }
@@ -978,7 +971,7 @@ struct AccountField {
 impl AccountField {
     /// Returns the login fit for the terminal.
     fn validated_login(&self) -> Result<String, PlatformError> {
-        display_text(&self.login).ok_or(PlatformError::InvalidResponse)
+        display_text(&self.login, MAX_TEXT_CHARS).ok_or(PlatformError::InvalidResponse)
     }
 }
 
@@ -1021,14 +1014,16 @@ struct SyncStartBody {
     claim_id: String,
     #[serde(default)]
     created: bool,
+    /// Read entry by entry, so one entry Agentty cannot read does not undo
+    /// a start the platform completed.
     #[serde(default)]
-    in_progress: Vec<SyncInProgressField>,
+    in_progress: serde_json::Value,
     task: SyncTaskField,
 }
 
 impl SyncStartBody {
     /// Checks the claim and the task, and keeps the other tasks in
-    /// progress whose text the terminal can show.
+    /// progress that parse and whose text the terminal can show.
     fn validate(self, base_url: &str) -> Result<SyncStart, SyncError> {
         let is_claim = !self.claim_id.is_empty()
             && self.claim_id.chars().count() <= MAX_SYNC_CLAIM_CHARS
@@ -1039,15 +1034,20 @@ impl SyncStartBody {
         if !is_claim {
             return Err(invalid_sync_response());
         }
-        let in_progress = self
-            .in_progress
+        let entries = match self.in_progress {
+            serde_json::Value::Array(entries) => entries,
+            _ => Vec::new(),
+        };
+        let in_progress = entries
             .into_iter()
-            .filter_map(|work| {
+            .filter_map(|entry| {
+                let work: SyncInProgressField = serde_json::from_value(entry).ok()?;
+
                 Some(SyncWorkInProgress {
                     last_activity_at_ms: work.last_activity_at_ms,
                     number: work.number,
                     session: session_label_text(work.session.as_deref()),
-                    title: sync_text(&work.title, platform_sync::MAX_TITLE_CHARS)?,
+                    title: display_text(&work.title, platform_sync::MAX_TITLE_CHARS)?,
                 })
             })
             .take(MAX_SYNC_IN_PROGRESS)
@@ -1077,12 +1077,13 @@ impl SyncTaskField {
     /// for the terminal, and keeps the page only when it is one of the
     /// platform's own.
     fn validate(self, base_url: &str) -> Result<SyncTask, SyncError> {
-        let title = sync_text(&self.title, platform_sync::MAX_TITLE_CHARS);
+        let title = display_text(&self.title, platform_sync::MAX_TITLE_CHARS);
         let (true, Some(title)) = (is_sync_project(&self.project) && self.number > 0, title) else {
             return Err(invalid_sync_response());
         };
         let url = self
             .url
+            .filter(|url| url.chars().count() <= MAX_SYNC_URL_CHARS)
             .and_then(|url| parse_page_url(&url).ok())
             .filter(|url| url.starts_with(&format!("{base_url}/")));
 

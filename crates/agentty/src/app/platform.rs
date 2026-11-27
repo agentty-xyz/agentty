@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
 use crate::app::link_copy::LinkCopy;
-use crate::app::platform_sync::SyncAccess;
+use crate::app::platform_sync::{SyncAccess, SyncTicket};
 use crate::app::{App, AppEvent, spawn};
 use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::setting::SettingName;
@@ -172,13 +172,22 @@ impl Platform {
         Some(SyncAccess {
             client: Arc::clone(client),
             platform_url: self.view.platform_url.clone(),
+            ticket: SyncTicket {
+                account_answer: self.sync.account_answers,
+                sign_in: self.sync.sign_ins,
+            },
             token: token.clone(),
         })
     }
 
     /// Treats the platform's Sync as off until the next account answer, as
-    /// a `sync_disabled` answer asks.
-    pub(crate) fn disable_sync(&mut self) {
+    /// a `sync_disabled` answer to a request sent under `ticket` asks. An
+    /// answer to a request sent before the latest account answer changes
+    /// nothing.
+    pub(crate) fn disable_sync(&mut self, ticket: SyncTicket) {
+        if ticket.account_answer != self.sync.account_answers {
+            return;
+        }
         self.sync.is_on = false;
         self.view.set_sync(false);
     }
@@ -253,12 +262,18 @@ impl Platform {
 /// The platform's Sync as this launch sees it.
 #[derive(Default)]
 struct SyncState {
+    /// Account answers applied, so an older request's `sync_disabled`
+    /// cannot undo a newer answer.
+    account_answers: u64,
     /// Choices offered in the sessions whose platform task holds them
     /// back, by session.
     choices: HashMap<String, PlatformTaskChoice>,
     /// Whether the latest account answer enables the platform's Sync, until
     /// a Sync answer says the platform no longer does.
     is_on: bool,
+    /// Sign-ins ended, so an answer to a request of an ended sign-in never
+    /// stores its claim.
+    sign_ins: u64,
 }
 
 impl Drop for Platform {
@@ -690,6 +705,7 @@ impl App {
     /// Sync, and once it does, settles the tasks of sessions that ended
     /// while it did not.
     async fn apply_platform_sync(&mut self, sync: bool) {
+        self.platform.sync.account_answers += 1;
         self.platform.sync.is_on = sync;
         self.platform.view.set_sync(sync);
         if sync {
@@ -697,22 +713,24 @@ impl App {
         }
     }
 
-    /// Forgets the token, keep on, and every Sync claim here, stops remote
-    /// control through the platform, and shows `notice`. Returns the
-    /// request a sign-out reports under.
+    /// Forgets the token, keep on, and every Sync claim this platform
+    /// issued here, stops remote control through the platform, and shows
+    /// `notice`. Returns the request a sign-out reports under.
     ///
     /// The claims are forgotten without a request, since the token they
     /// would be sent with is gone; the platform then reads their tasks as
-    /// stale.
+    /// stale. A start request still on its way stores no claim when it is
+    /// answered: its session starts without a task.
     async fn forget_platform_sign_in(&mut self, notice: Option<String>) -> u64 {
         let request_id = self.platform.next_request();
         self.platform.token = None;
         self.platform.sync.is_on = false;
+        self.platform.sync.sign_ins += 1;
         let _ = self
             .services
             .db()
             .platform_tasks()
-            .forget_platform_task_claims()
+            .forget_platform_task_claims(&self.platform.view.platform_url)
             .await;
         // An empty value leaves no token, and no keep on, behind.
         let cleared = self

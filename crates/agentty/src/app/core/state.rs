@@ -884,7 +884,11 @@ impl App {
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), AppError> {
         let prompt = prompt.into();
+        // Once workspace preparation or the first turn holds the prompt, a
+        // copy the platform's Sync kept goes.
         if self.queue_preparation_prompt(session_id, &prompt).await? {
+            self.forget_platform_task_prompt(session_id).await;
+
             return Ok(());
         }
         if self.platform_task_holds_start(session_id, &prompt).await {
@@ -908,6 +912,7 @@ impl App {
         self.sessions
             .start_session(&self.services, session_id, prompt)
             .await?;
+        self.forget_platform_task_prompt(session_id).await;
         self.clear_review_output_for_new_turn(session_id);
         self.clear_diff_comment_progress(session_id);
 

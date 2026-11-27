@@ -15,7 +15,8 @@ use ag_worker::test_support::MockAgentBackend;
 use tokio::sync::Notify;
 
 use super::{
-    ConflictView, PlatformTaskUpdate, StartFailure, conflict_notice, failure_update, held_notice,
+    ConflictView, PlatformTaskUpdate, StartFailure, SyncTicket, conflict_notice, failure_update,
+    held_notice,
 };
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, AppRuntimeEvent};
@@ -354,6 +355,14 @@ async fn drive_until_calls(
     }
 }
 
+/// Returns the ticket Sync requests of `app` are sent under now.
+fn ticket(app: &App) -> SyncTicket {
+    app.platform
+        .sync_access()
+        .map(|access| access.ticket)
+        .expect("Sync should be on")
+}
+
 /// Returns the session's status.
 fn status(app: &App, session_id: &str) -> Option<Status> {
     app.sessions
@@ -405,6 +414,58 @@ async fn record_check(app: &App, session_id: &str) {
         .save_platform_task_prompt(session_id, &prompt)
         .await
         .expect("prompt should save");
+}
+
+/// Records a check for `session_id` as an earlier run did, with `MESSAGE`
+/// saved in its ready workspace preparation.
+async fn record_prepared_wait(app: &App, session_id: &str) {
+    app.services
+        .db()
+        .platform_tasks()
+        .begin_platform_task(NewPlatformTask {
+            brief: MESSAGE,
+            platform_url: PLATFORM_URL,
+            session_id,
+            title: "Fix the relay reconnect",
+        })
+        .await
+        .expect("task should begin");
+    let prompt =
+        serde_json::to_string(&TurnPrompt::from_text(MESSAGE.to_string())).expect("prompt");
+    app.services
+        .db()
+        .sessions()
+        .save_preparation_prompt(session_id, &prompt)
+        .await
+        .expect("prompt should save");
+}
+
+/// Records that `session_id` holds task `number`, which the platform at
+/// `platform_url` issued.
+async fn record_held(app: &App, session_id: &str, platform_url: &str, number: u64) {
+    let tasks = app.services.db().platform_tasks();
+    tasks
+        .begin_platform_task(NewPlatformTask {
+            brief: MESSAGE,
+            platform_url,
+            session_id,
+            title: "Fix",
+        })
+        .await
+        .expect("task should begin");
+    tasks
+        .hold_platform_task(
+            session_id,
+            PlatformTaskName {
+                number,
+                project: "agentty",
+                title: "Fix",
+                url: None,
+            },
+            CLAIM,
+        )
+        .await
+        .expect("task should be held");
 }
 
 /// Records that another session holds task 12, as an earlier answer did.
@@ -538,7 +599,11 @@ async fn a_conflict_holds_the_session_until_the_user_takes_the_task_over() {
         .await;
     app.start_separate_platform_work("missing").await;
     app.ask_platform_task_again(&session_id).await;
+    // A second key, or another choice, while the first one is asking sends
+    // nothing more.
     app.take_over_platform_task(&session_id).await;
+    app.take_over_platform_task(&session_id).await;
+    app.start_separate_platform_work(&session_id).await;
     drive_until(&mut app, |app| has_started(app, &session_id)).await;
 
     // Assert
@@ -740,23 +805,88 @@ async fn waiting_sessions_start_without_a_task_once_sync_is_off() {
     let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
     let chosen = create_session(&mut app, &runs).await;
     record_conflict(&app, &chosen).await;
-    let restarted = create_session(&mut app, &runs).await;
-    record_conflict(&app, &restarted).await;
+    let waiting = create_session(&mut app, &runs).await;
+    record_conflict(&app, &waiting).await;
     app.show_waiting_platform_tasks(app.active_project_id())
         .await;
 
     // Act
+    let second_message = app.start_session(&waiting, MESSAGE).await;
     app.take_over_platform_task(&chosen).await;
-    app.start_session(&restarted, MESSAGE).await.expect("start");
-    drive_until(&mut app, |app| {
-        has_started(app, &chosen) && has_started(app, &restarted)
-    })
-    .await;
+    drive_until(&mut app, |app| has_started(app, &chosen)).await;
 
     // Assert
+    assert!(second_message.is_err());
+    assert_eq!(status(&app, &waiting), Some(Status::Draft));
     assert!(notice(&app, &chosen).is_some_and(|notice| notice.contains("Sync is off")));
-    assert_eq!(notice(&app, &restarted), None);
     assert_eq!(platform.works(), Vec::new());
+}
+
+#[tokio::test]
+async fn after_a_restart_waiting_sessions_wait_for_a_key_whatever_the_account_says() {
+    // Arrange: no account answer yet, then an answer without Sync.
+    for has_answer in [false, true] {
+        let (mut app, _base_dir, runs) = if has_answer {
+            sync_app(Arc::new(ScriptedSync::default()), Some(ORIGIN)).await
+        } else {
+            let (mut app, base_dir) = Box::pin(test_support::new_git_test_app()).await;
+            let runs = TestSessionRunFactory::install(&mut app.services);
+
+            (app, base_dir, runs)
+        };
+        let conflicted = create_session(&mut app, &runs).await;
+        let interrupted = create_session(&mut app, &runs).await;
+        for session_id in [&conflicted, &interrupted] {
+            record_prepared_wait(&app, session_id).await;
+        }
+        app.services
+            .db()
+            .platform_tasks()
+            .record_platform_task_conflict(
+                &conflicted,
+                PlatformTaskName {
+                    number: 12,
+                    project: "agentty",
+                    title: "Fix",
+                    url: None,
+                },
+                None,
+                0,
+            )
+            .await
+            .expect("conflict should record");
+        app.services
+            .db()
+            .platform_tasks()
+            .recover_platform_tasks()
+            .await
+            .expect("recovery");
+
+        // Act
+        app.resume_ready_workspace_prompts(app.active_project_id())
+            .await;
+        let waiting = [status(&app, &conflicted), status(&app, &interrupted)];
+        let choices = [
+            app.platform.task_choice(&conflicted),
+            app.platform.task_choice(&interrupted),
+        ];
+        app.start_separate_platform_work(&conflicted).await;
+        app.ask_platform_task_again(&interrupted).await;
+        drive_until(&mut app, |app| {
+            has_started(app, &conflicted) && has_started(app, &interrupted)
+        })
+        .await;
+
+        // Assert
+        assert_eq!(waiting, [Some(Status::Draft), Some(Status::Draft)]);
+        assert_eq!(
+            choices,
+            [
+                Some(PlatformTaskChoice::Conflict),
+                Some(PlatformTaskChoice::Interrupted)
+            ]
+        );
+    }
 }
 
 #[tokio::test]
@@ -937,6 +1067,7 @@ async fn an_answered_start_resumes_whatever_holds_the_prompt() {
         app.apply_platform_task_update(PlatformTaskUpdate::Started {
             result: Err(StartFailure::NoRepository),
             session_id: session_id.clone(),
+            ticket: ticket(&app),
         })
         .await;
     }
@@ -954,37 +1085,12 @@ async fn claims_go_only_to_the_platform_that_issued_them() {
     let platform = Arc::new(ScriptedSync::with_starts(Vec::new()));
     let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
     let elsewhere = create_session(&mut app, &runs).await;
+    record_held(&app, &elsewhere, "https://other.example", 12).await;
     let unclaimed = create_session(&mut app, &runs).await;
-    let db = app.services.db().clone();
-    let tasks = db.platform_tasks();
-    for (session_id, platform_url) in [
-        (&elsewhere, "https://other.example"),
-        (&unclaimed, PLATFORM_URL),
-    ] {
-        tasks
-            .begin_platform_task(NewPlatformTask {
-                brief: MESSAGE,
-                platform_url,
-                session_id,
-                title: "Fix",
-            })
-            .await
-            .expect("task should begin");
-    }
-    tasks
-        .hold_platform_task(
-            &elsewhere,
-            PlatformTaskName {
-                number: 12,
-                project: "agentty",
-                title: "Fix",
-                url: None,
-            },
-            CLAIM,
-        )
-        .await
-        .expect("held");
-    tasks
+    record_check(&app, &unclaimed).await;
+    app.services
+        .db()
+        .platform_tasks()
         .resolve_platform_task(&unclaimed)
         .await
         .expect("resolved");
@@ -1000,35 +1106,129 @@ async fn claims_go_only_to_the_platform_that_issued_them() {
         .expect("status");
     app.settle_platform_tasks().await;
     let other = create_session(&mut app, &runs).await;
-    tasks
-        .begin_platform_task(NewPlatformTask {
-            brief: MESSAGE,
-            platform_url: "https://other.example",
-            session_id: &other,
-            title: "Fix",
-        })
-        .await
-        .expect("task should begin");
-    tasks
-        .hold_platform_task(
-            &other,
-            PlatformTaskName {
-                number: 13,
-                project: "agentty",
-                title: "Fix",
-                url: None,
-            },
-            CLAIM,
-        )
-        .await
-        .expect("held");
+    record_held(&app, &other, "https://other.example", 13).await;
     app.release_platform_task_before_delete(&other).await;
+    // A request of this platform, sent after every one above would have
+    // been, shows that none was.
+    let sentinel = create_session(&mut app, &runs).await;
+    record_held(&app, &sentinel, PLATFORM_URL, 14).await;
+    app.report_platform_task_activity(&sentinel).await;
+    let calls = wait_for_calls(&platform, "", 1).await;
     app.sign_out_platform().await;
     app.release_platform_task_before_delete(&unclaimed).await;
-    tokio::task::yield_now().await;
 
     // Assert
+    assert_eq!(calls, ["activity 14 clm_secret"]);
+    for session_id in [&elsewhere, &other] {
+        assert_eq!(
+            platform_task(&app, session_id).await.claim_id.as_deref(),
+            Some(CLAIM)
+        );
+    }
+    assert_eq!(platform_task(&app, &sentinel).await.claim_id, None);
+}
+
+#[tokio::test]
+async fn an_answer_after_its_sign_in_ended_stores_no_claim() {
+    // Arrange
+    let gate = Arc::new(Notify::new());
+    let platform = Arc::new(ScriptedSync {
+        gate: Some(Arc::clone(&gate)),
+        ..ScriptedSync::with_starts(vec![Ok(start(true))])
+    });
+    let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
+    let session_id = start_first_message(&mut app, &runs).await;
+
+    // Act: sign out while the start runs, then sign in again.
+    app.sign_out_platform().await;
+    drive_until(&mut app, |app| {
+        app.platform.view().account().is_none()
+            && !matches!(
+                app.platform.view().state,
+                crate::presentation::platform::PlatformState::SigningOut { .. }
+            )
+    })
+    .await;
+    let stored = serde_json::json!({ "access_token": "agp_other", "platform_url": PLATFORM_URL });
+    app.services
+        .db()
+        .settings()
+        .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
+        .await
+        .expect("sign-in should save");
+    app.enable_platform(
+        Arc::clone(&platform) as Arc<dyn PlatformClient>,
+        PLATFORM_URL.to_string(),
+        "Agentty on studio".to_string(),
+    )
+    .await;
+    drive_until(&mut app, |app| app.platform.sync_access().is_some()).await;
+    gate.notify_one();
+    drive_until(&mut app, |app| has_started(app, &session_id)).await;
+    app.report_platform_task_activity(&session_id).await;
+    app.settle_platform_tasks().await;
+
+    // Assert
+    let task = platform_task(&app, &session_id).await;
+    assert_eq!(task.state, PlatformTaskState::Resolved);
+    assert_eq!(task.claim_id, None);
+    assert!(notice(&app, &session_id).is_some_and(|notice| notice.contains("Sync is off")));
     assert_eq!(platform.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_start_that_fails_after_the_answer_keeps_its_prompt_for_a_retry() {
+    // Arrange
+    let platform = Arc::new(ScriptedSync::with_starts(Vec::new()));
+    let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
+    let session_id = create_session(&mut app, &runs).await;
+    record_check(&app, &session_id).await;
+    // The session no longer loaded makes its start fail.
+    *app.sessions = test_support::session_manager_with_sessions(Vec::new());
+
+    // Act
+    app.apply_platform_task_update(PlatformTaskUpdate::Started {
+        result: Err(StartFailure::NoRepository),
+        session_id: session_id.clone(),
+        ticket: ticket(&app),
+    })
+    .await;
+
+    // Assert
+    let preparation = app
+        .services
+        .db()
+        .sessions()
+        .load_session_preparation(&session_id)
+        .await
+        .expect("load")
+        .expect("preparation");
+    assert_eq!(preparation.state, SessionPreparationState::Failed);
+    assert!(preparation.prompt.is_some());
+    assert_eq!(platform_task(&app, &session_id).await.pending_prompt, None);
+}
+
+#[tokio::test]
+async fn a_canceled_session_no_longer_answers_its_conflict() {
+    // Arrange
+    let platform = Arc::new(ScriptedSync::with_starts(Vec::new()));
+    let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
+    let session_id = create_session(&mut app, &runs).await;
+    record_conflict(&app, &session_id).await;
+    app.show_waiting_platform_tasks(app.active_project_id())
+        .await;
+    test_support::set_session_status_for_test(&mut app, &session_id, Status::Canceled);
+
+    // Act
+    app.take_over_platform_task(&session_id).await;
+    app.start_separate_platform_work(&session_id).await;
+
+    // Assert
+    assert_eq!(platform.works(), Vec::new());
+    assert_eq!(
+        platform_task(&app, &session_id).await.state,
+        PlatformTaskState::Conflict
+    );
 }
 
 #[tokio::test]
@@ -1064,6 +1264,7 @@ async fn notices_reach_only_loaded_sessions_and_follow_the_turn() {
     app.apply_platform_task_update(PlatformTaskUpdate::Started {
         result: conflict().map_err(StartFailure::Sync),
         session_id: unloaded.clone(),
+        ticket: ticket(&app),
     })
     .await;
     app.apply_platform_task_update(PlatformTaskUpdate::Lost {
@@ -1071,7 +1272,7 @@ async fn notices_reach_only_loaded_sessions_and_follow_the_turn() {
         session_id: unloaded.clone(),
     })
     .await;
-    app.platform.disable_sync();
+    app.platform.disable_sync(ticket(&app));
     let held_back = app
         .platform_task_holds_start(&unloaded, &TurnPrompt::from_text(MESSAGE.to_string()))
         .await;
@@ -1084,7 +1285,8 @@ async fn notices_reach_only_loaded_sessions_and_follow_the_turn() {
             .contains("Task #12 was finished or canceled")
     );
     assert_eq!(message.lifecycle, TransientMessageLifecycle::ClearOnNewTurn);
-    assert!(!held_back);
+    // A conflict waits for the user's choice even while Sync is off.
+    assert!(held_back);
 }
 
 #[tokio::test]
@@ -1167,7 +1369,7 @@ async fn a_first_message_that_cannot_be_kept_is_refused() {
 #[tokio::test]
 async fn lost_and_closed_tasks_say_so_in_the_session() {
     // Arrange
-    let platform = Arc::new(ScriptedSync::default());
+    let platform = Arc::new(ScriptedSync::with_starts(Vec::new()));
     let (mut app, _base_dir, runs) = sync_app(platform, Some(ORIGIN)).await;
     let session_id = create_session(&mut app, &runs).await;
 
@@ -1178,13 +1380,25 @@ async fn lost_and_closed_tasks_say_so_in_the_session() {
     })
     .await;
     let closed = notice(&app, &session_id);
-    app.apply_platform_task_update(PlatformTaskUpdate::Disabled)
+    let stale = SyncTicket {
+        account_answer: 0,
+        ..ticket(&app)
+    };
+    app.apply_platform_task_update(PlatformTaskUpdate::Disabled { ticket: stale })
         .await;
+    let is_on_after_stale = app.platform.sync_access().is_some();
+    app.apply_platform_task_update(PlatformTaskUpdate::Disabled {
+        ticket: ticket(&app),
+    })
+    .await;
     app.apply_platform_task_update(PlatformTaskUpdate::Started {
         result: Err(StartFailure::NoRepository),
         session_id: "missing".to_string(),
+        ticket: SyncTicket::default(),
     })
     .await;
+    assert!(is_on_after_stale);
+    assert!(app.platform.sync_access().is_none());
 
     // Assert
     assert!(closed.is_some_and(|notice| notice.starts_with("Task was finished or canceled")));
@@ -1210,7 +1424,9 @@ fn only_a_lost_claim_a_closed_task_or_sync_turned_off_reports_back() {
         ),
         (
             Err(SyncError::SyncDisabled),
-            Some(PlatformTaskUpdate::Disabled),
+            Some(PlatformTaskUpdate::Disabled {
+                ticket: SyncTicket::default(),
+            }),
         ),
         (Err(SyncError::Failed(PlatformError::Unreachable)), None),
         (Ok(()), None),
@@ -1218,7 +1434,7 @@ fn only_a_lost_claim_a_closed_task_or_sync_turned_off_reports_back() {
 
     for (result, expected) in cases {
         // Act
-        let update = failure_update("s", result);
+        let update = failure_update("s", SyncTicket::default(), result);
 
         // Assert
         assert_eq!(update, expected);

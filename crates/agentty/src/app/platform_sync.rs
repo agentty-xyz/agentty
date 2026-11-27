@@ -71,8 +71,20 @@ pub(crate) struct SyncAccess {
     pub(crate) client: Arc<dyn PlatformClient>,
     /// Address of the platform, the only one a claim goes to.
     pub(crate) platform_url: String,
+    /// Sign-in and account answer the access belongs to.
+    pub(crate) ticket: SyncTicket,
     /// Access token of the sign-in.
     pub(crate) token: AccessToken,
+}
+
+/// The sign-in and account answer a Sync request was sent under, so its
+/// answer can be matched against what holds when it arrives.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SyncTicket {
+    /// Account answers applied when the request was sent.
+    pub(crate) account_answer: u64,
+    /// Sign-ins ended when the request was sent.
+    pub(crate) sign_in: u64,
 }
 
 /// What the user chose for a session its platform task holds back.
@@ -95,6 +107,8 @@ pub(crate) enum PlatformTaskUpdate {
         result: Result<SyncStart, StartFailure>,
         /// Session that asked.
         session_id: String,
+        /// Sign-in and account answer the request was sent under.
+        ticket: SyncTicket,
     },
     /// A request about a held task found that the session no longer holds
     /// it.
@@ -105,7 +119,10 @@ pub(crate) enum PlatformTaskUpdate {
         session_id: String,
     },
     /// The platform no longer offers Sync to the account.
-    Disabled,
+    Disabled {
+        /// Sign-in and account answer the request was sent under.
+        ticket: SyncTicket,
+    },
 }
 
 /// Why a start request gave the session no task.
@@ -116,6 +133,9 @@ pub(crate) enum StartFailure {
     NoRepository,
     /// The platform refused, failed, or did not answer.
     Sync(SyncError),
+    /// The answer came after the sign-in it was sent under ended, so its
+    /// claim, if any, is dropped.
+    SignedOut,
 }
 
 /// One start request: the work to describe and the session label.
@@ -133,26 +153,39 @@ impl App {
     /// `prompt`, waits for the platform's Sync: while the start request is
     /// answered, after a conflict, or after an interrupted request. The
     /// first call for a session sends the start request, when the account
-    /// answer enables Sync and the message has text. A session waiting
-    /// while Sync is off starts without a task instead.
+    /// answer enables Sync and the message has text.
+    ///
+    /// A waiting session waits whether or not Sync is on now, or known yet
+    /// after a launch: a running request resolves when it is answered, and
+    /// only the user's choice resolves a conflict or an interrupted check.
     pub(crate) async fn platform_task_holds_start(
         &mut self,
         session_id: &str,
         prompt: &TurnPrompt,
     ) -> bool {
-        let tasks = self.services.db().platform_tasks();
-        let task = tasks.load_platform_task(session_id).await.ok().flatten();
+        let task = self
+            .services
+            .db()
+            .platform_tasks()
+            .load_platform_task(session_id)
+            .await
+            .ok()
+            .flatten();
         match task {
             None => self.begin_platform_task(session_id, prompt).await,
-            Some(task) if task.state == PlatformTaskState::Resolved => false,
-            Some(_) if self.platform.sync_access().is_some() => true,
-            Some(_) => {
-                let _ = tasks.resolve_platform_task(session_id).await;
-                self.clear_platform_task_notice(session_id);
-
-                false
-            }
+            Some(task) => task.state != PlatformTaskState::Resolved,
         }
+    }
+
+    /// Drops the copy of the first prompt the platform task kept, once the
+    /// session's start took it over.
+    pub(crate) async fn forget_platform_task_prompt(&self, session_id: &str) {
+        let _ = self
+            .services
+            .db()
+            .platform_tasks()
+            .take_platform_task_prompt(session_id)
+            .await;
     }
 
     /// Sends the start request for the first message `prompt` of the
@@ -249,15 +282,20 @@ impl App {
     /// Applies one answer of a background Sync request.
     pub(crate) async fn apply_platform_task_update(&mut self, update: PlatformTaskUpdate) {
         match update {
-            PlatformTaskUpdate::Started { result, session_id } => {
-                self.apply_platform_task_start(&session_id, result).await;
+            PlatformTaskUpdate::Started {
+                result,
+                session_id,
+                ticket,
+            } => {
+                self.apply_platform_task_start(&session_id, result, ticket)
+                    .await;
             }
             PlatformTaskUpdate::Lost { error, session_id } => {
                 let claim = self
                     .services
                     .db()
                     .platform_tasks()
-                    .take_platform_task_claim(&session_id)
+                    .take_platform_task_claim(&session_id, &self.platform.view().platform_url)
                     .await
                     .ok()
                     .flatten();
@@ -276,7 +314,7 @@ impl App {
                 };
                 self.post_platform_task_notice(&session_id, notice);
             }
-            PlatformTaskUpdate::Disabled => self.platform.disable_sync(),
+            PlatformTaskUpdate::Disabled { ticket } => self.platform.disable_sync(ticket),
         }
     }
 
@@ -306,7 +344,7 @@ impl App {
                 .client
                 .report_sync_activity(&access.token, &task_ref, &claim_id)
                 .await;
-            if let Some(update) = failure_update(&session_id, result) {
+            if let Some(update) = failure_update(&session_id, access.ticket, result) {
                 let _ = event_tx.send(AppEvent::PlatformTaskUpdated { update });
             }
         });
@@ -318,22 +356,15 @@ impl App {
         let Some(access) = self.platform.sync_access() else {
             return;
         };
-        let tasks = self.services.db().platform_tasks();
-        let settled = tasks
-            .load_settled_platform_tasks()
+        let settled = self
+            .services
+            .db()
+            .platform_tasks()
+            .take_settled_platform_tasks(&access.platform_url)
             .await
             .unwrap_or_default();
         for task in settled {
-            let claim = tasks
-                .take_platform_task_claim(&task.session_id)
-                .await
-                .ok()
-                .flatten();
-            let Some((task_ref, claim_id)) =
-                claim.and_then(|claim| issued_claim(claim, &access.platform_url))
-            else {
-                continue;
-            };
+            let (task_ref, claim_id) = claim_parts(task.claim);
             let summary = (task.status != Status::Canceled.to_string())
                 .then(|| finish_summary(task.title.as_deref()));
             send_settlement(
@@ -359,13 +390,11 @@ impl App {
             .services
             .db()
             .platform_tasks()
-            .take_platform_task_claim(session_id)
+            .take_platform_task_claim(session_id, &access.platform_url)
             .await
             .ok()
             .flatten();
-        let Some((task_ref, claim_id)) =
-            claim.and_then(|claim| issued_claim(claim, &access.platform_url))
-        else {
+        let Some((task_ref, claim_id)) = claim.map(claim_parts) else {
             return;
         };
         send_settlement(
@@ -433,23 +462,35 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Applies the answer to the start request of `session_id`, unless the
-    /// session was deleted or no longer waits, in which case a task it was
-    /// given is released at once.
+    /// Applies the answer to the start request of `session_id`, sent under
+    /// `ticket`, unless the session was deleted or no longer waits, in
+    /// which case a task it was given is released at once. An answer that
+    /// arrives after its sign-in ended, or once Sync is on for another
+    /// platform, keeps no claim: the session starts without a task.
     async fn apply_platform_task_start(
         &mut self,
         session_id: &str,
         result: Result<SyncStart, StartFailure>,
+        ticket: SyncTicket,
     ) {
         let tasks = self.services.db().platform_tasks();
-        let is_waiting = tasks
-            .load_platform_task(session_id)
-            .await
-            .ok()
-            .flatten()
+        let task = tasks.load_platform_task(session_id).await.ok().flatten();
+        let is_waiting = task
+            .as_ref()
             .is_some_and(|task| task.state == PlatformTaskState::Checking);
+        let access = self.platform.sync_access().filter(|access| {
+            access.ticket.sign_in == ticket.sign_in
+                && task
+                    .as_ref()
+                    .is_none_or(|task| task.platform_url == access.platform_url)
+        });
+        let result = if access.is_some() {
+            result
+        } else {
+            Err(StartFailure::SignedOut)
+        };
         if !is_waiting {
-            if let (Ok(start), Some(access)) = (&result, self.platform.sync_access()) {
+            if let (Ok(start), Some(access)) = (&result, access) {
                 send_settlement(
                     &access,
                     self.services.event_sender(),
@@ -516,8 +557,9 @@ impl App {
                 let _ = tasks.resolve_platform_task(session_id).await;
                 match failure {
                     StartFailure::NoRepository => NO_REPOSITORY.to_string(),
+                    StartFailure::SignedOut => SYNC_OFF.to_string(),
                     StartFailure::Sync(SyncError::SyncDisabled) => {
-                        self.platform.disable_sync();
+                        self.platform.disable_sync(ticket);
 
                         SYNC_DISABLED.to_string()
                     }
@@ -535,21 +577,37 @@ impl App {
     /// Starts the session whose start waited for the platform's Sync: with
     /// the prompt the platform task kept, or with the prompt workspace
     /// preparation keeps, once the workspace is ready.
+    ///
+    /// The kept prompt stays until the start takes it over. When the start
+    /// fails, it moves to the session's workspace preparation, which shows
+    /// it with the error and retries it on `s`.
     async fn resume_platform_task_start(&mut self, session_id: &str) {
         let prompt = self
             .services
             .db()
             .platform_tasks()
-            .take_platform_task_prompt(session_id)
+            .load_platform_task(session_id)
             .await
             .ok()
             .flatten()
+            .and_then(|task| task.pending_prompt)
             .and_then(|prompt| serde_json::from_str::<TurnPrompt>(&prompt).ok());
         let result = match prompt {
             Some(prompt) => self.start_session(session_id, prompt).await,
             None => self.resume_prepared_platform_task_start(session_id).await,
         };
         if let Err(error) = result {
+            let start_ref = self
+                .sessions
+                .session_for_id(session_id)
+                .map_or_else(String::new, |session| session.base_branch.clone());
+            let _ = self
+                .services
+                .db()
+                .platform_tasks()
+                .retain_platform_task_prompt(session_id, &start_ref, &error.to_string())
+                .await;
+            self.refresh_workspace_preparation(session_id).await;
             self.append_output_for_session(session_id, &TranscriptNotice::StartError.format(error))
                 .await;
         }
@@ -591,10 +649,16 @@ impl App {
     }
 
     /// Sends the start request again as `answer` asks, or starts the
-    /// session without a task when Sync is off now.
+    /// session without a task when Sync is off now. Only a session that
+    /// has not started, and was neither canceled nor deleted, answers.
     async fn answer_platform_task(&mut self, session_id: &str, answer: PlatformTaskAnswer) {
+        let is_unstarted = self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(|session| session.status == Status::Draft);
         let tasks = self.services.db().platform_tasks();
-        let Ok(Some(task)) = tasks.load_platform_task(session_id).await else {
+        let task = tasks.load_platform_task(session_id).await.ok().flatten();
+        let Some(task) = task.filter(|_| is_unstarted) else {
             return;
         };
         let mut not_duplicates = task.not_duplicates.clone();
@@ -683,7 +747,11 @@ impl App {
         spawn::spawn_detached(async move {
             let result = start_platform_task(&access, git_client.as_ref(), request).await;
             let _ = event_tx.send(AppEvent::PlatformTaskUpdated {
-                update: PlatformTaskUpdate::Started { result, session_id },
+                update: PlatformTaskUpdate::Started {
+                    result,
+                    session_id,
+                    ticket: access.ticket,
+                },
             });
         });
     }
@@ -741,17 +809,6 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Removes the platform task notice of `session_id`.
-    fn clear_platform_task_notice(&mut self, session_id: &str) {
-        self.platform.set_task_choice(session_id, None);
-        if let Some(session) = self.sessions.state_mut().session_mut_for_id(session_id) {
-            session
-                .transient_messages
-                .retract(TransientMessageSlot::PlatformSync);
-        }
-        self.mark_dirty();
-    }
-
     /// Returns the current time in milliseconds since the Unix epoch.
     fn platform_sync_now_ms(&self) -> u64 {
         self.services
@@ -803,6 +860,7 @@ fn send_settlement(
     summary: Option<(String, Option<String>)>,
 ) {
     let client = Arc::clone(&access.client);
+    let ticket = access.ticket;
     let token = access.token.clone();
     spawn::spawn_detached(async move {
         let result = match summary {
@@ -813,16 +871,20 @@ fn send_settlement(
             }
             None => client.release_sync_task(&token, &task_ref, &claim_id).await,
         };
-        if let Some(update) = failure_update(&session_id, result) {
+        if let Some(update) = failure_update(&session_id, ticket, result) {
             let _ = event_tx.send(AppEvent::PlatformTaskUpdated { update });
         }
     });
 }
 
-/// Returns the update a failed request about a held task reports: a lost
-/// claim or closed task, or Sync turned off; other failures are dropped,
-/// since no such request is repeated.
-fn failure_update(session_id: &str, result: Result<(), SyncError>) -> Option<PlatformTaskUpdate> {
+/// Returns the update a failed request about a held task, sent under
+/// `ticket`, reports: a lost claim or closed task, or Sync turned off;
+/// other failures are dropped, since no such request is repeated.
+fn failure_update(
+    session_id: &str,
+    ticket: SyncTicket,
+    result: Result<(), SyncError>,
+) -> Option<PlatformTaskUpdate> {
     match result {
         Err(error @ (SyncError::ClaimLost | SyncError::TaskClosed)) => {
             Some(PlatformTaskUpdate::Lost {
@@ -830,7 +892,7 @@ fn failure_update(session_id: &str, result: Result<(), SyncError>) -> Option<Pla
                 session_id: session_id.to_string(),
             })
         }
-        Err(SyncError::SyncDisabled) => Some(PlatformTaskUpdate::Disabled),
+        Err(SyncError::SyncDisabled) => Some(PlatformTaskUpdate::Disabled { ticket }),
         Ok(()) | Err(_) => None,
     }
 }
@@ -856,18 +918,15 @@ fn held_claim(task: &PlatformTaskRow, platform_url: &str) -> Option<(SyncTaskRef
     ))
 }
 
-/// Returns the task and claim `claim` names, when the platform at
-/// `platform_url` issued it.
-fn issued_claim(claim: PlatformTaskClaim, platform_url: &str) -> Option<(SyncTaskRef, ClaimId)> {
-    (claim.platform_url == platform_url).then(|| {
-        (
-            SyncTaskRef {
-                number: claim.task_number,
-                project: claim.task_project,
-            },
-            ClaimId::new(claim.claim_id),
-        )
-    })
+/// Returns the task and claim `claim` names.
+fn claim_parts(claim: PlatformTaskClaim) -> (SyncTaskRef, ClaimId) {
+    (
+        SyncTaskRef {
+            number: claim.task_number,
+            project: claim.task_project,
+        },
+        ClaimId::new(claim.claim_id),
+    )
 }
 
 /// Returns the notice of a session that holds the task `start` answered,

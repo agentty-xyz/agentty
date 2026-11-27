@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT claim_id AS \"claim_id!: String\", platform_url,\n       task_project AS \"task_project!: String\", task_number AS \"task_number!: i64\"\nFROM session_platform_task\nWHERE session_id = ? AND claim_id IS NOT NULL AND task_project IS NOT NULL\n      AND task_number IS NOT NULL\n",
+  "query": "\nSELECT claim_id AS \"claim_id!: String\", platform_url,\n       task_project AS \"task_project!: String\", task_number AS \"task_number!: i64\"\nFROM session_platform_task\nWHERE session_id = ? AND platform_url = ? AND claim_id IS NOT NULL\n      AND task_project IS NOT NULL AND task_number IS NOT NULL\n",
   "describe": {
     "columns": [
       {
@@ -49,7 +49,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       true,
@@ -58,5 +58,5 @@
       true
     ]
   },
-  "hash": "bf6fc8ddc22bb25933dfeee7e1017aa706b6272446af9af48003a29ed6661004"
+  "hash": "b1e7cd990b412b06b744935c8c04cead431b49946377f0e2df73b04c7c4487d6"
 }

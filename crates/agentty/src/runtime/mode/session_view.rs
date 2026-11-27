@@ -719,7 +719,11 @@ fn open_or_regenerate_review(
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
     let mut snapshot =
         ViewSessionSnapshot::from_sessions(&app.sessions, view_context, app.is_tmux_session())?;
-    snapshot.platform_task_choice = app.platform.task_choice(view_context.session_id.as_str());
+    // Only an unstarted session answers its platform task's choice.
+    snapshot.platform_task_choice = app
+        .platform
+        .task_choice(view_context.session_id.as_str())
+        .filter(|_| snapshot.session_status == Status::Draft);
 
     Some(snapshot)
 }

@@ -81,7 +81,8 @@ platform's account answer turns it on or off, and the `Sync` field of the `Platf
 shows which. Signing out turns it off.
 
 While Sync is on, the first message of every new session is checked before the session
-starts, while its workspace is set up:
+starts, while its workspace is set up. A fork is the exception: it continues work that
+already has, or had, a task, and takes none of its own.
 
 - **New or matching open work.** The session takes a task and starts. A notice in the
   session names the task and lists the repository's other work in progress, with the
@@ -94,11 +95,18 @@ starts, while its workspace is set up:
   session starts without a task and its notice says why. Sync never keeps you from
   working.
 
+A waiting session keeps waiting for your key, also after a restart and whether or not
+Sync is on by then. If Agentty quits before the platform answers a first message, the
+session waits after the restart; press `s` to ask again. When Sync is off by the time
+you press a key, the session starts without a task. If the session cannot start once the
+platform has answered, your prompt stays with the session's workspace setup, which shows
+the error; press `s` to retry.
+
 A session that holds a task reports activity when each turn starts and ends, finishes
-the task when it is merged or done, and releases it when it is deleted or canceled. If
-another session took the task over, or it was finished elsewhere, the session says so
-and keeps running without it. If Agentty quits before the platform answers a first
-message, the session waits after the restart; press `s` to ask again.
+the task when it is merged or done, and releases it when it is canceled, or when it is
+deleted while Sync is on. If another session took the task over, or it was finished
+elsewhere, the session says so and keeps running without it. A task issued by another
+platform stays with its session until Agentty runs with that platform again.
 
 Agentty sends only the first non-blank line of the first message, cut to 200 characters,
 as the task's title; the message, cut to 4,000 characters, as its brief; the
@@ -110,7 +118,10 @@ text, starts its session without a task. The platform's text is shown only in th
 session; it never reaches an agent's prompt.
 
 Signing out forgets the tasks sessions hold on this computer without telling the
-platform, since the token is gone; the platform then sees them as stale.
+platform, since the token is gone, and a first message still being checked then starts
+its session without a task. Deleting a session while Sync is off, or before the account
+answer of a launch, forgets its task the same way. The platform sees such tasks as stale
+until another session takes them over.
 
 ## Use Another Platform
 

@@ -103,18 +103,23 @@ async fn a_held_claim_is_taken_once_and_hidden_from_debug_output() {
         .await
         .expect("task should load")
         .expect("task should exist");
+    let other_platform = tasks
+        .take_platform_task_claim("first", "https://other.example")
+        .await
+        .expect("other platform's take should run");
     let claim = tasks
-        .take_platform_task_claim("first")
+        .take_platform_task_claim("first", PLATFORM_URL)
         .await
         .expect("claim should be taken");
     let claim_again = tasks
-        .take_platform_task_claim("first")
+        .take_platform_task_claim("first", PLATFORM_URL)
         .await
         .expect("second take should run");
 
     // Assert
     assert!(held);
     assert!(!held_again);
+    assert_eq!(other_platform, None);
     assert_eq!(row.state, PlatformTaskState::Resolved);
     assert_eq!(row.task_number, Some(12));
     assert_eq!(row.task_project.as_deref(), Some("agentty"));
@@ -240,13 +245,14 @@ async fn a_prompt_is_kept_once_until_taken_and_not_after_the_start_is_answered()
 async fn only_tasks_holding_their_sessions_back_are_waiting() {
     // Arrange
     let (database, project_id) = database_with_sessions(&[
+        ("canceled", "Canceled"),
         ("checking", "Draft"),
         ("conflict", "Draft"),
         ("resolved", "InProgress"),
     ])
     .await;
     let tasks = database.platform_tasks();
-    for session_id in ["checking", "conflict", "resolved"] {
+    for session_id in ["canceled", "checking", "conflict", "resolved"] {
         begin(&database, session_id).await;
     }
     tasks
@@ -284,7 +290,7 @@ async fn only_tasks_holding_their_sessions_back_are_waiting() {
 }
 
 #[tokio::test]
-async fn settled_sessions_list_their_held_tasks_until_the_claims_are_forgotten() {
+async fn settled_sessions_give_up_their_claims_once_and_sign_out_forgets_only_its_own() {
     // Arrange
     let (database, _) = database_with_sessions(&[
         ("canceled", "Canceled"),
@@ -317,36 +323,55 @@ async fn settled_sessions_list_their_held_tasks_until_the_claims_are_forgotten()
     .expect("review request should insert");
 
     // Act
-    let settled = tasks
-        .load_settled_platform_tasks()
+    let elsewhere = tasks
+        .take_settled_platform_tasks("https://other.example")
         .await
-        .expect("settled tasks should load");
+        .expect("settled tasks should be taken");
+    let settled = tasks
+        .take_settled_platform_tasks(PLATFORM_URL)
+        .await
+        .expect("settled tasks should be taken");
+    let settled_again = tasks
+        .take_settled_platform_tasks(PLATFORM_URL)
+        .await
+        .expect("settled tasks should be taken");
     tasks
-        .forget_platform_task_claims()
+        .forget_platform_task_claims("https://other.example")
+        .await
+        .expect("other claims should be forgotten");
+    let after_other_sign_out = review_claim(&database).await;
+    tasks
+        .forget_platform_task_claims(PLATFORM_URL)
         .await
         .expect("claims should be forgotten");
-    let after_sign_out = tasks
-        .load_settled_platform_tasks()
-        .await
-        .expect("settled tasks should load");
+    let after_sign_out = review_claim(&database).await;
 
     // Assert
+    let claim = PlatformTaskClaim {
+        claim_id: "clm_secret".to_string(),
+        platform_url: PLATFORM_URL.to_string(),
+        task_number: 12,
+        task_project: "agentty".to_string(),
+    };
     assert_eq!(
         settled,
         [
             SettledPlatformTask {
+                claim: claim.clone(),
                 review_request_url: None,
                 session_id: "canceled".to_string(),
                 status: "Canceled".to_string(),
                 title: None,
             },
             SettledPlatformTask {
+                claim: claim.clone(),
                 review_request_url: None,
                 session_id: "done".to_string(),
                 status: "Done".to_string(),
                 title: None,
             },
             SettledPlatformTask {
+                claim,
                 review_request_url: Some(
                     "https://github.com/agentty-xyz/agentty/pull/7".to_string()
                 ),
@@ -356,7 +381,156 @@ async fn settled_sessions_list_their_held_tasks_until_the_claims_are_forgotten()
             },
         ]
     );
-    assert_eq!(after_sign_out, Vec::new());
+    assert!(!format!("{settled:?}").contains("clm_secret"));
+    assert_eq!(elsewhere, Vec::new());
+    assert_eq!(settled_again, Vec::new());
+    assert_eq!(after_other_sign_out.as_deref(), Some("clm_secret"));
+    assert_eq!(after_sign_out, None);
+}
+
+/// Returns the claim the `review` session holds.
+async fn review_claim(database: &Database) -> Option<String> {
+    database
+        .platform_tasks()
+        .load_platform_task("review")
+        .await
+        .expect("task should load")
+        .expect("task should exist")
+        .claim_id
+}
+
+#[tokio::test]
+async fn a_kept_prompt_moves_to_a_failed_preparation_unless_it_is_canceled() {
+    // Arrange
+    let (database, project_id) = database_with_sessions(&[]).await;
+    let sessions = database.sessions();
+    for id in ["reserved", "canceled"] {
+        sessions
+            .reserve_session(crate::PersistedSessionCreation {
+                agent: "codex",
+                base_branch: "main",
+                id,
+                is_draft: false,
+                model: "gpt-5.6-sol",
+                project_id,
+                reasoning_level: ag_session::ReasoningLevel::default(),
+                response_style: ag_session::ResponseStyle::default(),
+                speed_mode: ag_session::SpeedMode::Normal,
+                status: "Draft",
+            })
+            .await
+            .expect("session should reserve");
+    }
+    sessions
+        .insert_session("unprepared", "gpt-5.6-sol", "main", "Draft", project_id)
+        .await
+        .expect("session should insert");
+    sessions
+        .cancel_session_preparation("canceled")
+        .await
+        .expect("preparation should cancel");
+    let tasks = database.platform_tasks();
+    for session_id in ["reserved", "canceled", "unprepared", "promptless"] {
+        if session_id != "promptless" {
+            begin(&database, session_id).await;
+            tasks
+                .save_platform_task_prompt(session_id, "{\"text\":\"one\"}")
+                .await
+                .expect("prompt should save");
+        }
+    }
+
+    // Act
+    let retained = [
+        tasks
+            .retain_platform_task_prompt("reserved", "main", "Start failed.")
+            .await
+            .expect("retain should run"),
+        tasks
+            .retain_platform_task_prompt("canceled", "main", "Start failed.")
+            .await
+            .expect("retain should run"),
+        tasks
+            .retain_platform_task_prompt("unprepared", "main", "Start failed.")
+            .await
+            .expect("retain should run"),
+        tasks
+            .retain_platform_task_prompt("promptless", "main", "Start failed.")
+            .await
+            .expect("retain should run"),
+    ];
+
+    // Assert
+    assert_eq!(retained, [true, false, true, false]);
+    for session_id in ["reserved", "unprepared"] {
+        let preparation = sessions
+            .load_session_preparation(session_id)
+            .await
+            .expect("preparation should load")
+            .expect("preparation should exist");
+        assert_eq!(preparation.state, crate::SessionPreparationState::Failed);
+        assert_eq!(preparation.error.as_deref(), Some("Start failed."));
+        assert_eq!(preparation.prompt.as_deref(), Some("{\"text\":\"one\"}"));
+        let task = tasks
+            .load_platform_task(session_id)
+            .await
+            .expect("task should load")
+            .expect("task should exist");
+        assert_eq!(task.pending_prompt, None);
+    }
+    let canceled = tasks
+        .load_platform_task("canceled")
+        .await
+        .expect("task should load")
+        .expect("task should exist");
+    assert_eq!(
+        canceled.pending_prompt.as_deref(),
+        Some("{\"text\":\"one\"}")
+    );
+}
+
+#[tokio::test]
+async fn recovery_retains_the_prompt_of_an_answered_start_that_never_ran() {
+    // Arrange
+    let (database, _) =
+        database_with_sessions(&[("unstarted", "Draft"), ("started", "InProgress")]).await;
+    let tasks = database.platform_tasks();
+    for session_id in ["unstarted", "started"] {
+        begin(&database, session_id).await;
+        tasks
+            .save_platform_task_prompt(session_id, "{\"text\":\"one\"}")
+            .await
+            .expect("prompt should save");
+        tasks
+            .hold_platform_task(session_id, task_twelve(), "clm_secret")
+            .await
+            .expect("task should be held");
+    }
+
+    // Act
+    tasks
+        .recover_platform_tasks()
+        .await
+        .expect("recovery should run");
+
+    // Assert
+    let preparation = database
+        .sessions()
+        .load_session_preparation("unstarted")
+        .await
+        .expect("preparation should load")
+        .expect("preparation should exist");
+    assert_eq!(preparation.state, crate::SessionPreparationState::Failed);
+    assert_eq!(preparation.prompt.as_deref(), Some("{\"text\":\"one\"}"));
+    for session_id in ["unstarted", "started"] {
+        let task = tasks
+            .load_platform_task(session_id)
+            .await
+            .expect("task should load")
+            .expect("task should exist");
+        assert_eq!(task.pending_prompt, None);
+        assert_eq!(task.claim_id.as_deref(), Some("clm_secret"));
+    }
 }
 
 #[tokio::test]
