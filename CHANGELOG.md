@@ -7,6 +7,46 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.22.1] - 2026-11-27
+
+### Added
+
+- `agentty`: take a platform Sync task for each new session when the signed-in account
+  has Sync. The first message asks the platform for a task while the workspace is
+  prepared; when another session already works on the same task, the session waits with
+  its prompt kept, `t` takes the task over, and `n` starts separate work. Agentty
+  reports activity on the task at each turn, finishes it when the session is merged or
+  done, and releases it when the session is canceled or deleted. The `Platform` tab
+  shows whether Sync is on. Accounts without Sync send no Sync request.
+- `ag-store`: record a session's platform task (`session_platform_task`) and its task
+  worktrees (`task_worktree`) with their base commit and state, capped per session.
+  Deleting or canceling a session removes its task worktrees' directories and branches.
+- `ag-forge`: add `remote_repository_path`, the credential-free `host/path` of a remote.
+- docs site: add `Sign in to platform` and a platform waitlist notice to the header and
+  home page, show the current release and the theme toggle in the header, and place
+  search in the middle of the header.
+
+### Changed
+
+- `agentty`: show only the latest finished command with its status, the command that is
+  running now, and one totals line in a running turn's timeline, instead of every action
+  of the turn. The `Running...` status line no longer repeats the current command's
+  details.
+- `ag-session`: refuse an execution graph that lists the same task in two nodes.
+- docs site: measure page leaves, and page speed only for visitors who allow analytics.
+
+### Fixed
+
+- docs site: keep query strings out of every analytics event, including the session's
+  entry address.
+- `ag-remote`: keep the server test device reading frames after the relay hangs up,
+  which made a rejection test fail intermittently.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.22.0] - 2026-11-26
 
 ### Added
