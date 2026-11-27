@@ -133,15 +133,18 @@ the main session features of the terminal, and a paired device can already send 
 that agents run with edit permissions.
 
 **Decision.** A paired device may stop a turn, create sessions, merge a session into its
-base branch, publish a session branch and open or refresh its review request, sync a
+base branch, publish a session branch and open or refresh its review request, merge a
+session's ready GitHub pull request on GitHub or add it to its merge queue, sync a
 session branch, sync a project's branch with its remote, and change session settings.
 Each operation is a separate request with its own capability and reaches only the
 projects and sessions the host lists; see
-[Devices reach every listed project](#devices-reach-every-listed-project). Merge and
-publish ask for confirmation on the device, not in the terminal, and Agentty keeps no
-audit trail of remote actions yet. Running host commands, opening worktrees, changing
-Agentty settings, managing projects, and choosing the remote branch name stay out of
-reach.
+[Devices reach every listed project](#devices-reach-every-listed-project). A
+pull-request merge bypasses branch protections only when the request carries
+`bypass: true` and the host reports the pull request ready with bypass, and the host
+checks GitHub again before it acts. Merges and publishing ask for confirmation on the
+device, not in the terminal, and Agentty keeps no audit trail of remote actions yet.
+Running host commands, opening worktrees, changing Agentty settings, managing projects,
+and choosing the remote branch name stay out of reach.
 
 **Consequences.**
 

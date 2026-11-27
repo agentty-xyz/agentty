@@ -16,7 +16,9 @@ use super::prompt::{
 use crate::domain::input::InputState;
 use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::question::{QuestionAttachmentState, QuestionItem};
-use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, SessionId};
+use crate::domain::session::{
+    PublishBranchAction, ReviewRequestMergeAction, ReviewWatchToggle, Session, SessionId,
+};
 use crate::domain::session_usage::SessionUsage;
 
 /// Side of a unified diff that owns one selected changed line.
@@ -445,6 +447,12 @@ pub enum ConfirmationIntent {
     ForkSession,
     /// Confirms queueing merge for the active view session.
     MergeSession,
+    /// Confirms merging the active view session's pull request on its forge,
+    /// bypassing branch protections when `bypass` is true.
+    MergeReviewRequest {
+        /// Whether the confirmed merge bypasses branch protections.
+        bypass: bool,
+    },
     /// Confirms regenerating the focused review for the active view session.
     RegenerateReview,
     /// Asks, before pushing, whether to watch the review request a publish
@@ -1114,6 +1122,8 @@ pub enum HelpContext {
         platform_task_choice: Option<PlatformTaskChoice>,
         /// Pull-request publication action currently available.
         publish_pull_request_action: Option<PublishBranchAction>,
+        /// Pull-request merge currently available on the forge.
+        review_request_merge_action: Option<ReviewRequestMergeAction>,
         /// Review-request watch action currently available.
         review_watch_toggle: Option<ReviewWatchToggle>,
         /// Session whose view opened help.
@@ -1168,6 +1178,7 @@ impl HelpContext {
                 can_view_review_comments,
                 platform_task_choice,
                 publish_pull_request_action,
+                review_request_merge_action,
                 review_watch_toggle,
                 session_state,
                 ..
@@ -1186,6 +1197,7 @@ impl HelpContext {
                     ),
                     platform_task_choice: *platform_task_choice,
                     publish_pull_request_action: *publish_pull_request_action,
+                    review_request_merge_action: *review_request_merge_action,
                     session_state: *session_state,
                 },
                 *can_view_review_comments,

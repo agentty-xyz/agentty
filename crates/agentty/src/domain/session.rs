@@ -176,6 +176,53 @@ pub enum PublishBranchAction {
     PublishPullRequest,
 }
 
+/// How the session's linked pull request can merge on its forge now, from
+/// its latest refresh.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewRequestMergeAction {
+    /// The pull request is ready, so it merges, or joins the merge queue
+    /// its base branch requires.
+    Merge,
+    /// The pull request merges only by bypassing branch protections with
+    /// the user's administrator rights.
+    BypassMerge,
+}
+
+impl ReviewRequestMergeAction {
+    /// Returns whether this merge bypasses branch protections.
+    pub fn bypasses_protections(self) -> bool {
+        self == Self::BypassMerge
+    }
+}
+
+/// Why the session's linked pull request cannot merge from Agentty now.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewRequestMergeBlocker {
+    /// The session's work, publish, or own merge is still running or
+    /// queued.
+    Busy,
+    /// The pull request is already merging.
+    Merging,
+    /// The session has no open GitHub pull request.
+    NoPullRequest,
+    /// The latest refresh did not report the pull request ready.
+    NotReady,
+}
+
+impl ReviewRequestMergeBlocker {
+    /// Returns the plain-language refusal for this blocker.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Busy => {
+                "The session has work in progress; merge its pull request once it finishes"
+            }
+            Self::Merging => "The session's pull request is already merging",
+            Self::NoPullRequest => "The session has no open GitHub pull request",
+            Self::NotReady => "The session's pull request is not ready to merge",
+        }
+    }
+}
+
 /// Session-view action currently available for review-request watching.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReviewWatchToggle {
@@ -563,17 +610,69 @@ impl Session {
     }
 
     /// Returns the review-request publish action currently available in session
-    /// view, including queueing behind active turn or rebase work.
+    /// view, including queueing behind active turn or rebase work, while no
+    /// publish or merge of the pull request runs.
     pub fn publish_pull_request_action(&self) -> Option<PublishBranchAction> {
-        let is_publish_active = self
-            .transient_messages
-            .get(TransientMessageSlot::BranchPublish)
-            .is_some_and(|message| message.body.is_pending_indicator());
+        let is_publish_active = [
+            TransientMessageSlot::BranchPublish,
+            TransientMessageSlot::ReviewRequestMerge,
+        ]
+        .into_iter()
+        .filter_map(|slot| self.transient_messages.get(slot))
+        .any(|message| message.body.is_pending_indicator());
 
         ((self.status.allows_review_actions()
             || matches!(self.status, Status::InProgress | Status::Rebasing))
             && !is_publish_active)
             .then_some(PublishBranchAction::PublishPullRequest)
+    }
+
+    /// Returns whether a merge of the linked pull request on its forge is
+    /// running, which holds the session in `Queued` until it settles.
+    pub fn is_merging_review_request(&self) -> bool {
+        self.transient_messages
+            .get(TransientMessageSlot::ReviewRequestMerge)
+            .is_some_and(|message| message.body.is_pending_indicator())
+    }
+
+    /// Returns how the linked pull request can merge on its forge now, or
+    /// why it cannot.
+    ///
+    /// A GitHub pull request merges while the session rests in `Review` or
+    /// `Watching` with no worker work, publish, or merge of its own running
+    /// or queued, and its latest refresh reported it ready or ready with
+    /// bypass. GitLab merge requests never merge from Agentty.
+    ///
+    /// # Errors
+    /// Returns the [`ReviewRequestMergeBlocker`] that keeps the pull request
+    /// from merging now.
+    pub fn review_request_merge_availability(
+        &self,
+    ) -> Result<ReviewRequestMergeAction, ReviewRequestMergeBlocker> {
+        let summary = self
+            .review_request
+            .as_ref()
+            .map(|review_request| &review_request.summary)
+            .filter(|summary| {
+                summary.forge_kind == ForgeKind::GitHub && summary.state == ReviewRequestState::Open
+            })
+            .ok_or(ReviewRequestMergeBlocker::NoPullRequest)?;
+        if self.is_merging_review_request() {
+            return Err(ReviewRequestMergeBlocker::Merging);
+        }
+        if !matches!(self.status, Status::Review | Status::Watching)
+            || self.has_pending_worker_work()
+        {
+            return Err(ReviewRequestMergeBlocker::Busy);
+        }
+        if summary.is_github_pr_ready() {
+            return Ok(ReviewRequestMergeAction::Merge);
+        }
+        if summary.is_github_pr_bypass_ready() {
+            return Ok(ReviewRequestMergeAction::BypassMerge);
+        }
+
+        Err(ReviewRequestMergeBlocker::NotReady)
     }
 
     /// Returns the review-request watch action currently available in session

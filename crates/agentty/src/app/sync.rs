@@ -2055,11 +2055,7 @@ async fn sync_review_request_status(
         .map_err(|error| error.detail_message())?;
 
     match found_summary {
-        Some(summary) => {
-            let session_head_hash =
-                session_head_hash_for_summary(git_client, &folder, &summary).await;
-            Ok(sync_task_result_from_summary(summary, session_head_hash))
-        }
+        Some(summary) => Ok(review_request_sync_result(git_client, &folder, summary).await),
         None => Ok(SyncReviewRequestTaskResult {
             attention: None,
             outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
@@ -2113,6 +2109,20 @@ fn review_request_repo_url(
             .or_else(|| web_url.split_once("/merge_requests/"))
             .map(|(repo_url, _)| repo_url.to_string()),
     }
+}
+
+/// Builds the refresh result of `summary`, the review request of the session
+/// worktree in `folder`, as the background refresh reports it, so a merged
+/// review request moves its session to the same final state wherever the
+/// merge was seen.
+pub(crate) async fn review_request_sync_result(
+    git_client: &dyn GitClient,
+    folder: &Path,
+    summary: crate::domain::session::ReviewRequestSummary,
+) -> SyncReviewRequestTaskResult {
+    let session_head_hash = session_head_hash_for_summary(git_client, folder, &summary).await;
+
+    sync_task_result_from_summary(summary, session_head_hash)
 }
 
 /// Captures the local session branch `HEAD` hash only when the review request

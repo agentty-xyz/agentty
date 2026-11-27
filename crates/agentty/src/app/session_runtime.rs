@@ -15,8 +15,9 @@ use std::task::Poll;
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, HostContext, HostProject,
-    HostProjectStatus, MessageImage, ProjectScope, ProjectSessions, ReviewRequest, Session,
-    SessionDiffFile, SessionError, SessionFileEntry, SessionId, SessionListEntry, SessionSummary,
+    HostProjectStatus, MessageImage, ProjectScope, ProjectSessions, ReviewRequest,
+    ReviewRequestMerge, Session, SessionDiffFile, SessionError, SessionFileEntry, SessionId,
+    SessionListEntry, SessionSummary,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -776,6 +777,24 @@ impl SessionRuntimeHandle {
         self.request_mutation(|response_tx| CommandDelivery::Review {
             request: ReviewRequestCommand::new(session_id, None),
             response_tx: Some(response_tx),
+        })
+        .await
+    }
+
+    /// Merges one session's pull request on its forge through the runtime
+    /// actor, bypassing branch protections only when `bypass`, and waits for
+    /// the forge's answer.
+    pub(crate) async fn merge_review_request(
+        &self,
+        session_id: &SessionId,
+        bypass: bool,
+    ) -> Result<ReviewRequestMerge, SessionError> {
+        let session_id = session_id.clone();
+
+        self.request_mutation(|response_tx| CommandDelivery::ReviewRequestMerge {
+            bypass,
+            response_tx: Some(response_tx),
+            session_id,
         })
         .await
     }

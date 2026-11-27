@@ -1,9 +1,10 @@
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, CreateSessionMode, ForgeKind,
     HostProjectStatus, HostProjectSync, HostProjectSyncPhase, HostSessionMode, ReasoningLevel,
-    ResponseStyle, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionDiffFile,
-    SessionDiffFileStatus, SessionFileEntry, SessionFocusedReview, SessionId, SessionListEntry,
-    SessionListStats, SessionStatus, SessionSummary, SpeedMode,
+    ResponseStyle, ReviewRequest, ReviewRequestMerge, ReviewRequestMergeOutcome,
+    ReviewRequestState, ReviewRequestSummary, SessionDiffFile, SessionDiffFileStatus,
+    SessionFileEntry, SessionFocusedReview, SessionId, SessionListEntry, SessionListStats,
+    SessionStatus, SessionSummary, SpeedMode,
 };
 use serde_json::json;
 
@@ -11,8 +12,9 @@ use crate::protocol::{
     ClientFrame, MAX_FILE_RESPONSE_BYTES, RemoteDiffFile, RemoteFocusedReview,
     RemoteFocusedReviewState, RemoteImage, RemoteMessage, RemoteMessageKind, RemoteModeModel,
     RemoteModelOption, RemoteProject, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest,
-    RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest, RemoteSession,
-    RemoteSessionMode, RemoteSessionSummary, ServerFrame,
+    RemoteResponse, RemoteResult, RemoteReviewReadiness, RemoteReviewRequest,
+    RemoteReviewRequestMergeOutcome, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
+    ServerFrame,
 };
 use crate::source_support::{host_fixture, project_status_fixture, session_fixture};
 
@@ -351,6 +353,120 @@ fn review_request_response_names_the_forge_and_omits_a_missing_status() {
                 "web_url": "https://gitlab.com/example/project/-/merge_requests/4"
             }
         })
+    );
+}
+
+#[test]
+fn review_request_merge_requests_bypass_only_when_it_is_sent_true() {
+    // Arrange
+    let without_bypass = json!({"type": "request", "id": 1, "request": {
+        "method": "merge_review_request", "session_id": "s"
+    }});
+    let with_bypass = json!({"type": "request", "id": 2, "request": {
+        "method": "merge_review_request", "session_id": "s", "bypass": true
+    }});
+    let plain = RemoteRequest::MergeReviewRequest {
+        bypass: false,
+        session_id: "s".into(),
+    };
+
+    // Act
+    let without_bypass = serde_json::from_value::<ClientFrame>(without_bypass);
+    let with_bypass = serde_json::from_value::<ClientFrame>(with_bypass);
+    let encoded = serde_json::to_value(&plain).expect("request should encode");
+
+    // Assert
+    assert_eq!(
+        without_bypass.expect("merge without bypass should parse"),
+        ClientFrame::Request {
+            id: 1,
+            request: plain,
+        }
+    );
+    assert_eq!(
+        with_bypass.expect("merge with bypass should parse"),
+        ClientFrame::Request {
+            id: 2,
+            request: RemoteRequest::MergeReviewRequest {
+                bypass: true,
+                session_id: "s".into(),
+            },
+        }
+    );
+    assert_eq!(
+        encoded,
+        json!({"method": "merge_review_request", "session_id": "s"})
+    );
+}
+
+#[test]
+fn review_request_merge_responses_carry_each_outcome() {
+    // Arrange
+    let summary = ReviewRequestSummary {
+        display_id: "#7".to_string(),
+        forge_kind: ForgeKind::GitHub,
+        source_branch: "agentty/s".to_string(),
+        state: ReviewRequestState::Open,
+        status_summary: Some("In merge queue".to_string()),
+        target_branch: "main".to_string(),
+        title: "Build it".to_string(),
+        web_url: "https://github.com/example/project/pull/7".to_string(),
+    };
+    let merges = [
+        ReviewRequestMerge {
+            outcome: ReviewRequestMergeOutcome::Merged {
+                merge_commit: Some("7a1c0de".to_string()),
+            },
+            review_request: None,
+        },
+        ReviewRequestMerge {
+            outcome: ReviewRequestMergeOutcome::Queued,
+            review_request: Some(summary),
+        },
+        ReviewRequestMerge {
+            outcome: ReviewRequestMergeOutcome::Refused {
+                reason: "Pull request #7 is already merged".to_string(),
+            },
+            review_request: None,
+        },
+    ];
+
+    // Act
+    let encoded = merges.map(|merge| {
+        serde_json::to_value(RemoteResponse::from(merge)).expect("response should encode")
+    });
+
+    // Assert
+    assert_eq!(
+        encoded,
+        [
+            json!({"kind": "review_request_merge", "outcome": "merged", "merge_commit": "7a1c0de"}),
+            json!({"kind": "review_request_merge", "outcome": "queued", "review_request": {
+                "display_id": "#7",
+                "forge": "GitHub",
+                "source_branch": "agentty/s",
+                "state": "Open",
+                "status_summary": "In merge queue",
+                "target_branch": "main",
+                "title": "Build it",
+                "web_url": "https://github.com/example/project/pull/7"
+            }}),
+            json!({
+                "kind": "review_request_merge",
+                "outcome": "refused",
+                "reason": "Pull request #7 is already merged"
+            }),
+        ]
+    );
+    assert_eq!(
+        serde_json::from_value::<RemoteResponse>(encoded[0].clone())
+            .expect("response should decode"),
+        RemoteResponse::ReviewRequestMerge {
+            merge_commit: Some("7a1c0de".to_string()),
+            outcome: RemoteReviewRequestMergeOutcome::Merged,
+            reason: None,
+            review_request: None,
+        }
     );
 }
 

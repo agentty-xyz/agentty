@@ -190,6 +190,7 @@ impl App {
             open_diff_refresh: crate::app::session_diff::OpenDiffRefresh::default(),
             project_sync_status_expirations: std::collections::HashMap::new(),
             project_sync_statuses: std::collections::HashMap::new(),
+            review_request_merges: std::collections::HashSet::new(),
             session_live_usage: std::collections::HashMap::new(),
             session_progress_messages: std::collections::HashMap::new(),
             session_usage_totals: std::collections::HashMap::new(),

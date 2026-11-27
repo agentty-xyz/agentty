@@ -6,7 +6,9 @@ use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use async_trait::async_trait;
 
 use crate::error::SessionError;
-use crate::model::{ReviewRequest, Session, SessionId, SessionListEntry, SessionSummary};
+use crate::model::{
+    ReviewRequest, ReviewRequestMerge, Session, SessionId, SessionListEntry, SessionSummary,
+};
 use crate::{
     AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, CreateTaskRequest,
     ReasoningLevel, ResponseStyle, SpeedMode, SubmitTaskRequest, Task,
@@ -227,6 +229,9 @@ pub enum SessionOperation {
     /// and serving a [`ProjectScope::Project`] to the methods that take a
     /// [`ProjectScope`], such as [`SessionBackend::project_sessions`].
     Projects,
+    /// Merging a session's open pull request on its forge, or adding it to
+    /// its merge queue, through [`SessionBackend::merge_review_request`].
+    MergeReviewRequest,
 }
 
 /// Project that a request which takes a project is for.
@@ -946,6 +951,23 @@ pub trait SessionBackend: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> Result<ReviewRequest, SessionError>;
+
+    /// Merges the session's open review request on its forge when its
+    /// latest refresh reported it ready, or ready with bypass when `bypass`
+    /// is true, after the host checks the forge again; a ready pull request
+    /// whose base branch requires a merge queue joins the queue. Resolves
+    /// once the forge answered. Older hosts may omit support.
+    async fn merge_review_request(
+        &self,
+        session_id: &SessionId,
+        bypass: bool,
+    ) -> Result<ReviewRequestMerge, SessionError> {
+        let _ = (session_id, bypass);
+
+        Err(SessionError::Operation(
+            "Host does not support merging a review request".to_string(),
+        ))
+    }
 }
 
 /// Stable programmatic facade for session lifecycle operations.
@@ -1597,6 +1619,24 @@ impl SessionService {
         session_id: &SessionId,
     ) -> Result<ReviewRequest, SessionError> {
         self.backend.create_review_request(session_id).await
+    }
+
+    /// Merges the session's open review request on its forge, bypassing its
+    /// branch protections only when `bypass` is true, or adds it to its merge
+    /// queue.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not merge review requests, the
+    /// session cannot merge one now, or a forge command fails. A forge that
+    /// no longer allows the merge answers with
+    /// [`ReviewRequestMergeOutcome::Refused`](crate::ReviewRequestMergeOutcome::Refused)
+    /// instead.
+    pub async fn merge_review_request(
+        &self,
+        session_id: &SessionId,
+        bypass: bool,
+    ) -> Result<ReviewRequestMerge, SessionError> {
+        self.backend.merge_review_request(session_id, bypass).await
     }
 }
 

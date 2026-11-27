@@ -121,3 +121,94 @@ async fn test_handle_confirmation_decision_confirm_queues_merge_with_view_restor
     let output = session_replay_text(&app.sessions.sessions()[0]);
     assert!(output.contains("[Merge Error]"));
 }
+
+/// Opens the pull-request merge confirmation of `session_id`, bypassing
+/// branch protections when `bypass` is true.
+fn review_request_merge_confirmation(session_id: &str, bypass: bool) -> AppMode {
+    AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::MergeReviewRequest { bypass },
+        confirmation_message: "Merge pull request #42 into `main`?".to_string(),
+        confirmation_title: "Confirm Merge".to_string(),
+        restore_view: Some(ConfirmationViewMode {
+            scroll_offset: Some(3),
+            session_id: session_id.into(),
+        }),
+        session_id: Some(session_id.into()),
+        selected_confirmation_index: 0,
+    }
+}
+
+#[tokio::test]
+async fn confirmed_pull_request_merge_reports_a_refusal_in_the_view() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    app.mode = review_request_merge_confirmation(&session_id, true);
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            session_id: ref session_id_in_mode,
+            scroll_offset: Some(3),
+        } if session_id_in_mode == &session_id
+    ));
+    app.sessions.sync_from_handles();
+    let output = session_replay_text(&app.sessions.sessions()[0]);
+    assert!(
+        output.contains("[Merge Error] The session has no open GitHub pull request"),
+        "{output}"
+    );
+}
+
+#[tokio::test]
+async fn canceled_pull_request_merge_restores_the_view() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    app.mode = review_request_merge_confirmation(&session_id, false);
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Cancel).await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            scroll_offset: Some(3),
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn confirmed_pull_request_merge_without_a_session_returns_to_the_list() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::MergeReviewRequest { bypass: false },
+        confirmation_message: "Merge pull request #42 into `main`?".to_string(),
+        confirmation_title: "Confirm Merge".to_string(),
+        restore_view: None,
+        session_id: None,
+        selected_confirmation_index: 0,
+    };
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(app.mode, AppMode::List));
+}

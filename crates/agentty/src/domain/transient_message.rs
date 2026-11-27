@@ -31,6 +31,8 @@ pub(crate) enum TransientMessageSlot {
     WorkflowNotice,
     /// Manual branch or review-request publish progress and result.
     BranchPublish,
+    /// Merge of the linked pull request on its forge while it runs.
+    ReviewRequestMerge,
     /// Session sync waiting behind the active worker command.
     SyncQueue,
     /// Model and response-speed changes waiting until the session worker

@@ -19,6 +19,7 @@ use app::reducer::AppEventReducer;
 use app::review::{
     FocusedReviewPersistence, FocusedReviewPersistenceRetry, ReviewUpdate, apply_review_updates,
 };
+use app::review_request_merge::ReviewRequestMergeCompletion;
 use tracing::warn;
 
 use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
@@ -356,6 +357,11 @@ pub(crate) enum AppEvent {
     /// Indicates that review watch finished sending one session's forge
     /// rerun requests, whether or not the forge accepted them.
     ReviewWatchRerunFinished { session_id: SessionId },
+    /// Indicates that a merge of one session's pull request finished.
+    ReviewRequestMergeCompleted {
+        completion: Box<ReviewRequestMergeCompletion>,
+        session_id: SessionId,
+    },
 }
 
 /// Ordered external effects planned before an app-event batch mutates state.
@@ -428,10 +434,10 @@ pub(super) struct PublishedBranchSyncUpdate {
 
 /// Completed review-request status refresh payload ready for reducer
 /// application.
-pub(super) struct ReviewRequestStatusUpdate {
-    pub(super) generation: u64,
-    pub(super) result: Result<SyncReviewRequestTaskResult, String>,
-    pub(super) session_id: SessionId,
+pub(crate) struct ReviewRequestStatusUpdate {
+    pub(crate) generation: u64,
+    pub(crate) result: Result<SyncReviewRequestTaskResult, String>,
+    pub(crate) session_id: SessionId,
 }
 
 /// Reduced representation of all app events currently queued for one tick.
@@ -479,6 +485,8 @@ pub(super) struct AppEventBatch {
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
     pub(super) review_progress_updates:
         Vec<(SessionId, u64, uuid::Uuid, app::review::ReviewProgress)>,
+    /// Finished pull-request merges in arrival order.
+    pub(super) review_request_merge_completions: Vec<(SessionId, ReviewRequestMergeCompletion)>,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_updates: Vec<(SessionId, ReviewUpdate)>,
     /// Sessions whose review-watch rerun requests finished, applied before
@@ -583,6 +591,7 @@ impl AppEventBatch {
             || !self.diff_preview_updates.is_empty()
             || !self.prompt_image_paste_updates.is_empty()
             || !self.published_branch_sync_updates.is_empty()
+            || !self.review_request_merge_completions.is_empty()
             || !self.review_request_status_updates.is_empty()
             || !self.review_updates.is_empty()
             || !self.review_progress_updates.is_empty()
@@ -802,7 +811,8 @@ impl AppEventBatch {
             | AppEvent::AgentResponseReceived { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }
-            | AppEvent::ReviewWatchRerunFinished { .. }) => self.collect_workflow_event(event),
+            | AppEvent::ReviewWatchRerunFinished { .. }
+            | AppEvent::ReviewRequestMergeCompleted { .. }) => self.collect_workflow_event(event),
             AppEvent::ImplementerAttemptSucceeded { .. }
             | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
@@ -1030,6 +1040,14 @@ impl AppEventBatch {
             } => self.collect_review_request_status_updated(generation, result, session_id),
             AppEvent::ReviewWatchRerunFinished { session_id } => {
                 self.review_watch_reruns_finished.insert(session_id);
+            }
+            AppEvent::ReviewRequestMergeCompleted {
+                completion,
+                session_id,
+            } => {
+                self.session_ids.insert(session_id.clone());
+                self.review_request_merge_completions
+                    .push((session_id, *completion));
             }
             // The exhaustive runtime dispatcher handles other event categories
             // before calling this collector.
@@ -1577,6 +1595,14 @@ impl App {
     ) {
         for session_id in std::mem::take(&mut event_batch.review_watch_reruns_finished) {
             self.review_watch.finish_rerun(&session_id);
+        }
+        // A finished pull-request merge carries its own refresh, applied
+        // whatever the sync generation.
+        for (session_id, completion) in
+            std::mem::take(&mut event_batch.review_request_merge_completions)
+        {
+            self.apply_review_request_merge_completion(session_id, completion)
+                .await;
         }
         let review_request_status_updates =
             std::mem::take(&mut event_batch.review_request_status_updates);
@@ -2739,7 +2765,7 @@ impl App {
     }
 
     /// Applies one background review-request status refresh.
-    pub(super) async fn apply_review_request_status_update(
+    pub(in crate::app) async fn apply_review_request_status_update(
         &mut self,
         review_request_status_update: ReviewRequestStatusUpdate,
     ) {

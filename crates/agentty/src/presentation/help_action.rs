@@ -2,7 +2,9 @@
 //! list, settings, remote, session view, and diff contexts.
 
 use crate::domain::platform_sync::PlatformTaskChoice;
-use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, Status};
+use crate::domain::session::{
+    PublishBranchAction, ReviewRequestMergeAction, ReviewWatchToggle, Session, Status,
+};
 use crate::domain::session_order::ArchiveAction;
 use crate::presentation::platform::{PlatformAccess, PlatformState, PlatformTabView};
 use crate::presentation::remote_control::RemoteControlView;
@@ -145,6 +147,9 @@ pub(crate) struct ViewHelpState {
     /// Pull-request publish action available for the current session, when
     /// any.
     pub(crate) publish_pull_request_action: Option<PublishBranchAction>,
+    /// Pull-request merge available on the forge for the current session,
+    /// when its latest refresh reported it ready or ready with bypass.
+    pub(crate) review_request_merge_action: Option<ReviewRequestMergeAction>,
     /// High-level view-mode state that gates the rest of the shortcut set.
     pub(crate) session_state: ViewSessionState,
 }
@@ -474,6 +479,12 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
+    if let Some(review_request_merge_action) = state.review_request_merge_action {
+        actions.push(review_request_merge_help_action(
+            review_request_merge_action,
+        ));
+    }
+
     if action_set.rebase_session.is_enabled() {
         actions.push(HelpAction::new("sync", "r", "Sync"));
     }
@@ -797,6 +808,23 @@ pub(crate) fn diff_actions(
 /// Returns list-mode actions shared by all tabs.
 fn list_base_actions() -> Vec<HelpAction> {
     Vec::from(LIST_BASE_ACTIONS)
+}
+
+/// Returns the view-mode shortcut entry for merging the session's pull
+/// request on its forge.
+fn review_request_merge_help_action(action: ReviewRequestMergeAction) -> HelpAction {
+    match action {
+        ReviewRequestMergeAction::Merge => HelpAction::new(
+            "merge PR",
+            "m",
+            "Merge pull request, or add it to its merge queue",
+        ),
+        ReviewRequestMergeAction::BypassMerge => HelpAction::new(
+            "merge PR (bypass)",
+            "m",
+            "Merge pull request by bypassing branch protections",
+        ),
+    }
 }
 
 /// Returns the view-mode shortcut entry for the current pull-request publish

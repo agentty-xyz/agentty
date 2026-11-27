@@ -658,6 +658,7 @@ impl AppServices {
             AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
             AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
             AppEvent::ReviewWatchRerunFinished { .. } => "ReviewWatchRerunFinished",
+            AppEvent::ReviewRequestMergeCompleted { .. } => "ReviewRequestMergeCompleted",
         }
     }
 

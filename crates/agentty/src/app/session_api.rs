@@ -11,7 +11,7 @@ use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostContext, HostProject, HostProjectStatus, HostProjectSync,
     HostProjectSyncPhase, HostSessionMode, MessageImage, ProjectScope, ProjectSessions,
-    QuestionAnswer, ReviewRequest, ReviewRequestState, SessionBackend,
+    QuestionAnswer, ReviewRequest, ReviewRequestMerge, ReviewRequestState, SessionBackend,
     SessionError as ApiSessionError, SessionFileEntry, SessionId, SessionMessage,
     SessionMessageKind, SessionOperation, SessionService, SessionSettings, SessionSettingsChange,
     SessionStatus, parse_persisted_session_agent_model,
@@ -73,6 +73,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::RebaseSession
                 | SessionOperation::SessionSettings
                 | SessionOperation::PublishSession
+                | SessionOperation::MergeReviewRequest
                 | SessionOperation::ProjectStatus
                 | SessionOperation::SyncProject
                 | SessionOperation::Graphs
@@ -370,6 +371,14 @@ impl SessionBackend for SessionRuntimeHandle {
         session_id: &SessionId,
     ) -> Result<ReviewRequest, ApiSessionError> {
         SessionRuntimeHandle::create_review_request(self, session_id).await
+    }
+
+    async fn merge_review_request(
+        &self,
+        session_id: &SessionId,
+        bypass: bool,
+    ) -> Result<ReviewRequestMerge, ApiSessionError> {
+        SessionRuntimeHandle::merge_review_request(self, session_id, bypass).await
     }
 }
 

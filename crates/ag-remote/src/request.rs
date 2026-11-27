@@ -34,6 +34,7 @@ const CAPABILITIES: &[(SessionOperation, &str)] = &[
     (SessionOperation::RebaseSession, "sync"),
     (SessionOperation::SessionSettings, "settings"),
     (SessionOperation::PublishSession, "publish"),
+    (SessionOperation::MergeReviewRequest, "merge_review_request"),
     (SessionOperation::SyncProject, "sync_project"),
     (SessionOperation::Graphs, "graphs"),
     (SessionOperation::GraphActions, "graph_actions"),
@@ -221,6 +222,10 @@ impl<'request> RequestPolicy<'request> {
                 &[SessionOperation::Projects],
                 RequestOrder::Read,
             ),
+            RemoteRequest::MergeReviewRequest { session_id, .. } => unscoped(
+                &[SessionOperation::MergeReviewRequest],
+                RequestOrder::Queued(session_id),
+            ),
             RemoteRequest::MergeSession { session_id } => unscoped(
                 &[SessionOperation::MergeSession],
                 RequestOrder::Queued(session_id),
@@ -342,6 +347,9 @@ async fn respond(
             list_listed_session_files(sessions, session_id).await
         }
         RemoteRequest::ListSessions { .. } => list_sessions(sessions, scope).await,
+        RemoteRequest::MergeReviewRequest { bypass, session_id } => {
+            merge_listed_review_request(sessions, session_id, bypass).await
+        }
         RemoteRequest::MergeSession { session_id } => {
             let session_id = session_id.listed(sessions).await?;
             sessions.merge_session(&session_id).await?;
@@ -652,6 +660,21 @@ async fn list_sessions(
             .map(RemoteSessionSummary::from)
             .collect(),
     })
+}
+
+/// Merges one session's pull request on its forge only when the host lists
+/// that session, bypassing branch protections only when `bypass` is true;
+/// the host checks the forge again before it acts.
+async fn merge_listed_review_request(
+    sessions: &SessionService,
+    session_id: RequestedSessionId,
+    bypass: bool,
+) -> Result<RemoteResponse, SessionError> {
+    let session_id = session_id.listed(sessions).await?;
+
+    Ok(RemoteResponse::from(
+        sessions.merge_review_request(&session_id, bypass).await?,
+    ))
 }
 
 /// Publishes one session and opens or refreshes its review request only

@@ -29,6 +29,10 @@ is on GitHub.
 Review watch's automatic check rerun needs a token with Actions write access. Without
 it, review watch still sees failing checks and reports that it could not rerun them.
 
+[Merging a pull request](@/docs/usage/workflow.md#usage-review-request-merge) with `m`
+runs `gh pr merge`, so the account needs permission to merge into the base branch; a
+bypass merge also needs the right to bypass its branch protections.
+
 ## GitLab
 
 <a id="usage-forge-authentication-gitlab"></a> Use this setup when the repository remote

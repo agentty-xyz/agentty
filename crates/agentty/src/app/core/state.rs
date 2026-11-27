@@ -339,6 +339,9 @@ pub struct App {
     /// switches, is hydrated after restart, and is ready when the user presses
     /// `f`.
     pub(crate) review_cache: HashMap<SessionId, ReviewCacheEntry>,
+    /// Sessions whose pull request merges on its forge now, held in
+    /// `Queued` until the merge settles, whichever project page is loaded.
+    pub(crate) review_request_merges: HashSet<SessionId>,
     /// Caches the persisted review diff baseline across turns and project
     /// switches independently of visible output. Lazily recovered after
     /// restart and removed when the session is deleted.

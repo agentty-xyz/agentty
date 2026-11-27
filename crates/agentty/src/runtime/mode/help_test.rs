@@ -41,6 +41,7 @@ fn test_handle_quit_key_restores_view_mode() {
             can_view_review_comments: false,
             platform_task_choice: None,
             publish_pull_request_action: None,
+            review_request_merge_action: None,
             review_watch_toggle: None,
             session_id: "s1".into(),
             session_state: ViewSessionState::Interactive,

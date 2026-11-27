@@ -64,6 +64,7 @@ fn view_help_text(session: &Session, can_open_worktree: bool) -> String {
         ),
         platform_task_choice: None,
         publish_pull_request_action: session.publish_pull_request_action(),
+        review_request_merge_action: session.review_request_merge_availability().ok(),
         session_state: help_action::session_view_state(session),
     });
 

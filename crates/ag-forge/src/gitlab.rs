@@ -7,12 +7,12 @@ use url::{Url, form_urlencoded};
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture, ForgeKind,
-    ForgeRemote, ReviewCheckFailure, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
-    ReviewCommentThread, ReviewRequestAdapter, ReviewRequestAttention, ReviewRequestError,
-    ReviewRequestMetadata, ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState,
-    ReviewRequestSummary, SyncReviewRequestMetadataConfig, UpdateReviewRequestInput,
-    is_gitlab_host, map_parse_error, normalize_provider_label, parse_remote_url,
-    status_summary_parts, strip_port,
+    ForgeRemote, MergeReviewRequestInput, ReviewCheckFailure, ReviewComment,
+    ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter,
+    ReviewRequestAttention, ReviewRequestError, ReviewRequestMergeOutcome, ReviewRequestMetadata,
+    ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState, ReviewRequestSummary,
+    SyncReviewRequestMetadataConfig, UpdateReviewRequestInput, is_gitlab_host, map_parse_error,
+    normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// Lowest GitLab project access level trusted to request changes: Developer.
@@ -963,6 +963,19 @@ impl ReviewRequestAdapter for GitLabReviewRequestAdapter {
                 has_pending_checks,
                 head_commit: merge_request.sha,
                 review_threads,
+            })
+        })
+    }
+
+    /// Refuses every merge: Agentty merges only GitHub pull requests.
+    fn merge_authenticated_review_request(
+        &self,
+        _remote: ForgeRemote,
+        _input: MergeReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestMergeOutcome, ReviewRequestError>> {
+        Box::pin(async {
+            Ok(ReviewRequestMergeOutcome::Refused {
+                reason: "Agentty merges only GitHub pull requests".to_string(),
             })
         })
     }

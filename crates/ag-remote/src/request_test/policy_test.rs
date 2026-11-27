@@ -188,6 +188,15 @@ cases! {
         sample: RemoteRequest::ListSessions { project_id: None },
         unlisted: None,
     },
+    RemoteRequest::MergeReviewRequest { .. } => Case {
+        order: Order::Queued,
+        requires: &[SessionOperation::MergeReviewRequest],
+        sample: RemoteRequest::MergeReviewRequest {
+            bypass: true,
+            session_id: UNLISTED.into(),
+        },
+        unlisted: Some(not_found()),
+    },
     RemoteRequest::MergeSession { .. } => Case {
         order: Order::Queued,
         requires: &[SessionOperation::MergeSession],

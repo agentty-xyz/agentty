@@ -18,7 +18,9 @@ use super::support::{
     new_test_app_with_session_and_tmux_client, reply_enabled_review_snapshot, session_fixture,
 };
 use crate::domain::platform_sync::PlatformTaskChoice;
-use crate::domain::session::{PublishBranchAction, SessionDiffState, SessionId, Status};
+use crate::domain::session::{
+    PublishBranchAction, ReviewRequestMergeAction, SessionDiffState, SessionId, Status,
+};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, HelpContext,
@@ -159,6 +161,7 @@ fn test_open_view_help_overlay_preserves_view_context() {
         open_worktree: ViewActionState::Enabled,
         platform_task_choice: None,
         review_comments: ViewActionState::Disabled,
+        review_request_merge_action: Some(ReviewRequestMergeAction::BypassMerge),
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         steer_queued_messages: ViewActionState::Disabled,
@@ -182,6 +185,7 @@ fn test_open_view_help_overlay_preserves_view_context() {
                 can_start_staged_session: false,
                 can_steer_queued_messages: false,
                 publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+                review_request_merge_action: Some(ReviewRequestMergeAction::BypassMerge),
                 session_id: ref session_id_in_mode,
                 session_state: ViewSessionState::Review,
                 scroll_offset: Some(3),

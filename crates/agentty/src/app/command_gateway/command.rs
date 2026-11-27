@@ -2,7 +2,7 @@
 
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, MessageImage,
-    ProjectScope, ReviewRequest, SessionError, SessionId,
+    ProjectScope, ReviewRequest, ReviewRequestMerge, SessionError, SessionId,
 };
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -80,6 +80,14 @@ pub(crate) enum CommandDelivery {
         request: ReviewRequestCommand,
         response_tx: Option<oneshot::Sender<Result<ReviewRequest, SessionError>>>,
     },
+    /// A pull-request merge transfers its optional completion reply to the
+    /// background merge, which answers once the forge did.
+    ReviewRequestMerge {
+        /// Whether the caller asked to bypass branch protections.
+        bypass: bool,
+        response_tx: Option<oneshot::Sender<Result<ReviewRequestMerge, SessionError>>>,
+        session_id: SessionId,
+    },
 }
 
 impl CommandDelivery {
@@ -89,6 +97,9 @@ impl CommandDelivery {
             Self::Create { .. } => ("create", None),
             Self::Admission { request, .. } => request.target(),
             Self::Review { request, .. } => ("create_review_request", Some(&request.session_id)),
+            Self::ReviewRequestMerge { session_id, .. } => {
+                ("merge_review_request", Some(session_id))
+            }
         }
     }
 
@@ -96,7 +107,7 @@ impl CommandDelivery {
     /// project it names, or the session it inherits from, whose project
     /// creation then requires it to name; publication reaches its session
     /// under the branch name the host chooses, and a device may not name
-    /// one.
+    /// one; a pull-request merge reaches its session.
     pub(super) fn remote_scope(&self) -> RemoteScope<'_> {
         match self {
             Self::Create { request, .. } => request.inherit_from_session_id.as_ref().map_or(
@@ -108,6 +119,7 @@ impl CommandDelivery {
                 RemoteScope::NotServed
             }
             Self::Review { request, .. } => RemoteScope::Session(&request.session_id),
+            Self::ReviewRequestMerge { session_id, .. } => RemoteScope::Session(session_id),
         }
     }
 
@@ -118,6 +130,9 @@ impl CommandDelivery {
             Self::Create { response_tx, .. } => Self::reply_with_refusal(response_tx, refusal),
             Self::Admission { response_tx, .. } => Self::reply_with_refusal(response_tx, refusal),
             Self::Review { response_tx, .. } => Self::reply_with_refusal(response_tx, refusal),
+            Self::ReviewRequestMerge { response_tx, .. } => {
+                Self::reply_with_refusal(response_tx, refusal)
+            }
         }
     }
 

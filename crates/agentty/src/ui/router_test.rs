@@ -413,6 +413,7 @@ fn surface_for_help_context_classifies_each_restored_page() {
         platform_task_choice: None,
         can_view_review_comments: false,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         review_watch_toggle: None,
         scroll_offset: Some(3),
         session_id: "session-help".into(),
@@ -1042,6 +1043,29 @@ fn render_list_backed_modes_forward_frame_time_to_every_overlay() {
 }
 
 #[test]
+fn render_pull_request_merge_confirmation_over_its_session() {
+    // Arrange
+    let mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::MergeReviewRequest { bypass: true },
+        confirmation_message: "Bypass branch protections?".to_string(),
+        confirmation_title: "Bypass Merge PR #42".to_string(),
+        restore_view: Some(ConfirmationViewMode {
+            scroll_offset: None,
+            session_id: "session-overlay".into(),
+        }),
+        session_id: Some("session-overlay".into()),
+        selected_confirmation_index: 0,
+    };
+
+    // Act
+    let (handled, text) = render_list_backed_mode(&mode);
+
+    // Assert
+    assert!(handled);
+    assert!(text.contains("Bypass Merge PR #42"), "{text}");
+}
+
+#[test]
 fn render_help_modes_forward_frame_time_to_list_and_view_backgrounds() {
     // Arrange
     let modes = [
@@ -1065,6 +1089,7 @@ fn render_help_modes_forward_frame_time_to_list_and_view_backgrounds() {
                     platform_task_choice: None,
                     can_view_review_comments: false,
                     publish_pull_request_action: None,
+                    review_request_merge_action: None,
                     review_watch_toggle: None,
                     session_id: "session-overlay".into(),
                     session_state: crate::presentation::help_action::ViewSessionState::Review,

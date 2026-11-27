@@ -8,7 +8,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 pub use ag_contracts::{PermissionMode, ResponseStyle, SpeedMode};
-pub use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
+pub use ag_forge::{
+    ForgeKind, ReviewRequestMergeOutcome, ReviewRequestState, ReviewRequestSummary,
+};
 use ag_protocol::QuestionItem;
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
@@ -368,6 +370,16 @@ pub struct ReviewRequest {
     pub last_refreshed_at: i64,
     /// Normalized remote summary captured at `last_refreshed_at`.
     pub summary: ReviewRequestSummary,
+}
+
+/// Result of merging a session's review request on its forge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRequestMerge {
+    /// What the forge did: merged, queued, or refused with a reason.
+    pub outcome: ReviewRequestMergeOutcome,
+    /// The session's review request as the forge reported it after the
+    /// attempt, or `None` when that refresh failed.
+    pub review_request: Option<ReviewRequestSummary>,
 }
 
 /// Complete persisted session aggregate returned by the programmatic API.

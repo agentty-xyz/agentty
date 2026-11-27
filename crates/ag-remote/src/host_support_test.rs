@@ -14,12 +14,12 @@ use ag_session::{
     ExecutionGraphStatus, ForgeKind, GenerateGraphProposalRequest, HostContext, HostProject,
     HostProjectStatus, HostProjectSync, HostProjectSyncPhase, HostSessionMode, MessageImage,
     ProjectScope, ProjectSessions, QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest,
-    ReviewRequestState, ReviewRequestSummary, Session, SessionBackend, SessionDiffFile,
-    SessionDiffFileStatus, SessionError, SessionFileEntry, SessionFocusedReview,
-    SessionGraphActionRequest, SessionGraphApproval, SessionGraphProposalPhase,
-    SessionGraphSummary, SessionGraphs, SessionGraphsRequest, SessionId, SessionListEntry,
-    SessionListStats, SessionMessage, SessionMessageKind, SessionOperation, SessionSettings,
-    SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
+    ReviewRequestMerge, ReviewRequestMergeOutcome, ReviewRequestState, ReviewRequestSummary,
+    Session, SessionBackend, SessionDiffFile, SessionDiffFileStatus, SessionError,
+    SessionFileEntry, SessionFocusedReview, SessionGraphActionRequest, SessionGraphApproval,
+    SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs, SessionGraphsRequest, SessionId,
+    SessionListEntry, SessionListStats, SessionMessage, SessionMessageKind, SessionOperation,
+    SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -690,6 +690,45 @@ impl SessionBackend for RecordingBackend {
                 title: "Build it".to_string(),
                 web_url: "https://github.com/example/project/pull/7".to_string(),
             },
+        })
+    }
+
+    // A merge of pull request `#7` without bypass joins its merge queue; a
+    // bypass merges it as commit `7a1c0de`.
+    async fn merge_review_request(
+        &self,
+        session_id: &SessionId,
+        bypass: bool,
+    ) -> Result<ReviewRequestMerge, SessionError> {
+        self.record(format!("merge_review_request:{session_id}:{bypass}"));
+        let (outcome, state, status_summary) = if bypass {
+            (
+                ReviewRequestMergeOutcome::Merged {
+                    merge_commit: Some("7a1c0de".to_string()),
+                },
+                ReviewRequestState::Merged,
+                None,
+            )
+        } else {
+            (
+                ReviewRequestMergeOutcome::Queued,
+                ReviewRequestState::Open,
+                Some(ReviewRequestSummary::GITHUB_MERGE_QUEUE_STATUS_COMPONENT.to_string()),
+            )
+        };
+
+        Ok(ReviewRequestMerge {
+            outcome,
+            review_request: Some(ReviewRequestSummary {
+                display_id: "#7".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: format!("agentty/{session_id}"),
+                state,
+                status_summary,
+                target_branch: "main".to_string(),
+                title: "Build it".to_string(),
+                web_url: "https://github.com/example/project/pull/7".to_string(),
+            }),
         })
     }
 }

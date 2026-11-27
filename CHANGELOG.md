@@ -7,6 +7,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `agentty`: merge a session's linked GitHub pull request with `m` in session view while
+  it shows `[ready]` or `[ready (bypass)]`. After you confirm, Agentty checks GitHub
+  again, marks a draft ready for review, and merges with the first method the repository
+  allows (squash, merge commit, rebase), adds the pull request to the merge queue its
+  base branch requires, or, for a bypass, merges past branch protections with your
+  administrator rights. The outcome lands in the transcript, and a merged pull request
+  moves the session to `Merged`.
+- `ag-forge`: add `ReviewRequestClient::merge_review_request`, which rechecks one pull
+  request and merges, queues, or refuses it as a `ReviewRequestMergeOutcome`.
+- `ag-session`: add `SessionOperation::MergeReviewRequest`,
+  `SessionBackend::merge_review_request`, and `SessionService::merge_review_request`.
+- `ag-remote`: add the `merge_review_request` request, offered through the
+  `merge_review_request` capability. It bypasses branch protections only with
+  `bypass: true`, and its `review_request_merge` response reports `merged`, `queued`, or
+  `refused` with a reason.
+
 ## [v0.22.1] - 2026-11-27
 
 ### Added

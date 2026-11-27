@@ -11,11 +11,11 @@ use ag_session::{
     AgentModel, AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest,
     DurableMessageRequest, GenerateGraphProposalRequest, HostContext, HostProject,
     HostProjectStatus, HostProjectSync, HostProjectSyncPhase, HostSessionMode, MessageImage,
-    QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, Session, SessionBackend,
-    SessionDiffFile, SessionError, SessionFileEntry, SessionGraphActionRequest, SessionGraphs,
-    SessionGraphsRequest, SessionId, SessionMessage, SessionMessageKind, SessionOperation,
-    SessionService, SessionSettings, SessionSettingsChange, SessionStatus, SessionSummary,
-    SpeedMode,
+    QuestionItem, ReasoningLevel, ResponseStyle, ReviewRequest, ReviewRequestMerge,
+    ReviewRequestMergeOutcome, Session, SessionBackend, SessionDiffFile, SessionError,
+    SessionFileEntry, SessionGraphActionRequest, SessionGraphs, SessionGraphsRequest, SessionId,
+    SessionMessage, SessionMessageKind, SessionOperation, SessionService, SessionSettings,
+    SessionSettingsChange, SessionStatus, SessionSummary, SpeedMode,
 };
 use async_trait::async_trait;
 use rustls::crypto::ring;
@@ -496,6 +496,31 @@ impl SessionBackend for RecordingBackend {
 
     async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         self.record(format!("merge:{session_id}"), ())
+    }
+
+    // A bypass merges as commit `7a1c0de`; a merge without one is refused.
+    async fn merge_review_request(
+        &self,
+        session_id: &SessionId,
+        bypass: bool,
+    ) -> Result<ReviewRequestMerge, SessionError> {
+        let outcome = if bypass {
+            ReviewRequestMergeOutcome::Merged {
+                merge_commit: Some("7a1c0de".to_string()),
+            }
+        } else {
+            ReviewRequestMergeOutcome::Refused {
+                reason: "Pull request #7 is no longer ready to merge (Checks pending)".to_string(),
+            }
+        };
+
+        self.record(
+            format!("merge_review_request:{session_id}:{bypass}"),
+            ReviewRequestMerge {
+                outcome,
+                review_request: None,
+            },
+        )
     }
 
     async fn create_review_request(

@@ -247,6 +247,27 @@ pub(super) fn github_view_json() -> String {
     .to_string()
 }
 
+/// Marks every reported check as passing and every base-branch required
+/// check, from both a ruleset and classic branch protection, as reported.
+pub(super) fn set_passing_required_checks(pull_request: &mut serde_json::Value) {
+    pull_request["statusCheckRollup"] = serde_json::json!({
+        "state": "SUCCESS",
+        "contexts": {"nodes": [
+            {"name": "Workspace validation"},
+            {"context": "codecov/patch"},
+            {}
+        ]}
+    });
+    pull_request["baseRef"] = serde_json::json!({
+        "refUpdateRule": {"requiredStatusCheckContexts": ["codecov/patch"]},
+        "rules": {"totalCount": 3, "nodes": [
+            {"parameters": {"requiredStatusChecks": [{"context": "Workspace validation"}]}},
+            {"parameters": {}},
+            {"parameters": null}
+        ]}
+    });
+}
+
 /// Parses one compact status response into its normalized summary.
 pub(super) fn parse_view_summary(stdout: &str) -> Result<ReviewRequestSummary, String> {
     GitHubReviewRequestAdapter::parse_view_pull_request(stdout)

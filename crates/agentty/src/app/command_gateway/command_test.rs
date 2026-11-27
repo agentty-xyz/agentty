@@ -224,6 +224,46 @@ async fn refused_deliveries_answer_their_reply_or_return_the_refusal() {
     assert_eq!(returned, Err(SessionError::NotFound));
 }
 
+#[tokio::test]
+async fn pull_request_merges_reach_their_session_and_answer_a_refusal_on_their_reply() {
+    // Arrange
+    let session_id = SessionId::from("sess");
+    let (merge_tx, merge_rx) = oneshot::channel();
+    let answered = CommandDelivery::ReviewRequestMerge {
+        bypass: true,
+        response_tx: Some(merge_tx),
+        session_id: session_id.clone(),
+    };
+    let unanswered = CommandDelivery::ReviewRequestMerge {
+        bypass: false,
+        response_tx: None,
+        session_id: session_id.clone(),
+    };
+
+    // Act
+    let target = answered.target();
+    let scope = answered.remote_scope();
+    let routing = (
+        target.0,
+        target.1.cloned(),
+        scope == RemoteScope::Session(&session_id),
+    );
+    let answered = answered.refuse(SessionError::NotFound);
+    let returned = unanswered.refuse(SessionError::NotFound);
+
+    // Assert
+    assert_eq!(
+        routing,
+        ("merge_review_request", Some(session_id.clone()), true)
+    );
+    assert_eq!(answered, Ok(()));
+    assert_eq!(
+        merge_rx.await.expect("merge reply"),
+        Err(SessionError::NotFound)
+    );
+    assert_eq!(returned, Err(SessionError::NotFound));
+}
+
 fn create_delivery(inherit_from_session_id: Option<SessionId>) -> CommandDelivery {
     CommandDelivery::Create {
         request: create_request(inherit_from_session_id),

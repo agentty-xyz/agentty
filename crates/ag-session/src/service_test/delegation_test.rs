@@ -8,7 +8,9 @@ use async_trait::async_trait;
 
 use super::support::{FakeBackend, FakeBackendState, review_request_fixture, session_fixture};
 use crate::error::SessionError;
-use crate::model::{ReviewRequest, Session, SessionId};
+use crate::model::{
+    ReviewRequest, ReviewRequestMerge, ReviewRequestMergeOutcome, Session, SessionId,
+};
 use crate::service::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, HostProjectStatus, HostProjectSync, HostProjectSyncPhase,
@@ -458,6 +460,56 @@ async fn service_delegates_settings_changes_to_supporting_hosts() {
     );
 }
 
+#[tokio::test]
+async fn existing_hosts_report_unsupported_review_request_merges() {
+    // Arrange
+    let backend = Arc::new(FakeBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supported = service.supports(SessionOperation::MergeReviewRequest);
+    let merged = service
+        .merge_review_request(&SessionId::from("session-1"), true)
+        .await;
+
+    // Assert
+    assert!(!supported);
+    assert_eq!(
+        merged,
+        Err(SessionError::Operation(
+            "Host does not support merging a review request".to_string()
+        ))
+    );
+    assert_eq!(backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn service_delegates_review_request_merges_with_their_bypass_choice() {
+    // Arrange
+    let backend = Arc::new(OptionalBackend::default());
+    let service = SessionService::new(backend.clone());
+
+    // Act
+    let supported = service.supports(SessionOperation::MergeReviewRequest);
+    let merged = service
+        .merge_review_request(&SessionId::from("session-1"), false)
+        .await;
+
+    // Assert
+    assert!(supported);
+    assert_eq!(
+        merged,
+        Ok(ReviewRequestMerge {
+            outcome: ReviewRequestMergeOutcome::Queued,
+            review_request: None,
+        })
+    );
+    assert_eq!(
+        backend.merges.lock().expect("merges").as_slice(),
+        [(SessionId::from("session-1"), false)]
+    );
+}
+
 /// Host that serves the optional operations and records each call.
 #[derive(Default)]
 struct OptionalBackend {
@@ -472,6 +524,8 @@ struct OptionalBackend {
     inner: FakeBackend,
     /// Whether a project sync was asked for and still runs.
     is_project_syncing: Mutex<bool>,
+    /// Review-request merges asked for, with their bypass choice, in order.
+    merges: Mutex<Vec<(SessionId, bool)>>,
     settings_changes: Mutex<Vec<(SessionId, SessionSettingsChange)>>,
     stopped: Mutex<Vec<SessionId>>,
     synced: Mutex<Vec<SessionId>>,
@@ -485,6 +539,7 @@ impl SessionBackend for OptionalBackend {
             SessionOperation::StopTurn
                 | SessionOperation::RebaseSession
                 | SessionOperation::SessionSettings
+                | SessionOperation::MergeReviewRequest
                 | SessionOperation::ProjectStatus
                 | SessionOperation::SyncProject
                 | SessionOperation::Graphs
@@ -643,6 +698,22 @@ impl SessionBackend for OptionalBackend {
         session_id: &SessionId,
     ) -> Result<ReviewRequest, SessionError> {
         self.inner.create_review_request(session_id).await
+    }
+
+    async fn merge_review_request(
+        &self,
+        session_id: &SessionId,
+        bypass: bool,
+    ) -> Result<ReviewRequestMerge, SessionError> {
+        self.merges
+            .lock()
+            .expect("merges")
+            .push((session_id.clone(), bypass));
+
+        Ok(ReviewRequestMerge {
+            outcome: ReviewRequestMergeOutcome::Queued,
+            review_request: None,
+        })
     }
 }
 
