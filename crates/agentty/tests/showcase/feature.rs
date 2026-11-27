@@ -4,8 +4,7 @@
 //! `tab_tour` feature pages using the
 //! [VHS](https://github.com/charmbracelet/vhs) terminal recorder. VHS records
 //! a real terminal session with proper fonts, colors, and rendering fidelity.
-//! Output uses the canonical feature canvas (1600x800, font size 18), which
-//! keeps VHS and `ffmpeg` memory within a typical recording container.
+//! Output uses the canonical feature canvas, [`FEATURE_CANVAS`].
 //!
 //! The database is pre-seeded with realistic projects and sessions so the
 //! UI looks populated and compelling. When a generator changes, regenerate
@@ -76,10 +75,9 @@ async fn record_feature(name: &str, steps: &str) -> ShowcaseResult<PathBuf> {
     let binary_path = cargo_bin("agentty");
     let gif_path = feature_output_dir().join(format!("{name}.gif"));
 
-    vhs::record(&gif_path, |output_path| {
-        build_tape(output_path, &binary_path, &agentty_root, &workdir, steps)
-    })
-    .await
+    let tape = build_tape(&binary_path, &agentty_root, &workdir, steps);
+
+    vhs::record(&gif_path, &FEATURE_CANVAS, &tape).await
 }
 
 /// Set up an isolated feature demo environment with a seeded database and Git
@@ -215,6 +213,16 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     },
 ];
 
+/// The canonical feature canvas, matching the site's poster dimensions.
+const FEATURE_CANVAS: vhs::Canvas = vhs::Canvas {
+    font_size: 18,
+    width: 1600,
+    height: 800,
+    padding: 0,
+    framerate: 30,
+    theme: vhs::ONE_DARK,
+};
+
 /// Published feature GIF directory derived from the crate manifest location.
 fn feature_output_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -226,15 +234,9 @@ fn feature_output_dir() -> PathBuf {
 ///
 /// The tape exports `AGENTTY_ROOT`, `HOME`, and the deterministic showcase
 /// `PATH` in a hidden preamble, changes to `workdir`, visibly types `agentty`,
-/// executes the provided VHS `steps` block, then quits. Output uses the
-/// canonical feature canvas (1600x800, font size 18).
-fn build_tape(
-    output_path: &Path,
-    binary_path: &Path,
-    agentty_root: &Path,
-    workdir: &Path,
-    steps: &str,
-) -> String {
+/// executes the provided VHS `steps` block, then quits. The canvas settings
+/// and `Output` come from `vhs::record`.
+fn build_tape(binary_path: &Path, agentty_root: &Path, workdir: &Path, steps: &str) -> String {
     let mut tape = String::new();
     let binary_dir = binary_path.parent().unwrap_or(binary_path);
     let home_dir = agentty_root.parent().unwrap_or(agentty_root);
@@ -250,17 +252,9 @@ fn build_tape(
         |value| value.to_string_lossy().into_owned(),
     );
 
-    // Header settings — the canonical feature canvas.
+    // Header settings after the canvas `vhs::record` writes.
     let _ = writeln!(tape, "Set Shell \"bash\"");
-    let _ = writeln!(tape, "Set FontSize 18");
-    let _ = writeln!(tape, "Set Width 1600");
-    let _ = writeln!(tape, "Set Height 800");
-    let _ = writeln!(tape, "Set Padding 0");
-    let _ = writeln!(tape, "Set Framerate 30");
     let _ = writeln!(tape, "Set TypingSpeed 0");
-    let _ = writeln!(tape, "Set Theme \"OneDark\"");
-    let _ = writeln!(tape);
-    let _ = writeln!(tape, "Output \"{}\"", output_path.display());
     let _ = writeln!(tape);
 
     // Hidden environment setup.

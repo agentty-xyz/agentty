@@ -56,9 +56,11 @@ pub(crate) async fn generate() -> ShowcaseResult<PathBuf> {
     let canonical_cwd = fs::canonicalize(&env.workdir).await?;
     seed_database(&env, &fake_project_paths, &canonical_cwd).await?;
 
-    let gif_path = vhs::record(&repo_demo_dir().join("demo.gif"), |output_path| {
-        build_demo_tape(&env, output_path)
-    })
+    let gif_path = vhs::record(
+        &repo_demo_dir().join("demo.gif"),
+        &DEMO_CANVAS,
+        &build_demo_tape(&env),
+    )
     .await?;
 
     // Best-effort cleanup of the scratch directory.
@@ -552,6 +554,17 @@ ON CONFLICT(session_id) DO NOTHING
     Ok(())
 }
 
+/// The demo's hero canvas: taller than the feature canvas, padded, and in
+/// the `Dracula` theme.
+const DEMO_CANVAS: vhs::Canvas = vhs::Canvas {
+    font_size: 20,
+    width: 1600,
+    height: 900,
+    padding: 28,
+    framerate: 30,
+    theme: vhs::DRACULA,
+};
+
 /// Returns the on-disk destination directory for the marketing demo GIF.
 fn repo_demo_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -573,7 +586,7 @@ fn repo_demo_dir() -> PathBuf {
 /// their list order falls back to random session ids. The tape therefore
 /// never navigates by row offset: it reopens the Claude session from the
 /// list selection, which follows the session id it last left.
-fn build_demo_tape(env: &DemoEnv, gif_path: &Path) -> String {
+fn build_demo_tape(env: &DemoEnv) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
         let parts = [
@@ -592,36 +605,28 @@ fn build_demo_tape(env: &DemoEnv, gif_path: &Path) -> String {
 
     format!(
         r#"Set Shell "bash"
-Set FontSize 20
-Set Width 1600
-Set Height 900
-Set Padding 28
 Set TypingSpeed 55ms
-Set Framerate 30
-Set Theme "Dracula"
-
-Output "{gif}"
 
 Hide
-Type "export AGENTTY_ROOT='{root}'"
+Type "export AGENTTY_ROOT='{agentty_root}'"
 Enter
 Sleep 80ms
-Type "export {clock_env}='{clock_seconds}'"
+Type "export {PINNED_CLOCK_ENV_VAR}='{PINNED_CLOCK_UNIX_SECONDS}'"
 Enter
 Sleep 80ms
-Type "export {clock_offset_env}='{clock_offset_seconds}'"
+Type "export {PINNED_CLOCK_UTC_OFFSET_ENV_VAR}='{PINNED_CLOCK_UTC_OFFSET_SECONDS}'"
 Enter
 Sleep 80ms
-Type "export PATH='{path}'"
+Type "export PATH='{path_env}'"
 Enter
 Sleep 80ms
-Type "export HOME='{root}'"
+Type "export HOME='{agentty_root}'"
 Enter
 Sleep 80ms
 Type "unset NO_COLOR"
 Enter
 Sleep 80ms
-Type "cd '{cwd}'"
+Type "cd '{workdir}'"
 Enter
 Sleep 80ms
 Type "clear"
@@ -649,17 +654,7 @@ Sleep 2200ms
 Hide
 Type "q"
 Sleep 400ms
-"#,
-        gif = gif_path.display(),
-        root = agentty_root,
-        clock_env = PINNED_CLOCK_ENV_VAR,
-        clock_seconds = PINNED_CLOCK_UNIX_SECONDS,
-        clock_offset_env = PINNED_CLOCK_UTC_OFFSET_ENV_VAR,
-        clock_offset_seconds = PINNED_CLOCK_UTC_OFFSET_SECONDS,
-        path = path_env,
-        cwd = workdir,
-        codex_session = codex_session,
-        claude_session = claude_session,
+"#
     )
 }
 
@@ -728,9 +723,7 @@ Enter
 Sleep 2500ms
 
 # Back on the list, the selection stays on the Claude session wherever its
-# row sorts; linger while it moves to Review, then reopen it. Keep the
-# tape no longer than this: the 1600x900 GIF encode already nears the
-# recording VM's memory limit.
+# row sorts; linger while it moves to Review, then reopen it.
 Type "q"
 Sleep 3500ms
 Enter
