@@ -5,6 +5,7 @@ mod connection;
 mod error;
 mod execution_graph;
 mod operation;
+mod platform_task;
 mod project;
 mod remote_device;
 mod repository;
@@ -36,6 +37,10 @@ pub use execution_graph::{
 #[cfg(any(test, feature = "test-utils"))]
 pub use execution_graph::{MockGraphProposalRepository, MockGraphRepository};
 pub use operation::{OperationRepository, SessionOperationRow};
+pub use platform_task::{
+    NewPlatformTask, PlatformTaskClaim, PlatformTaskName, PlatformTaskRepository, PlatformTaskRow,
+    PlatformTaskState, SettledPlatformTask,
+};
 pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
 #[cfg(any(test, feature = "test-utils"))]
 pub use remote_device::MockRemoteDeviceRepository;

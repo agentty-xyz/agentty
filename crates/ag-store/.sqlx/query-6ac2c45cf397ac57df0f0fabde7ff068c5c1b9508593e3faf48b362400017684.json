@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_platform_task (session_id, state, platform_url, title, brief)\nVALUES (?, 'checking', ?, ?, ?)\nON CONFLICT(session_id) DO NOTHING\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "6ac2c45cf397ac57df0f0fabde7ff068c5c1b9508593e3faf48b362400017684"
+}

@@ -15,6 +15,10 @@ pub(crate) enum TransientMessageSlot {
     Turn,
     /// Durable workspace setup projected into inline session output.
     WorkspacePreparation,
+    /// The task the platform's Sync holds for the session: the check of
+    /// its first message, a conflict with another session, or the answer.
+    /// Never persisted or replayed to the provider.
+    PlatformSync,
     /// Focused review loading, result, or failure output.
     Review,
     /// Agentty-generated turn, such as selected forge review comments or a

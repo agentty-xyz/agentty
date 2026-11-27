@@ -1,6 +1,7 @@
 //! Footer and help-popup shortcut entries, with the action sets available in
 //! list, settings, remote, session view, and diff contexts.
 
+use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, Status};
 use crate::domain::session_order::ArchiveAction;
 use crate::presentation::platform::{PlatformAccess, PlatformState, PlatformTabView};
@@ -138,6 +139,9 @@ pub(crate) struct ViewHelpState {
     pub(crate) can_start_staged_session: ViewActionAvailability,
     /// Whether queued chat messages can join the running turn now.
     pub(crate) can_steer_queued_messages: ViewActionAvailability,
+    /// Choice offered while the session's task on the platform's Sync
+    /// holds it back, when it does.
+    pub(crate) platform_task_choice: Option<PlatformTaskChoice>,
     /// Pull-request publish action available for the current session, when
     /// any.
     pub(crate) publish_pull_request_action: Option<PublishBranchAction>,
@@ -428,10 +432,32 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ));
     }
 
-    if state.can_start_staged_session.is_enabled()
-        && state.session_state == ViewSessionState::NewSession
-    {
-        actions.push(HelpAction::new("start", "s", "Start staged session"));
+    match state.platform_task_choice {
+        Some(PlatformTaskChoice::Conflict) => {
+            actions.push(HelpAction::new(
+                "take over",
+                "t",
+                "Take the platform's Sync task over from the session holding it",
+            ));
+            actions.push(HelpAction::new(
+                "separate work",
+                "n",
+                "Start as separate work on the platform's Sync",
+            ));
+        }
+        Some(PlatformTaskChoice::Interrupted) => {
+            actions.push(HelpAction::new(
+                "ask again",
+                "s",
+                "Ask the platform's Sync again whether another session works on this",
+            ));
+        }
+        None if state.can_start_staged_session.is_enabled()
+            && state.session_state == ViewSessionState::NewSession =>
+        {
+            actions.push(HelpAction::new("start", "s", "Start staged session"));
+        }
+        None => {}
     }
 
     append_view_open_action(&mut actions, action_set);

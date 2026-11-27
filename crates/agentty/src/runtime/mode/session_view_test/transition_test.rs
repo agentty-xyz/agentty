@@ -8,14 +8,16 @@ use mockall::predicate::eq;
 
 use super::super::{
     ViewActionState, ViewContext, ViewKeyContext, ViewPendingUpdate, ViewSessionSnapshot,
-    confirmation_view_mode, end_in_progress_turn, handle_primary_view_key, handle_view_key,
-    open_view_help_overlay, open_worktree_for_view_session, show_diff_for_view_session,
-    view_context, view_session_snapshot,
+    confirmation_view_mode, end_in_progress_turn, handle_platform_task_key,
+    handle_primary_view_key, handle_view_key, open_view_help_overlay,
+    open_worktree_for_view_session, show_diff_for_view_session, view_context,
+    view_session_snapshot,
 };
 use super::support::{
     apply_pending_session_diff, attach_open_review_request, handle, new_test_app_with_session,
     new_test_app_with_session_and_tmux_client, reply_enabled_review_snapshot, session_fixture,
 };
+use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::session::{PublishBranchAction, SessionDiffState, SessionId, Status};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{
@@ -155,6 +157,7 @@ fn test_open_view_help_overlay_preserves_view_context() {
         fork_session: ViewActionState::Enabled,
         merge_session_branch: ViewActionState::Enabled,
         open_worktree: ViewActionState::Enabled,
+        platform_task_choice: None,
         review_comments: ViewActionState::Disabled,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
@@ -229,6 +232,60 @@ async fn question_mark_dispatches_to_view_help() {
             ..
         } if help_session_id == &session_id.to_string()
     ));
+}
+
+#[tokio::test]
+async fn a_session_held_back_by_the_platform_sync_offers_only_its_choices() {
+    // Arrange: the choice, the key, then whether the key answers it.
+    let cases = [
+        (PlatformTaskChoice::Conflict, 't', true),
+        (PlatformTaskChoice::Conflict, 'n', true),
+        (PlatformTaskChoice::Conflict, 's', false),
+        (PlatformTaskChoice::Interrupted, 's', true),
+        (PlatformTaskChoice::Interrupted, 't', false),
+    ];
+    let (mut app, _base_dir) = new_test_app().await;
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.clone();
+    *app.sessions = session_manager_with_sessions(vec![session]);
+    app.mode = AppMode::View {
+        session_id: session_id.clone(),
+        scroll_offset: None,
+    };
+
+    for (choice, key, expected) in cases {
+        app.platform.set_task_choice(&session_id, Some(choice));
+        let context = view_context(&mut app).expect("expected view context");
+        let snapshot = view_session_snapshot(&app, &context).expect("expected session snapshot");
+
+        // Act
+        let handled = handle_platform_task_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+            &context,
+            choice,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(snapshot.platform_task_choice, Some(choice));
+        assert_eq!(handled, expected, "{choice:?} {key}");
+    }
+    let context = view_context(&mut app).expect("expected view context");
+    let snapshot = view_session_snapshot(&app, &context).expect("expected session snapshot");
+    let mut pending_update = ViewPendingUpdate::from_context(&context);
+    let dispatched = handle_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        ViewKeyContext {
+            context: &context,
+            session_snapshot: &snapshot,
+        },
+        &mut pending_update,
+    )
+    .await;
+    assert!(dispatched);
+    assert!(matches!(app.mode, AppMode::View { .. }));
 }
 
 #[tokio::test]

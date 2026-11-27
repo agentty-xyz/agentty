@@ -126,16 +126,13 @@ impl SessionPreparationRepository for SqliteSessionRepository {
         session_id: &str,
         start_ref: &str,
     ) -> Result<(), DbError> {
-        sqlx::query(
-            "INSERT INTO session_preparation (session_id, state, start_ref) VALUES (?, \
-             'preparing', ?) ON CONFLICT(session_id) DO NOTHING",
+        insert_preparation(
+            &self.0,
+            session_id,
+            start_ref,
+            SessionPreparationState::Preparing,
         )
-        .bind(session_id)
-        .bind(start_ref)
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
+        .await
     }
 
     async fn load_session_preparation(
@@ -169,16 +166,7 @@ impl SessionPreparationRepository for SqliteSessionRepository {
         session_id: &str,
         prompt: &str,
     ) -> Result<bool, DbError> {
-        let result = sqlx::query(
-            "UPDATE session_preparation SET prompt = ? WHERE session_id = ? AND prompt IS NULL \
-             AND state != 'canceled'",
-        )
-        .bind(prompt)
-        .bind(session_id)
-        .execute(&self.0)
-        .await?;
-
-        Ok(result.rows_affected() == 1)
+        save_prompt(&self.0, session_id, prompt).await
     }
 
     async fn update_session_preparation(
@@ -187,17 +175,7 @@ impl SessionPreparationRepository for SqliteSessionRepository {
         state: SessionPreparationState,
         error: Option<&str>,
     ) -> Result<bool, DbError> {
-        let result = sqlx::query(
-            "UPDATE session_preparation SET state = ?, error = ? WHERE session_id = ? AND state \
-             != 'canceled'",
-        )
-        .bind(state)
-        .bind(error)
-        .bind(session_id)
-        .execute(&self.0)
-        .await?;
-
-        Ok(result.rows_affected() == 1)
+        update_preparation(&self.0, session_id, state, error).await
     }
 
     async fn cancel_session_preparation(&self, session_id: &str) -> Result<bool, DbError> {
@@ -317,6 +295,68 @@ impl SessionPreparationRepository for SqliteSessionRepository {
 
         Ok(())
     }
+}
+
+/// Registers setup for `session_id` from `start_ref` in `state` through
+/// `executor`, without replacing an existing attempt.
+pub(crate) async fn insert_preparation<'executor>(
+    executor: impl sqlx::SqliteExecutor<'executor>,
+    session_id: &str,
+    start_ref: &str,
+    state: SessionPreparationState,
+) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO session_preparation (session_id, state, start_ref) VALUES (?, ?, ?) ON \
+         CONFLICT(session_id) DO NOTHING",
+    )
+    .bind(session_id)
+    .bind(state)
+    .bind(start_ref)
+    .execute(executor)
+    .await?;
+
+    Ok(())
+}
+
+/// Saves `prompt` as the first prompt of `session_id`'s setup through
+/// `executor`, unless one is saved already or setup was canceled. Returns
+/// whether it was saved.
+pub(crate) async fn save_prompt<'executor>(
+    executor: impl sqlx::SqliteExecutor<'executor>,
+    session_id: &str,
+    prompt: &str,
+) -> Result<bool, DbError> {
+    let result = sqlx::query(
+        "UPDATE session_preparation SET prompt = ? WHERE session_id = ? AND prompt IS NULL AND \
+         state != 'canceled'",
+    )
+    .bind(prompt)
+    .bind(session_id)
+    .execute(executor)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+/// Moves `session_id`'s setup to `state` with `error` through `executor`,
+/// unless cancellation already won. Returns whether it moved.
+pub(crate) async fn update_preparation<'executor>(
+    executor: impl sqlx::SqliteExecutor<'executor>,
+    session_id: &str,
+    state: SessionPreparationState,
+    error: Option<&str>,
+) -> Result<bool, DbError> {
+    let result = sqlx::query(
+        "UPDATE session_preparation SET state = ?, error = ? WHERE session_id = ? AND state != \
+         'canceled'",
+    )
+    .bind(state)
+    .bind(error)
+    .bind(session_id)
+    .execute(executor)
+    .await?;
+
+    Ok(result.rows_affected() == 1)
 }
 
 #[cfg(test)]

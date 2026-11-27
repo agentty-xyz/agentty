@@ -11,6 +11,8 @@ pub mod harness;
 /// Editable text-input state and cursor operations.
 pub mod input;
 /// Persisted project entities and project-list ordering.
+/// What a session tells a platform's Sync about its work.
+pub mod platform_sync;
 pub mod project;
 pub mod question;
 /// Validation of relay, pairing page, and platform addresses.

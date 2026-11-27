@@ -40,7 +40,7 @@ integration tests exercise supported APIs without exposing private implementatio
 | Remote-control relay link      | `RemoteControlLauncher`         |
 | Paired remote devices          | `DeviceStore`                   |
 | Relay host resolution, dials   | `NetworkClient`                 |
-| Agentty Platform API           | `PlatformClient`                |
+| Agentty Platform API and Sync  | `PlatformClient`                |
 | Persistence                    | Repository traits in `ag-store` |
 | Storage timestamps             | `TimestampSource`               |
 

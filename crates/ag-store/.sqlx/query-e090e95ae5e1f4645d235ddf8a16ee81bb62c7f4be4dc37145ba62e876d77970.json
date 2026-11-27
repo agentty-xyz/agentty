@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_platform_task\nSET pending_prompt = NULL\nWHERE state = 'resolved' AND pending_prompt IS NOT NULL\n      AND EXISTS (\n          SELECT 1 FROM session\n          WHERE session.id = session_platform_task.session_id AND session.status != 'Draft'\n      )\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "e090e95ae5e1f4645d235ddf8a16ee81bb62c7f4be4dc37145ba62e876d77970"
+}

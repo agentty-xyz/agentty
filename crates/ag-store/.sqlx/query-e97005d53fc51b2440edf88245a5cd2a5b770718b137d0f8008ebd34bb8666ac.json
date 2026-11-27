@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT task.session_id AS \"session_id!: String\", session.base_branch\nFROM session_platform_task AS task\nJOIN session ON session.id = task.session_id\nWHERE task.state = 'resolved' AND task.pending_prompt IS NOT NULL\n      AND session.status = 'Draft'\nORDER BY task.session_id\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "base_branch",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "base_branch"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e97005d53fc51b2440edf88245a5cd2a5b770718b137d0f8008ebd34bb8666ac"
+}

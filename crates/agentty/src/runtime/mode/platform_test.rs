@@ -74,6 +74,7 @@ async fn platform_keys_follow_the_sign_in_state() {
                 relay_url: "ws://127.0.0.1:9".to_string(),
             },
         }),
+        sync: false,
     })
     .await;
     let is_registered = app.platform.view().is_registered();

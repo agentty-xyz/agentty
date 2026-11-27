@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT pending_prompt\nFROM session_platform_task\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "pending_prompt",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "pending_prompt"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "aceacc2800e77307a5a831a455b21de69575560c427585137bcc9545cb6c5208"
+}

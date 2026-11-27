@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT session_id AS \"session_id!: String\", state AS \"state: PlatformTaskState\", platform_url,\n       title, brief, not_duplicates, pending_prompt, task_project, task_number, task_title,\n       task_url, claim_id, holder_session, holder_last_active_at\nFROM session_platform_task\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "state: PlatformTaskState",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "platform_url",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "platform_url"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "brief",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "brief"
+          }
+        }
+      },
+      {
+        "name": "not_duplicates",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "not_duplicates"
+          }
+        }
+      },
+      {
+        "name": "pending_prompt",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "pending_prompt"
+          }
+        }
+      },
+      {
+        "name": "task_project",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_project"
+          }
+        }
+      },
+      {
+        "name": "task_number",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_number"
+          }
+        }
+      },
+      {
+        "name": "task_title",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_title"
+          }
+        }
+      },
+      {
+        "name": "task_url",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "task_url"
+          }
+        }
+      },
+      {
+        "name": "claim_id",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "claim_id"
+          }
+        }
+      },
+      {
+        "name": "holder_session",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "holder_session"
+          }
+        }
+      },
+      {
+        "name": "holder_last_active_at",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_platform_task",
+            "name": "holder_last_active_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7b5d7cbf5b4dcb4e6bf952a21ee763690b2d4052e07ec9c310a80237a1769637"
+}

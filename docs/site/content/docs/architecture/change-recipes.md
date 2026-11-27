@@ -104,6 +104,15 @@ dispatch through the public API.
 1. Keep query changes in the matching `ag-store` domain module.
 1. Update user-facing docs affected by status or model behavior changes.
 
+## Change What a Platform's Sync Receives
+
+1. Build every value a Sync request sends in
+   `crates/agentty/src/domain/platform_sync.rs` and check it again in
+   `crates/agentty/src/infra/platform.rs` before sending.
+1. Keep answer text in session transient output only, never in a transcript or prompt.
+1. Update the Sync section of `SECURITY.md` and
+   `docs/site/content/docs/usage/platform.md` with what is sent and when.
+
 ## Add a New UI Page or Component
 
 1. Add the page in `crates/agentty/src/ui/page/` or component in

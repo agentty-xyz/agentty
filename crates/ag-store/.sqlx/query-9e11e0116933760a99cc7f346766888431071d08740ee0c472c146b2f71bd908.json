@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_platform_task\nSET pending_prompt = NULL\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9e11e0116933760a99cc7f346766888431071d08740ee0c472c146b2f71bd908"
+}

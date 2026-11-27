@@ -5,7 +5,9 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::timestamp::TimestampSource;
-use crate::{activity, operation, project, remote_device, review, session, setting, usage};
+use crate::{
+    activity, operation, platform_task, project, remote_device, review, session, setting, usage,
+};
 
 /// App-layer repository bundle used for selective mock injection.
 #[derive(Clone)]
@@ -38,6 +40,11 @@ impl AppRepositories {
     /// Returns the session-operation repository.
     pub fn operations(&self) -> &dyn operation::OperationRepository<crate::DbError> {
         self.repositories.operation.as_ref()
+    }
+
+    /// Returns the tasks a platform's Sync holds for sessions.
+    pub fn platform_tasks(&self) -> &dyn platform_task::PlatformTaskRepository {
+        self.repositories.platform_task.as_ref()
     }
 
     /// Returns the project repository.
@@ -105,6 +112,9 @@ impl AppRepositories {
                     pool.clone(),
                     Arc::clone(&timestamp_source),
                 )),
+                platform_task: Arc::new(platform_task::SqlitePlatformTaskRepository::new(
+                    pool.clone(),
+                )),
                 project: Arc::new(project::SqliteProjectRepository::new(
                     pool.clone(),
                     Arc::clone(&timestamp_source),
@@ -145,6 +155,7 @@ struct RepositorySet {
     graph_dispatch: Arc<dyn ag_worker::GraphDispatchRepository>,
     graph_proposal: Arc<dyn crate::GraphProposalRepository>,
     operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
+    platform_task: Arc<dyn platform_task::PlatformTaskRepository>,
     project: Arc<dyn project::ProjectRepository>,
     remote_device: Arc<dyn remote_device::RemoteDeviceRepository>,
     review: Arc<dyn review::ReviewRepository>,

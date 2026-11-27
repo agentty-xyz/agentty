@@ -674,7 +674,11 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
                 AppEvent::SessionTurnStarted { session_id, turn } => {
                     starts.push((turn, session_id));
                 }
-                AppEvent::SessionTurnEnded { outcome, turn } => ends.push((turn, outcome)),
+                AppEvent::SessionTurnEnded {
+                    outcome,
+                    session_id,
+                    turn,
+                } => ends.push((turn, outcome, session_id)),
                 _ => {}
             }
         }
@@ -683,16 +687,15 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
         assert!(result.is_some());
         if request_kind == AgentRequestKind::UtilityPrompt {
             assert_eq!(starts, Vec::new());
+            assert_eq!(ends, Vec::new());
         } else {
             assert_eq!(starts, vec![(expected_turn, context.session_id.clone())]);
+            // A failed turn ends without an outcome.
+            assert_eq!(
+                ends,
+                vec![(expected_turn, expected_outcome, context.session_id.clone())]
+            );
         }
-        assert_eq!(
-            ends,
-            expected_outcome
-                .into_iter()
-                .map(|outcome| (expected_turn, outcome))
-                .collect::<Vec<_>>()
-        );
     }
 }
 
@@ -720,7 +723,7 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
         SessionWorkerService::process_session_command(&context, &run_client, command).await;
     let ends = std::iter::from_fn(|| event_rx.try_recv().ok())
         .filter_map(|event| match event {
-            AppEvent::SessionTurnEnded { outcome, turn } => Some((turn, outcome)),
+            AppEvent::SessionTurnEnded { outcome, turn, .. } => Some((turn, outcome)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -737,7 +740,7 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
             .expect("turn cancellation token")
             .is_cancelled()
     );
-    assert_eq!(ends, vec![(expected_turn, TurnOutcome::Interrupted)]);
+    assert_eq!(ends, vec![(expected_turn, Some(TurnOutcome::Interrupted))]);
 }
 
 #[tokio::test]

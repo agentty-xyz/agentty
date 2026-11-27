@@ -31,6 +31,13 @@ impl PlatformView {
         }
     }
 
+    /// Shows whether the platform's Sync is on, while signed in.
+    pub fn set_sync(&mut self, sync: bool) {
+        if let PlatformState::SignedIn(account) = &mut self.state {
+            account.sync = sync;
+        }
+    }
+
     /// Returns whether remote control runs through the platform's relay.
     pub fn is_registered(&self) -> bool {
         self.account()
@@ -83,16 +90,20 @@ pub struct PlatformAccountView {
     pub keep_on_notice: Option<String>,
     /// Account login, once the platform named it.
     pub login: Option<String>,
+    /// Whether the latest account answer enables the platform's Sync, so
+    /// sessions record their first messages there.
+    pub sync: bool,
 }
 
 impl PlatformAccountView {
-    /// Starts checking the account of `login`, with keep on off.
+    /// Starts checking the account of `login`, with keep on and Sync off.
     pub fn checking(login: Option<String>) -> Self {
         Self {
             access: PlatformAccess::Checking,
             keep_on: false,
             keep_on_notice: None,
             login,
+            sync: false,
         }
     }
 

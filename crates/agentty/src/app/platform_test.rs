@@ -18,8 +18,9 @@ use crate::app::{App, AppEvent, AppRuntimeEvent, Tab};
 use crate::domain::setting::SettingName;
 use crate::infra::browser::MockBrowserClient;
 use crate::infra::platform::{
-    AccessToken, DeviceAuthorization, DeviceCode, MockPlatformClient, PlatformAccount,
-    PlatformClient, PlatformError, RegisteredInstance, RemoteControlService, SignIn,
+    AccessToken, ClaimId, DeviceAuthorization, DeviceCode, MockPlatformClient, PlatformAccount,
+    PlatformClient, PlatformError, RegisteredInstance, RemoteControlService, SignIn, SyncError,
+    SyncStart, SyncTaskRef, SyncWork,
 };
 use crate::infra::remote_control::{MockRemoteControlLauncher, RemoteControlServer};
 use crate::infra::terminal_clipboard::MockTerminalClipboard;
@@ -76,6 +77,7 @@ fn account(has_relay: bool) -> PlatformAccount {
     PlatformAccount {
         login: "octocat".to_string(),
         remote_control: has_relay.then(service),
+        sync: false,
     }
 }
 
@@ -276,6 +278,7 @@ async fn sign_in_registered(app: &mut App) {
             name: INSTANCE_NAME.to_string(),
             service: service(),
         }),
+        sync: false,
     })
     .await;
 }
@@ -468,19 +471,21 @@ async fn account_check_registers_only_when_a_relay_is_offered() {
     let waitlisted = check_account(&waitlisted, &token(), instance).await;
 
     // Assert
-    let login = Some("octocat".to_string());
-    assert_eq!(no_relay, (login.clone(), Ok(Access::NoRelay)));
+    assert_eq!(no_relay, (Some(account(false)), Ok(Access::NoRelay)));
     assert_eq!(
         registered,
         (
-            login.clone(),
+            Some(account(true)),
             Ok(Access::Registered {
                 name: "Box on the platform".to_string(),
                 service: service(),
             })
         )
     );
-    assert_eq!(limited, (login, Err(PlatformError::InstanceLimit)));
+    assert_eq!(
+        limited,
+        (Some(account(true)), Err(PlatformError::InstanceLimit))
+    );
     assert_eq!(waitlisted, (None, Err(PlatformError::Waitlisted)));
 }
 
@@ -804,6 +809,7 @@ async fn cancelling_a_sign_in_stops_its_polling_and_drops_its_late_results() {
             request_id,
             login: None,
             result: Ok(Access::NoRelay),
+            sync: false,
         })
         .await;
     }
@@ -964,6 +970,7 @@ async fn account_outcomes_show_what_this_agentty_may_use_and_start_nothing_unreg
             request_id: 0,
             login: Some("octocat".to_string()),
             result,
+            sync: false,
         })
         .await;
 
@@ -1043,6 +1050,7 @@ async fn stopping_with_enter_while_kept_on_stays_stopped_for_this_launch() {
             name: INSTANCE_NAME.to_string(),
             service: service(),
         }),
+        sync: false,
     })
     .await;
 
@@ -1130,6 +1138,7 @@ async fn a_registered_agentty_checks_the_account_then_starts_remote_control_thro
             name: INSTANCE_NAME.to_string(),
             service: service(),
         }),
+        sync: false,
     })
     .await;
     app.tabs.set(Tab::Settings);
@@ -1307,6 +1316,43 @@ impl PlatformClient for RacingPlatform {
         self.record("revoke");
 
         Ok(())
+    }
+
+    async fn start_sync_work(
+        &self,
+        _token: &AccessToken,
+        _work: &SyncWork,
+    ) -> Result<SyncStart, SyncError> {
+        Err(SyncError::SyncDisabled)
+    }
+
+    async fn report_sync_activity(
+        &self,
+        _token: &AccessToken,
+        _task: &SyncTaskRef,
+        _claim_id: &ClaimId,
+    ) -> Result<(), SyncError> {
+        Err(SyncError::SyncDisabled)
+    }
+
+    async fn finish_sync_task(
+        &self,
+        _token: &AccessToken,
+        _task: &SyncTaskRef,
+        _claim_id: &ClaimId,
+        _summary: &str,
+        _result_url: Option<String>,
+    ) -> Result<(), SyncError> {
+        Err(SyncError::SyncDisabled)
+    }
+
+    async fn release_sync_task(
+        &self,
+        _token: &AccessToken,
+        _task: &SyncTaskRef,
+        _claim_id: &ClaimId,
+    ) -> Result<(), SyncError> {
+        Err(SyncError::SyncDisabled)
     }
 }
 

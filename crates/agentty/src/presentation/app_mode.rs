@@ -14,6 +14,7 @@ use super::prompt::{
     PromptSlashState,
 };
 use crate::domain::input::InputState;
+use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::question::{QuestionAttachmentState, QuestionItem};
 use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Session, SessionId};
 use crate::domain::session_usage::SessionUsage;
@@ -1108,6 +1109,9 @@ pub enum HelpContext {
         can_steer_queued_messages: bool,
         /// Whether linked forge review comments may be opened.
         can_view_review_comments: bool,
+        /// Choice offered while the session's task on the platform's Sync
+        /// holds it back.
+        platform_task_choice: Option<PlatformTaskChoice>,
         /// Pull-request publication action currently available.
         publish_pull_request_action: Option<PublishBranchAction>,
         /// Review-request watch action currently available.
@@ -1162,6 +1166,7 @@ impl HelpContext {
                 can_start_staged_session,
                 can_steer_queued_messages,
                 can_view_review_comments,
+                platform_task_choice,
                 publish_pull_request_action,
                 review_watch_toggle,
                 session_state,
@@ -1179,6 +1184,7 @@ impl HelpContext {
                     can_steer_queued_messages: ViewActionAvailability::from_bool(
                         *can_steer_queued_messages,
                     ),
+                    platform_task_choice: *platform_task_choice,
                     publish_pull_request_action: *publish_pull_request_action,
                     session_state: *session_state,
                 },

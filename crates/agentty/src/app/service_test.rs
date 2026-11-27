@@ -1092,7 +1092,8 @@ async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
 fn app_event_label_names_turn_ends() {
     // Arrange
     let event = AppEvent::SessionTurnEnded {
-        outcome: TurnOutcome::Finished,
+        outcome: Some(TurnOutcome::Finished),
+        session_id: "session".into(),
         turn: TurnSelection {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         },
@@ -1103,6 +1104,22 @@ fn app_event_label_names_turn_ends() {
 
     // Assert
     assert_eq!(label, "SessionTurnEnded");
+}
+
+#[test]
+fn app_event_label_names_platform_task_updates() {
+    // Arrange
+    let event = AppEvent::PlatformTaskUpdated {
+        update: crate::app::platform_sync::PlatformTaskUpdate::Disabled {
+            ticket: crate::app::platform_sync::SyncTicket::default(),
+        },
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "PlatformTaskUpdated");
 }
 
 #[test]

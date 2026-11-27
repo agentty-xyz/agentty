@@ -261,6 +261,9 @@ impl App {
                 "Workspace setup was canceled".to_string(),
             ));
         }
+        // A first message asks the platform's Sync while the workspace is
+        // set up, so an account with Sync does not wait twice.
+        self.begin_platform_task(session_id, prompt).await;
         if preparation.state == SessionPreparationState::Failed {
             self.retry_workspace_preparation(session_id, "session.create")
                 .await?;
@@ -326,8 +329,12 @@ impl App {
     /// Resumes the ready prompts of `project_id`'s sessions on its loaded
     /// page: the active page when its sessions reload, or a viewed page when
     /// it loads, so a prompt saved while no page held its session, such as
-    /// one whose viewed page was dropped during setup, still starts.
+    /// one whose viewed page was dropped during setup, still starts. It also
+    /// shows the platform Sync tasks that hold the page's sessions back and
+    /// settles the tasks of sessions that ended.
     pub(crate) async fn resume_ready_workspace_prompts(&mut self, project_id: i64) {
+        self.show_waiting_platform_tasks(project_id).await;
+        self.settle_platform_tasks().await;
         let Ok(preparations) = self
             .services
             .db()
@@ -353,7 +360,7 @@ impl App {
 
     /// Hands off a saved prompt only after readiness, then acknowledges
     /// persistence.
-    async fn dispatch_prepared_prompt(&mut self, session_id: &str) {
+    pub(in crate::app) async fn dispatch_prepared_prompt(&mut self, session_id: &str) {
         let result = self.run_prepared_prompt(session_id).await;
         if let Err(error) = result {
             let _ = self
@@ -406,16 +413,21 @@ impl App {
             .session_for_id(session_id)
             .ok_or(AppError::Workflow("Session is not loaded".to_string()))?;
         let was_draft = session.is_draft_session();
+        let status = session.status;
         if was_draft && !self.sessions.can_start_staged_session(session_id) {
             return Err(AppError::Workflow(
                 "The draft session is no longer ready to start".to_string(),
             ));
         }
-        if session.status == Status::Draft {
+        if status == Status::Draft {
+            // The saved prompt stays until the platform's Sync answers.
+            if self.platform_task_holds_start(session_id, &prompt).await {
+                return Ok(());
+            }
             self.sessions
                 .start_session(&self.services, session_id, prompt)
                 .await?;
-        } else if matches!(session.status, Status::Review | Status::Watching) {
+        } else if matches!(status, Status::Review | Status::Watching) {
             if !self
                 .sessions
                 .reply_to_durable_message(

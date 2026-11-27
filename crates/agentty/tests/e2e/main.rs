@@ -14,6 +14,7 @@ mod confirmation;
 mod mouse;
 mod navigation;
 mod platform;
+mod platform_sync;
 mod project;
 mod remote_control;
 mod resource;

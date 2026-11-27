@@ -27,6 +27,9 @@ const SIGN_IN_PITCH: &str = "Sign in to use remote control: this Agentty connect
 const KEEP_ON_HINT: &str =
     "With keep on, remote control through the platform's relay starts whenever Agentty starts.";
 
+/// Sync state while the account answer enables it.
+const SYNC_ON: &str = "On: each new session's first message is recorded on the platform";
+
 /// Title of the Platform tab, which names no project: paired devices pick
 /// their own among the projects the terminal lists.
 const TITLE: &str = "Agentty Platform";
@@ -124,6 +127,7 @@ impl<'a> PlatformPage<'a> {
             lines.push(field_line("Name", name, palette::text()));
         }
         lines.extend(keep_on_lines(account));
+        lines.push(sync_line(account));
         lines.push(Line::from(""));
         let (status, color) = match &account.access {
             PlatformAccess::Checking => ("Checking the account...", palette::warning()),
@@ -209,6 +213,16 @@ fn keep_on_lines(account: &PlatformAccountView) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+/// Returns whether the platform's Sync is on for the account, which records
+/// the first message of every new session there.
+fn sync_line(account: &PlatformAccountView) -> Line<'static> {
+    if account.sync {
+        return field_line("Sync", SYNC_ON, palette::success());
+    }
+
+    field_line("Sync", "Off", palette::text_muted())
 }
 
 /// Builds one row of `text` in `color`.

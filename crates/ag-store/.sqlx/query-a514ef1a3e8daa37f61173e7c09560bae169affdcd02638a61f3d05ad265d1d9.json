@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_platform_task\nSET claim_id = NULL\nWHERE session_id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a514ef1a3e8daa37f61173e7c09560bae169affdcd02638a61f3d05ad265d1d9"
+}
