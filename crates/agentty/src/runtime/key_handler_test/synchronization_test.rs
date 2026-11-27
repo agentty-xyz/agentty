@@ -2,9 +2,16 @@
 
 use std::sync::Arc;
 
+use ag_forge::{
+    ForgeRemote, MockReviewRequestClient, ReviewRequestMergeMode, ReviewRequestMergeOutcome,
+};
+
 use super::super::{handle_confirmation_decision, handle_merge_confirmation};
 use super::support::session_replay_text;
 use crate::app::App;
+use crate::domain::session::{
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, Status,
+};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::runtime::EventResult;
@@ -135,6 +142,103 @@ fn review_request_merge_confirmation(session_id: &str, bypass: bool) -> AppMode 
         }),
         session_id: Some(session_id.into()),
         selected_confirmation_index: 0,
+    }
+}
+
+#[tokio::test]
+async fn confirmed_pull_request_merge_starts_and_settles_without_an_error() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
+    app.sessions.apply_review_request(
+        &session_id,
+        ReviewRequest {
+            last_refreshed_at: 0,
+            summary: pull_request("Approved, Mergeable, PR ready"),
+        },
+    );
+    let mut client = MockReviewRequestClient::new();
+    client.expect_detect_remote().returning(|_| {
+        Ok(ForgeRemote {
+            command_working_directory: None,
+            forge_kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+        })
+    });
+    client
+        .expect_merge_review_request()
+        .once()
+        .withf(|_, input| input.mode == ReviewRequestMergeMode::Ready)
+        .returning(|_, _| Box::pin(async { Ok(ReviewRequestMergeOutcome::Queued) }));
+    client
+        .expect_refresh_review_request()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async { Ok(pull_request("Approved, Mergeable, In merge queue")) })
+        });
+    app.services.set_review_request_client(Arc::new(client));
+    app.mode = review_request_merge_confirmation(&session_id, false);
+
+    // Act
+    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+    let is_merging = app
+        .sessions
+        .session_for_id(&session_id)
+        .is_some_and(crate::domain::session::Session::is_merging_review_request);
+    let mut is_settled = false;
+    for _ in 0..500 {
+        app.process_pending_app_events().await;
+        is_settled = app
+            .sessions
+            .session_for_id(&session_id)
+            .is_some_and(|session| !session.is_merging_review_request());
+        if is_settled {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Assert
+    assert!(matches!(event_result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::View {
+            scroll_offset: Some(3),
+            ..
+        }
+    ));
+    assert!(is_merging);
+    assert!(is_settled);
+    app.sessions.sync_from_handles();
+    let session = app
+        .sessions
+        .session_for_id(&session_id)
+        .expect("session should stay loaded");
+    let output = session_replay_text(session);
+    assert!(!output.contains("[Merge Error]"), "{output}");
+    assert!(
+        output.contains("[Review Request] Added PR #42 to the merge queue of `main`"),
+        "{output}"
+    );
+    assert_eq!(session.status, Status::Queued);
+}
+
+/// Builds open pull request `#42` into `main` that reports `status_summary`.
+fn pull_request(status_summary: &str) -> ReviewRequestSummary {
+    ReviewRequestSummary {
+        display_id: "#42".to_string(),
+        forge_kind: ForgeKind::GitHub,
+        source_branch: "wt/session".to_string(),
+        state: ReviewRequestState::Open,
+        status_summary: Some(status_summary.to_string()),
+        target_branch: "main".to_string(),
+        title: "Merge it".to_string(),
+        web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
     }
 }
 

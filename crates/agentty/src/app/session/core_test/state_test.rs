@@ -490,6 +490,7 @@ fn test_session_reducer_updates_ignore_unloaded_sessions() {
         AgentSelection::new(AgentKind::Claude, AgentKind::Claude.default_model()),
     );
     session_manager.start_branch_publish("other-session", "Publishing...".to_string());
+    session_manager.start_review_request_merge("other-session", "Merging PR #42...".to_string());
     session_manager.append_workflow_notice("other-session", "[Sync] Ignored.".to_string());
     session_manager.apply_turn_applied_state(
         "other-session",
@@ -505,6 +506,12 @@ fn test_session_reducer_updates_ignore_unloaded_sessions() {
     assert_eq!(
         session.transient_messages.fingerprint(),
         original_fingerprint
+    );
+    assert!(
+        session
+            .transient_messages
+            .get(TransientMessageSlot::ReviewRequestMerge)
+            .is_none()
     );
     assert_eq!(session_manager.sessions().len(), 1);
 }
