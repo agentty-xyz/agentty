@@ -407,11 +407,14 @@ direct or through a prepared prompt, checks that row and holds the prompt until 
 `PlatformTaskUpdated` event resolves it: a held task or a failure starts the session, a
 conflict waits for the user, whether or not Sync is on by then. Forks reply instead of
 starting, so they take no task. An answer stores its claim only while the sign-in it was
-sent under lasts. Turn start and end events report activity, and each session reload
-finishes or releases the claims this platform issued for sessions that reached `Merged`,
-`Done`, or `Canceled`, taking each claim from its row first so it is sent once. Startup
-marks unanswered starts `interrupted` instead of repeating them, and moves the kept
-prompt of an answered start that never ran into a failed workspace preparation.
+sent under lasts, even if an account check in between read Sync as off, and the session
+then starts from its workspace preparation, which takes over the kept prompt and keeps
+it with its images when the start fails. Turn start and end events report activity, and
+each session reload finishes or releases the claims this platform issued for sessions
+that reached `Merged`, `Done`, or `Canceled`, taking each claim from its row first so it
+is sent once. Startup marks unanswered starts `interrupted` instead of repeating them,
+and moves the kept prompt of an answered start that never ran into a failed workspace
+preparation.
 
 All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have bounded
 execution and cleanup, and background results keep their original session and project

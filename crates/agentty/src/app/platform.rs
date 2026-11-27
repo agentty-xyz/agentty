@@ -165,7 +165,14 @@ impl Platform {
     /// enables the platform's Sync: the client, the token, and the
     /// platform's address.
     pub(crate) fn sync_access(&self) -> Option<SyncAccess> {
-        let (true, Some(client), Some(token)) = (self.sync.is_on, &self.client, &self.token) else {
+        self.signed_in_access().filter(|_| self.sync.is_on)
+    }
+
+    /// Returns the client, token, and platform address of the current
+    /// sign-in, whether or not its latest account answer enables Sync, for
+    /// matching an answer to the sign-in it was sent under.
+    pub(crate) fn signed_in_access(&self) -> Option<SyncAccess> {
+        let (Some(client), Some(token)) = (&self.client, &self.token) else {
             return None;
         };
 

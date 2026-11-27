@@ -7,6 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, AppRuntimeEvent};
 use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::session::Status;
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::{TransientMessageLifecycle, TransientMessageSlot};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
@@ -48,6 +50,8 @@ const CLAIM: &str = "clm_secret";
 /// optionally only once released, and records every task request.
 #[derive(Default)]
 struct ScriptedSync {
+    /// Whether account checks fail, as on a network blip.
+    account_fails: AtomicBool,
     /// Task requests in arrival order, such as `release 12 clm_secret`.
     calls: Mutex<Vec<String>>,
     /// Released once per start that may answer, when set.
@@ -115,6 +119,10 @@ impl PlatformClient for ScriptedSync {
     }
 
     async fn account(&self, _token: &AccessToken) -> Result<PlatformAccount, PlatformError> {
+        if self.account_fails.load(Ordering::SeqCst) {
+            return Err(PlatformError::Unreachable);
+        }
+
         Ok(PlatformAccount {
             login: "octocat".to_string(),
             remote_control: None,
@@ -257,7 +265,20 @@ async fn build_sync_app(
     platform: Arc<ScriptedSync>,
     origin: Option<&str>,
 ) -> (App, tempfile::TempDir, Arc<TestSessionRunFactory>) {
-    let (mut app, base_dir) = test_support::new_git_test_app().await;
+    let (app, base_dir) = test_support::new_git_test_app().await;
+
+    Box::pin(connect_sync_app(app, base_dir, platform, origin)).await
+}
+
+/// Gives `app`, rooted at `base_dir`, the remote `origin` when set, and
+/// signs it in to `platform` through its account check, as [`sync_app`]
+/// describes.
+async fn connect_sync_app(
+    mut app: App,
+    base_dir: tempfile::TempDir,
+    platform: Arc<ScriptedSync>,
+    origin: Option<&str>,
+) -> (App, tempfile::TempDir, Arc<TestSessionRunFactory>) {
     let runs = TestSessionRunFactory::install(&mut app.services);
     if let Some(origin) = origin {
         let config = base_dir.path().join(".git").join("config");
@@ -353,6 +374,34 @@ async fn drive_until_calls(
             },
         }
     }
+}
+
+/// Signs `app` out of `platform`, then in again with another token, and
+/// waits until the account answer enables Sync again.
+async fn sign_out_and_in_again(app: &mut App, platform: &Arc<ScriptedSync>) {
+    app.sign_out_platform().await;
+    drive_until(app, |app| {
+        app.platform.view().account().is_none()
+            && !matches!(
+                app.platform.view().state,
+                crate::presentation::platform::PlatformState::SigningOut { .. }
+            )
+    })
+    .await;
+    let stored = serde_json::json!({ "access_token": "agp_other", "platform_url": PLATFORM_URL });
+    app.services
+        .db()
+        .settings()
+        .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
+        .await
+        .expect("sign-in should save");
+    app.enable_platform(
+        Arc::clone(platform) as Arc<dyn PlatformClient>,
+        PLATFORM_URL.to_string(),
+        "Agentty on studio".to_string(),
+    )
+    .await;
+    drive_until(app, |app| app.platform.sync_access().is_some()).await;
 }
 
 /// Returns the ticket Sync requests of `app` are sent under now.
@@ -1140,29 +1189,7 @@ async fn an_answer_after_its_sign_in_ended_stores_no_claim() {
     let session_id = start_first_message(&mut app, &runs).await;
 
     // Act: sign out while the start runs, then sign in again.
-    app.sign_out_platform().await;
-    drive_until(&mut app, |app| {
-        app.platform.view().account().is_none()
-            && !matches!(
-                app.platform.view().state,
-                crate::presentation::platform::PlatformState::SigningOut { .. }
-            )
-    })
-    .await;
-    let stored = serde_json::json!({ "access_token": "agp_other", "platform_url": PLATFORM_URL });
-    app.services
-        .db()
-        .settings()
-        .upsert_setting(SettingName::PlatformSignIn, &stored.to_string())
-        .await
-        .expect("sign-in should save");
-    app.enable_platform(
-        Arc::clone(&platform) as Arc<dyn PlatformClient>,
-        PLATFORM_URL.to_string(),
-        "Agentty on studio".to_string(),
-    )
-    .await;
-    drive_until(&mut app, |app| app.platform.sync_access().is_some()).await;
+    sign_out_and_in_again(&mut app, &platform).await;
     gate.notify_one();
     drive_until(&mut app, |app| has_started(app, &session_id)).await;
     app.report_platform_task_activity(&session_id).await;
@@ -1206,6 +1233,126 @@ async fn a_start_that_fails_after_the_answer_keeps_its_prompt_for_a_retry() {
     assert_eq!(preparation.state, SessionPreparationState::Failed);
     assert!(preparation.prompt.is_some());
     assert_eq!(platform_task(&app, &session_id).await.pending_prompt, None);
+}
+
+#[tokio::test]
+async fn a_kept_prompt_whose_start_fails_keeps_its_images_for_a_retry() {
+    // Arrange
+    let platform = Arc::new(ScriptedSync::with_starts(Vec::new()));
+    let (app, base_dir, pool) = Box::pin(test_support::new_git_test_app_with_pool()).await;
+    let (mut app, _base_dir, runs) = Box::pin(connect_sync_app(
+        app,
+        base_dir,
+        Arc::clone(&platform),
+        Some(ORIGIN),
+    ))
+    .await;
+    let session_id = create_session(&mut app, &runs).await;
+    // Only images under Agentty's own temporary folder are ever removed.
+    let managed_root = crate::app::agentty_home().join("tmp");
+    std::fs::create_dir_all(&managed_root).expect("managed tmp root");
+    let image_directory = tempfile::tempdir_in(managed_root).expect("image directory");
+    let images = image_directory.path().join("images");
+    std::fs::create_dir(&images).expect("images");
+    let image = images.join("kept.png");
+    std::fs::write(&image, b"png").expect("image should save");
+    let tasks = app.services.db().platform_tasks();
+    tasks
+        .begin_platform_task(NewPlatformTask {
+            brief: MESSAGE,
+            platform_url: PLATFORM_URL,
+            session_id: &session_id,
+            title: "Fix the relay reconnect",
+        })
+        .await
+        .expect("task should begin");
+    let prompt = TurnPrompt {
+        attachments: vec![TurnPromptAttachment {
+            local_image_path: image.clone(),
+            placeholder: "[Image #1]".to_string(),
+        }],
+        ..TurnPrompt::from_text(format!("{MESSAGE} [Image #1]"))
+    };
+    tasks
+        .save_platform_task_prompt(
+            &session_id,
+            &serde_json::to_string(&prompt).expect("prompt"),
+        )
+        .await
+        .expect("prompt should save");
+    // The store refuses the turn's operation, so handing it over fails.
+    sqlx::query(
+        "CREATE TRIGGER refuse_operation BEFORE INSERT ON session_operation BEGIN SELECT \
+         RAISE(ABORT, 'refused'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("trigger should install");
+
+    // Act
+    app.apply_platform_task_update(PlatformTaskUpdate::Started {
+        result: Err(StartFailure::NoRepository),
+        session_id: session_id.clone(),
+        ticket: ticket(&app),
+    })
+    .await;
+
+    // Assert
+    let preparation = app
+        .services
+        .db()
+        .sessions()
+        .load_session_preparation(&session_id)
+        .await
+        .expect("load")
+        .expect("preparation");
+    assert_eq!(preparation.state, SessionPreparationState::Failed);
+    let kept = serde_json::from_str::<TurnPrompt>(&preparation.prompt.expect("prompt"))
+        .expect("prompt should parse");
+    assert_eq!(kept.attachments[0].local_image_path, image);
+    assert!(image.exists());
+    assert_eq!(status(&app, &session_id), Some(Status::Draft));
+}
+
+#[tokio::test]
+async fn a_start_whose_setup_cannot_be_read_says_so_in_the_session() {
+    // Arrange
+    let platform = Arc::new(ScriptedSync::with_starts(Vec::new()));
+    let (app, base_dir, pool) = Box::pin(test_support::new_git_test_app_with_pool()).await;
+    let (mut app, _base_dir, runs) = Box::pin(connect_sync_app(
+        app,
+        base_dir,
+        Arc::clone(&platform),
+        Some(ORIGIN),
+    ))
+    .await;
+    let session_id = create_session(&mut app, &runs).await;
+    record_check(&app, &session_id).await;
+    sqlx::query("DROP TABLE session_preparation")
+        .execute(&pool)
+        .await
+        .expect("table should drop");
+
+    // Act
+    app.apply_platform_task_update(PlatformTaskUpdate::Started {
+        result: Err(StartFailure::NoRepository),
+        session_id: session_id.clone(),
+        ticket: ticket(&app),
+    })
+    .await;
+
+    // Assert
+    let transcript = app
+        .sessions
+        .session_handles_or_err(&session_id)
+        .expect("handles")
+        .transcript
+        .lock()
+        .expect("transcript lock")
+        .messages()
+        .to_vec();
+    assert!(SessionTranscript::display_text_for_messages(&transcript).contains("[Start Error]"));
+    assert_eq!(status(&app, &session_id), Some(Status::Draft));
 }
 
 #[tokio::test]
@@ -1324,6 +1471,7 @@ async fn sign_out_forgets_claims_without_a_request() {
 
     // Act
     app.sign_out_platform().await;
+    let after_sign_out = platform_task(&app, &session_id).await.claim_id;
     app.services
         .db()
         .sessions()
@@ -1332,15 +1480,88 @@ async fn sign_out_forgets_claims_without_a_request() {
         .expect("status");
     app.settle_platform_tasks().await;
     app.report_platform_task_activity(&session_id).await;
+    // A request of the next sign-in, sent after every one above would have
+    // been, shows that none was.
+    let calls_before = platform.calls().len();
+    sign_out_and_in_again(&mut app, &platform).await;
+    let sentinel = create_session(&mut app, &runs).await;
+    record_held(&app, &sentinel, PLATFORM_URL, 14).await;
+    app.report_platform_task_activity(&sentinel).await;
+    let calls = wait_for_calls(&platform, "", calls_before + 1).await;
 
     // Assert
-    assert!(app.platform.sync_access().is_none());
-    assert_eq!(platform_task(&app, &session_id).await.claim_id, None);
+    assert_eq!(after_sign_out, None);
+    assert_eq!(calls[calls_before..], ["activity 14 clm_secret"]);
+    assert!(!calls.iter().any(|call| call.starts_with("release")));
+}
+
+#[tokio::test]
+async fn an_answer_after_a_failed_account_check_of_the_same_sign_in_keeps_its_claim() {
+    // Arrange
+    let gate = Arc::new(Notify::new());
+    let platform = Arc::new(ScriptedSync {
+        gate: Some(Arc::clone(&gate)),
+        ..ScriptedSync::with_starts(vec![Ok(start(true))])
+    });
+    let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
+    let session_id = start_first_message(&mut app, &runs).await;
+
+    // Act: the account check fails while the start runs.
+    platform.account_fails.store(true, Ordering::SeqCst);
+    app.activate_platform().await;
+    drive_until(&mut app, |app| app.platform.sync_access().is_none()).await;
+    gate.notify_one();
+    drive_until(&mut app, |app| has_started(app, &session_id)).await;
+
+    // Assert
+    assert_eq!(
+        platform_task(&app, &session_id).await.claim_id.as_deref(),
+        Some(CLAIM)
+    );
+    assert!(notice(&app, &session_id).is_some_and(|notice| notice.contains("task #12")));
+}
+
+#[tokio::test]
+async fn an_answer_whose_task_cannot_be_read_starts_the_session_without_one() {
+    // Arrange
+    let gate = Arc::new(Notify::new());
+    let platform = Arc::new(ScriptedSync {
+        gate: Some(Arc::clone(&gate)),
+        ..ScriptedSync::with_starts(vec![Ok(start(true))])
+    });
+    let (app, base_dir, pool) = Box::pin(test_support::new_git_test_app_with_pool()).await;
+    let (mut app, _base_dir, runs) = Box::pin(connect_sync_app(
+        app,
+        base_dir,
+        Arc::clone(&platform),
+        Some(ORIGIN),
+    ))
+    .await;
+    let request = CreateSessionRequest {
+        inherit_from_session_id: None,
+        mode: CreateSessionMode::Regular,
+        project_id: app.active_project_id(),
+    };
+    app.start_session_creation(request, None).await;
+    let session_id = app.sessions.sessions()[0].id.clone();
+    script_turns(&runs, &app, &session_id);
+    app.start_session(&session_id, MESSAGE)
+        .await
+        .expect("the prompt is saved");
+    test_support::finish_session_creation_tasks(&mut app).await;
+
+    // Act: the store loses the task before the answer comes.
+    sqlx::query("DROP TABLE session_platform_task")
+        .execute(&pool)
+        .await
+        .expect("table should drop");
+    gate.notify_one();
+    drive_until(&mut app, |app| has_started(app, &session_id)).await;
+
+    // Assert
     assert!(
-        !platform
-            .calls()
-            .iter()
-            .any(|call| call.starts_with("release"))
+        notice(&app, &session_id)
+            .is_some_and(|notice| notice.contains("could not read the session's task"))
     );
 }
 

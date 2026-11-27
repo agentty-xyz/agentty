@@ -400,11 +400,11 @@ async fn review_claim(database: &Database) -> Option<String> {
 }
 
 #[tokio::test]
-async fn a_kept_prompt_moves_to_a_failed_preparation_unless_it_is_canceled() {
+async fn a_kept_prompt_moves_to_its_preparation_unless_it_is_canceled() {
     // Arrange
     let (database, project_id) = database_with_sessions(&[]).await;
     let sessions = database.sessions();
-    for id in ["reserved", "canceled"] {
+    for id in ["reserved", "canceled", "ready"] {
         sessions
             .reserve_session(crate::PersistedSessionCreation {
                 agent: "codex",
@@ -429,8 +429,12 @@ async fn a_kept_prompt_moves_to_a_failed_preparation_unless_it_is_canceled() {
         .cancel_session_preparation("canceled")
         .await
         .expect("preparation should cancel");
+    sessions
+        .update_session_preparation("ready", crate::SessionPreparationState::Ready, None)
+        .await
+        .expect("preparation should be ready");
     let tasks = database.platform_tasks();
-    for session_id in ["reserved", "canceled", "unprepared", "promptless"] {
+    for session_id in ["reserved", "canceled", "unprepared", "ready", "promptless"] {
         if session_id != "promptless" {
             begin(&database, session_id).await;
             tasks
@@ -441,35 +445,38 @@ async fn a_kept_prompt_moves_to_a_failed_preparation_unless_it_is_canceled() {
     }
 
     // Act
-    let retained = [
-        tasks
-            .retain_platform_task_prompt("reserved", "main", "Start failed.")
-            .await
-            .expect("retain should run"),
-        tasks
-            .retain_platform_task_prompt("canceled", "main", "Start failed.")
-            .await
-            .expect("retain should run"),
-        tasks
-            .retain_platform_task_prompt("unprepared", "main", "Start failed.")
-            .await
-            .expect("retain should run"),
-        tasks
-            .retain_platform_task_prompt("promptless", "main", "Start failed.")
-            .await
-            .expect("retain should run"),
-    ];
+    let mut moved = Vec::new();
+    for (session_id, failure) in [
+        ("reserved", Some("Start failed.")),
+        ("canceled", None),
+        ("unprepared", None),
+        ("promptless", None),
+        ("ready", None),
+    ] {
+        moved.push(
+            tasks
+                .move_platform_task_prompt_to_preparation(session_id, "main", failure)
+                .await
+                .expect("move should run"),
+        );
+    }
 
     // Assert
-    assert_eq!(retained, [true, false, true, false]);
-    for session_id in ["reserved", "unprepared"] {
+    assert_eq!(moved, [true, false, true, false, true]);
+    let failed = crate::SessionPreparationState::Failed;
+    let ready = crate::SessionPreparationState::Ready;
+    for (session_id, state, error) in [
+        ("reserved", failed, Some("Start failed.")),
+        ("unprepared", ready, None),
+        ("ready", ready, None),
+    ] {
         let preparation = sessions
             .load_session_preparation(session_id)
             .await
             .expect("preparation should load")
             .expect("preparation should exist");
-        assert_eq!(preparation.state, crate::SessionPreparationState::Failed);
-        assert_eq!(preparation.error.as_deref(), Some("Start failed."));
+        assert_eq!(preparation.state, state);
+        assert_eq!(preparation.error.as_deref(), error);
         assert_eq!(preparation.prompt.as_deref(), Some("{\"text\":\"one\"}"));
         let task = tasks
             .load_platform_task(session_id)

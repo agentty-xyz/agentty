@@ -42,7 +42,8 @@ use crate::infra::db::{
     SessionPreparationState,
 };
 use crate::infra::platform::{
-    AccessToken, ClaimId, PlatformClient, SyncError, SyncStart, SyncTaskRef, SyncWork,
+    AccessToken, ClaimId, PlatformClient, SyncError, SyncHolder, SyncStart, SyncTask, SyncTaskRef,
+    SyncWork,
 };
 
 /// Shown while the start request runs.
@@ -60,6 +61,9 @@ const SYNC_DISABLED: &str =
     "This session started without a task: the platform no longer offers Sync to this account.";
 /// Names a holding session whose client gave it no label.
 const UNLABELLED_HOLDER: &str = "a session without a label";
+/// Shown when the session's task could not be read as its answer came.
+const UNREADABLE: &str = "This session started without a task on the platform's Sync: Agentty \
+                          could not read the session's task.";
 /// Shown when a choice is made after Sync stopped being offered.
 const SYNC_OFF: &str =
     "The platform's Sync is off for this account now, so this session started without a task.";
@@ -136,6 +140,9 @@ pub(crate) enum StartFailure {
     /// The answer came after the sign-in it was sent under ended, so its
     /// claim, if any, is dropped.
     SignedOut,
+    /// The session's task could not be read when the answer came, so its
+    /// claim, if any, is dropped.
+    Unreadable,
 }
 
 /// One start request: the work to describe and the session label.
@@ -462,11 +469,57 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Records that `holder` already works on `task`, which the session
+    /// `session_id` asked for, and asks the user whether to take it over.
+    async fn record_platform_task_conflict(
+        &mut self,
+        session_id: &str,
+        holder: &SyncHolder,
+        task: &SyncTask,
+    ) {
+        let _ = self
+            .services
+            .db()
+            .platform_tasks()
+            .record_platform_task_conflict(
+                session_id,
+                PlatformTaskName {
+                    number: task.number,
+                    project: &task.project,
+                    title: &task.title,
+                    url: task.url.as_deref(),
+                },
+                holder.session.as_deref(),
+                i64::try_from(holder.last_activity_at_ms / 1000).unwrap_or(i64::MAX),
+            )
+            .await;
+        let notice = conflict_notice(
+            &ConflictView {
+                holder: holder.session.as_deref(),
+                last_active_ms: Some(holder.last_activity_at_ms),
+                number: task.number,
+                title: &task.title,
+                url: task.url.as_deref(),
+            },
+            self.platform_sync_now_ms(),
+        );
+        self.show_platform_task_notice(
+            session_id,
+            TransientMessageBody::Plain(notice),
+            Some(PlatformTaskChoice::Conflict),
+        );
+    }
+
     /// Applies the answer to the start request of `session_id`, sent under
     /// `ticket`, unless the session was deleted or no longer waits, in
-    /// which case a task it was given is released at once. An answer that
-    /// arrives after its sign-in ended, or once Sync is on for another
-    /// platform, keeps no claim: the session starts without a task.
+    /// which case a task it was given is released at once.
+    ///
+    /// The answer applies while the sign-in it was sent under lasts on the
+    /// same platform, whether or not an account answer in between turned
+    /// Sync off; a claim kept while Sync reads as off waits for Sync to be
+    /// on again. An answer that arrives after its sign-in ended keeps no
+    /// claim, and one whose task cannot be read is a failure: either way
+    /// the session starts without a task.
     async fn apply_platform_task_start(
         &mut self,
         session_id: &str,
@@ -474,22 +527,33 @@ impl App {
         ticket: SyncTicket,
     ) {
         let tasks = self.services.db().platform_tasks();
-        let task = tasks.load_platform_task(session_id).await.ok().flatten();
-        let is_waiting = task
-            .as_ref()
-            .is_some_and(|task| task.state == PlatformTaskState::Checking);
-        let access = self.platform.sync_access().filter(|access| {
+        let (task, is_waiting, result) = match tasks.load_platform_task(session_id).await {
+            Ok(task) => {
+                let is_waiting = task
+                    .as_ref()
+                    .is_some_and(|task| task.state == PlatformTaskState::Checking);
+
+                (task, is_waiting, result)
+            }
+            Err(_) => (None, true, Err(StartFailure::Unreadable)),
+        };
+        let is_same_sign_in = |access: &SyncAccess| {
             access.ticket.sign_in == ticket.sign_in
                 && task
                     .as_ref()
                     .is_none_or(|task| task.platform_url == access.platform_url)
-        });
-        let result = if access.is_some() {
+        };
+        let result = if self
+            .platform
+            .signed_in_access()
+            .is_some_and(|access| is_same_sign_in(&access))
+        {
             result
         } else {
             Err(StartFailure::SignedOut)
         };
         if !is_waiting {
+            let access = self.platform.sync_access().filter(is_same_sign_in);
             if let (Ok(start), Some(access)) = (&result, access) {
                 send_settlement(
                     &access,
@@ -522,34 +586,8 @@ impl App {
                 held_notice(&start, self.platform_sync_now_ms())
             }
             Err(StartFailure::Sync(SyncError::TaskInProgress { holder, task })) => {
-                let _ = tasks
-                    .record_platform_task_conflict(
-                        session_id,
-                        PlatformTaskName {
-                            number: task.number,
-                            project: &task.project,
-                            title: &task.title,
-                            url: task.url.as_deref(),
-                        },
-                        holder.session.as_deref(),
-                        i64::try_from(holder.last_activity_at_ms / 1000).unwrap_or(i64::MAX),
-                    )
+                self.record_platform_task_conflict(session_id, &holder, &task)
                     .await;
-                let notice = conflict_notice(
-                    &ConflictView {
-                        holder: holder.session.as_deref(),
-                        last_active_ms: Some(holder.last_activity_at_ms),
-                        number: task.number,
-                        title: &task.title,
-                        url: task.url.as_deref(),
-                    },
-                    self.platform_sync_now_ms(),
-                );
-                self.show_platform_task_notice(
-                    session_id,
-                    TransientMessageBody::Plain(notice),
-                    Some(PlatformTaskChoice::Conflict),
-                );
 
                 return;
             }
@@ -558,6 +596,7 @@ impl App {
                 match failure {
                     StartFailure::NoRepository => NO_REPOSITORY.to_string(),
                     StartFailure::SignedOut => SYNC_OFF.to_string(),
+                    StartFailure::Unreadable => UNREADABLE.to_string(),
                     StartFailure::Sync(SyncError::SyncDisabled) => {
                         self.platform.disable_sync(ticket);
 
@@ -574,40 +613,25 @@ impl App {
         self.settle_platform_tasks().await;
     }
 
-    /// Starts the session whose start waited for the platform's Sync: with
-    /// the prompt the platform task kept, or with the prompt workspace
-    /// preparation keeps, once the workspace is ready.
+    /// Starts the session whose start waited for the platform's Sync, from
+    /// the prompt its workspace preparation holds.
     ///
-    /// The kept prompt stays until the start takes it over. When the start
-    /// fails, it moves to the session's workspace preparation, which shows
-    /// it with the error and retries it on `s`.
+    /// A prompt the platform task kept moves there first, so its start
+    /// runs once, as a saved prompt: a start that fails keeps the prompt
+    /// and its images in workspace setup, which shows the error and
+    /// retries it on `s`.
     async fn resume_platform_task_start(&mut self, session_id: &str) {
-        let prompt = self
+        let start_ref = self
+            .sessions
+            .session_for_id(session_id)
+            .map_or_else(String::new, |session| session.base_branch.clone());
+        let _ = self
             .services
             .db()
             .platform_tasks()
-            .load_platform_task(session_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|task| task.pending_prompt)
-            .and_then(|prompt| serde_json::from_str::<TurnPrompt>(&prompt).ok());
-        let result = match prompt {
-            Some(prompt) => self.start_session(session_id, prompt).await,
-            None => self.resume_prepared_platform_task_start(session_id).await,
-        };
-        if let Err(error) = result {
-            let start_ref = self
-                .sessions
-                .session_for_id(session_id)
-                .map_or_else(String::new, |session| session.base_branch.clone());
-            let _ = self
-                .services
-                .db()
-                .platform_tasks()
-                .retain_platform_task_prompt(session_id, &start_ref, &error.to_string())
-                .await;
-            self.refresh_workspace_preparation(session_id).await;
+            .move_platform_task_prompt_to_preparation(session_id, &start_ref, None)
+            .await;
+        if let Err(error) = self.resume_prepared_platform_task_start(session_id).await {
             self.append_output_for_session(session_id, &TranscriptNotice::StartError.format(error))
                 .await;
         }

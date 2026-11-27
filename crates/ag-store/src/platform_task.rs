@@ -13,6 +13,7 @@ use sqlx::SqlitePool;
 
 use crate::DbError;
 use crate::connection::begin_write;
+use crate::session_preparation::{self, SessionPreparationState};
 
 /// Where a session's platform task stands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, sqlx::Type)]
@@ -235,22 +236,24 @@ pub trait PlatformTaskRepository: Send + Sync {
     /// sign-out does.
     async fn forget_platform_task_claims(&self, platform_url: &str) -> Result<(), DbError>;
 
-    /// Moves the prompt kept for a session whose first turn did not start
-    /// into its workspace preparation, failed with `error`, where it waits
-    /// for a retry; a session without preparation gets one from
-    /// `start_ref`. Returns whether it moved: a canceled preparation, or
-    /// one holding a prompt already, keeps it here.
-    async fn retain_platform_task_prompt(
+    /// Hands the prompt kept for `session_id` to its workspace
+    /// preparation, which starts it once the workspace is ready and keeps
+    /// it, with its images, when the start fails. `failure` marks the
+    /// preparation failed with that reason, for a retry; a session without
+    /// preparation gets one from `start_ref`, ready unless `failure` is
+    /// given. Returns whether it moved: a canceled preparation, or one
+    /// holding a prompt already, leaves it here.
+    async fn move_platform_task_prompt_to_preparation(
         &self,
         session_id: &str,
         start_ref: &str,
-        error: &str,
+        failure: Option<&str>,
     ) -> Result<bool, DbError>;
 
     /// Marks start requests a previous run left unanswered as interrupted,
-    /// so none is repeated without the user, and retains the kept prompt
-    /// of every answered session whose first turn did not start, as
-    /// [`Self::retain_platform_task_prompt`] does.
+    /// so none is repeated without the user, and hands the kept prompt of
+    /// every answered session whose first turn did not start to its
+    /// workspace preparation, failed for a retry.
     async fn recover_platform_tasks(&self) -> Result<(), DbError>;
 }
 
@@ -268,12 +271,13 @@ impl SqlitePlatformTaskRepository {
 
     /// Moves the kept prompt of `session_id` into its workspace
     /// preparation within `transaction`, as
-    /// [`PlatformTaskRepository::retain_platform_task_prompt`] describes.
-    async fn retain_prompt_in(
+    /// [`PlatformTaskRepository::move_platform_task_prompt_to_preparation`]
+    /// describes.
+    async fn move_prompt_in(
         transaction: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
         session_id: &str,
         start_ref: &str,
-        error: &str,
+        failure: Option<&str>,
     ) -> Result<bool, DbError> {
         let prompt = sqlx::query_scalar!(
             r"
@@ -289,31 +293,29 @@ WHERE session_id = ?
         let Some(prompt) = prompt else {
             return Ok(false);
         };
-        sqlx::query!(
-            r"
-INSERT INTO session_preparation (session_id, state, start_ref)
-VALUES (?, 'failed', ?)
-ON CONFLICT(session_id) DO NOTHING
-",
+        let new_state = if failure.is_some() {
+            SessionPreparationState::Failed
+        } else {
+            SessionPreparationState::Ready
+        };
+        session_preparation::insert_preparation(
+            &mut **transaction,
             session_id,
-            start_ref
+            start_ref,
+            new_state,
         )
-        .execute(&mut **transaction)
         .await?;
-        let is_moved = sqlx::query!(
-            r"
-UPDATE session_preparation
-SET prompt = ?, state = 'failed', error = ?
-WHERE session_id = ? AND prompt IS NULL AND state != 'canceled'
-",
-            prompt,
-            error,
-            session_id
-        )
-        .execute(&mut **transaction)
-        .await?
-        .rows_affected()
-            == 1;
+        let is_moved =
+            session_preparation::save_prompt(&mut **transaction, session_id, &prompt).await?;
+        if is_moved && let Some(failure) = failure {
+            session_preparation::update_preparation(
+                &mut **transaction,
+                session_id,
+                SessionPreparationState::Failed,
+                Some(failure),
+            )
+            .await?;
+        }
         if is_moved {
             sqlx::query!(
                 r"
@@ -700,18 +702,18 @@ WHERE claim_id IS NOT NULL AND platform_url = ?
         Ok(())
     }
 
-    async fn retain_platform_task_prompt(
+    async fn move_platform_task_prompt_to_preparation(
         &self,
         session_id: &str,
         start_ref: &str,
-        error: &str,
+        failure: Option<&str>,
     ) -> Result<bool, DbError> {
-        let mut transaction = begin_write(&self.pool, "retain platform task prompt").await?;
-        let is_retained =
-            Self::retain_prompt_in(&mut transaction, session_id, start_ref, error).await?;
+        let mut transaction = begin_write(&self.pool, "move platform task prompt").await?;
+        let is_moved =
+            Self::move_prompt_in(&mut transaction, session_id, start_ref, failure).await?;
         transaction.commit().await?;
 
-        Ok(is_retained)
+        Ok(is_moved)
     }
 
     async fn recover_platform_tasks(&self) -> Result<(), DbError> {
@@ -738,11 +740,11 @@ ORDER BY task.session_id
         .fetch_all(&mut *transaction)
         .await?;
         for session in unstarted {
-            Self::retain_prompt_in(
+            Self::move_prompt_in(
                 &mut transaction,
                 &session.session_id,
                 &session.base_branch,
-                INTERRUPTED_START,
+                Some(INTERRUPTED_START),
             )
             .await?;
         }

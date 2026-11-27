@@ -97,10 +97,11 @@ already has, or had, a task, and takes none of its own.
 
 A waiting session keeps waiting for your key, also after a restart and whether or not
 Sync is on by then. If Agentty quits before the platform answers a first message, the
-session waits after the restart; press `s` to ask again. When Sync is off by the time
-you press a key, the session starts without a task. If the session cannot start once the
-platform has answered, your prompt stays with the session's workspace setup, which shows
-the error; press `s` to retry.
+session waits after the restart; press `s` to ask again. Answer a waiting session in the
+terminal: a paired device cannot press its keys. When Sync is off by the time you press
+a key, the session starts without a task. If the session cannot start once the platform
+has answered, your prompt stays with the session's workspace setup, which shows the
+error; press `s` to retry.
 
 A session that holds a task reports activity when each turn starts and ends, finishes
 the task when it is merged or done, and releases it when it is canceled, or when it is

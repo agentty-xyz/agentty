@@ -199,6 +199,9 @@ These are known limits, not vulnerabilities:
   reads it as stale or another session takes it over. Signing out forgets held claims
   without telling the platform, and so does deleting a session while Sync is off or
   before the account answer of a launch, with the same effect.
+- Agentty treats an answer whose task it cannot use, such as one naming a project it
+  will not put in a request path, as a failed start, and the task stays held on the
+  platform until the platform reads it as stale.
 - Any session of the account can take a task over from another, and the platform, not
   Agentty, decides which work counts as the same.
 
