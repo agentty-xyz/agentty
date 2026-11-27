@@ -8,11 +8,20 @@
   var settings = document.querySelector('[data-analytics-settings]');
   var choiceKey = 'agentty-site-posthog-choice-v2';
   var allowedEvents = new Set([
-    '$pageview', 'github_clicked',
+    '$pageview', '$pageleave', 'github_clicked',
     'install_method_selected', 'install_command_copied',
     'platform_login_clicked', 'platform_waitlist_clicked'
   ]);
+  // Sent only after the visitor allows analytics: replay recordings and page-speed metrics.
+  var consentedEvents = new Set(['$snapshot', '$web_vitals']);
   var allowedMethods = new Set(['npm', 'Bun', 'pnpm', 'npx', 'cargo', 'sh']);
+  var removedKeys = /referrer|current_url|search|query|utm_/i;
+  // PostHog derives the other session-entry properties, such as ad click IDs, from the
+  // landing page's query string.
+  var sessionEntryKeys = new Set([
+    '$session_entry_url', '$session_entry_host', '$session_entry_pathname',
+    '$session_entry_referring_domain'
+  ]);
   var choice;
 
   var allowedHostname = location.hostname === 'agentty.xyz'
@@ -44,6 +53,42 @@
   // Keep PostHog in page memory until the visitor allows browser storage.
   function persistence() {
     return choice === 'allowed' ? 'localStorage+cookie' : 'memory';
+  }
+
+  // PostHog settings that follow the visitor's choice. Web vitals load their script from the
+  // SDK's asset host, so they also need external dependency loading.
+  function choiceConfig() {
+    var allowed = choice === 'allowed';
+    return {
+      disable_session_recording: !allowed,
+      disable_external_dependency_loading: !allowed,
+      capture_performance: {
+        web_vitals: allowed,
+        web_vitals_allowed_metrics: ['LCP', 'INP', 'CLS', 'FCP'],
+        web_vitals_attribution: false
+      }
+    };
+  }
+
+  // `set_config` does not start web vitals capture, so start it once the SDK has loaded.
+  function startWebVitals(posthog) {
+    posthog.webVitalsAutocapture?.startIfEnabled();
+  }
+
+  // Remove query strings, fragments, and query-derived values from event properties.
+  // Replay snapshots carry their own masking, so only their top level is cleaned.
+  function cleanProperties(properties, deep) {
+    Object.keys(properties).forEach(function (key) {
+      var value = properties[key];
+      if (key !== '$current_url' && (removedKeys.test(key)
+        || (key.startsWith('$session_entry_') && !sessionEntryKeys.has(key)))) {
+        delete properties[key];
+      } else if (typeof value === 'string' && /^[a-z][a-z\d+.-]*:\/\//i.test(value)) {
+        properties[key] = value.split(/[?#]/)[0];
+      } else if (deep && value && typeof value === 'object') {
+        cleanProperties(value, deep);
+      }
+    });
   }
 
   function capture(name, properties) {
@@ -101,11 +146,8 @@
 
   function startPosthog() {
     if (window.posthog) {
-      window.posthog.set_config({
-        persistence: persistence(),
-        disable_session_recording: choice !== 'allowed',
-        disable_external_dependency_loading: choice !== 'allowed'
-      });
+      window.posthog.set_config({ persistence: persistence(), ...choiceConfig() });
+      startWebVitals(window.posthog);
       window.posthog.opt_in_capturing();
       return;
     }
@@ -116,10 +158,14 @@
       defaults: '2026-05-30',
       autocapture: false,
       capture_pageview: false,
-      capture_pageleave: false,
+      capture_pageleave: true,
       capture_exceptions: false,
-      disable_session_recording: choice !== 'allowed',
-      disable_external_dependency_loading: choice !== 'allowed',
+      ...choiceConfig(),
+      // The choice may have changed while the SDK loaded.
+      loaded: function (posthog) {
+        posthog.set_config(choiceConfig());
+        startWebVitals(posthog);
+      },
       enable_recording_console_log: false,
       session_recording: {
         maskAllInputs: true,
@@ -135,17 +181,13 @@
       person_profiles: 'identified_only',
       save_campaign_params: false,
       before_send: function (event) {
-        var allowedReplay = event.event === '$snapshot' && choice === 'allowed';
-        if (choice === 'declined' || (!allowedEvents.has(event.event) && !allowedReplay)) {
+        var consented = consentedEvents.has(event.event) && choice === 'allowed';
+        if (choice === 'declined' || (!allowedEvents.has(event.event) && !consented)) {
           return null;
         }
 
         event.properties = event.properties || {};
-        Object.keys(event.properties).forEach(function (key) {
-          if (/referrer|current_url|search|query|utm_/i.test(key)) {
-            delete event.properties[key];
-          }
-        });
+        cleanProperties(event.properties, event.event !== '$snapshot');
         event.properties.$current_url = location.origin + location.pathname;
         // Separates website events from other apps sharing this PostHog project.
         event.properties.app_source = 'web';
@@ -170,10 +212,8 @@
     if (value === 'allowed') {
       startPosthog();
     } else if (window.posthog) {
-      window.posthog.set_config({
-        disable_session_recording: true,
-        disable_external_dependency_loading: true
-      });
+      // Web vitals observers cannot be removed; opting out and `before_send` drop their events.
+      window.posthog.set_config(choiceConfig());
       window.posthog.opt_out_capturing();
     }
   }
