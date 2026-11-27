@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.23.0] - 2026-11-27
+
 ### Added
 
 - `agentty`: merge a session's linked GitHub pull request with `m` in session view while
@@ -23,7 +25,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `ag-remote`: add the `merge_review_request` request, offered through the
   `merge_review_request` capability. It bypasses branch protections only with
   `bypass: true`, and its `review_request_merge` response reports `merged`, `queued`, or
-  `refused` with a reason.
+  `refused` with a reason (breaking: `RemoteRequest` and `RemoteResponse` gain
+  variants).
+- `agentty`: give a session's agent the milestone its platform Sync task belongs to.
+  Every turn carries the milestone's title and goal in one fenced block marked as
+  reference data, never instructions, so it survives context compaction; the task's
+  notice and the conflict view name the milestone. `SECURITY.md` describes this, the one
+  piece of platform text that reaches an agent.
+- `ag-contracts`: add `TaskMilestone` and `TurnRequest::task_milestone` (breaking for
+  code that builds a `TurnRequest`).
+- `ag-store`: keep a session platform task's milestone (migration `130`).
+
+### Changed
+
+- `agentty`: check that the session's base branch exists on the remote before pushing a
+  new review request, and stop with a message that names the branch and says to push it
+  when it is missing. An open review request for the source branch, linked or not, is
+  linked or refreshed against its own target instead.
+
+### Fixed
+
+- `agentty`: name the missing branch and its role when fetching a review request's
+  branch fails, instead of a generic parse error.
+
+### Contributors
+
+- @minev-dev
 
 ## [v0.22.1] - 2026-11-27
 
