@@ -612,9 +612,7 @@ impl SessionManager {
                 )
             })?;
 
-        let repo_root = self
-            .load_session_repo_root(services, source_session_id)
-            .await?;
+        let repo_root = Self::load_session_repo_root(services, source_session_id).await?;
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
         if services.fs_client().exists(folder.clone()) {
@@ -836,7 +834,7 @@ impl SessionManager {
             return Ok(());
         }
 
-        let repo_root = self.load_session_repo_root(services, session_id).await?;
+        let repo_root = Self::load_session_repo_root(services, session_id).await?;
 
         Self::create_session_worktree(
             services,
@@ -910,7 +908,6 @@ impl SessionManager {
     /// Returns an error if the session project cannot be resolved or no git
     /// repository root can be found for the project path.
     async fn load_session_repo_root(
-        &self,
         services: &AppServices,
         session_id: &str,
     ) -> Result<PathBuf, SessionError> {
@@ -924,7 +921,7 @@ impl SessionManager {
                     "Session project is required to create a worktree".to_string(),
                 )
             })?;
-        let project_path = self.load_project_path(services, project_id).await?;
+        let project_path = Self::load_project_path(services, project_id).await?;
 
         services
             .git_client()
@@ -938,7 +935,6 @@ impl SessionManager {
     /// # Errors
     /// Returns an error if the project row does not exist or cannot be loaded.
     pub(crate) async fn load_project_path(
-        &self,
         services: &AppServices,
         project_id: i64,
     ) -> Result<PathBuf, SessionError> {
@@ -1162,7 +1158,7 @@ impl SessionManager {
         session_agent: AgentSelection,
         session_folder: PathBuf,
     ) -> Result<DraftTitleGenerationContext, SessionError> {
-        let project_working_dir = self.load_project_path(services, project_id).await?;
+        let project_working_dir = Self::load_project_path(services, project_id).await?;
         let title_generation_agent =
             setting::load_default_fast_agent_setting(services, Some(project_id), session_agent)
                 .await;
@@ -3628,11 +3624,18 @@ impl SessionManager {
                 let _worktree_cleanup_turn = worktree_cleanup_lane.lock().await;
                 // Resolve the repository while the session worktree still
                 // exists, so task branches go even without directories.
-                let repo_root = if has_worktree {
+                // Without it, the session's project still names the
+                // repository of every task branch.
+                let mut repo_root = if has_worktree {
                     git_client.main_repo_root(folder.clone()).await.ok()
                 } else {
                     None
                 };
+                if repo_root.is_none() && !task_worktrees.is_empty() {
+                    repo_root = Self::load_session_repo_root(&cleanup_services, &session_id)
+                        .await
+                        .ok();
+                }
                 Self::remove_canceled_task_worktrees(
                     cleanup_services.db(),
                     Arc::clone(&fs_client),

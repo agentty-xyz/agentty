@@ -390,8 +390,8 @@ async fn canceled_session_removes_task_worktrees_from_the_session_repository() {
         );
         cleanup.services.wait_for_cleanup_tasks(None).await;
 
-        // Assert: without a session worktree, the root comes from the task
-        // worktree itself.
+        // Assert: without a session worktree, the root comes from the
+        // session's project.
         assert!(
             cleanup
                 .removed()
@@ -402,14 +402,12 @@ async fn canceled_session_removes_task_worktrees_from_the_session_repository() {
             expected_branches.push("wt/session-");
         }
         assert_eq!(cleanup.deleted_branches(), expected_branches);
-        assert_eq!(
-            cleanup.resolved_roots(),
-            [if has_worktree {
-                PathBuf::from("/tmp/session")
-            } else {
-                PathBuf::from(TASK_WORKTREE_FOLDER)
-            }]
-        );
+        let expected_roots = if has_worktree {
+            vec![PathBuf::from("/tmp/session")]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(cleanup.resolved_roots(), expected_roots);
         assert_eq!(
             task_worktree_states(&repositories).await,
             Vec::<db::TaskWorktreeState>::new()
@@ -475,11 +473,13 @@ async fn canceled_session_finishes_task_worktree_removal_when_resources_are_gone
         "already removed",
         "branch remains",
         "prune fails",
+        "project repository",
         "repository unknown",
     ] {
         // Arrange: the directory is already gone and the branch deletion
         // fails; only a branch that still resolves, a Git worktree record
         // that cannot be pruned, or an unknown repository keeps the record.
+        // The project names the repository when the task directory cannot.
         let session = test_session("", Status::Canceled, None, "");
         let (repositories, _pool) = database_with_session_and_pool(&session).await;
         reserve_task_worktree(&repositories).await;
@@ -489,9 +489,12 @@ async fn canceled_session_finishes_task_worktree_removal_when_resources_are_gone
             Box::pin(async { Err(FsError::Io(std::io::ErrorKind::NotFound.into())) })
         });
         let mut git = MockGitClient::new();
+        git.expect_find_git_repo_root().returning(move |_| {
+            Box::pin(async move { (case == "project repository").then(|| PathBuf::from("/repo")) })
+        });
         git.expect_main_repo_root().returning(move |_| {
             Box::pin(async move {
-                if case == "repository unknown" {
+                if matches!(case, "project repository" | "repository unknown") {
                     return Err(GitError::OutputParse("not a repository".to_string()));
                 }
 
@@ -539,7 +542,7 @@ async fn canceled_session_finishes_task_worktree_removal_when_resources_are_gone
         services.wait_for_cleanup_tasks(None).await;
 
         // Assert
-        let expected_states = if case == "already removed" {
+        let expected_states = if matches!(case, "already removed" | "project repository") {
             Vec::new()
         } else {
             vec![db::TaskWorktreeState::Removing]
