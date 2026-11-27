@@ -31,7 +31,7 @@ github_repo_slug = "agentty-xyz/agentty"
 # The Agentty version the header shows; the page never asks GitHub for it. It must equal
 # `[workspace.package].version` in the root `Cargo.toml`: the `docs-site-tests` hook fails
 # when it does not.
-agentty_version = "0.22.0"
+agentty_version = "0.22.1"
 # The recommended install command, which the home page hero and the first installation
 # tab both show.
 npm_install_command = "npm install -g agentty"
