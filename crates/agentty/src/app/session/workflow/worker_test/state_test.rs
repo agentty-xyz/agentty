@@ -34,7 +34,7 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
 use crate::domain::session_usage::{LiveUsageKey, LiveUsageRun};
-use crate::domain::turn_timeline::{RowState, TimelineRow};
+use crate::domain::turn_timeline::RowState;
 use crate::infra::cargo_cache::MockCargoCacheClient;
 use crate::infra::clock::Clock;
 use crate::infra::db::AppRepositories;
@@ -575,14 +575,7 @@ async fn test_consume_turn_events_streams_output_and_clears_it_with_the_turn() {
             .map(|narration| &*narration.text),
         Some("Hello")
     );
-    assert_eq!(
-        snapshot
-            .steps
-            .iter()
-            .map(|step| step.rows.len())
-            .sum::<usize>(),
-        2
-    );
+    assert_eq!(snapshot.calls.stats.total, 2);
     assert_eq!(
         events.last(),
         Some(&AppEvent::SessionTurnCleared {
@@ -857,10 +850,10 @@ async fn test_activity_is_published_before_the_turn_stream_closes() {
         AppEvent::SessionProgressUpdated { progress_message: Some(progress), .. }
             if progress == "Calling Read"
     )));
-    assert!(matches!(
-        &finished.steps[0].rows[0],
-        TimelineRow::Tool(row) if row.state == RowState::Succeeded
-    ));
+    assert_eq!(
+        finished.calls.latest.as_ref().map(|row| row.state),
+        Some(RowState::Succeeded)
+    );
     assert_eq!(
         activity.summary().render(None),
         "turn-summary v1\n1 tool · 0s\nUsed\tRead ×1\n─ Worked 0s · 1 tool"

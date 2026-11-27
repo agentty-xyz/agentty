@@ -2322,7 +2322,7 @@ async fn test_harness_session_shows_a_live_timeline_while_the_turn_runs() -> E2e
                     )
                     .capture_labeled(
                         "harness_live_timeline_running",
-                        "The running turn shows its steps and tool rows",
+                        "The running turn shows its steps and a compact call block",
                     )
                     .compose(&gate.release())
                     .eventually(
@@ -2353,21 +2353,19 @@ async fn test_harness_session_shows_a_live_timeline_while_the_turn_runs() -> E2e
         .await
 }
 
-/// Checks the held turn's narration steps, folded exploration, rejected and
-/// applied edits, and status line, and that the saved answer replaces them.
+/// Checks the held turn's narration steps, its call totals with only the
+/// last finished call, and the status line, and that the saved answer
+/// replaces them.
 fn assert_live_timeline_report(frame: &testty::frame::TerminalFrame, report: &ProofReport) {
     let running = common::frame_from_capture(&report.captures[0]);
     let full = Region::full(running.cols(), running.rows());
     for text in [
         "• Checking the notes first.",
-        "✓ Explored  read notes.txt · search \"alpha\"",
-        "2 calls",
         "• Adding beta below alpha.",
-        "✗ Edit      notes.txt",
-        "rejected",
-        "✓ Edit      notes.txt",
-        "+1 −0   read :1-1 first",
         "• Added beta",
+        "5 tools · 1 failed · 2 edits · 2 reads · 1 search",
+        "✓ Edit      notes.txt",
+        "+1 −0",
     ] {
         assertion::assert_text_in_region(&running, text, &full);
     }
@@ -2387,8 +2385,11 @@ fn assert_live_timeline_report(frame: &testty::frame::TerminalFrame, report: &Pr
         )
     );
     assert!(text.find("Checking the notes") < text.find("Adding beta below"));
-    assert!(text.find("✗ Edit") < text.find("✓ Edit"));
-    assert!(!text.contains("Working..."));
+    assert!(text.find("5 tools") < text.find("✓ Edit"));
+    // Only the last finished call shows; the rejected edit is only counted.
+    for hidden in ["✗ Edit", "rejected", "read notes.txt", "Working..."] {
+        assert!(!text.contains(hidden), "{hidden}");
+    }
 
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(
@@ -2398,8 +2399,7 @@ fn assert_live_timeline_report(frame: &testty::frame::TerminalFrame, report: &Pr
     );
     for hidden in [
         "• Checking the notes first.",
-        "✓ Explored",
-        "✗ Edit",
+        "✓ Edit      notes.txt",
         "step 3",
     ] {
         assertion::assert_not_visible(frame, hidden);

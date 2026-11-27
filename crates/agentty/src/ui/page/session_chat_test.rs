@@ -287,7 +287,8 @@ fn test_render_view_mode_omits_keybinding_help_line() {
 }
 
 /// Verifies a running turn's live timeline reserves a status row above the
-/// composer margin, and that a pane too short for it keeps the transcript.
+/// composer margin naming only the kind of action its running row shows in
+/// full, and that a pane too short for it keeps the transcript.
 #[test]
 fn test_live_timeline_renders_a_status_line_above_the_composer() {
     // Arrange
@@ -325,7 +326,7 @@ fn test_live_timeline_renders_a_status_line_above_the_composer() {
     let status_row = buffer_row_text(buffer, status_area.y, 80);
     assert_eq!(
         status_row.trim_end(),
-        " ⠋ Running cargo test 12s  ·  step 1  ·  turn 0s"
+        " ⠋ Running a command 12s  ·  step 1  ·  turn 0s"
     );
     let running_row = (plan.areas.output_area.y..plan.areas.output_area.bottom())
         .map(|row| buffer_row_text(buffer, row, 80))

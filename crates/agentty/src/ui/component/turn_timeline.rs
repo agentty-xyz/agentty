@@ -1,11 +1,13 @@
 //! Rows of a running turn's live timeline: narration steps with their
-//! reasoning and tool rows, laid out in columns.
+//! reasoning, then a compact block of the turn's calls, laid out in columns.
 //!
-//! A step renders as a `•` narration row with its start time on the right,
-//! a dim `✻ Thought` line, and one row per call or folded exploration: a
-//! status glyph, a verb, the target, and a right-hand result column. Rows
-//! of running calls carry a spinner glyph and leave room on their right for
-//! the elapsed time, both of which the session output paints each frame.
+//! A step renders as a `•` narration row with its start time on the right
+//! and a dim `✻ Thought` line. The call block starts with one line of
+//! totals by kind and outcome, followed by the call that finished last and
+//! the calls still running: a status glyph, a verb, the target, and a
+//! right-hand result column. Rows of running calls carry a spinner glyph and
+//! leave room on their right for the elapsed time, both of which the session
+//! output paints each frame.
 
 use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
@@ -13,7 +15,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::domain::turn_timeline::{
-    ExploreRow, Narration, RowResult, RowState, Thought, TimelineRow, TimelineStep, ToolRow,
+    CallStats, Narration, RowResult, RowState, Thought, TimelineStep, ToolRow,
 };
 use crate::ui::{markdown, style};
 
@@ -74,18 +76,68 @@ pub(crate) fn header_lines(
     lines
 }
 
-/// Renders one row at `width` columns: its line, then a failed call's last
-/// output lines. A running row's first line carries the spinner glyph.
-pub(crate) fn row_lines(row: &TimelineRow, width: usize) -> Vec<Line<'static>> {
-    match row {
-        TimelineRow::Explored(explore) => vec![explore_line(explore, width)],
-        TimelineRow::Tool(tool) => {
-            let mut lines = vec![tool_line(tool, width)];
-            append_failure_tail(&mut lines, &tool.tail, width);
-
-            lines
+/// Returns the line of the turn's call totals at `width` columns, such as
+/// `52 tools · 1 failed · 38 commands · 9 reads · posthog/query ×2`, or
+/// `None` before the turn makes a call.
+pub(crate) fn stats_line(stats: &CallStats, width: usize) -> Option<Line<'static>> {
+    if stats.total == 0 {
+        return None;
+    }
+    let subtle = Style::default().fg(style::palette::text_subtle());
+    let warning = Style::default().fg(style::palette::warning());
+    let mut segments = vec![(plural(stats.total, "tool", "tools"), subtle)];
+    for (count, label, segment_style) in [
+        (
+            stats.failed,
+            "failed",
+            Style::default().fg(style::palette::danger()),
+        ),
+        (stats.interrupted, "interrupted", warning),
+        (stats.running, "running", warning),
+    ] {
+        if count > 0 {
+            segments.push((format!("{count} {label}"), segment_style));
         }
     }
+    for (count, one, many) in [
+        (stats.commands, "command", "commands"),
+        (stats.edits, "edit", "edits"),
+        (stats.reads, "read", "reads"),
+        (stats.searches, "search", "searches"),
+        (stats.listings, "listing", "listings"),
+        (stats.web_searches, "web search", "web searches"),
+    ] {
+        if count > 0 {
+            segments.push((plural(count, one, many), subtle));
+        }
+    }
+    segments.extend(
+        stats
+            .used
+            .iter()
+            .map(|(name, count)| (format!("{name} ×{count}"), subtle)),
+    );
+    let mut spans = vec![Span::raw("  ")];
+    for (index, (text, segment_style)) in segments.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", subtle));
+        }
+        spans.push(Span::styled(text, segment_style));
+    }
+
+    Some(Line::from(text_util::truncate_spans_with_ellipsis(
+        spans, width,
+    )))
+}
+
+/// Renders one call's row at `width` columns: its line, then a failed
+/// call's last output lines. A running row's first line carries the spinner
+/// glyph.
+pub(crate) fn row_lines(row: &ToolRow, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![tool_line(row, width)];
+    append_failure_tail(&mut lines, &row.tail, width);
+
+    lines
 }
 
 /// Returns the elapsed time a running row shows on its right, such as
@@ -201,36 +253,6 @@ fn append_thought(lines: &mut Vec<Line<'static>>, thought: &Thought, width: usiz
     }
 }
 
-/// Returns a folded exploration row.
-fn explore_line(explore: &ExploreRow, width: usize) -> Line<'static> {
-    let target = explore
-        .parts
-        .iter()
-        .map(|part| format!("{} {}", part.label, part.items.join(", ")))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let noun = if explore.calls == 1 { "call" } else { "calls" };
-    let result = vec![Span::styled(
-        format!("{} {noun}", explore.calls),
-        Style::default().fg(style::palette::text_subtle()),
-    )];
-    let (glyph, verb) = if explore.running_since.is_some() {
-        (running_glyph(), "Exploring")
-    } else {
-        (success_glyph(), "Explored")
-    };
-
-    row_line(RowParts {
-        duration: None,
-        glyph,
-        result,
-        target: Span::styled(target, Style::default().fg(style::palette::text_muted())),
-        target_is_path: false,
-        verb: Span::styled(verb, verb_style(style::palette::text())),
-        width,
-    })
-}
-
 /// Returns one call's row.
 fn tool_line(tool: &ToolRow, width: usize) -> Line<'static> {
     let (glyph, verb_color) = match tool.state {
@@ -250,21 +272,7 @@ fn tool_line(tool: &ToolRow, width: usize) -> Line<'static> {
     } else {
         style::palette::text_muted()
     };
-    let mut result = result_spans(&tool.result);
-    if let Some(range) = &tool.read_first {
-        if !result.is_empty() {
-            result.push(Span::raw("   "));
-        }
-        let read = if range.is_empty() {
-            "read first".to_string()
-        } else {
-            format!("read {range} first")
-        };
-        result.push(Span::styled(
-            read,
-            Style::default().fg(style::palette::text_subtle()),
-        ));
-    }
+    let result = result_spans(&tool.result);
 
     row_line(RowParts {
         duration: tool.duration_seconds,
@@ -440,6 +448,15 @@ fn running_glyph() -> Span<'static> {
 /// Returns the glyph of a successful row.
 fn success_glyph() -> Span<'static> {
     Span::styled("✓", Style::default().fg(style::palette::success()))
+}
+
+/// Returns `count` with `one` or `many`, such as `1 tool` or `3 tools`.
+fn plural(count: usize, one: &str, many: &str) -> String {
+    if count == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{count} {many}")
+    }
 }
 
 /// Returns the bold style of a row's verb in `color`.
