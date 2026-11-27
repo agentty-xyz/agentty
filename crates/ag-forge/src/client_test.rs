@@ -10,7 +10,8 @@ use opentelemetry::Value;
 use crate::client::{RealReviewRequestClient, ReviewRequestClient};
 use crate::command::{ForgeCommand, ForgeCommandError, ForgeCommandOutput, MockForgeCommandRunner};
 use crate::model::{
-    CreateReviewRequestInput, ForgeKind, ForgeRemote, ReviewRequestAttention, ReviewRequestError,
+    CreateReviewRequestInput, ForgeKind, ForgeRemote, MergeReviewRequestInput,
+    ReviewRequestAttention, ReviewRequestError, ReviewRequestMergeMode, ReviewRequestMergeOutcome,
     ReviewRequestMetadata, ReviewRequestState, ReviewRequestSummary, UpdateReviewRequestInput,
 };
 use crate::telemetry_support::{SpanCapture, attribute, attribute_keys};
@@ -688,6 +689,79 @@ async fn refresh_review_request_authenticates_before_gitlab_refresh() {
     // Assert
     assert_eq!(review_request.display_id, "!42");
     assert_eq!(review_request.forge_kind, ForgeKind::GitLab);
+}
+
+#[tokio::test]
+async fn merge_review_request_authenticates_before_the_github_recheck() {
+    // Arrange
+    let mut sequence = Sequence::new();
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf(|command| command.arguments[..2] == ["auth", "status"])
+        .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    command_runner
+        .expect_run()
+        .once()
+        .in_sequence(&mut sequence)
+        .withf(|command| {
+            command.arguments.iter().any(|argument| {
+                argument.starts_with("query=") && argument.contains("isMergeQueueEnabled")
+            })
+        })
+        .returning(|_| Box::pin(async { Ok(failure_output("HTTP 502".to_string())) }));
+    let client = RealReviewRequestClient::new(Arc::new(command_runner));
+
+    // Act
+    let error = client
+        .merge_review_request(github_remote(), merge_input())
+        .await
+        .expect_err("recheck failure should be reported");
+
+    // Assert
+    assert_eq!(
+        error,
+        ReviewRequestError::OperationFailed {
+            forge_kind: ForgeKind::GitHub,
+            message: "read pull request before merging: HTTP 502".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn merge_review_request_refuses_gitlab_merge_requests() {
+    // Arrange
+    let mut command_runner = MockForgeCommandRunner::new();
+    command_runner
+        .expect_run()
+        .once()
+        .withf(|command| command.arguments[..2] == ["auth", "status"])
+        .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+    let client = RealReviewRequestClient::new(Arc::new(command_runner));
+
+    // Act
+    let outcome = client
+        .merge_review_request(gitlab_remote(), merge_input())
+        .await;
+
+    // Assert
+    assert_eq!(
+        outcome,
+        Ok(ReviewRequestMergeOutcome::Refused {
+            reason: "Agentty merges only GitHub pull requests".to_string(),
+        })
+    );
+}
+
+/// Returns a merge input for a ready review request `#42`.
+fn merge_input() -> MergeReviewRequestInput {
+    MergeReviewRequestInput {
+        display_id: "#42".to_string(),
+        expected_head_commit: None,
+        mode: ReviewRequestMergeMode::Ready,
+    }
 }
 
 /// Returns whether `command` exactly matches one expected CLI invocation.

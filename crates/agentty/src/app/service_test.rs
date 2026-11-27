@@ -18,6 +18,7 @@ use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::chatgpt_sign_in::ChatGptSignInUpdate;
 use crate::app::platform::PlatformUpdate;
 use crate::app::prompt_intent::PromptImagePasteUpdate;
+use crate::app::review_request_merge::ReviewRequestMergeCompletion;
 use crate::app::service::{AppServices, RealSessionRunFactory, SessionRunFactory};
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
@@ -1008,7 +1009,19 @@ fn session_event_labels_preserve_variant_identity() {
             result: Err("offline".to_string()),
             session_id: session_id.clone(),
         },
-        AppEvent::ReviewWatchRerunFinished { session_id },
+        AppEvent::ReviewWatchRerunFinished {
+            session_id: session_id.clone(),
+        },
+        AppEvent::ReviewRequestMergeCompleted {
+            completion: Box::new(ReviewRequestMergeCompletion {
+                display_id: "#42".to_string(),
+                outcome: Err("offline".to_string()),
+                refreshed: None,
+                short_name: "PR",
+                target_branch: "main".to_string(),
+            }),
+            session_id,
+        },
     ];
     // Act / Assert
     assert_event_labels(events);

@@ -360,6 +360,7 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
                 ConfirmationIntent::ContinueSession
                 | ConfirmationIntent::ForkSession
                 | ConfirmationIntent::MergeSession
+                | ConfirmationIntent::MergeReviewRequest { .. }
                 | ConfirmationIntent::RegenerateReview
                 | ConfirmationIntent::WatchPublishedReviewRequest
                 | ConfirmationIntent::WatchReviewRequest,

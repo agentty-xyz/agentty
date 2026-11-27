@@ -386,6 +386,27 @@ in Active. Sync its local target branch with `s` from the list to move it to **D
 and remove the worktree; if that fails, follow the warning and retry. Closing an
 unmerged request cancels its session and removes its worktree.
 
+### Merging a Pull Request
+
+<a id="usage-review-request-merge"></a> While a GitHub pull request shows `[ready]` or
+`[ready (bypass)]` and its session rests in **Review** or **Watching** with nothing
+running or queued, press `m` in session view and confirm with `y`:
+
+- **`[ready]`**: Agentty merges the pull request with the first method the repository
+  allows: squash, then a merge commit, then rebase. If the base branch requires a merge
+  queue, the pull request joins the queue instead and the session shows **Queued**.
+- **`[ready (bypass)]`**: The confirmation asks `Bypass branch protections?`. Agentty
+  marks a draft ready for review, then merges with your administrator rights, skipping
+  the missing approval and any merge queue.
+
+The session shows **Queued** while Agentty merges, so no reply, sync, or watched
+follow-up starts meanwhile. Agentty reads the pull request again first and changes
+nothing when it is no longer ready, is already merged or queued, or is not at the
+session branch's commit; push or sync the session, then retry. `[Merge Error]` says why,
+and the session returns to **Review** or **Watching**. A merged pull request moves the
+session to **Merged**, as a remote merge does. A failure after a draft was marked ready
+leaves it ready for review. GitLab merge requests are merged on GitLab.
+
 ### Watching a Review Request
 
 <a id="usage-review-request-watch"></a> When you publish a branch that is not pushed

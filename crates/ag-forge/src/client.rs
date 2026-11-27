@@ -6,9 +6,10 @@ use ag_telemetry::{Context, FutureExt as _, Outcome, Span, TraceContextExt};
 
 use super::{
     CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeKind, ForgeOperation,
-    ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
-    ReviewCommentSnapshot, ReviewRequestAttention, ReviewRequestError, ReviewRequestMetadata,
-    ReviewRequestSummary, UpdateReviewRequestInput, detect_remote,
+    ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, MergeReviewRequestInput,
+    RealForgeCommandRunner, ReviewCommentSnapshot, ReviewRequestAttention, ReviewRequestError,
+    ReviewRequestMergeOutcome, ReviewRequestMetadata, ReviewRequestSummary,
+    UpdateReviewRequestInput, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -81,6 +82,27 @@ pub trait ReviewRequestClient: Send + Sync {
         display_id: String,
         input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
+
+    /// Merges one open review request whose latest refresh reported the
+    /// readiness `input.mode` names, or adds it to its target branch's merge
+    /// queue.
+    ///
+    /// The forge state is read again first, and the merge is refused unless
+    /// it still allows `input.mode`: open, not queued, at
+    /// `input.expected_head_commit` when one is given, and ready (or ready
+    /// with bypass) by the same rules a refresh reports. A draft is marked
+    /// ready for review before it merges. GitLab merge requests are always
+    /// refused.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when a forge command
+    /// fails. A draft marked ready for review before the failure stays ready
+    /// for review, and the error says so.
+    fn merge_review_request(
+        &self,
+        remote: ForgeRemote,
+        input: MergeReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestMergeOutcome, ReviewRequestError>>;
 
     /// Returns the browser-openable URL for one review request.
     ///
@@ -324,6 +346,18 @@ impl ReviewRequestClient for RealReviewRequestClient {
         )
     }
 
+    fn merge_review_request(
+        &self,
+        remote: ForgeRemote,
+        input: MergeReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestMergeOutcome, ReviewRequestError>> {
+        self.call_with_authenticated_adapter(
+            remote,
+            "merge_review_request",
+            move |adapter, remote| adapter.merge_authenticated_review_request(remote, input),
+        )
+    }
+
     fn review_request_web_url(
         &self,
         review_request: &ReviewRequestSummary,
@@ -469,6 +503,13 @@ pub(crate) trait ReviewRequestAdapter: Send + Sync {
         display_id: String,
         input: UpdateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>>;
+
+    /// Merges or queues one review request after authentication.
+    fn merge_authenticated_review_request(
+        &self,
+        remote: ForgeRemote,
+        input: MergeReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestMergeOutcome, ReviewRequestError>>;
 
     /// Fetches a review-comment snapshot after authentication.
     fn fetch_authenticated_review_comment_snapshot(

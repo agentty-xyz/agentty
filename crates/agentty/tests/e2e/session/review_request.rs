@@ -449,6 +449,145 @@ async fn test_pr_bypass_ready_label() -> E2eResult {
     Ok(())
 }
 
+/// Seeds one linked pull request that refreshes as ready and whose `gh`
+/// stub records a squash merge at the session head, after which every read
+/// reports it merged.
+async fn seed_mergeable_pr(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env).await?;
+    let gh_path = env.stub_bin.join("gh");
+    // Every pull-request read runs in the session worktree, so `git
+    // rev-parse HEAD` names the head the merge must match.
+    let gh_script = r#"#!/bin/sh
+merged_marker="${0}.merged"
+pull_request='"number":42,"title":"Review-ready session shortcuts","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"isInMergeQueue":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED"'
+case "$*" in
+  *"auth status"*)
+    exit 0
+    ;;
+  *"pr merge 42"*)
+    case "$*" in
+      *"--squash --match-head-commit $(git rev-parse HEAD)"*) ;;
+      *) echo "unexpected merge: $*" >&2; exit 1 ;;
+    esac
+    touch "$merged_marker"
+    printf '%s\n' 'Squashed and merged pull request agentty-xyz/agentty#42' >&2
+    ;;
+  # The pre-merge query also selects `mergeCommitAllowed`, so match it first.
+  *"isMergeQueueEnabled"*)
+    printf '{"data":{"repository":{"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"squashMergeAllowed":true,"pullRequest":{%s,"state":"OPEN","mergedAt":null,"headRefOid":"%s","isMergeQueueEnabled":false,"autoMergeRequest":null}}}}\n' "$pull_request" "$(git rev-parse HEAD)"
+    ;;
+  *"mergeCommit"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"state":"MERGED","mergedAt":"2026-11-27T10:00:00Z","mergeCommit":{"oid":"fedcba9876543210fedcba9876543210fedcba98"},"isInMergeQueue":false,"autoMergeRequest":null}}}}'
+    ;;
+  *"mergeStateStatus"*)
+    if [ -f "$merged_marker" ]; then
+      printf '{"data":{"repository":{"pullRequest":{%s,"state":"MERGED","mergedAt":"2026-11-27T10:00:00Z"}}}}\n' "$pull_request"
+    else
+      printf '{"data":{"repository":{"pullRequest":{%s,"state":"OPEN","mergedAt":null}}}}\n' "$pull_request"
+    fi
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 1
+    ;;
+esac
+"#;
+    std::fs::write(&gh_path, gh_script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
+/// Verify that `m` on a ready pull request confirms, merges it on GitHub at
+/// the session head, and moves the session to `Merged`.
+#[tokio::test]
+async fn test_pr_merge_shortcut() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("pr_merge_shortcut")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_mergeable_pr(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("[ready]", 10_000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("m")
+                    .wait_for_text("Merge PR #42", 5000)
+                    .capture_labeled(
+                        "pr_merge_confirmation",
+                        "Merging a ready pull request asks for confirmation first",
+                    )
+                    .press_key("y")
+                    .wait_for_text("[Review Request] Merged PR #42", 10_000)
+                    .wait_for_text("Merged", 5000)
+                    .capture_labeled("pr_merged", "The merged pull request merges the session")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let confirmation = common::frame_from_capture(&report.captures[0]);
+                    let confirmation_full = Region::full(confirmation.cols(), confirmation.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation,
+                        "Merge or join merge queue?",
+                        &confirmation_full,
+                    );
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Merged PR #42 into", &full);
+                    assertion::assert_text_in_region(frame, "fedcba9", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that `m` on a pull request that merges only by bypass warns that
+/// the merge bypasses branch protections, and that canceling merges nothing.
+#[tokio::test]
+async fn test_pr_bypass_merge_confirmation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("pr_bypass_merge_confirmation")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_bypass_ready_pr_status(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("[ready (bypass)]", 10_000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("m")
+                    .wait_for_text("Bypass Merge PR #42", 5000)
+                    .capture_labeled(
+                        "pr_bypass_merge_confirmation",
+                        "A bypass merge warns that it bypasses branch protections",
+                    )
+                    .press_key("n")
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let confirmation = common::frame_from_capture(&report.captures[0]);
+                    let confirmation_full = Region::full(confirmation.cols(), confirmation.rows());
+                    assertion::assert_text_in_region(
+                        &confirmation,
+                        "Bypass branch protections?",
+                        &confirmation_full,
+                    );
+                    assertion::assert_not_visible(frame, "Bypass Merge PR #42");
+                    assertion::assert_not_visible(frame, "Merging PR #42");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Verify that pressing `p` in a review-ready session opens the review-request
 /// publish popup.
 #[tokio::test]

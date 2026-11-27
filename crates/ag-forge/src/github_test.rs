@@ -4,6 +4,8 @@
 mod attention_test;
 #[path = "github_test/comment_test.rs"]
 mod comment_test;
+#[path = "github_test/merge_test.rs"]
+mod merge_test;
 #[path = "github_test/metadata_test.rs"]
 mod metadata_test;
 #[path = "github_test/parse_test.rs"]

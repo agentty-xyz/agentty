@@ -10,15 +10,16 @@ and serves no web client; a program that embeds `ag-relay` serves the client.
   crate receives a `SessionService`, a revision counter, and a `DeviceStore`.
 - Expose only the operations in `RemoteRequest`. The user approved PNG and JPEG images
   in chat messages, which the host stores itself, stopping a turn, creating sessions,
-  merging, publishing, syncing a session or a project, session settings, generating a
-  graph proposal with `/graph`, answering the questions of a session's graph work, and
-  the graph inspector's actions: accepting an output, retrying or replying to a node,
-  resuming or cancelling a graph, and adding provider calls to its spent budget. A
-  request about a project is for the host's active project unless it names another in
-  `project_id`; where the host offers `projects`, it may name any project the host
-  lists. Any other mutation, any operation that runs a host command, and any read
-  outside a listed session or a listed project's status is a new security decision; do
-  not extend the protocol without one.
+  merging, publishing, merging a session's ready pull request on its forge (bypassing
+  branch protections only when the request asks to), syncing a session or a project,
+  session settings, generating a graph proposal with `/graph`, answering the questions
+  of a session's graph work, and the graph inspector's actions: accepting an output,
+  retrying or replying to a node, resuming or cancelling a graph, and adding provider
+  calls to its spent budget. A request about a project is for the host's active project
+  unless it names another in `project_id`; where the host offers `projects`, it may name
+  any project the host lists. Any other mutation, any operation that runs a host
+  command, and any read outside a listed session or a listed project's status is a new
+  security decision; do not extend the protocol without one.
 - Every request added after the first protocol version names its capability; the three
   original mutations, `send_message`, `answer_questions`, and `cancel_session`, are
   always served. A request declares the operations it needs and how it queues in

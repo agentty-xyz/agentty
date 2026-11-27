@@ -8,8 +8,9 @@ use ag_remote::protocol::{
     RemoteGraphProposalPhase, RemoteGraphStatus, RemoteImage, RemoteMessage, RemoteMessageKind,
     RemoteModeModel, RemoteModelOption, RemoteProject, RemoteProjectEntry, RemoteProjectSync,
     RemoteProjectSyncPhase, RemoteQuestion, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteReviewRequest, RemoteSession, RemoteSessionGraph, RemoteSessionMode,
-    RemoteSessionSummary, RequestedProjectId, RequestedSessionId, ServerFrame,
+    RemoteResult, RemoteReviewRequest, RemoteReviewRequestMergeOutcome, RemoteSession,
+    RemoteSessionGraph, RemoteSessionMode, RemoteSessionSummary, RequestedProjectId,
+    RequestedSessionId, ServerFrame,
 };
 use ag_remote::test_support::{MemoryDeviceStore, RecordingBackend};
 use base64::Engine as _;
@@ -1174,6 +1175,87 @@ async fn merge_reaches_the_host_only_for_listed_sessions() -> TestResult {
         RemoteResult::Error("Session not found".to_string())
     );
     assert_eq!(server.backend.calls(), ["list", "merge:session-1", "list"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn review_request_merges_bypass_only_when_the_client_sends_bypass() -> TestResult {
+    // Arrange
+    let server = TestServer::start().await?;
+    let (mut client, _device_id) = server.pair("Phone").await?;
+    // A client that leaves `bypass` out, as one unaware of it would.
+    let without_bypass = serde_json::from_value::<RemoteRequest>(serde_json::json!({
+        "method": "merge_review_request",
+        "session_id": "session-1"
+    }))?;
+
+    // Act
+    let queued = call(&mut client, 1, without_bypass).await?;
+    let bypassed = call(
+        &mut client,
+        2,
+        RemoteRequest::MergeReviewRequest {
+            bypass: true,
+            session_id: "session-1".into(),
+        },
+    )
+    .await?;
+    let unlisted = call(
+        &mut client,
+        3,
+        RemoteRequest::MergeReviewRequest {
+            bypass: true,
+            session_id: "other-project-session".into(),
+        },
+    )
+    .await?;
+
+    // Assert
+    let pull_request = |state: &str, status_summary: Option<&str>| {
+        Box::new(RemoteReviewRequest {
+            display_id: "#7".to_string(),
+            forge: Some("GitHub".to_string()),
+            source_branch: "agentty/session-1".to_string(),
+            state: state.to_string(),
+            status_summary: status_summary.map(str::to_string),
+            target_branch: "main".to_string(),
+            title: "Build it".to_string(),
+            web_url: "https://github.com/example/project/pull/7".to_string(),
+        })
+    };
+    assert_eq!(
+        queued,
+        RemoteResult::Ok(RemoteResponse::ReviewRequestMerge {
+            merge_commit: None,
+            outcome: RemoteReviewRequestMergeOutcome::Queued,
+            reason: None,
+            review_request: Some(pull_request("Open", Some("In merge queue"))),
+        })
+    );
+    assert_eq!(
+        bypassed,
+        RemoteResult::Ok(RemoteResponse::ReviewRequestMerge {
+            merge_commit: Some("7a1c0de".to_string()),
+            outcome: RemoteReviewRequestMergeOutcome::Merged,
+            reason: None,
+            review_request: Some(pull_request("Merged", None)),
+        })
+    );
+    assert_eq!(
+        unlisted,
+        RemoteResult::Error("Session not found".to_string())
+    );
+    assert_eq!(
+        server.backend.calls(),
+        [
+            "list",
+            "merge_review_request:session-1:false",
+            "list",
+            "merge_review_request:session-1:true",
+            "list",
+        ]
+    );
 
     Ok(())
 }

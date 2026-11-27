@@ -140,6 +140,7 @@ pub(super) fn reply_enabled_review_snapshot() -> ViewSessionSnapshot {
         open_worktree: ViewActionState::Enabled,
         platform_task_choice: None,
         review_comments: ViewActionState::Disabled,
+        review_request_merge_action: None,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         steer_queued_messages: ViewActionState::Disabled,

@@ -6,13 +6,31 @@ use serde::Deserialize;
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandRunner, ForgeFuture, ForgeKind,
-    ForgeRemote, ReviewCheckFailure, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
-    ReviewCommentThread, ReviewRequestAdapter, ReviewRequestAttention, ReviewRequestError,
+    ForgeRemote, MergeReviewRequestInput, ReviewCheckFailure, ReviewComment,
+    ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestAdapter,
+    ReviewRequestAttention, ReviewRequestError, ReviewRequestMergeMode, ReviewRequestMergeOutcome,
     ReviewRequestMetadata, ReviewRequestMetadataEdit, ReviewRequestOperations, ReviewRequestState,
     ReviewRequestSummary, SyncReviewRequestMetadataConfig, UpdateReviewRequestInput,
     map_parse_error, normalize_provider_label, operation_failed, parse_remote_url,
     status_summary_parts, strip_port,
 };
+
+/// Length of the abbreviated commit hashes shown in merge refusals.
+const SHORT_COMMIT_LENGTH: usize = 7;
+
+/// Pull-request fields every readiness evaluation reads, shared by the
+/// refresh query and the query that rechecks readiness before a merge.
+macro_rules! pull_request_status_fields {
+    () => {
+        "number title state url baseRefName headRefName isDraft isInMergeQueue mergeable \
+         mergeStateStatus reviewDecision mergedAt statusCheckRollup { state contexts(first: 100) { \
+         nodes { ... on CheckRun { name } ... on StatusContext { context } } pageInfo { \
+         hasNextPage } } } reviewThreads(first: 100) { totalCount nodes { isResolved } } baseRef { \
+         refUpdateRule { requiredStatusCheckContexts } rules(first: 100) { totalCount nodes { \
+         parameters { ... on RequiredStatusChecksParameters { requiredStatusChecks { context } } } \
+         } } } viewerCanMergeAsAdmin"
+    };
+}
 
 /// One compact status query replaces `gh pr view` during each review refresh.
 ///
@@ -20,15 +38,31 @@ use super::{
 /// bypass readiness wait for required checks that have not reported yet.
 /// `isInMergeQueue` reports whether the pull request waits in its base
 /// branch's merge queue.
-const PULL_REQUEST_STATUS_QUERY: &str =
+const PULL_REQUEST_STATUS_QUERY: &str = concat!(
     "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
-     $repo) { pullRequest(number: $number) { number title state url baseRefName headRefName \
-     isDraft isInMergeQueue mergeable mergeStateStatus reviewDecision mergedAt statusCheckRollup \
-     { state contexts(first: 100) { nodes { ... on CheckRun { name } ... on StatusContext { \
-     context } } pageInfo { hasNextPage } } } reviewThreads(first: 100) { totalCount nodes { \
-     isResolved } } baseRef { refUpdateRule { requiredStatusCheckContexts } rules(first: 100) { \
-     totalCount nodes { parameters { ... on RequiredStatusChecksParameters { requiredStatusChecks \
-     { context } } } } } } viewerCanMergeAsAdmin } } }";
+     $repo) { pullRequest(number: $number) { ",
+    pull_request_status_fields!(),
+    " } } }"
+);
+
+/// Status query read immediately before a merge: the refresh fields plus the
+/// head commit the merge must match, whether the base branch requires a
+/// merge queue, whether auto-merge is already enabled, and the merge methods
+/// the repository allows.
+const PULL_REQUEST_MERGE_CANDIDATE_QUERY: &str = concat!(
+    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
+     $repo) { mergeCommitAllowed rebaseMergeAllowed squashMergeAllowed pullRequest(number: \
+     $number) { ",
+    pull_request_status_fields!(),
+    " headRefOid isMergeQueueEnabled autoMergeRequest { enabledAt } } } }"
+);
+
+/// Query read after `gh pr merge` succeeds, telling a merge from a queued
+/// pull request.
+const PULL_REQUEST_MERGE_RESULT_QUERY: &str =
+    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
+     $repo) { pullRequest(number: $number) { state mergedAt mergeCommit { oid } isInMergeQueue \
+     autoMergeRequest { enabledAt } } } }";
 
 /// Paginated GraphQL query used when a required check may be reported beyond
 /// the first page of rollup contexts.
@@ -766,6 +800,225 @@ impl GitHubReviewRequestAdapter {
             ],
         )
     }
+
+    /// Replaces the first page of rollup contexts with every page when a
+    /// required check is missing from it, so readiness never depends on a
+    /// truncated check list.
+    async fn load_unfetched_required_checks(
+        operations: &ReviewRequestOperations,
+        remote: &ForgeRemote,
+        pull_request_number: &str,
+        pull_request: &mut GitHubViewResponse,
+    ) -> Result<(), ReviewRequestError> {
+        if !pull_request.has_unfetched_required_checks() {
+            return Ok(());
+        }
+
+        let contexts_output = operations
+            .run_review_command(
+                remote,
+                Self::status_contexts_command(remote, pull_request_number),
+                "fetch pull-request status checks",
+            )
+            .await?;
+        pull_request.status_check_rollup = Some(map_parse_error(
+            ForgeKind::GitHub,
+            Self::parse_status_check_rollup_pages(&contexts_output.stdout),
+        )?);
+
+        Ok(())
+    }
+
+    /// Rechecks one pull request, then marks a draft ready for review and
+    /// merges or queues it as `input.mode` allows.
+    ///
+    /// Every refusal is decided before anything changes. A failure after a
+    /// draft was marked ready for review says that it stays ready.
+    async fn merge_pull_request(
+        operations: ReviewRequestOperations,
+        remote: ForgeRemote,
+        input: MergeReviewRequestInput,
+    ) -> Result<ReviewRequestMergeOutcome, ReviewRequestError> {
+        let pull_request_number = Self::parse_display_id(&input.display_id)?;
+        let candidate_output = operations
+            .run_review_command(
+                &remote,
+                Self::pull_request_graphql_command(
+                    &remote,
+                    PULL_REQUEST_MERGE_CANDIDATE_QUERY,
+                    &pull_request_number,
+                ),
+                "read pull request before merging",
+            )
+            .await?;
+        let (mut candidate, merge_methods) = map_parse_error(
+            ForgeKind::GitHub,
+            Self::parse_merge_candidate(&candidate_output.stdout),
+        )?;
+        Self::load_unfetched_required_checks(
+            &operations,
+            &remote,
+            &pull_request_number,
+            &mut candidate.status,
+        )
+        .await?;
+        let plan = match candidate.merge_plan(&merge_methods, &input) {
+            Ok(plan) => plan,
+            Err(reason) => return Ok(ReviewRequestMergeOutcome::Refused { reason }),
+        };
+
+        if candidate.status.is_draft {
+            operations
+                .run_review_command(
+                    &remote,
+                    Self::ready_for_review_command(&remote, &pull_request_number),
+                    "mark pull request ready for review",
+                )
+                .await?;
+        }
+        let outcome = Self::run_merge_plan(&operations, &remote, &pull_request_number, &plan).await;
+        if !candidate.status.is_draft {
+            return outcome;
+        }
+
+        outcome.map_err(|error| Self::stays_ready_for_review_error(&error, &pull_request_number))
+    }
+
+    /// Runs `gh pr merge` for `plan`, then reads the pull request back to
+    /// tell a merge from a queued pull request.
+    async fn run_merge_plan(
+        operations: &ReviewRequestOperations,
+        remote: &ForgeRemote,
+        pull_request_number: &str,
+        plan: &GitHubMergePlan,
+    ) -> Result<ReviewRequestMergeOutcome, ReviewRequestError> {
+        operations
+            .run_review_command(
+                remote,
+                Self::merge_command(remote, pull_request_number, plan),
+                "merge pull request",
+            )
+            .await?;
+        let result_output = operations
+            .run_review_command(
+                remote,
+                Self::pull_request_graphql_command(
+                    remote,
+                    PULL_REQUEST_MERGE_RESULT_QUERY,
+                    pull_request_number,
+                ),
+                "read pull request after merging",
+            )
+            .await?;
+        let result = map_parse_error(
+            ForgeKind::GitHub,
+            Self::parse_merge_result(&result_output.stdout),
+        )?;
+
+        result.outcome().ok_or_else(|| {
+            operation_failed(
+                ForgeKind::GitHub,
+                format!(
+                    "GitHub accepted the merge, but pull request #{pull_request_number} is \
+                     neither merged nor queued"
+                ),
+            )
+        })
+    }
+
+    /// Returns `error` with the note that the draft pull request it failed
+    /// on was marked ready for review and stays ready.
+    fn stays_ready_for_review_error(
+        error: &ReviewRequestError,
+        pull_request_number: &str,
+    ) -> ReviewRequestError {
+        let detail = match error {
+            ReviewRequestError::OperationFailed { message, .. } => message.clone(),
+            other => other.detail_message(),
+        };
+
+        operation_failed(
+            ForgeKind::GitHub,
+            format!(
+                "{detail}\nPull request #{pull_request_number} was marked ready for review and \
+                 stays ready for review."
+            ),
+        )
+    }
+
+    /// Parses the pre-merge status of one pull request and the merge
+    /// methods its repository allows.
+    fn parse_merge_candidate(
+        stdout: &str,
+    ) -> Result<(GitHubMergeCandidate, GitHubMergeMethods), String> {
+        let response: GitHubMergeCandidateEnvelope = serde_json::from_str(stdout)
+            .map_err(|error| format!("invalid GitHub pull-request merge response: {error}"))?;
+        let repository = response
+            .data
+            .and_then(|data| data.repository)
+            .ok_or_else(|| {
+                "GitHub pull-request merge response is missing a repository".to_string()
+            })?;
+        let candidate = repository.pull_request.ok_or_else(|| {
+            "GitHub pull-request merge response is missing a pull request".to_string()
+        })?;
+
+        Ok((candidate, repository.merge_methods))
+    }
+
+    /// Parses the state of one pull request read after `gh pr merge`.
+    fn parse_merge_result(stdout: &str) -> Result<GitHubMergeResult, String> {
+        let response: GitHubMergeResultEnvelope = serde_json::from_str(stdout)
+            .map_err(|error| format!("invalid GitHub pull-request merge result: {error}"))?;
+
+        response
+            .data
+            .and_then(|data| data.repository)
+            .and_then(|repository| repository.pull_request)
+            .ok_or_else(|| "GitHub pull-request merge result is missing a pull request".to_string())
+    }
+
+    /// Builds the `gh pr ready` command that marks a draft ready for review.
+    fn ready_for_review_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
+        Self::github_command(
+            remote,
+            vec![
+                "pr".to_string(),
+                "ready".to_string(),
+                pull_request_number.to_string(),
+                "--repo".to_string(),
+                remote.project_path(),
+            ],
+        )
+    }
+
+    /// Builds the `gh pr merge` command for `plan`.
+    ///
+    /// `--match-head-commit` makes GitHub refuse the merge when a commit
+    /// lands after the recheck. A pull request that joins a merge queue
+    /// takes no merge method, since the queue sets it.
+    fn merge_command(
+        remote: &ForgeRemote,
+        pull_request_number: &str,
+        plan: &GitHubMergePlan,
+    ) -> ForgeCommand {
+        let mut arguments = vec![
+            "pr".to_string(),
+            "merge".to_string(),
+            pull_request_number.to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+        ];
+        if let Some(method) = plan.method {
+            arguments.push(method.flag().to_string());
+        }
+        if plan.bypasses_protections {
+            arguments.push("--admin".to_string());
+        }
+        arguments.extend(["--match-head-commit".to_string(), plan.head_commit.clone()]);
+
+        Self::github_command(remote, arguments)
+    }
 }
 
 impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
@@ -850,23 +1103,29 @@ impl ReviewRequestAdapter for GitHubReviewRequestAdapter {
                 ForgeKind::GitHub,
                 Self::parse_view_pull_request(&output.stdout),
             )?;
-            if pull_request.has_unfetched_required_checks() {
-                let contexts_output = operations
-                    .run_review_command(
-                        &remote,
-                        Self::status_contexts_command(&remote, &pull_request_number),
-                        "fetch pull-request status checks",
-                    )
-                    .await?;
-                let status_check_rollup = map_parse_error(
-                    ForgeKind::GitHub,
-                    Self::parse_status_check_rollup_pages(&contexts_output.stdout),
-                )?;
-                pull_request.status_check_rollup = Some(status_check_rollup);
-            }
+            Self::load_unfetched_required_checks(
+                &operations,
+                &remote,
+                &pull_request_number,
+                &mut pull_request,
+            )
+            .await?;
 
             Ok(pull_request.into_summary())
         })
+    }
+
+    /// Rechecks one pull request and merges or queues it.
+    fn merge_authenticated_review_request(
+        &self,
+        remote: ForgeRemote,
+        input: MergeReviewRequestInput,
+    ) -> ForgeFuture<Result<ReviewRequestMergeOutcome, ReviewRequestError>> {
+        Box::pin(Self::merge_pull_request(
+            self.operations.clone(),
+            remote,
+            input,
+        ))
     }
 
     /// Loads current pull-request title/body metadata.
@@ -1572,6 +1831,249 @@ impl GitHubViewResponse {
             Some(other) => Some(normalize_provider_label(other)),
         }
     }
+}
+
+/// Outer GraphQL response of the pre-merge query.
+#[derive(Deserialize)]
+struct GitHubMergeCandidateEnvelope {
+    data: Option<GitHubMergeCandidateData>,
+}
+
+/// GraphQL `data` payload of the pre-merge query.
+#[derive(Deserialize)]
+struct GitHubMergeCandidateData {
+    repository: Option<GitHubMergeCandidateRepository>,
+}
+
+/// Repository node of the pre-merge query.
+#[derive(Deserialize)]
+struct GitHubMergeCandidateRepository {
+    #[serde(flatten)]
+    merge_methods: GitHubMergeMethods,
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GitHubMergeCandidate>,
+}
+
+/// Merge methods a repository allows for its pull requests.
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+struct GitHubMergeMethods {
+    #[serde(default, rename = "mergeCommitAllowed")]
+    merge_commit_allowed: bool,
+    #[serde(default, rename = "rebaseMergeAllowed")]
+    rebase_merge_allowed: bool,
+    #[serde(default, rename = "squashMergeAllowed")]
+    squash_merge_allowed: bool,
+}
+
+impl GitHubMergeMethods {
+    /// Returns the allowed method closest to Agentty's own squash merge:
+    /// squash, then a merge commit, then rebase.
+    fn preferred(&self) -> Option<GitHubMergeMethod> {
+        [
+            (self.squash_merge_allowed, GitHubMergeMethod::Squash),
+            (self.merge_commit_allowed, GitHubMergeMethod::Merge),
+            (self.rebase_merge_allowed, GitHubMergeMethod::Rebase),
+        ]
+        .into_iter()
+        .find_map(|(is_allowed, method)| is_allowed.then_some(method))
+    }
+}
+
+/// One `gh pr merge` merge method.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GitHubMergeMethod {
+    Merge,
+    Rebase,
+    Squash,
+}
+
+impl GitHubMergeMethod {
+    /// Returns the `gh pr merge` flag that selects this method.
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Merge => "--merge",
+            Self::Rebase => "--rebase",
+            Self::Squash => "--squash",
+        }
+    }
+}
+
+/// How one rechecked pull request merges.
+#[derive(Debug, Eq, PartialEq)]
+struct GitHubMergePlan {
+    /// Whether the merge bypasses branch protections and any merge queue.
+    bypasses_protections: bool,
+    /// Head commit the recheck saw, which the merge must still match.
+    head_commit: String,
+    /// Merge method to request; `None` when the pull request joins a merge
+    /// queue, which sets the method itself.
+    method: Option<GitHubMergeMethod>,
+}
+
+/// Pull-request status read immediately before a merge.
+#[derive(Deserialize)]
+struct GitHubMergeCandidate {
+    #[serde(rename = "autoMergeRequest")]
+    auto_merge_request: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+    #[serde(default, rename = "isMergeQueueEnabled")]
+    is_merge_queue_enabled: bool,
+    #[serde(flatten)]
+    status: GitHubViewResponse,
+}
+
+impl GitHubMergeCandidate {
+    /// Returns how this pull request merges for `input`, or why it may not.
+    ///
+    /// Readiness follows the same rules as the status a refresh reports, so
+    /// a merge runs only while the pull request is still what the caller
+    /// saw: still open, not queued, at the expected head, and ready for the
+    /// requested mode.
+    fn merge_plan(
+        &self,
+        merge_methods: &GitHubMergeMethods,
+        input: &MergeReviewRequestInput,
+    ) -> Result<GitHubMergePlan, String> {
+        let number = self.status.number;
+        match self.status.review_request_state() {
+            ReviewRequestState::Merged => {
+                return Err(format!("Pull request #{number} is already merged"));
+            }
+            ReviewRequestState::Closed => return Err(format!("Pull request #{number} is closed")),
+            ReviewRequestState::Open => {}
+        }
+        if self.status.is_in_merge_queue {
+            return Err(format!(
+                "Pull request #{number} is already in the merge queue"
+            ));
+        }
+        if self.auto_merge_request.is_some() {
+            return Err(format!(
+                "Pull request #{number} is already set to merge automatically"
+            ));
+        }
+        if let Some(expected_head_commit) = input.expected_head_commit.as_deref()
+            && expected_head_commit != self.head_ref_oid
+        {
+            return Err(format!(
+                "Pull request #{number} is at commit `{}`, not `{}`; push or sync the branch, \
+                 then merge again",
+                short_commit(&self.head_ref_oid),
+                short_commit(expected_head_commit),
+            ));
+        }
+
+        let (bypasses_protections, joins_merge_queue) = match input.mode {
+            ReviewRequestMergeMode::Ready if self.status.is_ready() => {
+                (false, self.is_merge_queue_enabled)
+            }
+            ReviewRequestMergeMode::Bypass if self.status.is_ready() => {
+                return Err(format!(
+                    "Pull request #{number} is now ready to merge without bypassing branch \
+                     protections; merge it without bypass"
+                ));
+            }
+            ReviewRequestMergeMode::Bypass if self.status.is_bypass_ready() => (true, false),
+            ReviewRequestMergeMode::Ready | ReviewRequestMergeMode::Bypass => {
+                return Err(self.not_ready_reason(input.mode));
+            }
+        };
+        let method = if joins_merge_queue {
+            None
+        } else {
+            Some(merge_methods.preferred().ok_or_else(|| {
+                format!("The repository of pull request #{number} allows no merge method")
+            })?)
+        };
+
+        Ok(GitHubMergePlan {
+            bypasses_protections,
+            head_commit: self.head_ref_oid.clone(),
+            method,
+        })
+    }
+
+    /// Explains that the pull request is no longer ready for `mode`, with
+    /// the status a refresh would show now.
+    fn not_ready_reason(&self, mode: ReviewRequestMergeMode) -> String {
+        let readiness = match mode {
+            ReviewRequestMergeMode::Bypass => "ready to merge with bypass",
+            ReviewRequestMergeMode::Ready => "ready to merge",
+        };
+        let status = self
+            .status
+            .status_summary()
+            .unwrap_or_else(|| "no status".to_string());
+
+        format!(
+            "Pull request #{} is no longer {readiness} ({status})",
+            self.status.number
+        )
+    }
+}
+
+/// Returns the abbreviated form of `commit` shown in refusals.
+fn short_commit(commit: &str) -> &str {
+    commit.get(..SHORT_COMMIT_LENGTH).unwrap_or(commit)
+}
+
+/// Outer GraphQL response of the query read after a merge.
+#[derive(Deserialize)]
+struct GitHubMergeResultEnvelope {
+    data: Option<GitHubMergeResultData>,
+}
+
+/// GraphQL `data` payload of the query read after a merge.
+#[derive(Deserialize)]
+struct GitHubMergeResultData {
+    repository: Option<GitHubMergeResultRepository>,
+}
+
+/// Repository node of the query read after a merge.
+#[derive(Deserialize)]
+struct GitHubMergeResultRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GitHubMergeResult>,
+}
+
+/// Pull-request state read after `gh pr merge` succeeded.
+#[derive(Deserialize)]
+struct GitHubMergeResult {
+    #[serde(rename = "autoMergeRequest")]
+    auto_merge_request: Option<serde::de::IgnoredAny>,
+    #[serde(default, rename = "isInMergeQueue")]
+    is_in_merge_queue: bool,
+    #[serde(rename = "mergeCommit")]
+    merge_commit: Option<GitHubCommitOid>,
+    #[serde(rename = "mergedAt")]
+    merged_at: Option<String>,
+    state: String,
+}
+
+impl GitHubMergeResult {
+    /// Returns whether the pull request merged or waits to merge, or `None`
+    /// when it did neither.
+    ///
+    /// With a merge queue, `gh pr merge` adds a pull request whose checks
+    /// passed to the queue and enables auto-merge for one whose checks have
+    /// not, which adds it once they pass; both count as queued.
+    fn outcome(self) -> Option<ReviewRequestMergeOutcome> {
+        if self.merged_at.is_some() || self.state == "MERGED" {
+            return Some(ReviewRequestMergeOutcome::Merged {
+                merge_commit: self.merge_commit.map(|commit| commit.oid),
+            });
+        }
+
+        (self.is_in_merge_queue || self.auto_merge_request.is_some())
+            .then_some(ReviewRequestMergeOutcome::Queued)
+    }
+}
+
+/// Commit node carrying only its object id.
+#[derive(Deserialize)]
+struct GitHubCommitOid {
+    oid: String,
 }
 
 /// Aggregate check and commit-status state for the pull-request head.

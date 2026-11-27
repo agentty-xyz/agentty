@@ -8,7 +8,7 @@ use mockall::Sequence;
 
 use super::support_test::{
     failure_output, github_empty_pull_request_comments_json, github_remote, github_view_json,
-    parse_view_summary, success_output,
+    parse_view_summary, set_passing_required_checks, success_output,
 };
 use crate::client::ReviewRequestAdapter;
 use crate::command::MockForgeCommandRunner;
@@ -610,27 +610,6 @@ fn status_contexts_page(state: &str, nodes: &serde_json::Value) -> serde_json::V
         "state": state,
         "contexts": {"nodes": nodes, "pageInfo": {"hasNextPage": false, "endCursor": null}}
     }}}}})
-}
-
-/// Marks every reported check as passing and every base-branch required
-/// check, from both a ruleset and classic branch protection, as reported.
-fn set_passing_required_checks(pull_request: &mut serde_json::Value) {
-    pull_request["statusCheckRollup"] = serde_json::json!({
-        "state": "SUCCESS",
-        "contexts": {"nodes": [
-            {"name": "Workspace validation"},
-            {"context": "codecov/patch"},
-            {}
-        ]}
-    });
-    pull_request["baseRef"] = serde_json::json!({
-        "refUpdateRule": {"requiredStatusCheckContexts": ["codecov/patch"]},
-        "rules": {"totalCount": 3, "nodes": [
-            {"parameters": {"requiredStatusChecks": [{"context": "Workspace validation"}]}},
-            {"parameters": {}},
-            {"parameters": null}
-        ]}
-    });
 }
 
 #[test]

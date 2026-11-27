@@ -45,6 +45,7 @@ mod review_diff;
 mod review_graph;
 mod review_prompt;
 mod review_request;
+mod review_request_merge;
 mod review_resume;
 mod review_rules;
 mod review_watch;

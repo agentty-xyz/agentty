@@ -15,11 +15,12 @@ use ag_session::{
     AgentSelection, AgentSelectionMetadata, CreateSessionMode, ExecutionGraphStatus,
     ExtendGraphBudgetRequest, GraphNodeProgress, GraphNodeStatus, GraphResultState, HostContext,
     HostProject, HostProjectStatus, HostProjectSync, HostProjectSyncPhase, ProjectScope,
-    QuestionItem, ReviewRequestSummary, Session, SessionDiffFile, SessionDiffFileStatus,
-    SessionError, SessionFileEntry, SessionFocusedReview, SessionGraph, SessionGraphAction,
-    SessionGraphActionKind, SessionGraphActionRequest, SessionGraphNode, SessionGraphProposal,
-    SessionGraphProposalPhase, SessionGraphSummary, SessionGraphs, SessionId, SessionListEntry,
-    SessionMessage, SessionMessageKind, SessionService, session_branch,
+    QuestionItem, ReviewRequestMerge, ReviewRequestMergeOutcome, ReviewRequestSummary, Session,
+    SessionDiffFile, SessionDiffFileStatus, SessionError, SessionFileEntry, SessionFocusedReview,
+    SessionGraph, SessionGraphAction, SessionGraphActionKind, SessionGraphActionRequest,
+    SessionGraphNode, SessionGraphProposal, SessionGraphProposalPhase, SessionGraphSummary,
+    SessionGraphs, SessionId, SessionListEntry, SessionMessage, SessionMessageKind, SessionService,
+    session_branch,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -208,6 +209,29 @@ pub enum RemoteRequest {
         /// that offers `projects`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project_id: Option<RequestedProjectId>,
+    },
+    /// Merges the session's open GitHub pull request on GitHub, with the
+    /// user's forge credentials, when the session's `review_ready` is
+    /// `ready`, or `ready_with_bypass` and `bypass` is true. A draft is
+    /// marked ready for review first. A `ready` pull request whose base
+    /// branch requires a merge queue joins the queue instead; a bypass
+    /// merges past branch protections and any merge queue with the user's
+    /// administrator rights.
+    ///
+    /// Agentty reads the pull request again before acting and answers
+    /// `refused` with a reason when it is no longer ready for the requested
+    /// merge, or no longer at the session branch's commit. It answers an
+    /// error when the session cannot merge it now: no ready GitHub pull
+    /// request, another merge or publish running, or a turn or other work
+    /// pending. Offered through the `merge_review_request` capability.
+    MergeReviewRequest {
+        /// Whether to merge by bypassing branch protections; it must be
+        /// true for a `ready_with_bypass` pull request and false for a
+        /// `ready` one. Absent means false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bypass: bool,
+        /// Session whose pull request merges.
+        session_id: RequestedSessionId,
     },
     /// Merges a review-ready session into its base branch in the host's
     /// checkout. Offered through the `merge` capability.
@@ -803,6 +827,25 @@ pub enum RemoteResponse {
     ReviewRequest {
         /// Review request as the forge reported it.
         review_request: RemoteReviewRequest,
+    },
+    /// What a `merge_review_request` did on the forge.
+    ReviewRequestMerge {
+        /// Commit the merge created on the target branch, present for
+        /// `merged` when the forge reports it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        merge_commit: Option<String>,
+        /// Whether the pull request merged, joined the merge queue, or was
+        /// left unchanged.
+        outcome: RemoteReviewRequestMergeOutcome,
+        /// Why the forge state no longer allows the merge, present for
+        /// `refused`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// The pull request as the forge reported it after the attempt;
+        /// absent when that refresh failed. Boxed to keep other responses
+        /// small.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review_request: Option<Box<RemoteReviewRequest>>,
     },
     /// The sessions of the project a `list_sessions` request is for, in
     /// display order.
@@ -2124,6 +2167,44 @@ impl From<ReviewRequestSummary> for RemoteReviewRequest {
             target_branch: summary.target_branch,
             title: summary.title,
             web_url: summary.web_url,
+        }
+    }
+}
+
+/// What a `merge_review_request` did on the forge.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteReviewRequestMergeOutcome {
+    /// The pull request merged into its target branch.
+    Merged,
+    /// The pull request joined its target branch's merge queue, or is set
+    /// to join it once the forge's requirements pass.
+    Queued,
+    /// The forge state no longer allows the merge, so nothing changed.
+    Refused,
+}
+
+impl From<ReviewRequestMerge> for RemoteResponse {
+    fn from(merge: ReviewRequestMerge) -> Self {
+        let (outcome, merge_commit, reason) = match merge.outcome {
+            ReviewRequestMergeOutcome::Merged { merge_commit } => {
+                (RemoteReviewRequestMergeOutcome::Merged, merge_commit, None)
+            }
+            ReviewRequestMergeOutcome::Queued => {
+                (RemoteReviewRequestMergeOutcome::Queued, None, None)
+            }
+            ReviewRequestMergeOutcome::Refused { reason } => {
+                (RemoteReviewRequestMergeOutcome::Refused, None, Some(reason))
+            }
+        };
+
+        Self::ReviewRequestMerge {
+            merge_commit,
+            outcome,
+            reason,
+            review_request: merge
+                .review_request
+                .map(|summary| Box::new(RemoteReviewRequest::from(summary))),
         }
     }
 }

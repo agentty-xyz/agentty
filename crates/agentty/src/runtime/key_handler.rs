@@ -670,6 +670,7 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
             ConfirmationIntent::ContinueSession
             | ConfirmationIntent::ForkSession
             | ConfirmationIntent::MergeSession
+            | ConfirmationIntent::MergeReviewRequest { .. }
             | ConfirmationIntent::RegenerateReview
             | ConfirmationIntent::WatchPublishedReviewRequest
             | ConfirmationIntent::WatchReviewRequest,
@@ -717,6 +718,15 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         }
         ConfirmationIntent::MergeSession => {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
+        }
+        ConfirmationIntent::MergeReviewRequest { bypass } => {
+            Ok(handle_review_request_merge_confirmation(
+                app,
+                confirmation_session_id,
+                restore_view,
+                bypass,
+            )
+            .await)
         }
         ConfirmationIntent::RegenerateReview => Ok(handle_regenerate_review_confirmation(
             app,
@@ -822,6 +832,31 @@ async fn handle_merge_confirmation(
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Restores the previous view and starts merging the confirmed session's
+/// pull request in the background, bypassing branch protections only when
+/// `bypass`; a refusal lands in the session's transcript.
+async fn handle_review_request_merge_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+    bypass: bool,
+) -> EventResult {
+    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+    let Some(session_id) = confirmation_session_id else {
+        return EventResult::Continue;
+    };
+    if let Err(error) = app
+        .admit_review_request_merge(session_id.clone(), bypass)
+        .await
+    {
+        app.append_output_for_session(&session_id, &TranscriptNotice::MergeError.format(error))
+            .await;
+    }
+
+    EventResult::Continue
 }
 
 /// Restores the previous view and starts watching the confirmed session's

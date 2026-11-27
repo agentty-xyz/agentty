@@ -7,7 +7,8 @@ use super::super::{
     ViewActionState, ViewContext, ViewKeyContext, ViewPendingUpdate, ViewSessionSnapshot,
     end_in_progress_turn, handle_primary_view_key, handle_view_key, handle_workflow_view_key,
     open_or_regenerate_review, open_publish_branch_input, open_review_comments_in_diff,
-    open_review_output_mode, view_context, view_session_snapshot,
+    open_review_output_mode, open_review_request_merge_confirmation, view_context,
+    view_session_snapshot,
 };
 use super::support::{
     apply_pending_session_diff, attach_open_review_request, new_test_app_with_session,
@@ -16,7 +17,9 @@ use super::support::{
 use crate::app::ReviewCacheEntry;
 use crate::app::test_support::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Status};
+use crate::domain::session::{
+    FollowUpTaskAction, PublishBranchAction, ReviewRequestMergeAction, Status,
+};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus,
 };
@@ -45,6 +48,7 @@ async fn test_handle_view_key_uppercase_f_does_not_start_review_when_fork_unavai
         open_worktree: ViewActionState::Enabled,
         platform_task_choice: None,
         review_comments: ViewActionState::Disabled,
+        review_request_merge_action: None,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         steer_queued_messages: ViewActionState::Disabled,
@@ -96,6 +100,7 @@ async fn test_handle_view_key_p_opens_review_request_publish_input() {
         open_worktree: ViewActionState::Enabled,
         platform_task_choice: None,
         review_comments: ViewActionState::Disabled,
+        review_request_merge_action: None,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         steer_queued_messages: ViewActionState::Disabled,
@@ -147,6 +152,7 @@ async fn test_handle_view_key_shift_p_opens_review_request_publish_input() {
         open_worktree: ViewActionState::Enabled,
         platform_task_choice: None,
         review_comments: ViewActionState::Disabled,
+        review_request_merge_action: None,
         review_watch_toggle: None,
         start_staged_session: ViewActionState::Disabled,
         steer_queued_messages: ViewActionState::Disabled,
@@ -773,6 +779,126 @@ async fn review_comment_key_opens_diff_from_view() {
             ..
         } if session_id == &view_context.session_id
     ));
+}
+
+/// Presses `m` in the view of `session_id` while its linked pull request
+/// reports `status_summary`, with the snapshot the view derives from it.
+async fn press_merge_with_pull_request_status(
+    app: &mut crate::app::App,
+    session_id: &str,
+    status_summary: &str,
+) -> Option<bool> {
+    crate::test_support::set_session_status_for_test(app, session_id, Status::Review);
+    let session = &mut app.sessions.sessions_mut()[0];
+    attach_open_review_request(session);
+    if let Some(review_request) = session.review_request.as_mut() {
+        review_request.summary.status_summary = Some(status_summary.to_string());
+    }
+    app.mode = AppMode::View {
+        session_id: session_id.into(),
+        scroll_offset: Some(2),
+    };
+    let view_context = view_context(app).expect("expected view context");
+    let snapshot = view_session_snapshot(app, &view_context).expect("expected view snapshot");
+    let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+
+    handle_workflow_view_key(
+        app,
+        KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+        &view_context,
+        &snapshot,
+        &mut pending_update,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn merge_key_confirms_a_ready_pull_request_merge_that_may_queue() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+
+    // Act
+    let result =
+        press_merge_with_pull_request_status(&mut app, &session_id, "Approved, PR ready").await;
+
+    // Assert
+    assert_eq!(result, Some(false));
+    assert!(matches!(
+        app.mode,
+        AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::MergeReviewRequest { bypass: false },
+            ref confirmation_message,
+            ref confirmation_title,
+            restore_view: Some(ConfirmationViewMode {
+                scroll_offset: Some(2),
+                ..
+            }),
+            ..
+        } if confirmation_title == "Merge PR #42"
+            && confirmation_message == "Merge or join merge queue?"
+    ));
+}
+
+#[tokio::test]
+async fn merge_key_warns_that_a_bypass_merge_skips_branch_protections() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+
+    // Act
+    let result = press_merge_with_pull_request_status(
+        &mut app,
+        &session_id,
+        "Review required, Blocked, PR ready with bypass",
+    )
+    .await;
+
+    // Assert
+    assert_eq!(result, Some(false));
+    assert!(matches!(
+        app.mode,
+        AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::MergeReviewRequest { bypass: true },
+            ref confirmation_message,
+            ref confirmation_title,
+            ..
+        } if confirmation_title == "Bypass Merge PR #42"
+            && confirmation_message == "Bypass branch protections?"
+    ));
+}
+
+#[tokio::test]
+async fn merge_key_ignores_a_pull_request_that_is_not_ready() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+
+    // Act
+    let result =
+        press_merge_with_pull_request_status(&mut app, &session_id, "Checks pending").await;
+
+    // Assert
+    assert_eq!(result, None);
+    assert!(matches!(app.mode, AppMode::View { .. }));
+}
+
+#[tokio::test]
+async fn merge_confirmation_without_a_linked_pull_request_leaves_the_view() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    app.mode = AppMode::View {
+        session_id: session_id.into(),
+        scroll_offset: None,
+    };
+    let view_context = view_context(&mut app).expect("expected view context");
+
+    // Act
+    open_review_request_merge_confirmation(
+        &mut app,
+        &view_context,
+        ReviewRequestMergeAction::Merge,
+    );
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::View { .. }));
 }
 
 /// Sends one plain workflow key against a fresh review-ready view.

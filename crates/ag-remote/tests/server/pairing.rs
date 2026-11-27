@@ -35,6 +35,7 @@ async fn paired_device_reconnects_with_its_key() -> TestResult {
                 "settings",
                 "settings_agent",
                 "publish",
+                "merge_review_request",
                 "sync_project",
                 "graphs",
                 "graph_actions",

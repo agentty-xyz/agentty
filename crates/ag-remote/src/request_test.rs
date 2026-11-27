@@ -11,7 +11,8 @@ use crate::protocol::{
     ClientFrame, RemoteDiffFile, RemoteDiffFileStatus, RemoteFileEntry, RemoteGraphAction,
     RemoteGraphActionRequest, RemoteImage, RemoteModeModel, RemoteModelOption, RemoteProject,
     RemoteProjectSync, RemoteProjectSyncPhase, RemoteQuestionAnswer, RemoteRequest, RemoteResponse,
-    RemoteResult, RemoteSession, RemoteSessionMode, RemoteSessionSummary,
+    RemoteResult, RemoteReviewRequestMergeOutcome, RemoteSession, RemoteSessionMode,
+    RemoteSessionSummary,
 };
 use crate::server::{MAX_MESSAGE_SIZE, ServerState};
 use crate::source_support::{
@@ -1091,6 +1092,85 @@ async fn publish_returns_host_refusals_and_needs_the_host_to_serve_it() {
         RemoteResult::Error("Unsupported request".to_string())
     );
     assert_eq!(serving.backend.calls(), ["list", "review:session-1"]);
+    assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn review_request_merge_answers_the_forge_outcome_and_passes_bypass_through() {
+    // Arrange
+    let serving = StateFixture::supporting(
+        MemoryDeviceStore::default(),
+        &[SessionOperation::MergeReviewRequest],
+    );
+    let merge = |bypass| RemoteRequest::MergeReviewRequest {
+        bypass,
+        session_id: "session-1".into(),
+    };
+
+    // Act
+    let bypassed = reply_result(&serving.state, merge(true)).await;
+    let refused = reply_result(&serving.state, merge(false)).await;
+
+    // Assert
+    assert_eq!(
+        bypassed,
+        RemoteResult::Ok(RemoteResponse::ReviewRequestMerge {
+            merge_commit: Some("7a1c0de".to_string()),
+            outcome: RemoteReviewRequestMergeOutcome::Merged,
+            reason: None,
+            review_request: None,
+        })
+    );
+    assert_eq!(
+        refused,
+        RemoteResult::Ok(RemoteResponse::ReviewRequestMerge {
+            merge_commit: None,
+            outcome: RemoteReviewRequestMergeOutcome::Refused,
+            reason: Some(
+                "Pull request #7 is no longer ready to merge (Checks pending)".to_string()
+            ),
+            review_request: None,
+        })
+    );
+    assert_eq!(
+        serving.backend.calls(),
+        [
+            "list",
+            "merge_review_request:session-1:true",
+            "list",
+            "merge_review_request:session-1:false",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn review_request_merge_never_reaches_a_host_that_does_not_serve_it() {
+    // Arrange
+    let not_serving = StateFixture::supporting(
+        MemoryDeviceStore::default(),
+        &[
+            SessionOperation::MergeSession,
+            SessionOperation::PublishSession,
+        ],
+    );
+
+    // Act
+    let unsupported = reply_result(
+        &not_serving.state,
+        RemoteRequest::MergeReviewRequest {
+            bypass: true,
+            session_id: "session-1".into(),
+        },
+    )
+    .await;
+    let offered = capabilities(not_serving.state.sessions());
+
+    // Assert
+    assert_eq!(
+        unsupported,
+        RemoteResult::Error("Unsupported request".to_string())
+    );
+    assert_eq!(offered, ["merge", "publish"]);
     assert_eq!(not_serving.backend.calls(), Vec::<String>::new());
 }
 

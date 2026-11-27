@@ -85,6 +85,15 @@ impl App {
             } => {
                 return self.execute_review_request(request, response_tx).await;
             }
+            CommandDelivery::ReviewRequestMerge {
+                bypass,
+                response_tx,
+                session_id,
+            } => {
+                return self
+                    .start_review_request_merge(session_id, bypass, response_tx)
+                    .await;
+            }
         }
 
         Ok(())
@@ -168,6 +177,25 @@ impl App {
             CommandDelivery::Review {
                 request,
                 response_tx,
+            },
+        );
+
+        self.admit_session_command(command).await
+    }
+
+    /// Admits the terminal's merge of a session's pull request, confirmed
+    /// for its readiness: bypassing branch protections only when `bypass`.
+    pub(crate) async fn admit_review_request_merge(
+        &mut self,
+        session_id: SessionId,
+        bypass: bool,
+    ) -> Result<(), SessionError> {
+        let command = SessionCommand::new(
+            CommandInitiator::SessionView,
+            CommandDelivery::ReviewRequestMerge {
+                bypass,
+                response_tx: None,
+                session_id,
             },
         );
 

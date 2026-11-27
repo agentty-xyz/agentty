@@ -10,7 +10,9 @@ use super::{
     view_actions_with_review_request,
 };
 use crate::domain::platform_sync::PlatformTaskChoice;
-use crate::domain::session::{PublishBranchAction, ReviewWatchToggle, Status};
+use crate::domain::session::{
+    PublishBranchAction, ReviewRequestMergeAction, ReviewWatchToggle, Status,
+};
 use crate::presentation::platform::{
     PlatformAccess, PlatformAccountView, PlatformSignInView, PlatformState, PlatformTabView,
     PlatformView,
@@ -244,6 +246,7 @@ fn test_view_actions_in_progress_shows_stop_sync_and_queue_and_hides_open_and_co
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::InProgress,
     };
 
@@ -274,6 +277,7 @@ fn in_progress_help_offers_send_now_only_for_steerable_queued_chat() {
         can_steer_queued_messages,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state,
     };
     let has_send_now = |state| {
@@ -317,6 +321,7 @@ fn a_session_held_back_by_the_platform_sync_lists_its_choices_instead_of_start()
             can_steer_queued_messages: ViewActionAvailability::Disabled,
             platform_task_choice: Some(choice),
             publish_pull_request_action: None,
+            review_request_merge_action: None,
             session_state: ViewSessionState::NewSession,
         };
 
@@ -346,6 +351,7 @@ fn test_view_actions_hide_open_when_worktree_is_unavailable() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::Review,
     };
 
@@ -379,6 +385,7 @@ fn test_view_actions_show_diff_in_every_session_state() {
             can_steer_queued_messages: ViewActionAvailability::Disabled,
             platform_task_choice: None,
             publish_pull_request_action: None,
+            review_request_merge_action: None,
             session_state,
         };
 
@@ -404,6 +411,7 @@ fn merged_view_actions_keep_diff_and_hide_mutating_actions() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         session_state: ViewSessionState::Merged,
     };
 
@@ -421,6 +429,52 @@ fn merged_view_actions_keep_diff_and_hide_mutating_actions() {
 }
 
 #[test]
+fn review_view_actions_offer_the_pull_request_merge_on_m() {
+    // Arrange
+    let state = |review_request_merge_action| ViewHelpState {
+        can_fork_session: ViewActionAvailability::Enabled,
+        can_merge_session_branch: ViewActionAvailability::Disabled,
+        can_open_worktree: ViewActionAvailability::Enabled,
+        can_start_staged_session: ViewActionAvailability::Disabled,
+        can_steer_queued_messages: ViewActionAvailability::Disabled,
+        platform_task_choice: None,
+        publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action,
+        session_state: ViewSessionState::Review,
+    };
+    let merge_action = |review_request_merge_action| {
+        view_actions(state(review_request_merge_action))
+            .into_iter()
+            .filter(|action| action.key == "m")
+            .collect::<Vec<_>>()
+    };
+
+    // Act
+    let ready = merge_action(Some(ReviewRequestMergeAction::Merge));
+    let bypass = merge_action(Some(ReviewRequestMergeAction::BypassMerge));
+    let unavailable = merge_action(None);
+
+    // Assert
+    assert_eq!(
+        ready,
+        [HelpAction::new(
+            "merge PR",
+            "m",
+            "Merge pull request, or add it to its merge queue",
+        )]
+    );
+    assert_eq!(
+        bypass,
+        [HelpAction::new(
+            "merge PR (bypass)",
+            "m",
+            "Merge pull request by bypassing branch protections",
+        )]
+    );
+    assert_eq!(unavailable, Vec::<HelpAction>::new());
+}
+
+#[test]
 fn test_view_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
     // Arrange
     let state = ViewHelpState {
@@ -431,6 +485,7 @@ fn test_view_actions_rebasing_shows_queue_publish_and_hides_open_and_stop() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         session_state: ViewSessionState::Rebasing,
     };
 
@@ -460,6 +515,7 @@ fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::MergeQueue,
     };
 
@@ -484,6 +540,7 @@ fn test_view_actions_review_shows_diff() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         session_state: ViewSessionState::Review,
     };
 
@@ -526,6 +583,7 @@ fn test_view_actions_review_hides_fork_when_unavailable() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         session_state: ViewSessionState::Review,
     };
 
@@ -547,6 +605,7 @@ fn test_view_actions_review_hides_merge_when_merge_gate_is_disabled_but_keeps_sy
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::Review,
     };
 
@@ -570,6 +629,7 @@ fn test_view_actions_agent_review_shows_sync() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         session_state: ViewSessionState::AgentReview,
     };
 
@@ -595,6 +655,7 @@ fn test_view_actions_interactive_hides_review_actions() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::Interactive,
     };
 
@@ -619,6 +680,7 @@ fn test_view_actions_new_session_shows_add_draft_and_start() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::NewSession,
     };
 
@@ -651,6 +713,7 @@ fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::Done,
     };
 
@@ -682,6 +745,7 @@ fn test_view_actions_canceled_shows_continue_without_edit_actions() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::Canceled,
     };
 
@@ -714,6 +778,7 @@ fn test_view_actions_terminal_sessions_hide_linked_review_comments() {
             can_steer_queued_messages: ViewActionAvailability::Disabled,
             platform_task_choice: None,
             publish_pull_request_action: None,
+            review_request_merge_action: None,
             session_state,
         };
 
@@ -750,6 +815,7 @@ fn test_view_actions_non_terminal_review_comments_follow_availability() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::Review,
     };
 
@@ -781,6 +847,7 @@ fn test_view_actions_review_hides_stop() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         session_state: ViewSessionState::Review,
     };
 
@@ -933,6 +1000,7 @@ fn review_watch_action_follows_toggle_before_trailing_help_actions() {
         can_steer_queued_messages: ViewActionAvailability::Disabled,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         session_state: ViewSessionState::Review,
     };
 

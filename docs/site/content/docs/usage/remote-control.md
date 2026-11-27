@@ -15,8 +15,10 @@ paired device can also stop a running turn, sync a session branch with its base 
 change a session's settings, create sessions, merge a session into its base branch,
 publish its branch, sync a project's branch with its remote, ask for a graph proposal
 with `/graph`, and act on an execution graph as the terminal's graph inspector does; the
-web page offers each of these. A device reaches every project in `Projects` and picks
-the one it shows with the [project menu](#usage-remote-control-project).
+web page offers each of these. This Agentty also lets a device merge a session's ready
+GitHub pull request, as `m` does in the terminal, once the page offers it. A device
+reaches every project in `Projects` and picks the one it shows with the
+[project menu](#usage-remote-control-project).
 
 Remote control is a preview feature that runs through an
 [Agentty Platform](@/docs/usage/platform.md): Agentty connects out to the platform's
@@ -333,6 +335,9 @@ projects and the sessions their lists show, it can:
   which adds a worktree and branch in that project's checkout;
 - publish a session, which pushes its branch and opens or refreshes its pull request
   with this computer's Git and forge credentials;
+- merge a session's ready GitHub pull request on GitHub, or add it to its merge queue,
+  with this computer's forge credentials, and, for a pull request ready with bypass,
+  merge it past its branch protections with your administrator rights;
 - sync any of these projects, which pulls its branch with a rebase and pushes it with
   this computer's Git credentials, and starts an agent to resolve any conflicts; and
 - act on a session's execution graph wherever the terminal's graph inspector could:
@@ -367,6 +372,10 @@ control.
   this computer's Git and forge credentials; it cannot choose a branch name. See
   [Forge Authentication](@/docs/usage/forge-authentication.md) for what publishing
   needs.
+- A device merges a pull request only while Agentty shows it ready or ready with bypass,
+  and Agentty checks GitHub again first. It bypasses branch protections only when the
+  device asks for a bypass and the pull request is ready with bypass; a request without
+  one never bypasses.
 - Agentty accepts no inbound connections: it reaches devices only through the relay of
   the platform it is signed in to.
 

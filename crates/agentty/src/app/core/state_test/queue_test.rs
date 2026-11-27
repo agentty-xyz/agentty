@@ -136,6 +136,7 @@ async fn help_and_info_overlays_follow_their_background_tick_driven_ui() {
                     platform_task_choice: None,
                     can_view_review_comments: false,
                     publish_pull_request_action: None,
+                    review_request_merge_action: None,
                     review_watch_toggle: None,
                     session_id: "session-id".into(),
                     session_state: ViewSessionState::InProgress,

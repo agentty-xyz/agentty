@@ -14,7 +14,8 @@ use crate::app::{App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::input::InputState;
 use crate::domain::platform_sync::PlatformTaskChoice;
 use crate::domain::session::{
-    FollowUpTaskAction, PublishBranchAction, ReviewWatchToggle, SessionId, Status,
+    FollowUpTaskAction, PublishBranchAction, ReviewRequestMergeAction, ReviewWatchToggle,
+    SessionId, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -120,6 +121,7 @@ struct ViewSessionSnapshot {
     platform_task_choice: Option<PlatformTaskChoice>,
     publish_pull_request_action: Option<PublishBranchAction>,
     review_comments: ViewActionState,
+    review_request_merge_action: Option<ReviewRequestMergeAction>,
     review_watch_toggle: Option<ReviewWatchToggle>,
     session_state: ViewSessionState,
     session_status: Status,
@@ -156,6 +158,7 @@ impl ViewSessionSnapshot {
             review_comments: ViewActionState::from_bool(
                 session.has_review_request() && session.allows_review_comment_reply(),
             ),
+            review_request_merge_action: session.review_request_merge_availability().ok(),
             review_watch_toggle: session.review_watch_toggle(),
             session_state: help_action::session_view_state(session),
             session_status,
@@ -547,6 +550,13 @@ async fn handle_workflow_view_key(
         KeyCode::Char('m') if view_session_snapshot.can_merge_session() => {
             open_merge_confirmation(app, view_context);
         }
+        KeyCode::Char('m') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            // Without a ready pull request `m` has no further meaning.
+            let review_request_merge_action = view_session_snapshot.review_request_merge_action?;
+            open_review_request_merge_confirmation(app, view_context, review_request_merge_action);
+
+            return Some(false);
+        }
         KeyCode::Char('r') if view_session_snapshot.can_rebase_session() => {
             rebase_view_session(app, &view_context.session_id).await;
         }
@@ -619,6 +629,52 @@ fn open_merge_confirmation(app: &mut App, view_context: &ViewContext) {
         confirmation_intent: ConfirmationIntent::MergeSession,
         confirmation_message: "Add this session to merge queue?".to_string(),
         confirmation_title: "Confirm Merge".to_string(),
+        restore_view: Some(confirmation_view_mode(view_context)),
+        session_id: Some(view_context.session_id.clone()),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    };
+}
+
+/// Opens the confirmation for merging the viewed session's pull request on
+/// its forge.
+///
+/// The one-line message says that a ready pull request may join a merge
+/// queue instead, or that a bypass merge bypasses branch protections.
+fn open_review_request_merge_confirmation(
+    app: &mut App,
+    view_context: &ViewContext,
+    review_request_merge_action: ReviewRequestMergeAction,
+) {
+    let Some(summary) = app
+        .sessions
+        .session_for_id(&view_context.session_id)
+        .and_then(|session| session.review_request.as_ref())
+        .map(|review_request| &review_request.summary)
+    else {
+        return;
+    };
+    let pull_request = format!(
+        "{} {}",
+        summary.forge_kind.review_request_short_name(),
+        summary.display_id
+    );
+    let (confirmation_title, confirmation_message) = match review_request_merge_action {
+        ReviewRequestMergeAction::Merge => (
+            format!("Merge {pull_request}"),
+            "Merge or join merge queue?",
+        ),
+        ReviewRequestMergeAction::BypassMerge => (
+            format!("Bypass Merge {pull_request}"),
+            "Bypass branch protections?",
+        ),
+    };
+
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::MergeReviewRequest {
+            bypass: review_request_merge_action.bypasses_protections(),
+        },
+        confirmation_message: confirmation_message.to_string(),
+        confirmation_title,
         restore_view: Some(confirmation_view_mode(view_context)),
         session_id: Some(view_context.session_id.clone()),
         selected_confirmation_index: DEFAULT_OPTION_INDEX,
@@ -877,6 +933,7 @@ fn open_view_help_overlay(
             can_view_review_comments: view_session_snapshot.can_open_review_comments(),
             platform_task_choice: view_session_snapshot.platform_task_choice,
             publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
+            review_request_merge_action: view_session_snapshot.review_request_merge_action,
             review_watch_toggle: view_session_snapshot.review_watch_toggle,
             session_id: view_context.session_id.clone(),
             session_state: view_session_snapshot.session_state,

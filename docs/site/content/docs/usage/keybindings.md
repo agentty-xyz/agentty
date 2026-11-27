@@ -128,7 +128,7 @@ The full set in **Review**, subject to session and forge availability:
 | `f`                 | Show, generate, or regenerate focused review        |
 | `F`                 | Fork session with copied transcript history         |
 | `W`                 | Watch an open review request, or stop watching      |
-| `m`                 | Add to merge queue after confirmation               |
+| `m`                 | Add to merge queue or merge ready PR, if confirmed  |
 | `r`                 | Sync session branch                                 |
 | `j` / `k`           | Scroll output                                       |
 | `g` / `G`           | Scroll to top / bottom                              |
@@ -152,7 +152,10 @@ State-specific differences:
   starts separate work; after a restart that interrupted the check, `s` asks again. See
   [Sync](@/docs/usage/platform.md#usage-platform-sync).
 - **Question**: Answer through the question panel; `r` is hidden.
-- **Linked review request**: `c` opens comments; local `m` is unavailable.
+- **Linked review request**: `c` opens comments. `m` merges the pull request instead of
+  adding the session to the local merge queue, only while it shows `[ready]` or
+  `[ready (bypass)]`; see
+  [Merging a Pull Request](@/docs/usage/workflow.md#usage-review-request-merge).
 - **Merged**: Read-only chat, comments, and diff until manual target sync completes.
 - **Done / Canceled**: `c` confirms a continuation draft and linked comments are hidden;
   `d` shows the archived diff.

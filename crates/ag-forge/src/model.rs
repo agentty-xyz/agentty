@@ -543,6 +543,54 @@ pub struct UpdateReviewRequestInput {
     pub title: Option<ReviewRequestMetadataFieldUpdate>,
 }
 
+/// How [`ReviewRequestClient::merge_review_request`](crate::ReviewRequestClient::merge_review_request)
+/// merges a review request, matching the readiness its latest refresh
+/// reported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewRequestMergeMode {
+    /// Merges a pull request whose status is
+    /// [`ReviewRequestSummary::GITHUB_BYPASS_READY_STATUS_COMPONENT`] by
+    /// bypassing its branch protections with the viewer's administrator
+    /// rights, which also skips a merge queue.
+    Bypass,
+    /// Merges a pull request whose status is
+    /// [`ReviewRequestSummary::GITHUB_READY_STATUS_COMPONENT`], or adds it
+    /// to the merge queue its base branch requires.
+    Ready,
+}
+
+/// Input required to merge one open review request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MergeReviewRequestInput {
+    /// Provider display id such as GitHub `#123`.
+    pub display_id: String,
+    /// Commit the review request's head must be at, such as the session
+    /// branch's local head; `None` accepts the head the forge reports.
+    pub expected_head_commit: Option<String>,
+    /// Readiness the caller saw and the merge requires.
+    pub mode: ReviewRequestMergeMode,
+}
+
+/// Result of one merge attempt that reached the forge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReviewRequestMergeOutcome {
+    /// The review request merged into its target branch.
+    Merged {
+        /// Commit the merge created on the target branch, when the forge
+        /// reports it.
+        merge_commit: Option<String>,
+    },
+    /// The review request waits in its target branch's merge queue, or is
+    /// set to join it once the forge's requirements pass.
+    Queued,
+    /// The forge state no longer allows the requested merge, so nothing was
+    /// changed.
+    Refused {
+        /// Plain-language reason, such as a newer commit or a failing check.
+        reason: String,
+    },
+}
+
 /// Review-request failures normalized for actionable UI messaging.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewRequestError {

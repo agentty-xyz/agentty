@@ -9,7 +9,10 @@ use ag_session::{
 };
 
 use super::super::super::agent::AgentSelection;
-use super::super::{PublishBranchAction, ReviewWatchToggle, Session, SessionSize};
+use super::super::{
+    PublishBranchAction, ReviewRequestMergeAction, ReviewRequestMergeBlocker, ReviewWatchToggle,
+    Session, SessionSize,
+};
 use super::support::test_session;
 use crate::domain::agent::AgentModel;
 use crate::domain::transient_message::{
@@ -490,4 +493,179 @@ fn review_watch_toggle_starts_from_open_review_and_stops_from_watching() {
         // Assert
         assert_eq!(toggle, expected, "{status}");
     }
+}
+
+/// Builds one linked pull request on `forge_kind` in `state` with
+/// `status_summary`.
+fn linked_pull_request(
+    forge_kind: ForgeKind,
+    state: ReviewRequestState,
+    status_summary: &str,
+) -> ReviewRequest {
+    ReviewRequest {
+        last_refreshed_at: 0,
+        summary: ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind,
+            source_branch: "wt/session-id".to_string(),
+            state,
+            status_summary: Some(status_summary.to_string()),
+            target_branch: "main".to_string(),
+            title: "feat".to_string(),
+            web_url: String::new(),
+        },
+    }
+}
+
+/// Returns one loading row in `slot`.
+fn loading_message(slot: TransientMessageSlot) -> TransientMessage {
+    TransientMessage {
+        anchor: TransientMessageAnchor::Tail,
+        body: TransientMessageBody::Loading("Merging PR #42 into `main`...".to_string()),
+        lifecycle: TransientMessageLifecycle::UntilResolved,
+        slot,
+        turn_position: None,
+    }
+}
+
+#[test]
+fn review_request_merge_follows_the_latest_github_readiness() {
+    // Arrange
+    let ready = "Approved, Mergeable, PR ready";
+    let bypass_ready = "Review required, Blocked, PR ready with bypass";
+    let open = |forge_kind, status_summary| {
+        Some(linked_pull_request(
+            forge_kind,
+            ReviewRequestState::Open,
+            status_summary,
+        ))
+    };
+    let cases = [
+        (
+            Status::Review,
+            open(ForgeKind::GitHub, ready),
+            Ok(ReviewRequestMergeAction::Merge),
+        ),
+        (
+            Status::Watching,
+            open(ForgeKind::GitHub, bypass_ready),
+            Ok(ReviewRequestMergeAction::BypassMerge),
+        ),
+        (
+            Status::Review,
+            open(ForgeKind::GitHub, "Checks pending"),
+            Err(ReviewRequestMergeBlocker::NotReady),
+        ),
+        (
+            Status::AgentReview,
+            open(ForgeKind::GitHub, ready),
+            Err(ReviewRequestMergeBlocker::Busy),
+        ),
+        (
+            Status::Review,
+            open(ForgeKind::GitLab, ready),
+            Err(ReviewRequestMergeBlocker::NoPullRequest),
+        ),
+        (
+            Status::Review,
+            Some(linked_pull_request(
+                ForgeKind::GitHub,
+                ReviewRequestState::Merged,
+                ready,
+            )),
+            Err(ReviewRequestMergeBlocker::NoPullRequest),
+        ),
+        (
+            Status::Review,
+            None,
+            Err(ReviewRequestMergeBlocker::NoPullRequest),
+        ),
+        (
+            Status::InProgress,
+            open(ForgeKind::GitHub, ready),
+            Err(ReviewRequestMergeBlocker::Busy),
+        ),
+        (
+            Status::Queued,
+            open(ForgeKind::GitHub, ready),
+            Err(ReviewRequestMergeBlocker::Busy),
+        ),
+    ];
+
+    for (status, review_request, expected) in cases {
+        let session = SessionFixtureBuilder::new()
+            .status(status)
+            .review_request(review_request)
+            .build();
+
+        // Act
+        let availability = session.review_request_merge_availability();
+
+        // Assert
+        assert_eq!(availability, expected, "{status}");
+    }
+}
+
+#[test]
+fn review_request_merge_waits_for_a_running_publish_or_merge() {
+    // Arrange
+    let ready_session = || {
+        SessionFixtureBuilder::new()
+            .status(Status::Review)
+            .review_request(Some(linked_pull_request(
+                ForgeKind::GitHub,
+                ReviewRequestState::Open,
+                "PR ready",
+            )))
+            .build()
+    };
+    let mut publishing = ready_session();
+    publishing
+        .transient_messages
+        .upsert(loading_message(TransientMessageSlot::BranchPublish));
+    let mut merging = ready_session();
+    merging
+        .transient_messages
+        .upsert(loading_message(TransientMessageSlot::ReviewRequestMerge));
+
+    // Act
+    let publishing_merge = publishing.review_request_merge_availability();
+    let merging_merge = merging.review_request_merge_availability();
+    let merging_publish = merging.publish_pull_request_action();
+
+    // Assert
+    assert_eq!(publishing_merge, Err(ReviewRequestMergeBlocker::Busy));
+    assert_eq!(merging_merge, Err(ReviewRequestMergeBlocker::Merging));
+    assert_eq!(merging_publish, None);
+}
+
+#[test]
+fn review_request_merge_blockers_and_actions_describe_themselves() {
+    // Arrange
+    let blockers = [
+        ReviewRequestMergeBlocker::Busy,
+        ReviewRequestMergeBlocker::Merging,
+        ReviewRequestMergeBlocker::NoPullRequest,
+        ReviewRequestMergeBlocker::NotReady,
+    ];
+
+    // Act
+    let messages = blockers.map(ReviewRequestMergeBlocker::message);
+    let bypasses = [
+        ReviewRequestMergeAction::Merge,
+        ReviewRequestMergeAction::BypassMerge,
+    ]
+    .map(ReviewRequestMergeAction::bypasses_protections);
+
+    // Assert
+    assert_eq!(
+        messages,
+        [
+            "The session has work in progress; merge its pull request once it finishes",
+            "The session's pull request is already merging",
+            "The session has no open GitHub pull request",
+            "The session's pull request is not ready to merge",
+        ]
+    );
+    assert_eq!(bypasses, [false, true]);
 }

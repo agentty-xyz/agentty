@@ -693,6 +693,7 @@ fn mode_session_id_uses_view_help_context() {
             can_view_review_comments: false,
             platform_task_choice: None,
             publish_pull_request_action: None,
+            review_request_merge_action: None,
             review_watch_toggle: None,
             scroll_offset: Some(2),
             session_id: "help-session".into(),

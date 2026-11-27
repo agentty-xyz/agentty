@@ -70,16 +70,19 @@ its own temporary folder for the turn, answering questions, including those of a
 session's graph proposal or graph nodes, stopping a turn, syncing a session branch,
 changing session settings, canceling a session, merging a session into its base branch,
 creating sessions in any listed project, publishing a session branch and opening its
-pull request with the user's forge credentials, syncing any listed project's branch with
-its Git remote, asking for a graph proposal with `/graph`, which starts model work that
-reads the session's worktree and proposes a graph but launches nothing until a chat
-reply approves the proposal, and acting on an execution graph as the terminal's graph
-inspector does: accepting an output, retrying a node or replying to it with guidance,
-resuming a paused graph, adding provider calls to its spent budget, and cancelling a
-graph, which is permanent and which the device's page asks to confirm first. With those,
-anyone holding a paired device can have code written, land it on the base branch, and
-push it to the Git remote of any listed project, so remove a device you no longer
-control.
+pull request with the user's forge credentials, merging a session's ready GitHub pull
+request on GitHub, or adding it to its merge queue, with the user's forge credentials,
+bypassing branch protections with the user's administrator rights only when the device
+asks for a bypass and Agentty reports the pull request ready with bypass, syncing any
+listed project's branch with its Git remote, asking for a graph proposal with `/graph`,
+which starts model work that reads the session's worktree and proposes a graph but
+launches nothing until a chat reply approves the proposal, and acting on an execution
+graph as the terminal's graph inspector does: accepting an output, retrying a node or
+replying to it with guidance, resuming a paused graph, adding provider calls to its
+spent budget, and cancelling a graph, which is permanent and which the device's page
+asks to confirm first. With those, anyone holding a paired device can have code written,
+land it on the base branch, merge its pull request, and push it to the Git remote of any
+listed project, so remove a device you no longer control.
 
 What a paired device reaches:
 

@@ -452,6 +452,11 @@ never discards worktree changes to fit a prompt.
 - **Publishing** shares branch ownership with sync and auto-push and uses
   force-with-lease. Review-request descriptions come from a read-only utility run over
   the published commits, preserving existing description content.
+- **Pull-request merge** holds the session in `Queued`, so no turn or sync starts, and
+  holds its branch-operation lock while `ReviewRequestClient` rechecks readiness and
+  merges, queues, or refuses a linked GitHub pull request. The reducer then applies its
+  refresh exactly as a review-request refresh, so a merged request marks `Merged`, a
+  queued one stays `Queued`, and any other outcome returns to `Review` or `Watching`.
 - **Remote merge** marks `Merged`. A successful manual target sync persists archival
   before cleanup. A review request closed without merging cancels the session with the
   same cleanup as an in-app cancel.

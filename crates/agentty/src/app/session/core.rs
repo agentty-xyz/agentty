@@ -696,6 +696,52 @@ impl SessionManager {
     ) -> bool {
         self.state
             .resolve_queued_action(session_id, TransientMessageSlot::BranchPublish);
+
+        self.promote_to_workflow_notice(
+            session_id,
+            TransientMessageSlot::BranchPublish,
+            persistent_notice,
+        )
+    }
+
+    /// Shows the merge of the linked pull request as an inline loading row.
+    pub(crate) fn start_review_request_merge(&mut self, session_id: &str, loading_label: String) {
+        if let Some(session) = self.state.session_mut_for_id(session_id) {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Loading(loading_label),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::ReviewRequestMerge,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        }
+    }
+
+    /// Promotes a finished pull-request merge into durable transcript
+    /// history and removes its loading row.
+    pub(crate) fn finish_review_request_merge(
+        &mut self,
+        session_id: &str,
+        persistent_notice: &str,
+    ) -> bool {
+        self.promote_to_workflow_notice(
+            session_id,
+            TransientMessageSlot::ReviewRequestMerge,
+            persistent_notice,
+        )
+    }
+
+    /// Appends `persistent_notice` to the session transcript and retracts
+    /// the transient row in `slot` that it replaces.
+    ///
+    /// Returns whether the notice reached a loaded session, so the caller
+    /// persists it.
+    fn promote_to_workflow_notice(
+        &mut self,
+        session_id: &str,
+        slot: TransientMessageSlot,
+        persistent_notice: &str,
+    ) -> bool {
         let appended_to_handle =
             self.append_workflow_notice_to_handle(session_id, persistent_notice);
         if appended_to_handle {
@@ -711,9 +757,7 @@ impl SessionManager {
                 .append_message(SessionMessageKind::WorkflowNotice, persistent_notice);
         }
         Self::place_completed_review_before_new_workflow_notice(session);
-        session
-            .transient_messages
-            .retract(TransientMessageSlot::BranchPublish);
+        session.transient_messages.retract(slot);
 
         true
     }

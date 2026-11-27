@@ -12,7 +12,7 @@ use super::{
 };
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionAttachmentState;
-use crate::domain::session::PublishBranchAction;
+use crate::domain::session::{PublishBranchAction, ReviewRequestMergeAction};
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachment, PromptAttachmentState, PromptHistoryState,
     PromptSlashState,
@@ -301,6 +301,7 @@ fn test_help_context_view_keybindings_for_in_progress_show_sync_and_queue_and_hi
         can_view_review_comments: false,
         platform_task_choice: None,
         publish_pull_request_action: None,
+        review_request_merge_action: None,
         review_watch_toggle: None,
         session_id: "session-id".into(),
         session_state: ViewSessionState::InProgress,
@@ -338,6 +339,7 @@ fn test_help_context_restore_mode_ignores_help_only_view_fields() {
         can_view_review_comments: false,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         review_watch_toggle: None,
         session_id: "session-id".into(),
         session_state: ViewSessionState::InProgress,
@@ -447,6 +449,7 @@ fn test_help_context_view_keybindings_include_publish_pull_request_action() {
         can_view_review_comments: false,
         platform_task_choice: None,
         publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+        review_request_merge_action: None,
         review_watch_toggle: None,
         session_id: "session-id".into(),
         session_state: ViewSessionState::Interactive,
@@ -458,6 +461,50 @@ fn test_help_context_view_keybindings_include_publish_pull_request_action() {
 
     // Assert
     assert!(bindings.iter().any(|binding| binding.key == "p"));
+}
+
+#[test]
+fn test_help_context_view_keybindings_include_the_pull_request_merge() {
+    // Arrange
+    let context = |review_request_merge_action| HelpContext::View {
+        can_fork_session: false,
+        can_merge_session_branch: false,
+        can_open_worktree: false,
+        can_start_staged_session: false,
+        can_steer_queued_messages: false,
+        can_view_review_comments: true,
+        platform_task_choice: None,
+        publish_pull_request_action: None,
+        review_request_merge_action,
+        review_watch_toggle: None,
+        session_id: "session-id".into(),
+        session_state: ViewSessionState::Review,
+        scroll_offset: None,
+    };
+    let merge_label = |review_request_merge_action| {
+        context(review_request_merge_action)
+            .keybindings()
+            .into_iter()
+            .find(|binding| binding.key == "m")
+            .map(|binding| binding.popup_label)
+    };
+
+    // Act
+    let labels = [
+        merge_label(Some(ReviewRequestMergeAction::Merge)),
+        merge_label(Some(ReviewRequestMergeAction::BypassMerge)),
+        merge_label(None),
+    ];
+
+    // Assert
+    assert_eq!(
+        labels,
+        [
+            Some("Merge pull request, or add it to its merge queue"),
+            Some("Merge pull request by bypassing branch protections"),
+            None,
+        ]
+    );
 }
 
 #[test]
