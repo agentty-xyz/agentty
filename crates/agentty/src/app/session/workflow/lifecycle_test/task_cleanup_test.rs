@@ -471,9 +471,15 @@ async fn canceled_session_keeps_task_worktree_records_it_could_not_remove() {
 
 #[tokio::test]
 async fn canceled_session_finishes_task_worktree_removal_when_resources_are_gone() {
-    for case in ["already removed", "branch remains", "repository unknown"] {
+    for case in [
+        "already removed",
+        "branch remains",
+        "prune fails",
+        "repository unknown",
+    ] {
         // Arrange: the directory is already gone and the branch deletion
-        // fails; only a branch that still resolves keeps the record.
+        // fails; only a branch that still resolves, a Git worktree record
+        // that cannot be pruned, or an unknown repository keeps the record.
         let session = test_session("", Status::Canceled, None, "");
         let (repositories, _pool) = database_with_session_and_pool(&session).await;
         reserve_task_worktree(&repositories).await;
@@ -492,8 +498,15 @@ async fn canceled_session_finishes_task_worktree_removal_when_resources_are_gone
                 Ok(PathBuf::from("/repo"))
             })
         });
-        git.expect_prune_worktrees()
-            .returning(|_| Box::pin(async { Ok(()) }));
+        git.expect_prune_worktrees().returning(move |_| {
+            Box::pin(async move {
+                if case == "prune fails" {
+                    return Err(GitError::OutputParse("worktree locked".to_string()));
+                }
+
+                Ok(())
+            })
+        });
         git.expect_delete_branch().returning(|_, _| {
             Box::pin(async { Err(GitError::OutputParse("branch not found".to_string())) })
         });
