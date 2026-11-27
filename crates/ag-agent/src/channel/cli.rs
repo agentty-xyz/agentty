@@ -278,12 +278,7 @@ impl AgentChannel for CliAgentChannel {
                 .then(|| steering_registry.register(&session_id));
             let execution = async {
                 let mut req = req;
-                req.prompt = agent::apply_response_style_prompt(
-                    req.prompt,
-                    req.request_kind.protocol_profile(),
-                    req.response_style,
-                )
-                .map_err(AgentError::from)?;
+                req.prompt = agent::session_turn_prompt(&req).map_err(AgentError::from)?;
                 let prompt_text = req.prompt.agent_text();
                 let replay = agent::replay::ReplayContext::prepare(
                     req.folder.clone(),

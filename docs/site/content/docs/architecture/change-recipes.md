@@ -110,6 +110,9 @@ dispatch through the public API.
    `crates/agentty/src/domain/platform_sync.rs` and check it again in
    `crates/agentty/src/infra/platform.rs` before sending.
 1. Keep answer text in session transient output only, never in a transcript or prompt.
+   The one exception is the held task's milestone, which reaches session turns only
+   through `TurnRequest::task_milestone`, fenced and escaped by
+   `crates/ag-agent/src/agent/prompt.rs`.
 1. Update the Sync section of `SECURITY.md` and
    `docs/site/content/docs/usage/platform.md` with what is sent and when.
 

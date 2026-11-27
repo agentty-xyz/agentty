@@ -1,5 +1,7 @@
 //! Platform task repository tests.
 
+use ag_contracts::TaskMilestone;
+
 use crate::{
     Database, NewPlatformTask, PlatformTaskClaim, PlatformTaskName, PlatformTaskState,
     SettledPlatformTask,
@@ -45,6 +47,7 @@ async fn begin(database: &Database, session_id: &str) -> bool {
 /// Names task 12 of the `agentty` project.
 fn task_twelve() -> PlatformTaskName<'static> {
     PlatformTaskName {
+        milestone: None,
         number: 12,
         project: "agentty",
         title: "Fix the relay reconnect",
@@ -124,6 +127,7 @@ async fn a_held_claim_is_taken_once_and_hidden_from_debug_output() {
     assert_eq!(row.task_number, Some(12));
     assert_eq!(row.task_project.as_deref(), Some("agentty"));
     assert_eq!(row.task_title.as_deref(), Some("Fix the relay reconnect"));
+    assert_eq!(row.milestone, None);
     assert_eq!(
         row.task_url.as_deref(),
         Some("https://platform.example/sync/projects/agentty/tasks/12")
@@ -187,6 +191,174 @@ async fn a_conflict_keeps_its_holder_until_the_session_asks_again() {
     assert_eq!(checking.task_number, None);
     assert_eq!(checking.holder_session, None);
     assert!(!asked_while_checking);
+}
+
+/// Returns milestone 3, "Ship milestones".
+fn milestone_three() -> TaskMilestone {
+    TaskMilestone {
+        goal: "Group a project's tasks under goals.\nAgents align with them.".to_string(),
+        number: 3,
+        title: "Ship milestones".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn a_held_tasks_milestone_survives_a_restart() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("directory should exist");
+    let path = directory.path().join("agentty.db");
+    let database = Database::open(&path).await.expect("db should open");
+    let project_id = database
+        .projects()
+        .upsert_project("/project", Some("main".to_string()))
+        .await
+        .expect("project should insert");
+    database
+        .sessions()
+        .insert_session("first", "gpt-5.6-sol", "main", "Draft", project_id)
+        .await
+        .expect("session should insert");
+    begin(&database, "first").await;
+    let milestone = milestone_three();
+    database
+        .platform_tasks()
+        .hold_platform_task(
+            "first",
+            PlatformTaskName {
+                milestone: Some(&milestone),
+                ..task_twelve()
+            },
+            "clm_secret",
+        )
+        .await
+        .expect("task should be held");
+    drop(database);
+
+    // Act
+    let reopened = Database::open(&path).await.expect("db should reopen");
+    let task = reopened
+        .platform_tasks()
+        .load_platform_task("first")
+        .await
+        .expect("task should load")
+        .expect("task should exist");
+
+    // Assert
+    assert_eq!(task.state, PlatformTaskState::Resolved);
+    assert_eq!(task.milestone, Some(milestone_three()));
+    assert!(format!("{task:?}").contains("milestone_number: Some(3)"));
+}
+
+#[tokio::test]
+async fn a_fork_keeps_only_its_sources_milestone_without_a_task_or_claim() {
+    // Arrange
+    let (database, _) = database_with_sessions(&[("held", "Review"), ("plain", "Review")]).await;
+    let milestone = milestone_three();
+    for session_id in ["held", "plain"] {
+        begin(&database, session_id).await;
+        let name = PlatformTaskName {
+            milestone: (session_id == "held").then_some(&milestone),
+            ..task_twelve()
+        };
+        database
+            .platform_tasks()
+            .hold_platform_task(session_id, name, "clm_secret")
+            .await
+            .expect("task should be held");
+    }
+
+    // Act
+    for (fork, source) in [("held-fork", "held"), ("plain-fork", "plain")] {
+        database
+            .sessions()
+            .fork_session_snapshot(crate::ForkSessionSnapshot {
+                new_session_id: fork,
+                source_session_id: source,
+                status: "Review",
+            })
+            .await
+            .expect("fork should succeed");
+    }
+    let tasks = database.platform_tasks();
+    let held_fork = tasks
+        .load_platform_task("held-fork")
+        .await
+        .expect("task should load")
+        .expect("the fork should keep the milestone");
+    let plain_fork = tasks
+        .load_platform_task("plain-fork")
+        .await
+        .expect("task should load");
+    let settled = tasks
+        .take_settled_platform_tasks(PLATFORM_URL)
+        .await
+        .expect("settled tasks should be taken");
+
+    // Assert
+    assert_eq!(held_fork.state, PlatformTaskState::Resolved);
+    assert_eq!(held_fork.milestone, Some(milestone_three()));
+    assert_eq!(held_fork.claim_id, None);
+    assert_eq!(held_fork.task_number, None);
+    assert_eq!(held_fork.pending_prompt, None);
+    assert_eq!(plain_fork, None);
+    assert_eq!(settled, Vec::new());
+}
+
+#[tokio::test]
+async fn a_conflicts_milestone_is_shown_and_forgotten_without_the_task() {
+    // Arrange
+    let (database, project_id) =
+        database_with_sessions(&[("again", "Draft"), ("separate", "Draft")]).await;
+    let tasks = database.platform_tasks();
+    let milestone = milestone_three();
+    for session_id in ["again", "separate"] {
+        begin(&database, session_id).await;
+        tasks
+            .record_platform_task_conflict(
+                session_id,
+                PlatformTaskName {
+                    milestone: Some(&milestone),
+                    ..task_twelve()
+                },
+                None,
+                1,
+            )
+            .await
+            .expect("conflict should record");
+    }
+
+    // Act
+    let waiting = tasks
+        .load_waiting_platform_tasks(project_id)
+        .await
+        .expect("tasks should load");
+    tasks
+        .check_platform_task_again("again", PLATFORM_URL, &[12])
+        .await
+        .expect("check should restart");
+    tasks
+        .resolve_platform_task("separate")
+        .await
+        .expect("task should resolve");
+    let mut after = Vec::new();
+    for session_id in ["again", "separate"] {
+        after.push(
+            tasks
+                .load_platform_task(session_id)
+                .await
+                .expect("task should load")
+                .expect("task should exist")
+                .milestone,
+        );
+    }
+
+    // Assert
+    let waiting = waiting
+        .into_iter()
+        .map(|task| task.milestone)
+        .collect::<Vec<_>>();
+    assert_eq!(waiting, [Some(milestone_three()), Some(milestone_three())]);
+    assert_eq!(after, [None, None]);
 }
 
 #[tokio::test]

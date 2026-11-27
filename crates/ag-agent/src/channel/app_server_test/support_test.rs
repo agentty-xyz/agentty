@@ -27,6 +27,7 @@ pub(super) fn make_turn_request() -> TurnRequest {
         response_style: ag_contracts::ResponseStyle::default(),
         host_caches: ag_contracts::HostCacheSharing::PerSession,
         speed_mode: ag_contracts::SpeedMode::default(),
+        task_milestone: None,
     }
 }
 

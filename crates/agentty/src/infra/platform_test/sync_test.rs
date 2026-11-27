@@ -1,12 +1,13 @@
 //! Tests of the platform's Sync routes against a fake platform server.
 
+use ag_contracts::TaskMilestone;
 use serde_json::{Value, json};
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::infra::platform::{
     AccessToken, ClaimId, HttpPlatformClient, PlatformClient, PlatformError, SyncError, SyncHolder,
-    SyncStart, SyncTask, SyncTaskRef, SyncWork, SyncWorkInProgress,
+    SyncStart, SyncTask, SyncTaskField, SyncTaskRef, SyncWork, SyncWorkInProgress,
 };
 
 /// Token the fake platform accepts.
@@ -47,6 +48,29 @@ fn task_json(uri: &str) -> Value {
         "title": "Fix the relay\u{7} reconnect",
         "url": format!("{uri}/sync/projects/agentty/tasks/12"),
     })
+}
+
+/// Returns milestone 3 as [`milestone_task_json`] names it, its title fit
+/// for the terminal and its goal as sent.
+fn milestone() -> TaskMilestone {
+    TaskMilestone {
+        goal: " Group tasks under goals.\r\nAgents\u{1b} align with them.\n".to_string(),
+        number: 3,
+        title: "Ship milestones".to_string(),
+    }
+}
+
+/// Returns the task object of answers in milestone 3, with its page on
+/// `uri` and control characters in the milestone's text.
+fn milestone_task_json(uri: &str) -> Value {
+    let mut task = task_json(uri);
+    task["milestone"] = json!({
+        "number": 3,
+        "title": "Ship\u{7} milestones",
+        "goal": " Group tasks under goals.\r\nAgents\u{1b} align with them.\n",
+    });
+
+    task
 }
 
 /// Starts a fake platform answering `POST route` with `response`, and a
@@ -112,6 +136,7 @@ async fn a_start_sends_only_the_work_and_keeps_the_cleaned_answer() {
     assert_eq!(
         start.task,
         SyncTask {
+            milestone: None,
             number: 12,
             project: "agentty".to_string(),
             title: "Fix the relay reconnect".to_string(),
@@ -211,6 +236,104 @@ async fn a_task_page_is_kept_only_when_it_is_one_of_the_platform_pages() {
         // Assert
         assert_eq!(start.expect("start should succeed").task.url, None);
     }
+}
+
+#[tokio::test]
+async fn a_tasks_milestone_is_kept_only_within_the_contract_and_never_fails_the_start() {
+    // Arrange
+    let server = MockServer::start().await;
+    let uri = server.uri();
+    let within = |title: &str, goal: Option<&str>| {
+        Some(TaskMilestone {
+            goal: goal.unwrap_or_default().to_string(),
+            number: 3,
+            title: title.to_string(),
+        })
+    };
+    let longest_title = "\u{e9}".repeat(200);
+    let longest_goal = "g".repeat(4000);
+    let cases = [
+        (None, None),
+        (Some(json!(null)), None),
+        (
+            milestone_task_json(&uri).get("milestone").cloned(),
+            Some(milestone()),
+        ),
+        (
+            Some(json!({ "number": 3, "title": "Ship" })),
+            within("Ship", None),
+        ),
+        (
+            Some(json!({ "number": 3, "title": longest_title, "goal": longest_goal })),
+            within(&longest_title, Some(&longest_goal)),
+        ),
+        (Some(json!({ "number": 3, "title": "", "goal": "" })), None),
+        (
+            Some(json!({ "number": 3, "title": "t".repeat(201), "goal": "" })),
+            None,
+        ),
+        (
+            Some(json!({ "number": 3, "title": "Ship", "goal": "g".repeat(4001) })),
+            None,
+        ),
+        (
+            Some(json!({ "number": 0, "title": "Ship", "goal": "" })),
+            None,
+        ),
+        (
+            Some(json!({ "number": "three", "title": "Ship", "goal": "" })),
+            None,
+        ),
+        (
+            Some(json!({ "number": 3, "title": " \u{1b} ", "goal": "" })),
+            None,
+        ),
+        (Some(json!("M3 Ship milestones")), None),
+    ];
+
+    for (field, expected) in cases {
+        server.reset().await;
+        let mut task = task_json(&uri);
+        if let Some(field) = field {
+            task["milestone"] = field;
+        }
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sync/work"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "task": task, "claim_id": CLAIM })),
+            )
+            .mount(&server)
+            .await;
+        let client = HttpPlatformClient::new(&uri).expect("client");
+
+        // Act
+        let start = client.start_sync_work(&token(), &work()).await;
+
+        // Assert
+        assert_eq!(
+            start.expect("start should succeed").task.milestone,
+            expected
+        );
+    }
+}
+
+#[test]
+fn a_dropped_milestone_is_logged_and_leaves_the_task_without_one() {
+    // Arrange
+    let uri = "https://platform.example";
+    let mut task = task_json(uri);
+    task["milestone"] = json!({ "number": 0, "title": "Ship milestones", "goal": "" });
+    let task: SyncTaskField = serde_json::from_value(task).expect("task should parse");
+    crate::test_support::enable_tracing_log_fallback();
+
+    // Act
+    let task = task.validate(uri);
+
+    // Assert
+    let task = task.expect("the task should be kept");
+    assert_eq!(task.milestone, None);
+    assert_eq!(task.number, 12);
 }
 
 #[tokio::test]
@@ -325,7 +448,7 @@ async fn a_conflict_names_the_task_and_its_holder() {
             .respond_with(ResponseTemplate::new(409).set_body_json(json!({
                 "error": "task_in_progress",
                 "message": "Another session is working on task #12",
-                "task": task_json(&uri),
+                "task": milestone_task_json(&uri),
                 "holder": holder,
             })))
             .mount(&server)
@@ -343,12 +466,13 @@ async fn a_conflict_names_the_task_and_its_holder() {
                     last_activity_at_ms: 2,
                     session: expected_session,
                 },
-                task: SyncTask {
+                task: Box::new(SyncTask {
+                    milestone: Some(milestone()),
                     number: 12,
                     project: "agentty".to_string(),
                     title: "Fix the relay reconnect".to_string(),
                     url: Some(format!("{uri}/sync/projects/agentty/tasks/12")),
-                },
+                }),
             })
         );
     }
@@ -590,12 +714,13 @@ fn sync_errors_and_claims_read_plainly_without_the_claim() {
             last_activity_at_ms: 0,
             session: None,
         },
-        task: SyncTask {
+        task: Box::new(SyncTask {
+            milestone: None,
             number: 12,
             project: "agentty".to_string(),
             title: "Fix".to_string(),
             url: None,
-        },
+        }),
     };
 
     // Act
@@ -632,6 +757,7 @@ fn a_held_task_names_its_project_and_number_for_later_requests() {
         created: true,
         in_progress: Vec::new(),
         task: SyncTask {
+            milestone: None,
             number: 12,
             project: "agentty".to_string(),
             title: "Fix".to_string(),

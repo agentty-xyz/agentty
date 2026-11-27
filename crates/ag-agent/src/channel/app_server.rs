@@ -132,12 +132,7 @@ impl AgentChannel for AppServerAgentChannel {
         let error_events = events.clone();
         let turn = async move {
             let mut req = req;
-            req.prompt = agent::apply_response_style_prompt(
-                req.prompt,
-                req.request_kind.protocol_profile(),
-                req.response_style,
-            )
-            .map_err(AgentError::from)?;
+            req.prompt = agent::session_turn_prompt(&req).map_err(AgentError::from)?;
             let continuation = req.continuation.into_parts();
             let request = AppServerTurnRequest {
                 execution_policy: req.execution_policy,

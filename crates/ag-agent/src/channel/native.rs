@@ -39,8 +39,8 @@ use crate::agent::native::{
     running_context_window, system_prompt, with_stored_api_keys,
 };
 use crate::agent::{
-    InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
-    instruction_bootstrap_key, plan_instruction_delivery,
+    InstructionDeliveryMode, execution_policy, instruction_bootstrap_key,
+    plan_instruction_delivery, session_turn_prompt,
 };
 
 /// Started runs whose settlement a shutdown or the session's next turn must
@@ -143,8 +143,8 @@ async fn run_session_turn(
     let repository = repository(&req.folder, &environment)?;
     reject_attachments(&req.prompt.attachments)?;
     let options = session_run_options(config, &session_id, &req, &environment, &events).await?;
-    let prompt_text = apply_response_style_prompt(req.prompt.clone(), profile, req.response_style)
-        .map_err(failure("Failed to apply the response style"))?
+    let prompt_text = session_turn_prompt(&req)
+        .map_err(failure("Failed to apply the session turn context"))?
         .agent_text();
     let continuation = req.continuation.into_parts();
     let replay_transcript = continuation.replay_transcript.or_else(|| {

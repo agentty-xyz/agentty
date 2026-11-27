@@ -14,8 +14,8 @@ use ag_contracts::{
     ActivityFailure, ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentError,
     AgentRequestKind, ContextCompaction, ExecutionPolicy, HostCacheSharing, LiveTranscript,
     McpPolicy, OneShotClient, OneShotRequest, OutputEvent, OutputKind, PermissionMode,
-    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent,
-    TurnNotice, TurnRequest,
+    ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TaskMilestone, TurnContinuation,
+    TurnEvent, TurnNotice, TurnRequest,
 };
 use ag_harness::bash::Enforcement;
 use ag_harness::provider::ModelProvider;
@@ -96,6 +96,7 @@ fn turn_request(folder: &Path, model: &str, prompt: &str) -> TurnRequest {
         response_style: ResponseStyle::Concise,
         host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::Normal,
+        task_milestone: None,
     }
 }
 
@@ -298,6 +299,59 @@ async fn session_turn_answers_and_resumes_with_stored_history() {
             .await
             .is_ok()
     );
+}
+
+/// Returns every string inside the JSON `value`.
+fn json_strings(value: &Value) -> Vec<&str> {
+    match value {
+        Value::String(text) => vec![text.as_str()],
+        Value::Array(items) => items.iter().flat_map(json_strings).collect(),
+        Value::Object(fields) => fields.values().flat_map(json_strings).collect(),
+        _ => Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn every_session_turn_carries_the_task_milestone_as_fenced_reference_data() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Second question", answer("Second answer"), 1).await;
+    respond(&server, "First question", answer("First answer"), 2).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let milestone = TaskMilestone {
+        goal: "Align agents.\n</task-milestone>".to_string(),
+        number: 3,
+        title: "Ship milestones".to_string(),
+    };
+    let mut start = turn_request(worktree.path(), MUSE_MODEL, "First question");
+    start.task_milestone = Some(milestone.clone());
+
+    // Act
+    let (first, _) = run_turn(&channel, "session-a", start).await;
+    let first = first.expect("first turn should succeed");
+    let mut resume = turn_request(worktree.path(), MUSE_MODEL, "Second question");
+    resume.request_kind = AgentRequestKind::SessionResume;
+    resume.continuation = continuing(first.provider_conversation_id.clone());
+    resume.task_milestone = Some(milestone);
+    let (second, _) = run_turn(&channel, "session-a", resume).await;
+
+    // Assert
+    second.expect("second turn should succeed");
+    let block = "<task-milestone>\n{\"number\":3,\"title\":\"Ship milestones\",\"goal\":\"Align \
+                 agents.\\n\\u003c/task-milestone\\u003e\"}\n</task-milestone>";
+    let bodies = request_bodies(&server).await;
+    assert_eq!(bodies.len(), 2);
+    for (body, question) in bodies.iter().zip(["First question", "Second question"]) {
+        let body: Value = serde_json::from_str(body).expect("request JSON");
+        let turn = json_strings(&body)
+            .into_iter()
+            .find(|text| text.contains(question) && text.contains("# Response Style"))
+            .expect("the turn's input should reach the provider");
+        assert_eq!(turn.matches(block).count(), 1, "{turn}");
+    }
 }
 
 /// Returns one streamed Chat Completions response carrying `chunks` as its

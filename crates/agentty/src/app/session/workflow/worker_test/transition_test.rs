@@ -1166,6 +1166,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
         response_style: ag_contracts::ResponseStyle::default(),
         host_caches: HostCacheSharing::PerSession,
         speed_mode: crate::domain::agent::SpeedMode::default(),
+        task_milestone: None,
     };
 
     // Act — pass the pre-cancelled token directly.
@@ -1286,6 +1287,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
             response_style: ag_contracts::ResponseStyle::default(),
             host_caches: HostCacheSharing::PerSession,
             speed_mode: crate::domain::agent::SpeedMode::default(),
+            task_milestone: None,
         };
 
         // Spawn a task that cancels the token after a small delay so the

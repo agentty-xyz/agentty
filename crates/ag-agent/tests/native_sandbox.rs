@@ -801,6 +801,7 @@ fn turn_request(folder: &Path, main_checkout: Option<&Path>, prompt: &str) -> Tu
         response_style: ResponseStyle::Concise,
         host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::Normal,
+        task_milestone: None,
     }
 }
 

@@ -172,15 +172,30 @@ under the sign-in that received it: an answer that arrives after that sign-in en
 keeps no claim. Agentty has no switch of its own for Sync: signing out is the way to
 stop it.
 
+Of the platform's answers, only the milestone of the task a session holds reaches an
+agent: its number, its title of at most 200 characters, and its goal of at most 4,000
+characters. People or agents of the same account write milestones to state the goal a
+group of tasks serves; every turn of the session carries its task's milestone so that
+the agent keeps its work aligned with that goal, and a fork of the session keeps it. It
+arrives in one delimited block that says it is reference data, never instructions.
+Agentty keeps only the goal's line breaks, drops every other control or invisible
+formatting character, such as bidirectional overrides and tag characters, and encodes
+the text as JSON that also escapes `<`, `>`, `&`, `@`, `[`, and `]`, so it cannot close
+or forge the block, name a file, or stand in for an image. A milestone outside these
+bounds is dropped, and the task is kept without it. Other answer text is shown only in
+the session.
+
 Report these as vulnerabilities:
 
 - a platform access token, device code, or sign-in code reaching the relay, another
   platform, a log, or a paired device;
 - a Sync claim reaching anything but the platform that issued it, or a log;
-- repository credentials from the `origin` remote, or anything beyond what the paragraph
-  above lists, reaching a platform;
+- repository credentials from the `origin` remote, or anything beyond what the first
+  Sync paragraph above lists, reaching a platform;
 - Agentty sending a Sync request while the latest account answer does not enable Sync;
-- text from a platform's Sync answer reaching an agent's prompt;
+- text from a platform's Sync answer reaching an agent's prompt, other than the held
+  task's milestone inside its block, or that milestone closing, leaving, or forging its
+  block;
 - a device gaining access to a session because Agentty is signed in, without pairing;
 - Agentty contacting a platform that the user has neither signed in to nor started
   signing in to, dialling any relay but the one named by the platform it is registered
@@ -204,6 +219,9 @@ These are known limits, not vulnerabilities:
   platform until the platform reads it as stale.
 - Any session of the account can take a task over from another, and the platform, not
   Agentty, decides which work counts as the same.
+- Anyone who can write the account's milestones writes text that the agents of its
+  sessions read. The block tells an agent never to follow it, but a model can still be
+  swayed by it, as by any file it reads.
 
 ## Response and Disclosure Process
 

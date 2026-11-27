@@ -97,6 +97,12 @@ pub(crate) fn finish_summary(title: Option<&str>) -> String {
     summary.to_string()
 }
 
+/// Returns the line of a notice that names the milestone `number` titled
+/// `title`, such as `Milestone M3: Ship milestones`.
+pub(crate) fn milestone_line(number: u64, title: &str) -> String {
+    format!("Milestone M{number}: {title}")
+}
+
 /// Returns when a session was last active, `at_ms` against `now_ms`, both
 /// in milliseconds since the Unix epoch, such as `5 minutes ago`.
 pub(crate) fn last_active_text(now_ms: u64, at_ms: u64) -> String {

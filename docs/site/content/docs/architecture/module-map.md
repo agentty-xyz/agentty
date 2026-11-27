@@ -93,8 +93,9 @@ For example, resource accounting puts host sampling in `infra/`, scheduling and 
 invalidation in `app/`, totals in `domain/`, and display formatting in `ui/`. A
 platform's Sync puts its HTTP routes in `infra/platform.rs`, what a request may say in
 `domain/platform_sync.rs`, the start gate and task lifecycle in `app/platform_sync.rs`,
-the credential-free remote `host/path` in `ag-forge`, and the held task in `ag-store`.
-It is unrelated to project sync in `app/sync.rs`.
+the credential-free remote `host/path` in `ag-forge`, the held task in `ag-store`, and
+the fenced milestone block of session turns in `ag-agent`. It is unrelated to project
+sync in `app/sync.rs`.
 
 See [Testability Boundaries](@/docs/architecture/testability-boundaries.md) for external
 ports and [Change Recipes](@/docs/architecture/change-recipes.md) for contribution

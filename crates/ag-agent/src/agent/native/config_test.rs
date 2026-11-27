@@ -1056,6 +1056,7 @@ fn session_request(folder: &Path) -> TurnRequest {
         request_kind: AgentRequestKind::SessionStart,
         response_style: ResponseStyle::default(),
         speed_mode: SpeedMode::default(),
+        task_milestone: None,
     }
 }
 

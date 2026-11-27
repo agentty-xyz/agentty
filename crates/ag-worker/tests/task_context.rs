@@ -125,5 +125,6 @@ fn request() -> TurnRequest {
         response_style: ResponseStyle::default(),
         host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::default(),
+        task_milestone: None,
     }
 }

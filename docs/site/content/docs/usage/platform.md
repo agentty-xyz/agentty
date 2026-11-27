@@ -82,15 +82,17 @@ shows which. Signing out turns it off.
 
 While Sync is on, the first message of every new session is checked before the session
 starts, while its workspace is set up. A fork is the exception: it continues work that
-already has, or had, a task, and takes none of its own.
+already has, or had, a task, and takes none of its own, but keeps that task's milestone.
 
 - **New or matching open work.** The session takes a task and starts. A notice in the
-  session names the task and lists the repository's other work in progress, with the
-  session holding each and when it was last active.
-- **Work another session holds.** The session does not start. Its notice names the task,
-  the session holding it, and when that session was last active. Press `t` to take the
-  task over, which ends the other session's claim, or `n` to start this as separate
-  work. Leave it, and the session stays unstarted with your prompt retained.
+  session names the task and its milestone, such as `Milestone M3: Ship milestones`, and
+  lists the repository's other work in progress, with the session holding each and when
+  it was last active.
+- **Work another session holds.** The session does not start. Its notice names the task
+  and its milestone, the session holding it, and when that session was last active.
+  Press `t` to take the task over, which ends the other session's claim, or `n` to start
+  this as separate work. Leave it, and the session stays unstarted with your prompt
+  retained.
 - **Anything else.** When the platform cannot be reached, is slow, or refuses, the
   session starts without a task and its notice says why. Sync never keeps you from
   working.
@@ -109,14 +111,21 @@ deleted while Sync is on. If another session took the task over, or it was finis
 elsewhere, the session says so and keeps running without it. A task issued by another
 platform stays with its session until Agentty runs with that platform again.
 
+The platform groups a project's tasks under milestones, the goals that people or agents
+of your account set for them. When the task a session took belongs to one, every turn of
+the session gives its agent the milestone's number, title, and goal, also after a
+restart, a resumed conversation, or a compacted context. They come in one delimited
+block that tells the agent they are reference data to align its work with, never
+instructions to follow.
+
 Agentty sends only the first non-blank line of the first message, cut to 200 characters,
 as the task's title; the message, cut to 4,000 characters, as its brief; the
 repository's `origin` remote as `host/path`, without credentials; and the session's
 label, this Agentty's name and the start of the session's identifier. A finished task
 also gets the session's title and its review request link. Nothing else is sent: no
 file, diff, or later message. A repository without such a remote, or a message without
-text, starts its session without a task. The platform's text is shown only in the
-session; it never reaches an agent's prompt.
+text, starts its session without a task. Apart from the milestone of the session's task,
+the platform's text is shown only in the session; it never reaches an agent's prompt.
 
 Signing out forgets the tasks sessions hold on this computer without telling the
 platform, since the token is gone, and a first message still being checked then starts

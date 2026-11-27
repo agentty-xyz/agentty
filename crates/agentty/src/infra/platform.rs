@@ -4,13 +4,16 @@
 //!
 //! The client talks to whichever platform origin it is given. Every answer
 //! is untrusted: text the terminal shows is stripped of control characters
-//! and bounded, and addresses Agentty opens or links to must be web or
-//! `WebSocket` URLs. Access tokens, device codes, user codes, and Sync
-//! claims never appear in `Debug` output, and nothing here logs.
+//! and bounded, a task's milestone outside the contract is dropped, and
+//! addresses Agentty opens or links to must be web or `WebSocket` URLs.
+//! Access tokens, device codes, user codes, and Sync claims never appear in
+//! `Debug` output. The only log is the task number of a dropped milestone,
+//! never answer text or a secret.
 
 use std::fmt;
 use std::time::Duration;
 
+use ag_contracts::TaskMilestone;
 use async_trait::async_trait;
 use reqwest::header::RETRY_AFTER;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
@@ -317,6 +320,9 @@ impl SyncWork {
 /// A Sync task, as an answer names it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyncTask {
+    /// Milestone the task belongs to, when the answer named one within the
+    /// contract: its title fit for the terminal, its goal as sent.
+    pub milestone: Option<TaskMilestone>,
     /// Task number within its project.
     pub number: u64,
     /// Project of the task, safe in a request path.
@@ -395,8 +401,8 @@ pub enum SyncError {
     TaskInProgress {
         /// The session holding it.
         holder: SyncHolder,
-        /// The task it holds.
-        task: SyncTask,
+        /// The task it holds, boxed to keep the error small.
+        task: Box<SyncTask>,
     },
     /// Another session took the task over.
     #[error("Another session took the task over.")]
@@ -780,7 +786,7 @@ fn sync_error_for(
                     last_activity_at_ms: holder.last_activity_at_ms,
                     session: session_label_text(holder.session.as_deref()),
                 },
-                task,
+                task: Box::new(task),
             }
         }
         (StatusCode::CONFLICT, "claim_lost") => SyncError::ClaimLost,
@@ -1065,6 +1071,10 @@ impl SyncStartBody {
 /// The `task` object of Sync answers.
 #[derive(Deserialize)]
 struct SyncTaskField {
+    /// Read on its own, so a milestone Agentty cannot use leaves the task
+    /// without one rather than failing the answer.
+    #[serde(default)]
+    milestone: Option<serde_json::Value>,
     number: u64,
     project: String,
     title: String,
@@ -1074,8 +1084,9 @@ struct SyncTaskField {
 
 impl SyncTaskField {
     /// Checks that the project is safe in a request path and the title fit
-    /// for the terminal, and keeps the page only when it is one of the
-    /// platform's own.
+    /// for the terminal, keeps the page only when it is one of the
+    /// platform's own, and keeps the milestone only when it fits the
+    /// contract.
     fn validate(self, base_url: &str) -> Result<SyncTask, SyncError> {
         let title = display_text(&self.title, platform_sync::MAX_TITLE_CHARS);
         let (true, Some(title)) = (is_sync_project(&self.project) && self.number > 0, title) else {
@@ -1086,14 +1097,59 @@ impl SyncTaskField {
             .filter(|url| url.chars().count() <= MAX_SYNC_URL_CHARS)
             .and_then(|url| parse_page_url(&url).ok())
             .filter(|url| url.starts_with(&format!("{base_url}/")));
+        let milestone = self.milestone.and_then(|milestone| {
+            let milestone = sync_milestone(milestone);
+            if milestone.is_none() {
+                tracing::warn!(
+                    task = self.number,
+                    "The platform's Sync named a milestone outside its contract; the task is kept \
+                     without it"
+                );
+            }
+
+            milestone
+        });
 
         Ok(SyncTask {
+            milestone,
             number: self.number,
             project: self.project,
             title,
             url,
         })
     }
+}
+
+/// The `milestone` object of a Sync task.
+#[derive(Deserialize)]
+struct SyncMilestoneField {
+    #[serde(default)]
+    goal: String,
+    number: u64,
+    title: String,
+}
+
+/// Returns the milestone `value` names when it fits the contract: a
+/// positive number, a title of 1 to 200 characters with something
+/// printable, and a goal of at most 4,000 characters. `None` means the
+/// task has no milestone. The title is made fit for the terminal; the goal,
+/// which only a prompt shows, is kept as sent, since the prompt fences and
+/// neutralizes all of the milestone's text.
+fn sync_milestone(value: serde_json::Value) -> Option<TaskMilestone> {
+    let milestone: SyncMilestoneField = serde_json::from_value(value).ok()?;
+    let title_chars = milestone.title.chars().count();
+    let is_valid = milestone.number > 0
+        && (1..=TaskMilestone::MAX_TITLE_CHARS).contains(&title_chars)
+        && milestone.goal.chars().count() <= TaskMilestone::MAX_GOAL_CHARS;
+    if !is_valid {
+        return None;
+    }
+
+    Some(TaskMilestone {
+        goal: milestone.goal,
+        number: milestone.number,
+        title: display_text(&milestone.title, TaskMilestone::MAX_TITLE_CHARS)?,
+    })
 }
 
 /// One entry of the `in_progress` list of a start answer.

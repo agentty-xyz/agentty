@@ -1,9 +1,10 @@
 //! Shared prompt-shaping helpers for agent-facing markdown prompts.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ag_contracts::{AgentDefinitionPromptUpdate, ResponseStyle};
+use ag_contracts::{AgentDefinitionPromptUpdate, TaskMilestone, TurnRequest};
 use ag_protocol::{
     ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt, TurnPromptAttachment,
     TurnPromptContentPart, prepend_protocol_instructions as protocol_prepend_instructions,
@@ -43,6 +44,17 @@ struct AgentDefinitionPromptTemplate<'a> {
 struct ResponseStylePromptTemplate<'a> {
     /// Guidance corresponding to the selected response style.
     instruction: &'a str,
+    /// Remaining turn prompt content.
+    prompt: &'a str,
+}
+
+/// Askama view model for placing a task's milestone, fenced as reference
+/// data, before a turn.
+#[derive(Template)]
+#[template(path = "task_milestone_prompt.md", escape = "none")]
+struct TaskMilestonePromptTemplate<'a> {
+    /// The milestone as one JSON object that cannot close its block.
+    milestone: &'a str,
     /// Remaining turn prompt content.
     prompt: &'a str,
 }
@@ -189,22 +201,129 @@ pub(crate) fn build_cli_prompt_text(
     })
 }
 
-/// Prepends response-style guidance to interactive session turns.
-pub(crate) fn apply_response_style_prompt(
-    mut prompt: TurnPrompt,
-    protocol_profile: ProtocolRequestProfile,
-    response_style: ResponseStyle,
-) -> Result<TurnPrompt, AgentBackendError> {
-    if protocol_profile == ProtocolRequestProfile::SessionTurn {
+/// Returns the prompt of `request` with the standing context of interactive
+/// session turns prepended: the task's milestone, when the session's task
+/// has one, then response-style guidance. Every session turn carries both,
+/// so they survive context compaction and resumed provider conversations;
+/// other request profiles keep their prompt unchanged.
+pub(crate) fn session_turn_prompt(request: &TurnRequest) -> Result<TurnPrompt, AgentBackendError> {
+    let mut prompt = request.prompt.clone();
+    if request.request_kind.protocol_profile() == ProtocolRequestProfile::SessionTurn {
         let prompt_text = prompt.agent_text();
         let template = ResponseStylePromptTemplate {
-            instruction: response_style.prompt_instruction(),
+            instruction: request.response_style.prompt_instruction(),
             prompt: &prompt_text,
         };
-        prompt.text = render_template(&template)?;
+        let styled = render_template(&template)?;
+        prompt.text = match request.task_milestone.as_ref().and_then(fenced_milestone) {
+            Some(milestone) => render_template(&TaskMilestonePromptTemplate {
+                milestone: &milestone,
+                prompt: &styled,
+            })?,
+            None => styled,
+        };
     }
 
     Ok(prompt)
+}
+
+/// Returns `milestone` as the one-line JSON object its prompt block holds,
+/// or `None` when its title has nothing printable.
+///
+/// The text is untrusted, so it is normalized and then encoded so that it
+/// cannot leave or forge the block: control and invisible formatting
+/// characters are dropped, line breaks are folded (into spaces in the
+/// title, into `\n` in the goal), and JSON encoding escapes quotes,
+/// backslashes, and line breaks. `<`, `>`, and `&` are escaped as well, so
+/// no tag can close the block, and `@`, `[`, and `]`, so prompt rendering
+/// finds no path mention or image placeholder inside it.
+fn fenced_milestone(milestone: &TaskMilestone) -> Option<String> {
+    let title = normalized_milestone_text(&milestone.title, TaskMilestone::MAX_TITLE_CHARS, ' ');
+    if title.is_empty() {
+        return None;
+    }
+    let goal = normalized_milestone_text(&milestone.goal, TaskMilestone::MAX_GOAL_CHARS, '\n');
+
+    Some(format!(
+        "{{\"number\":{},\"title\":{},\"goal\":{}}}",
+        milestone.number,
+        fenced_json_string(&title),
+        fenced_json_string(&goal)
+    ))
+}
+
+/// Returns `text` with every line break replaced by `line_break`, tabs by
+/// spaces, and other control or invisible formatting characters removed,
+/// without outer whitespace and cut to `max_chars` characters.
+fn normalized_milestone_text(text: &str, max_chars: usize, line_break: char) -> String {
+    let text = text.replace("\r\n", "\n");
+    let text: String = text
+        .chars()
+        .filter_map(|character| match character {
+            '\n' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}' => Some(line_break),
+            '\t' => Some(' '),
+            character if is_hidden_character(character) => None,
+            character => Some(character),
+        })
+        .collect();
+    let text: String = text.trim().chars().take(max_chars).collect();
+
+    text.trim_end().to_string()
+}
+
+/// Returns whether `character` is a control character, a Unicode format
+/// character such as a bidirectional override, a zero-width space, or a
+/// tag character, or another character that renders as nothing, such as a
+/// variation selector or a Hangul filler. Any of them could hide text from
+/// a person reading the milestone while a model still reads it.
+fn is_hidden_character(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{00AD}'
+                | '\u{034F}'
+                | '\u{0600}'..='\u{0605}'
+                | '\u{061C}'
+                | '\u{06DD}'
+                | '\u{070F}'
+                | '\u{0890}'..='\u{0891}'
+                | '\u{08E2}'
+                | '\u{115F}'..='\u{1160}'
+                | '\u{17B4}'..='\u{17B5}'
+                | '\u{180B}'..='\u{180F}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{3164}'
+                | '\u{FE00}'..='\u{FE0F}'
+                | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{110BD}'
+                | '\u{110CD}'
+                | '\u{13430}'..='\u{1343F}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E007F}'
+                | '\u{E0100}'..='\u{E01EF}'
+        )
+}
+
+/// Returns `text` as a JSON string in which `<`, `>`, `&`, `@`, `[`, and
+/// `]` appear only as `\u` escapes.
+fn fenced_json_string(text: &str) -> String {
+    let encoded = serde_json::Value::String(text.to_string()).to_string();
+    let mut fenced = String::with_capacity(encoded.len());
+    for character in encoded.chars() {
+        match character {
+            '<' | '>' | '&' | '@' | '[' | ']' => {
+                let _ = write!(fenced, "\\u{:04x}", u32::from(character));
+            }
+            character => fenced.push(character),
+        }
+    }
+
+    fenced
 }
 
 /// Prepends current agent instructions to one full bootstrap prompt.

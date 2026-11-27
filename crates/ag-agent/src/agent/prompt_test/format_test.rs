@@ -3,11 +3,11 @@
 
 use std::path::PathBuf;
 
-use ag_contracts::ResponseStyle;
-use ag_protocol::{ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment, diff_fence};
+use ag_contracts::{AgentRequestKind, ResponseStyle, TaskMilestone};
+use ag_protocol::{TurnPrompt, TurnPromptAttachment, diff_fence};
 
-use super::support::normalize_prompt;
-use crate::agent::prompt::{apply_response_style_prompt, build_resume_prompt};
+use super::support::{normalize_prompt, session_request};
+use crate::agent::prompt::{build_resume_prompt, session_turn_prompt};
 
 #[test]
 fn response_style_prompt_wraps_session_turns_and_preserves_attachments() {
@@ -19,15 +19,15 @@ fn response_style_prompt_wraps_session_turns_and_preserves_attachments() {
 
     // Act
     let prompts = ResponseStyle::ALL.map(|response_style| {
-        apply_response_style_prompt(
+        session_turn_prompt(&session_request(
             TurnPrompt {
                 attachments: vec![attachment.clone()],
                 text: "Explain [Image #1]".to_string(),
                 text_source: ag_protocol::TurnPromptTextSource::UserPrompt,
             },
-            ProtocolRequestProfile::SessionTurn,
             response_style,
-        )
+            None,
+        ))
         .expect("response style prompt should render")
     });
 
@@ -48,14 +48,19 @@ fn response_style_prompt_wraps_session_turns_and_preserves_attachments() {
 fn response_style_prompt_leaves_utility_prompts_unchanged() {
     // Arrange
     let prompt = TurnPrompt::from_agent_data("Generate a title".to_string());
+    let mut request = session_request(
+        prompt.clone(),
+        ResponseStyle::Detailed,
+        Some(TaskMilestone {
+            goal: "Group tasks under goals.".to_string(),
+            number: 3,
+            title: "Ship milestones".to_string(),
+        }),
+    );
+    request.request_kind = AgentRequestKind::UtilityPrompt;
 
     // Act
-    let styled_prompt = apply_response_style_prompt(
-        prompt.clone(),
-        ProtocolRequestProfile::UtilityPrompt,
-        ResponseStyle::Detailed,
-    )
-    .expect("utility prompt should remain valid");
+    let styled_prompt = session_turn_prompt(&request).expect("utility prompt should remain valid");
 
     // Assert
     assert_eq!(styled_prompt, prompt);

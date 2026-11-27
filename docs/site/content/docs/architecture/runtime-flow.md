@@ -415,7 +415,10 @@ each session reload finishes or releases the claims this platform issued for ses
 that reached `Merged`, `Done`, or `Canceled`, taking each claim from its row first so it
 is sent once. Startup marks unanswered starts `interrupted` instead of repeating them,
 and moves the kept prompt of an answered start that never ran into a failed workspace
-preparation.
+preparation. The row also keeps the milestone of the task the session holds, which a
+fork copies into a row of its own without the task or claim; each session, task-agent,
+and graph-node turn reads it into `TurnRequest::task_milestone`, and every channel
+prepends it, fenced as reference data, beside the response style.
 
 All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have bounded
 execution and cleanup, and background results keep their original session and project

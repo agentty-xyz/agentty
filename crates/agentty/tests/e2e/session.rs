@@ -3,7 +3,7 @@
 mod archive;
 mod diff;
 mod execution_graph;
-mod fixture;
+pub(crate) mod fixture;
 mod fork;
 mod graph_proposal;
 mod harness;

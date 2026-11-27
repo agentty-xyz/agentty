@@ -1,8 +1,8 @@
 //! Tests of what a session tells a platform's Sync.
 
 use super::{
-    FALLBACK_SUMMARY, finish_summary, is_sync_repository, last_active_text, session_label,
-    sync_repository, work_brief, work_title,
+    FALLBACK_SUMMARY, finish_summary, is_sync_repository, last_active_text, milestone_line,
+    session_label, sync_repository, work_brief, work_title,
 };
 
 #[test]
@@ -179,4 +179,16 @@ fn last_activity_reads_in_the_largest_whole_unit() {
         assert_eq!(text, expected);
     }
     assert_eq!(last_active_text(now, now + minute), "just now");
+}
+
+#[test]
+fn a_milestone_reads_as_one_notice_line() {
+    // Arrange
+    let (number, title) = (3, "Ship milestones");
+
+    // Act
+    let line = milestone_line(number, title);
+
+    // Assert
+    assert_eq!(line, "Milestone M3: Ship milestones");
 }

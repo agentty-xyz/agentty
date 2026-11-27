@@ -6,5 +6,7 @@ mod attachment;
 mod format;
 #[path = "prompt_test/instruction_test.rs"]
 mod instruction;
+#[path = "prompt_test/milestone_test.rs"]
+mod milestone;
 #[path = "prompt_test/support_test.rs"]
 mod support;

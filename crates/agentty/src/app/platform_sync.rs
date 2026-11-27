@@ -16,19 +16,22 @@
 //!
 //! Every request runs in the background and reports through
 //! [`AppEvent::PlatformTaskUpdated`]. What a request sends is limited to
-//! what `domain::platform_sync` builds, and no answer text reaches an
-//! agent's prompt: it is shown only in the session's transient output.
+//! what `domain::platform_sync` builds. Of an answer's text, only the
+//! milestone of the task a session holds reaches an agent: every turn of
+//! the session carries its number, title, and goal as fenced reference
+//! data. Everything else is shown only in the session's transient output.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ag_contracts::TaskMilestone;
 use ag_git::GitClient;
 
 use crate::app::{App, AppError, AppEvent, spawn};
 use crate::domain::platform_sync::{
-    PlatformTaskChoice, finish_summary, last_active_text, session_label, sync_repository,
-    work_brief, work_title,
+    PlatformTaskChoice, finish_summary, last_active_text, milestone_line, session_label,
+    sync_repository, work_brief, work_title,
 };
 use crate::domain::session::{Session, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -38,8 +41,8 @@ use crate::domain::transient_message::{
 };
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{
-    NewPlatformTask, PlatformTaskClaim, PlatformTaskName, PlatformTaskRow, PlatformTaskState,
-    SessionPreparationState,
+    AppRepositories, NewPlatformTask, PlatformTaskClaim, PlatformTaskName, PlatformTaskRow,
+    PlatformTaskState, SessionPreparationState,
 };
 use crate::infra::platform::{
     AccessToken, ClaimId, PlatformClient, SyncError, SyncHolder, SyncStart, SyncTask, SyncTaskRef,
@@ -484,6 +487,7 @@ impl App {
             .record_platform_task_conflict(
                 session_id,
                 PlatformTaskName {
+                    milestone: task.milestone.as_ref(),
                     number: task.number,
                     project: &task.project,
                     title: &task.title,
@@ -497,6 +501,7 @@ impl App {
             &ConflictView {
                 holder: holder.session.as_deref(),
                 last_active_ms: Some(holder.last_activity_at_ms),
+                milestone: task.milestone.as_ref(),
                 number: task.number,
                 title: &task.title,
                 url: task.url.as_deref(),
@@ -574,6 +579,7 @@ impl App {
                     .hold_platform_task(
                         session_id,
                         PlatformTaskName {
+                            milestone: task.milestone.as_ref(),
                             number: task.number,
                             project: &task.project,
                             title: &task.title,
@@ -845,6 +851,24 @@ impl App {
     }
 }
 
+/// Returns the milestone of the task `session_id`, or the session it was
+/// forked from, took, which every turn of the session carries as fenced
+/// reference data, whether or not Sync is on now. A session that waits for
+/// its task, or started without one, has none, and so does one whose task
+/// cannot be read.
+pub(crate) async fn load_task_milestone(
+    db: &AppRepositories,
+    session_id: &str,
+) -> Option<TaskMilestone> {
+    db.platform_tasks()
+        .load_platform_task(session_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|task| task.state == PlatformTaskState::Resolved)
+        .and_then(|task| task.milestone)
+}
+
 /// Reads the repository of `request` and sends the start request; a
 /// repository without an `origin` remote the platform accepts sends none.
 async fn start_platform_task(
@@ -968,6 +992,10 @@ fn held_notice(start: &SyncStart, now_ms: u64) -> String {
             task.number, task.title
         )
     };
+    if let Some(milestone) = &task.milestone {
+        notice.push('\n');
+        notice.push_str(&milestone_line(milestone.number, &milestone.title));
+    }
     if let Some(url) = &task.url {
         notice.push('\n');
         notice.push_str(url);
@@ -996,6 +1024,8 @@ struct ConflictView<'a> {
     /// Last activity of the holding session, in milliseconds since the
     /// Unix epoch, when known.
     last_active_ms: Option<u64>,
+    /// Milestone the task belongs to, when the platform named one.
+    milestone: Option<&'a TaskMilestone>,
     /// Task number.
     number: u64,
     /// Task title.
@@ -1013,6 +1043,7 @@ impl<'a> ConflictView<'a> {
                 .holder_last_active_at
                 .and_then(|seconds| u64::try_from(seconds).ok())
                 .map(|seconds| seconds.saturating_mul(1000)),
+            milestone: task.milestone.as_ref(),
             number: task.task_number.unwrap_or_default(),
             title: task.task_title.as_deref().unwrap_or_default(),
             url: task.task_url.as_deref(),
@@ -1030,13 +1061,16 @@ fn conflict_notice(conflict: &ConflictView<'_>, now_ms: u64) -> String {
         || "at an unknown time".to_string(),
         |at_ms| last_active_text(now_ms, at_ms),
     );
+    let milestone = conflict.milestone.map_or_else(String::new, |milestone| {
+        format!("\n{}", milestone_line(milestone.number, &milestone.title))
+    });
     let url = conflict
         .url
         .map_or_else(String::new, |url| format!("\n{url}"));
 
     format!(
         "Another session already works on this on the platform's Sync, so this session has not \
-         started.\nTask #{number}: {title}\nHeld by {holder}, last active \
+         started.\nTask #{number}: {title}{milestone}\nHeld by {holder}, last active \
          {last_active}{url}\n\nPress t to take the task over, which ends the other session's \
          claim, or n to start this as separate work. Your saved prompt is retained."
     )

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_platform_task\nSET state = 'conflict', task_project = ?, task_number = ?, task_title = ?, task_url = ?,\n    holder_session = ?, holder_last_active_at = ?, milestone_number = ?, milestone_title = ?,\n    milestone_goal = ?\nWHERE session_id = ? AND state = 'checking'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "404ca6b5324df61941825a5873a43b53233d654f9689d58202e25ec49718de76"
+}
