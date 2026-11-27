@@ -32,6 +32,7 @@ static INSTRUCTION_FINGERPRINT: LazyLock<u64> = LazyLock::new(|| {
     include_str!("template/resume_with_transcript_prompt.md").hash(&mut hasher);
     include_str!("template/agent_profile_prompt.md").hash(&mut hasher);
     include_str!("template/response_style_prompt.md").hash(&mut hasher);
+    include_str!("template/task_milestone_prompt.md").hash(&mut hasher);
     hasher.finish()
 });
 

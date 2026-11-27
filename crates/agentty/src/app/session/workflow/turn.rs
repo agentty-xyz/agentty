@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
     AgentDefinitionPrompt, AgentError, AgentRequestKind, HostCacheSharing, LiveTranscript,
-    TurnContinuation, TurnEvent, TurnRequest, TurnResult,
+    TaskMilestone, TurnContinuation, TurnEvent, TurnRequest, TurnResult,
 };
 use ag_session::ResolvedEnv;
 use ag_telemetry::{Outcome, Span};
@@ -24,7 +24,7 @@ use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::cargo_cache::Announcement;
 use crate::app::service::HarnessModels;
 use crate::app::session::SessionError;
-use crate::app::{AppEvent, SessionManager, setting, spawn};
+use crate::app::{AppEvent, SessionManager, platform_sync, setting, spawn};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
@@ -363,6 +363,7 @@ struct ResolvedTurnSettings {
     reasoning_level: ReasoningLevel,
     response_style: ResponseStyle,
     speed_mode: SpeedMode,
+    task_milestone: Option<TaskMilestone>,
 }
 
 /// Settings plus continuation and host bookkeeping read for one request.
@@ -382,6 +383,8 @@ impl ResolvedTurnContext {
         let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
         let host_caches =
             SessionTaskService::load_host_cache_sharing(&context.db, &context.session_id).await;
+        let task_milestone =
+            platform_sync::load_task_milestone(&context.db, &context.session_id).await;
         let continuation = load_turn_continuation(context, replay_transcript).await;
         let agent_profile = AgentDefinitionPrompt::cleared(
             continuation.persisted_instruction_conversation_id()
@@ -397,6 +400,7 @@ impl ResolvedTurnContext {
                 reasoning_level,
                 response_style,
                 speed_mode,
+                task_milestone,
             },
         }
     }
@@ -449,6 +453,7 @@ async fn prepare_turn_request(
                     request_kind,
                     response_style: settings.response_style,
                     speed_mode: settings.speed_mode,
+                    task_milestone: settings.task_milestone,
                 },
                 session_project_id,
             }

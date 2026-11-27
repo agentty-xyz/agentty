@@ -2911,6 +2911,7 @@ fn switching_turn(folder: &Path, model: &str, prompt: &str) -> ag_contracts::Tur
         request_kind: AgentRequestKind::UtilityPrompt,
         response_style: ag_contracts::ResponseStyle::default(),
         speed_mode: SpeedMode::Normal,
+        task_milestone: None,
     }
 }
 

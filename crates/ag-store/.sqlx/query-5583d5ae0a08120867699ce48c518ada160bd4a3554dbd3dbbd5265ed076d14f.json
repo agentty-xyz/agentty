@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_platform_task (\n    session_id, state, platform_url, title, brief, milestone_number, milestone_title,\n    milestone_goal\n)\nSELECT ?, 'resolved', platform_url, title, brief, milestone_number, milestone_title,\n       milestone_goal\nFROM session_platform_task\nWHERE session_id = ? AND state = 'resolved' AND milestone_number IS NOT NULL\n      AND milestone_title IS NOT NULL\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5583d5ae0a08120867699ce48c518ada160bd4a3554dbd3dbbd5265ed076d14f"
+}

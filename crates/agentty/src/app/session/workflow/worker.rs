@@ -856,6 +856,8 @@ impl SessionWorkerRebaseAssistClient {
             host_caches: SessionTaskService::load_host_cache_sharing(&self.db, &self.session_id)
                 .await,
             speed_mode,
+            // Utility prompts carry no session context.
+            task_milestone: None,
         };
         let (event_tx, relayed_rx) = mpsc::unbounded_channel::<TurnEvent>();
         let (relay_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();

@@ -91,6 +91,27 @@ ORDER BY position, id
         .await
         .db_context(FORK_SESSION_SNAPSHOT)?;
 
+        // A fork continues the work of its source's task without taking a
+        // task or claim of its own, so it keeps only the task's milestone.
+        sqlx::query!(
+            r"
+INSERT INTO session_platform_task (
+    session_id, state, platform_url, title, brief, milestone_number, milestone_title,
+    milestone_goal
+)
+SELECT ?, 'resolved', platform_url, title, brief, milestone_number, milestone_title,
+       milestone_goal
+FROM session_platform_task
+WHERE session_id = ? AND state = 'resolved' AND milestone_number IS NOT NULL
+      AND milestone_title IS NOT NULL
+",
+            new_session_id,
+            source_session_id,
+        )
+        .execute(&mut *transaction)
+        .await
+        .db_context(FORK_SESSION_SNAPSHOT)?;
+
         if let Some(start_ref) = start_ref {
             sqlx::query(
                 "INSERT INTO session_preparation (session_id, state, start_ref) VALUES (?, \

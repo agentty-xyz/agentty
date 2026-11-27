@@ -332,6 +332,31 @@ pub struct TurnRequest {
     pub response_style: ResponseStyle,
     /// Response-speed preference for the turn.
     pub speed_mode: SpeedMode,
+    /// Milestone of the shared task the session works on, carried into
+    /// every interactive session turn as fenced reference data, never as
+    /// instructions. Other request kinds ignore it.
+    pub task_milestone: Option<TaskMilestone>,
+}
+
+/// The milestone a session's shared task belongs to: a higher-level goal
+/// that people or agents of the same account wrote, which helps the agent
+/// align its work. Every field is untrusted text; adapters fence and
+/// neutralize it before it reaches a prompt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskMilestone {
+    /// What the milestone sets out to achieve; may be empty.
+    pub goal: String,
+    /// Milestone number within its project.
+    pub number: u64,
+    /// Milestone title.
+    pub title: String,
+}
+
+impl TaskMilestone {
+    /// Longest goal, in characters.
+    pub const MAX_GOAL_CHARS: usize = 4000;
+    /// Longest title, in characters.
+    pub const MAX_TITLE_CHARS: usize = 200;
 }
 
 /// Which dependency caches (Cargo, Go, pip, npm) sandboxed harness commands

@@ -192,6 +192,7 @@ async fn native_harness_configuration_runs_harness_work_in_process() {
         response_style: ResponseStyle::Concise,
         host_caches: HostCacheSharing::PerSession,
         speed_mode: SpeedMode::Normal,
+        task_milestone: None,
     };
     let utility = OneShotRequest {
         activity_tx: None,

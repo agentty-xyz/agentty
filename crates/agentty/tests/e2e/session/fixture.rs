@@ -392,7 +392,7 @@ pub(super) async fn seed_running_stop_session(
 
 /// Persists project-scoped settings so feature tests route model selections
 /// to deterministic backends even when additional real CLIs exist on `PATH`.
-pub(super) async fn seed_project_settings(
+pub(crate) async fn seed_project_settings(
     env: &BuilderEnv,
     settings: &[(&str, &str)],
 ) -> Result<(), Box<dyn std::error::Error>> {

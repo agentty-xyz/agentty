@@ -3,11 +3,13 @@
 //! A session asks the platform for a task before its first turn starts. The
 //! row keeps that question, its answer, and the claim that proves the
 //! session holds the task, so a restart neither forgets the claim nor
-//! repeats a start the platform may have answered. The claim is a secret:
-//! it never appears in `Debug` output.
+//! repeats a start the platform may have answered. It also keeps the
+//! milestone the task belongs to, which every turn of the session carries.
+//! The claim is a secret: it never appears in `Debug` output.
 
 use std::fmt;
 
+use ag_contracts::TaskMilestone;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
@@ -44,6 +46,9 @@ pub struct PlatformTaskRow {
     pub holder_last_active_at: Option<i64>,
     /// Label of the session holding the conflicting task.
     pub holder_session: Option<String>,
+    /// Milestone of the task the session holds or the conflict names, when
+    /// the platform named one.
+    pub milestone: Option<TaskMilestone>,
     /// Task numbers the user declared to be other work.
     pub not_duplicates: Vec<u64>,
     /// Serialized first prompt held until the start is answered, when no
@@ -72,6 +77,10 @@ impl fmt::Debug for PlatformTaskRow {
         formatter
             .debug_struct("PlatformTaskRow")
             .field("claim_id", &self.claim_id.as_ref().map(|_| "<redacted>"))
+            .field(
+                "milestone_number",
+                &self.milestone.as_ref().map(|milestone| milestone.number),
+            )
             .field("not_duplicates", &self.not_duplicates)
             .field("platform_url", &self.platform_url)
             .field("session_id", &self.session_id)
@@ -98,6 +107,8 @@ pub struct NewPlatformTask<'a> {
 /// The task a platform names in an answer.
 #[derive(Clone, Copy, Debug)]
 pub struct PlatformTaskName<'a> {
+    /// Milestone the task belongs to, when the platform named one.
+    pub milestone: Option<&'a TaskMilestone>,
     /// Task number within its project.
     pub number: u64,
     /// Project of the task.
@@ -191,8 +202,8 @@ pub trait PlatformTaskRepository: Send + Sync {
         not_duplicates: &[u64],
     ) -> Result<bool, DbError>;
 
-    /// Records the task a start answered and the claim to it. Returns
-    /// whether the start was still waiting for its answer.
+    /// Records the task a start answered, with its milestone, and the claim
+    /// to it. Returns whether the start was still waiting for its answer.
     async fn hold_platform_task(
         &self,
         session_id: &str,
@@ -211,8 +222,8 @@ pub trait PlatformTaskRepository: Send + Sync {
         holder_last_active_at: i64,
     ) -> Result<bool, DbError>;
 
-    /// Lets a waiting session start without a task. Returns whether it was
-    /// waiting.
+    /// Lets a waiting session start without a task, forgetting the
+    /// milestone a conflict named. Returns whether it was waiting.
     async fn resolve_platform_task(&self, session_id: &str) -> Result<bool, DbError>;
 
     /// Removes and returns the session's claim when the platform at
@@ -339,6 +350,9 @@ struct StoredPlatformTask {
     claim_id: Option<String>,
     holder_last_active_at: Option<i64>,
     holder_session: Option<String>,
+    milestone_goal: Option<String>,
+    milestone_number: Option<i64>,
+    milestone_title: Option<String>,
     not_duplicates: String,
     pending_prompt: Option<String>,
     platform_url: String,
@@ -353,11 +367,26 @@ struct StoredPlatformTask {
 
 impl From<StoredPlatformTask> for PlatformTaskRow {
     fn from(stored: StoredPlatformTask) -> Self {
+        let milestone = match (
+            stored
+                .milestone_number
+                .and_then(|number| u64::try_from(number).ok()),
+            stored.milestone_title,
+        ) {
+            (Some(number), Some(title)) => Some(TaskMilestone {
+                goal: stored.milestone_goal.unwrap_or_default(),
+                number,
+                title,
+            }),
+            _ => None,
+        };
+
         Self {
             brief: stored.brief,
             claim_id: stored.claim_id,
             holder_last_active_at: stored.holder_last_active_at,
             holder_session: stored.holder_session,
+            milestone,
             not_duplicates: stored
                 .not_duplicates
                 .split(',')
@@ -376,8 +405,28 @@ impl From<StoredPlatformTask> for PlatformTaskRow {
     }
 }
 
-/// Converts a task number for storage; numbers beyond `i64` cannot come
-/// from a platform answer Agentty accepts.
+/// Stored columns of a task's milestone, all `NULL` without one.
+struct StoredMilestone<'a> {
+    goal: Option<&'a str>,
+    number: Option<i64>,
+    title: Option<&'a str>,
+}
+
+impl<'a> StoredMilestone<'a> {
+    /// Returns the columns of the milestone `task` names.
+    fn from_name(task: &PlatformTaskName<'a>) -> Self {
+        Self {
+            goal: task.milestone.map(|milestone| milestone.goal.as_str()),
+            number: task
+                .milestone
+                .map(|milestone| stored_number(milestone.number)),
+            title: task.milestone.map(|milestone| milestone.title.as_str()),
+        }
+    }
+}
+
+/// Converts a task or milestone number for storage; numbers beyond `i64`
+/// cannot come from a platform answer Agentty accepts.
 fn stored_number(number: u64) -> i64 {
     i64::try_from(number).unwrap_or(i64::MAX)
 }
@@ -411,7 +460,8 @@ ON CONFLICT(session_id) DO NOTHING
             r#"
 SELECT session_id AS "session_id!: String", state AS "state: PlatformTaskState", platform_url,
        title, brief, not_duplicates, pending_prompt, task_project, task_number, task_title,
-       task_url, claim_id, holder_session, holder_last_active_at
+       task_url, claim_id, holder_session, holder_last_active_at, milestone_number,
+       milestone_title, milestone_goal
 FROM session_platform_task
 WHERE session_id = ?
 "#,
@@ -433,7 +483,8 @@ WHERE session_id = ?
 SELECT task.session_id AS "session_id!: String", task.state AS "state: PlatformTaskState",
        task.platform_url, task.title, task.brief, task.not_duplicates, task.pending_prompt,
        task.task_project, task.task_number, task.task_title, task.task_url, task.claim_id,
-       task.holder_session, task.holder_last_active_at
+       task.holder_session, task.holder_last_active_at, task.milestone_number,
+       task.milestone_title, task.milestone_goal
 FROM session_platform_task AS task
 JOIN session ON session.id = task.session_id
 WHERE session.project_id = ? AND task.state != 'resolved' AND session.status = 'Draft'
@@ -511,7 +562,8 @@ WHERE session_id = ?
 UPDATE session_platform_task
 SET state = 'checking', platform_url = ?, not_duplicates = ?, task_project = NULL,
     task_number = NULL, task_title = NULL, task_url = NULL, holder_session = NULL,
-    holder_last_active_at = NULL
+    holder_last_active_at = NULL, milestone_number = NULL, milestone_title = NULL,
+    milestone_goal = NULL
 WHERE session_id = ? AND state IN ('conflict', 'interrupted')
 ",
             platform_url,
@@ -531,11 +583,13 @@ WHERE session_id = ? AND state IN ('conflict', 'interrupted')
         claim_id: &str,
     ) -> Result<bool, DbError> {
         let number = stored_number(task.number);
+        let milestone = StoredMilestone::from_name(&task);
         let result = sqlx::query!(
             r"
 UPDATE session_platform_task
 SET state = 'resolved', task_project = ?, task_number = ?, task_title = ?, task_url = ?,
-    claim_id = ?, holder_session = NULL, holder_last_active_at = NULL
+    claim_id = ?, holder_session = NULL, holder_last_active_at = NULL, milestone_number = ?,
+    milestone_title = ?, milestone_goal = ?
 WHERE session_id = ? AND state = 'checking'
 ",
             task.project,
@@ -543,6 +597,9 @@ WHERE session_id = ? AND state = 'checking'
             task.title,
             task.url,
             claim_id,
+            milestone.number,
+            milestone.title,
+            milestone.goal,
             session_id
         )
         .execute(&self.pool)
@@ -559,11 +616,13 @@ WHERE session_id = ? AND state = 'checking'
         holder_last_active_at: i64,
     ) -> Result<bool, DbError> {
         let number = stored_number(task.number);
+        let milestone = StoredMilestone::from_name(&task);
         let result = sqlx::query!(
             r"
 UPDATE session_platform_task
 SET state = 'conflict', task_project = ?, task_number = ?, task_title = ?, task_url = ?,
-    holder_session = ?, holder_last_active_at = ?
+    holder_session = ?, holder_last_active_at = ?, milestone_number = ?, milestone_title = ?,
+    milestone_goal = ?
 WHERE session_id = ? AND state = 'checking'
 ",
             task.project,
@@ -572,6 +631,9 @@ WHERE session_id = ? AND state = 'checking'
             task.url,
             holder_session,
             holder_last_active_at,
+            milestone.number,
+            milestone.title,
+            milestone.goal,
             session_id
         )
         .execute(&self.pool)
@@ -581,10 +643,12 @@ WHERE session_id = ? AND state = 'checking'
     }
 
     async fn resolve_platform_task(&self, session_id: &str) -> Result<bool, DbError> {
+        // A session that starts without a task never works toward the
+        // milestone a conflict named.
         let result = sqlx::query!(
             r"
 UPDATE session_platform_task
-SET state = 'resolved'
+SET state = 'resolved', milestone_number = NULL, milestone_title = NULL, milestone_goal = NULL
 WHERE session_id = ? AND state != 'resolved'
 ",
             session_id

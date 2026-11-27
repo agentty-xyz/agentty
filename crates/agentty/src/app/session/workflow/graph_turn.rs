@@ -22,7 +22,7 @@ use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
 use crate::app::service::SessionRunFactory;
 use crate::app::session::SessionError;
-use crate::app::spawn;
+use crate::app::{platform_sync, spawn};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
@@ -421,6 +421,7 @@ async fn prepare(
         host_caches: SessionTaskService::load_host_cache_sharing(&context.db, &context.session_id)
             .await,
         speed_mode: turn::load_session_speed_mode(&context.db, &context.session_id).await,
+        task_milestone: platform_sync::load_task_milestone(&context.db, &context.session_id).await,
     })
 }
 

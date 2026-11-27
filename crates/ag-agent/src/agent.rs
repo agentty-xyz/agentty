@@ -38,9 +38,7 @@ pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandR
 pub use instruction::instruction_bootstrap_key;
 pub(crate) use instruction::{InstructionDeliveryMode, plan_instruction_delivery};
 pub use native::{NativeHarnessConfig, TrustedCargoCache, dispatch_sandbox_helper};
-pub(crate) use prompt::{
-    PromptPreparationRequest, apply_response_style_prompt, prepare_prompt_text,
-};
+pub(crate) use prompt::{PromptPreparationRequest, prepare_prompt_text, session_turn_prompt};
 pub(crate) use provider::{
     build_command_stdin_payload, cli_turn_steering, is_app_server_thought_chunk,
     parse_execution_output, parse_stream_payload, parse_turn_response,

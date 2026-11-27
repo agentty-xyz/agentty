@@ -94,6 +94,7 @@ fn test_build_command_request_uses_agent_facing_prompt_text() {
         response_style: ag_contracts::ResponseStyle::default(),
         host_caches: ag_contracts::HostCacheSharing::PerSession,
         speed_mode: ag_contracts::SpeedMode::default(),
+        task_milestone: None,
     };
     let prompt_text = request.prompt.agent_text();
 
