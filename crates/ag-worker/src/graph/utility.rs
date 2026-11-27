@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use ag_contracts::{AgentRequestKind, OneShotError, OneShotRequest, ReasoningLevel, SpeedMode};
 use ag_protocol::TurnPrompt;
-use ag_session::{EnvId, GraphContext, GraphNode, GraphPostProcessing};
+use ag_session::{GraphContext, GraphNode, GraphPostProcessing};
 use async_trait::async_trait;
 
 use super::{GraphNodeRunner, GraphRunRequest};
@@ -45,7 +45,7 @@ impl GraphNodeRunner for GraphUtilityRunner {
         else {
             return Err(OneShotError::new("Utility node requires a utility run"));
         };
-        let EnvId::SessionWorktree(session_id) = &node.env_id;
+        let session_id = node.env_id.session_id();
         let profile = node.execution.response_profile;
         let request_kind = [
             AgentRequestKind::UtilityPrompt,

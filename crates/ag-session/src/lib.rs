@@ -46,7 +46,7 @@ pub use discovery::{
     AgentAvailabilityProbe, AgentCliInfo, AgentCliVersion, ChatGptSignInOutcome,
     ChatGptSignInUrlHandler, StaticAgentAvailabilityProbe,
 };
-pub use env::{EnvId, ResolvedEnv};
+pub use env::{EnvId, ResolvedEnv, TASK_WORKTREE_LIMIT, TaskWorktreeId};
 pub use error::SessionError;
 pub use execution_graph::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,

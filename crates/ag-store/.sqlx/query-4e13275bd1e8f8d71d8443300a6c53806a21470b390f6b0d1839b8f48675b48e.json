@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE task_worktree\nSET state = 'ready', updated_at = ?\nWHERE session_id = ? AND id = ? AND state = 'creating'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "4e13275bd1e8f8d71d8443300a6c53806a21470b390f6b0d1839b8f48675b48e"
+}

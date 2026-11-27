@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE task_worktree\nSET state = 'removing', updated_at = ?\nWHERE session_id = ? AND id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a51807c180106ea210d8e53fa63c0f5fb3f7c359b350af7f39cc5e580497cea3"
+}

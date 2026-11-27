@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nDELETE FROM task_worktree\nWHERE session_id = ? AND id = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "aac1cbde00aaf22736bad2bf50370eb468cd7c3c253964a43da9fa8816733998"
+}

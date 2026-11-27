@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO task_worktree (session_id, id, base_commit, state, created_at, updated_at)\nVALUES (?, ?, ?, 'creating', ?, ?)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f73836209d3f30a52e0b822101e3f62395bc4cdf0071b3d8c80d6d42e8637568"
+}

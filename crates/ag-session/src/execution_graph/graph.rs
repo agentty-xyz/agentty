@@ -54,8 +54,11 @@ impl ExecutionGraph {
             if nodes.insert(node.id.as_str(), node).is_some() {
                 return Err(Self::duplicate("node", &node.id));
             }
-            if node.env_id != EnvId::SessionWorktree(self.session_id.clone()) {
+            if node.env_id.session_id() != &self.session_id {
                 return Err(GraphContractError::ForeignEnv);
+            }
+            if matches!(node.env_id, EnvId::TaskWorktree(_)) {
+                return Err(GraphContractError::UnsupportedEnv);
             }
             if let GraphContext::TaskConversation { task_id } = &node.execution.context
                 && !tasks.insert(task_id)

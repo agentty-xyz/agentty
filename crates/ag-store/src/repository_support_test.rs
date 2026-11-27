@@ -67,6 +67,7 @@ impl AppRepositories {
                 session: Arc::clone(&existing.session),
                 setting: Arc::clone(&existing.setting),
                 task: Arc::clone(&existing.task),
+                task_worktree: Arc::clone(&existing.task_worktree),
                 usage: Arc::clone(&existing.usage),
             }),
         }
@@ -92,6 +93,7 @@ impl AppRepositories {
                 session: Arc::clone(&existing.session),
                 setting: Arc::clone(&existing.setting),
                 task,
+                task_worktree: Arc::clone(&existing.task_worktree),
                 usage: Arc::clone(&existing.usage),
             }),
         }
@@ -117,6 +119,7 @@ impl AppRepositories {
                 session: Arc::clone(&existing.session),
                 setting: Arc::clone(&existing.setting),
                 task: Arc::clone(&existing.task),
+                task_worktree: Arc::clone(&existing.task_worktree),
                 usage: Arc::clone(&existing.usage),
             }),
         }
@@ -146,6 +149,7 @@ impl AppRepositories {
                 session: Arc::clone(&existing.session),
                 setting: Arc::clone(&existing.setting),
                 task: Arc::clone(&existing.task),
+                task_worktree: Arc::clone(&existing.task_worktree),
                 usage: Arc::clone(&existing.usage),
             }),
         }
