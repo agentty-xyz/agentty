@@ -8,8 +8,9 @@
   var settings = document.querySelector('[data-analytics-settings]');
   var choiceKey = 'agentty-site-posthog-choice-v2';
   var allowedEvents = new Set([
-    '$pageview', 'get_started_clicked', 'github_clicked',
-    'install_method_selected', 'install_command_copied'
+    '$pageview', 'github_clicked',
+    'install_method_selected', 'install_command_copied',
+    'platform_login_clicked', 'platform_waitlist_clicked'
   ]);
   var allowedMethods = new Set(['npm', 'Bun', 'pnpm', 'npx', 'cargo', 'sh']);
   var choice;

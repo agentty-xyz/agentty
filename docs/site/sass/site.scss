@@ -36,12 +36,93 @@ svg {
     min-width: 0;
 }
 
+/* The actions keep one rhythm: the distance from the repository widget's last
+   character to the button, from the button to the theme glyph, and from the
+   glyph to the edge of the viewport is the header's side padding each time.
+   The widget's box ends `--space-2xs` after its last character, so the gap is
+   that much less. */
 .site-nav-actions {
+    --site-nav-rhythm: clamp(0.9rem, 3vw, var(--space-2xl));
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     white-space: nowrap;
-    gap: var(--space-md);
+    gap: calc(var(--site-nav-rhythm) - var(--space-2xs));
 }
+
+/* The header's groups sit in a row the site owns, so the site decides when
+   they wrap. */
+.site-nav-row {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-lg);
+    min-width: 0;
+}
+
+/* The search sits in the middle of the header: both sides take equal room
+   once they fit, so its centre is the page's. */
+.site-nav-search {
+    display: flex;
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 7rem;
+    max-width: 28rem;
+}
+
+.site-nav-search .site-search-trigger {
+    width: 100%;
+}
+
+.site-nav-search .site-search-trigger .badge {
+    margin-left: auto;
+}
+
+@media (min-width: 821px) {
+    .site-nav-left,
+    .site-nav-actions {
+        flex: 1 1 0;
+        min-width: max-content;
+    }
+}
+
+.site-notice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) clamp(0.9rem, 3vw, var(--space-2xl));
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+}
+
+.site-notice-text {
+    margin: 0;
+    color: var(--color-muted);
+    font-size: var(--font-size-md);
+    line-height: var(--line-height-body);
+    text-align: center;
+    text-wrap: balance;
+}
+
+.site-notice-text .badge {
+    margin-right: var(--space-xs);
+}
+
+.site-notice-text a {
+    margin-left: var(--space-xs);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.site-notice-text a:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.25rem;
+}
+
 
 .site-container {
     width: min(100%, var(--width-prose));
@@ -73,6 +154,7 @@ svg {
 .docs-card-link,
 .docs-sidebar-title,
 .copy-btn,
+.hero-install-copy,
 .site-footer-text {
     transition: color var(--transition-fast);
 }
@@ -123,34 +205,99 @@ svg {
     color: var(--color-text);
 }
 
-.github-link-rich {
+/* The repository widget: the GitHub mark beside two lines, the repository's
+   name over its latest release. */
+.github-repo {
     display: inline-flex;
     align-items: center;
     gap: var(--space-sm);
     min-height: var(--control-height-md);
+    /* The last character's own side bearing is about a pixel of the gap after it. */
+    margin-right: -1px;
     padding: var(--space-2xs);
     border-radius: var(--radius-sm);
 }
 
-.github-link-icon {
+.github-repo-icon {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    flex-shrink: 0;
 }
 
-.github-link-badges {
-    display: inline-flex;
-    align-items: center;
+.github-repo-body {
+    display: grid;
     gap: var(--space-xs);
 }
 
-/* Room for the hydrated star count and release, so the header keeps its width. */
-.github-badge-stars .badge-value {
-    min-width: 3.5ch;
+.github-repo-icon,
+.github-repo-name {
+    color: var(--color-text);
+    transition: color var(--transition-fast);
 }
 
-.github-badge-release .badge-value {
-    min-width: 5.8ch;
+.github-repo:hover .github-repo-icon,
+.github-repo:hover .github-repo-name {
+    color: var(--color-accent);
+}
+
+.github-repo-name,
+.github-repo-fact {
+    line-height: var(--line-height-none);
+}
+
+.github-repo-fact {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2xs);
+    font-size: var(--font-size-2xs);
+}
+
+.github-repo-fact svg {
+    flex-shrink: 0;
+}
+
+/* The theme toggle: one square icon button showing the current theme's glyph.
+   Both glyphs are in the page, and the `theme-dark` class the head script sets
+   before the first paint picks one. The glyph is 20px, drawn 1/12 of that in
+   from its box, inside a larger hit area; the negative margins take that inset
+   back on both sides, so the glyph, not its hit area, keeps the actions'
+   rhythm and ends where the header's content does. */
+.theme-toggle {
+    --theme-toggle-size: var(--control-height-md);
+    --theme-toggle-inset: calc((var(--theme-toggle-size) - 20px) / 2 + 20px / 12);
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: var(--theme-toggle-size);
+    height: var(--theme-toggle-size);
+    margin-right: calc(var(--theme-toggle-inset) * -1);
+    margin-left: calc(var(--space-2xs) - var(--theme-toggle-inset));
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-muted);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+}
+
+.theme-toggle:hover {
+    color: var(--color-accent);
+}
+
+.theme-toggle-icon--dark,
+:root.theme-dark .theme-toggle-icon--green {
+    display: none;
+}
+
+:root.theme-dark .theme-toggle-icon--dark {
+    display: block;
+}
+
+@media (pointer: coarse) {
+    .theme-toggle {
+        --theme-toggle-size: var(--control-height-lg);
+    }
 }
 
 /* Keep page spacing proportional across phone, tablet, and desktop breakpoints. */
@@ -193,7 +340,7 @@ svg {
 
 /* Homepage: terminal-theme layout with square panels and glyph-printed art.
    Keep the introduction, demo, and installation close across viewport sizes.
-   The hero wordmark uses one gap above and below so it sits evenly between rules. */
+   `--home-wordmark-gap` is the room between the notice bar and the stage. */
 .site-main.home-layout {
     --home-wordmark-gap: clamp(1rem, 3vw, 2rem);
     --radius-sm: 0;
@@ -208,6 +355,55 @@ svg {
 
 .home-layout .site-section:not(:last-child) {
     margin-bottom: clamp(var(--space-4xl), 7vw, var(--space-5xl));
+}
+
+.platform-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: var(--space-3xl);
+    padding: var(--space-2xl);
+    border-top: 1px solid var(--color-border);
+}
+
+.platform-lead {
+    margin: var(--space-lg) 0 var(--space-xl);
+}
+
+.home-layout .platform-actions {
+    justify-content: flex-start;
+}
+
+.platform-note {
+    margin: var(--space-lg) 0 0;
+    color: var(--color-muted);
+    font-size: var(--font-size-md);
+    line-height: var(--line-height-body);
+}
+
+.platform-points {
+    display: grid;
+    align-content: center;
+    gap: var(--space-xl);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.platform-point {
+    padding-left: var(--space-lg);
+    border-left: 2px solid var(--color-border-strong);
+}
+
+.platform-point .badge {
+    margin-left: var(--space-xs);
+}
+
+@media (max-width: 860px) {
+    .platform-panel {
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--space-2xl);
+        padding: var(--space-xl);
+    }
 }
 
 .home-note {
@@ -229,10 +425,6 @@ svg {
     white-space: pre;
     overflow-x: auto;
     max-width: 100%;
-}
-
-.hero-description {
-    margin: 0 auto 1.7rem;
 }
 
 .eyebrow {
@@ -262,41 +454,129 @@ svg {
     border-top: 1px solid var(--color-border);
 }
 
-/* Break the hero out of the 800px reading column without horizontal overflow. */
-.home-layout .home-hero {
-    --home-hero-width: min(1180px, calc(100vw - 2rem));
-    width: var(--home-hero-width);
+/* The stage: one centered first screen. The glyph-art wordmark is its backdrop,
+   wider than the 800px reading column, and the copy overlaps the lower edge of
+   the art, where the mask has faded it to almost nothing. */
+.home-layout .home-stage {
+    --home-stage-width: min(1400px, calc(100vw - 2rem));
+    --home-stage-art-height: calc(var(--home-stage-width) / 4.8);
+    --home-stage-overlap: calc(var(--home-stage-art-height) * 0.2);
+    position: relative;
+    isolation: isolate;
+    width: var(--home-stage-width);
     max-width: none;
-    margin-inline: calc((100% - var(--home-hero-width)) / 2);
-    text-align: left;
+    margin-inline: calc((100% - var(--home-stage-width)) / 2);
 }
 
-.home-hero-grid {
+/* A glow behind the logo, the one place the design allows one. It rises from
+   under the notice bar and is gone at the sides of the stage. */
+.home-stage::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: calc(var(--home-wordmark-gap) * -1) 0 auto;
+    height: calc(var(--home-stage-art-height) * 1.6);
+    background: radial-gradient(
+        ellipse 50% 62% at 50% 36%,
+        color-mix(in srgb, var(--color-accent) 14%, transparent),
+        transparent
+    );
+    pointer-events: none;
+}
+
+.home-stage-copy {
+    position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-    gap: clamp(var(--space-2xl), 4vw, var(--space-4xl));
-    align-items: center;
-    margin-top: var(--home-wordmark-gap);
-    padding-top: clamp(var(--space-2xl), 4vw, 2.5rem);
-    border-top: 1px solid var(--color-border);
+    justify-items: center;
+    margin-top: calc(var(--home-stage-overlap) * -1);
 }
 
-.home-hero .hero-title {
-    max-width: none;
-    margin: 0 0 1.1rem;
+/* The kicker is the poster's top line: the eyebrow between two rules that fade
+   toward the edges of the stage. */
+.home-stage-kicker {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xl);
+    margin-bottom: var(--space-lg);
+}
+
+.home-stage-kicker::before,
+.home-stage-kicker::after {
+    content: "";
+    flex: 1 1 0;
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--color-border));
+}
+
+.home-stage-kicker::after {
+    background: linear-gradient(to left, transparent, var(--color-border));
+}
+
+.home-stage-kicker .eyebrow {
+    margin: 0;
+}
+
+/* Two lines on a desktop, the second one "with control."; a phone balances
+   them instead. */
+.home-stage .hero-title {
+    max-width: 25ch;
+    margin: 0 0 clamp(var(--space-3xl), 4vw, 2.5rem);
     font-family: "Martian Mono", var(--font-mono);
-    font-size: clamp(1.8rem, 3.2vw, 2.6rem);
+    font-size: clamp(1.75rem, 4.4vw, 3.5rem);
     font-weight: var(--font-weight-bold);
     letter-spacing: var(--tracking-tighter);
     line-height: var(--line-height-tight);
+    text-wrap: wrap;
+    /* Clears the faint glyphs right behind the letters of the first line. */
+    text-shadow: 0 0 0.12em var(--color-bg), 0 0 0.3em var(--color-bg), 0 0 0.55em var(--color-bg);
 }
 
-.home-hero .hero-description {
-    margin: 0 0 1.7rem;
+/* The hero's one action: the install command, centred under the headline, with
+   the link to the other methods as its caption. */
+.hero-install {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-md);
+    max-width: 100%;
 }
 
-.home-hero .hero-actions {
-    justify-content: flex-start;
+.hero-install-command {
+    display: flex;
+    align-items: center;
+    gap: var(--space-lg);
+    max-width: 100%;
+    min-height: var(--control-height-xl);
+    padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-xl);
+    border: 1px solid var(--color-border-strong);
+    background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-body);
+}
+
+.hero-install-text {
+    color: var(--color-accent);
+    white-space: nowrap;
+}
+
+.hero-install-more {
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+}
+
+.hero-install-more:hover {
+    color: var(--color-accent);
+}
+
+/* The demo follows the stage without a rule, wider than the reading column. */
+.home-layout .home-demo {
+    --home-demo-width: min(var(--width-wide), calc(100vw - 2rem));
+    width: var(--home-demo-width);
+    margin-inline: calc((100% - var(--home-demo-width)) / 2);
+    padding-top: 0;
+    border-top: 0;
 }
 
 .glyph-art {
@@ -329,17 +609,79 @@ svg {
     margin: 0;
 }
 
+/* The painted wordmark is atmosphere: bright along its top edge, gone before
+   the headline's first line, so text never sits on a bright glyph. The mask
+   reads only the alpha of its colors. */
+.glyph-art-wordmark .glyph-art-canvas {
+    opacity: 0.74;
+    mask-image: linear-gradient(
+        to bottom,
+        var(--color-bg) 46%,
+        color-mix(in srgb, var(--color-bg) 22%, transparent) 80%,
+        transparent 97%
+    );
+}
+
 .glyph-art-nerpa {
     aspect-ratio: 1000 / 600;
 }
 
-@media (max-width: 860px) {
-    .home-hero-grid {
-        grid-template-columns: 1fr;
+/* The colophon closes the installation section: the note on the left, the
+   seal on the right, resting on the rule that opens the next section. */
+.home-layout .home-install:not(:last-child) {
+    margin-bottom: 0;
+    /* The hero's link lands the heading below the sticky header. */
+    scroll-margin-top: 5rem;
+}
+
+.home-colophon {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-2xl);
+    margin-top: var(--space-xl);
+}
+
+.home-colophon .home-note {
+    margin: 0 0 var(--space-xl);
+}
+
+.home-colophon .glyph-art-nerpa {
+    flex: 0 0 auto;
+    width: min(60%, 480px);
+}
+
+/* On a phone the wordmark is a small logo again: nothing overlaps it, it fades
+   less, and the seal sits under its note instead of beside it. */
+@media (max-width: 640px) {
+    .home-layout .home-stage {
+        --home-stage-overlap: calc(var(--space-md) * -1);
     }
 
-    .glyph-art-nerpa {
-        width: min(100%, 560px);
+    .home-stage .hero-title {
+        text-wrap: balance;
+    }
+
+    .glyph-art-wordmark .glyph-art-canvas {
+        mask-image: linear-gradient(
+            to bottom,
+            var(--color-bg) 40%,
+            color-mix(in srgb, var(--color-bg) 35%, transparent)
+        );
+    }
+
+    .home-colophon {
+        align-items: stretch;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .home-colophon .home-note {
+        margin: 0;
+    }
+
+    .home-colophon .glyph-art-nerpa {
+        width: min(100%, 300px);
         margin-left: auto;
     }
 }
@@ -450,7 +792,8 @@ svg {
     text-overflow: ellipsis;
 }
 
-.copy-btn {
+.copy-btn,
+.hero-install-copy {
     flex-shrink: 0;
     background: transparent;
     border: 1px solid var(--color-border);
@@ -464,7 +807,8 @@ svg {
     cursor: pointer;
 }
 
-.copy-btn:hover {
+.copy-btn:hover,
+.hero-install-copy:hover {
     color: var(--color-accent);
     border-color: var(--color-accent);
 }
@@ -1739,10 +2083,6 @@ svg {
     .feature-demo-grid {
         grid-template-columns: 1fr;
     }
-
-    .github-badge-release {
-        display: none;
-    }
 }
 
 @media (max-width: 760px) {
@@ -1762,72 +2102,28 @@ svg {
     }
 }
 
-@media (max-width: 680px) {
-    .github-link-badges {
-        display: none;
+/* Just above the width where the header wraps, its one row has room for the
+   repository widget's mark alone: the lines stay in the link's name for screen
+   readers but leave the layout. */
+@media (min-width: 821px) and (max-width: 900px) {
+    .github-repo-body {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
     }
 }
 
-@media (max-width: 640px) {
-    .roadmap-intro {
-        max-width: none;
-    }
-
-    .roadmap-primary-row,
-    .roadmap-future-row {
-        grid-template-columns: 1fr;
-        gap: 0.85rem;
-    }
-
-    .roadmap-primary-row .roadmap-node,
-    .roadmap-future-row .roadmap-node {
-        margin: 0;
-    }
-
-    .roadmap-node-direction {
-        margin: 0;
-    }
-
-    /* Convert command tabs into touch-friendly rows and prevent command text truncation. */
-    .install-tabs {
+/* Below this width the header's groups no longer fit one row: the brand and
+   links, the search, and the actions each take a row of their own. */
+@media (max-width: 820px) {
+    .site-nav-row {
         flex-wrap: wrap;
-        gap: var(--space-xs);
-        margin-bottom: 0.6rem;
+        row-gap: var(--space-sm);
     }
 
-    .install-tab {
-        flex: 1 1 44%;
-        border-radius: var(--radius-sm);
-        border-bottom-color: var(--color-border);
-    }
-
-    .install-tab.is-active {
-        border-bottom-color: var(--color-border);
-    }
-
-    .install-command {
-        align-items: flex-start;
-        flex-wrap: wrap;
-        border-top-left-radius: var(--radius-sm);
-        border-top-right-radius: var(--radius-sm);
-        overflow: visible;
-    }
-
-    .install-cmd-text {
-        flex-basis: 100%;
-        order: 2;
-        white-space: normal;
-        overflow-wrap: anywhere;
-        text-overflow: clip;
-    }
-
-    .copy-btn {
-        order: 3;
-        margin-left: auto;
-    }
-}
-
-@media (max-width: 560px) {
     .site-nav-left {
         width: 100%;
         flex: 1 1 auto;
@@ -1841,22 +2137,19 @@ svg {
         row-gap: var(--space-xs);
     }
 
+    .site-nav-search {
+        flex: 1 1 100%;
+        max-width: none;
+    }
+
     .site-nav-actions {
         width: 100%;
         justify-content: flex-start;
         flex-wrap: wrap;
     }
+}
 
-    .site-search-trigger {
-        flex: 1 1 auto;
-        justify-content: flex-start;
-    }
-
-    .site-search-trigger .badge,
-    .site-nav-actions .segmented {
-        margin-left: auto;
-    }
-
+@media (max-width: 560px) {
     .section-heading-group {
         align-items: flex-start;
         flex-direction: column;

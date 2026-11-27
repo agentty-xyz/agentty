@@ -14,15 +14,21 @@
           rel="stylesheet">
     <noscript>
         <style>
-            .glyph-art-nerpa {
+            .glyph-art-nerpa,
+            .hero-install-copy {
                 display: none;
             }
         </style>
     </noscript>
 {% endblock extra_css %}
 {% block content %}
-    {# Glyph art is painted by `glyph-art.js`; the ASCII logo stays as the no-script fallback. #}
-    <section class="hero-section home-hero" aria-labelledby="home-hero-title">
+    {# The stage: the glyph-art wordmark is the backdrop of one centered first screen, and
+       the copy overlaps its faded lower edge. `glyph-art.js` paints the art; the ASCII
+       logo stays as the no-script fallback. #}
+    <section class="hero-section home-stage" aria-labelledby="home-hero-title">
+        <div class="home-stage-kicker">
+            <p class="eyebrow">// open-source agentic development environment</p>
+        </div>
         <div class="glyph-art glyph-art-wordmark"
              data-glyph-art="wordmark"
              aria-hidden="true">
@@ -33,30 +39,24 @@
  / ___ \ |_| | |___| |\  | | |   | |    | |
 /_/   \_\____|_____|_| \_| |_|   |_|    |_|</pre>
         </div>
-        <div class="home-hero-grid">
-            <div class="home-hero-text">
-                <p class="eyebrow">// terminal-first agent workflows</p>
-                <h1 class="hero-title" id="home-hero-title">Ship AI-assisted changes with control.</h1>
-                <div class="lead hero-description">{{ section.content | safe }}</div>
-                <div class="hero-actions">
-                    <a class="button button-primary"
-                       href="/docs/getting-started/installation/"
-                       data-analytics-event="get_started_clicked">Get started</a>
-                    <a class="button button-secondary"
-                       href="{{ config.extra.github_repo }}"
-                       target="_blank"
-                       rel="noopener"
-                       data-analytics-event="github_clicked">View on GitHub</a>
+        <div class="home-stage-copy">
+            <h1 class="hero-title" id="home-hero-title">Ship AI-assisted changes with control.</h1>
+            {# The hero's one action: the recommended install command. The installation section
+               lists every method. #}
+            <div class="hero-install">
+                <div class="hero-install-command">
+                    <span class="install-prompt" aria-hidden="true">$</span>
+                    <code class="hero-install-text" data-hero-install-text>npm install -g agentty</code>
+                    <button class="hero-install-copy"
+                            type="button"
+                            data-hero-install-copy
+                            aria-label="Copy the npm install command">copy</button>
                 </div>
-            </div>
-            <div class="glyph-art glyph-art-nerpa"
-                 data-glyph-art="nerpa"
-                 aria-hidden="true">
-                <canvas class="glyph-art-canvas"></canvas>
+                <a class="hero-install-more" href="#installation">or Bun, pnpm, npx, brew, cargo, sh &darr;</a>
             </div>
         </div>
     </section>
-    <section class="site-section">
+    <section class="site-section home-demo">
         <div class="terminal-window">
             <div class="terminal-window-bar" aria-hidden="true">
                 <span class="terminal-window-dots"><i></i><i></i><i></i></span>
@@ -83,10 +83,69 @@
             </div>
         </div>
     </section>
-    <section class="site-section">
+    <section class="site-section home-install" id="installation">
         <h2 class="section-heading">// installation</h2>
         {% include "partials/install-methods.html" %}
-        <p class="home-note">Built with Agentty itself, using the same workflow it provides.</p>
+        {# The seal rests on the rule that closes the section, beside the note it signs. #}
+        <div class="home-colophon">
+            <p class="home-note">Built with Agentty itself, using the same workflow it provides.</p>
+            <div class="glyph-art glyph-art-nerpa"
+                 data-glyph-art="nerpa"
+                 aria-hidden="true">
+                <canvas class="glyph-art-canvas"></canvas>
+            </div>
+        </div>
+    </section>
+    <section class="site-section" aria-labelledby="platform-title">
+        <div class="terminal-window">
+            <div class="terminal-window-bar" aria-hidden="true">
+                <span class="terminal-window-dots"><i></i><i></i><i></i></span>
+                <span>agentty / platform</span>
+                <span>preview</span>
+            </div>
+            <div class="platform-panel">
+                <div class="platform-intro">
+                    <p class="eyebrow">// agentty platform</p>
+                    <h2 class="section-title" id="platform-title">Your sessions, beyond the terminal.</h2>
+                    <p class="lead platform-lead">
+                        Agentty Platform connects the Agentty on your computer to the rest of your work. It is in preview and open to a few accounts for now: sign in with GitHub to join the waitlist.
+                    </p>
+                    <div class="hero-actions platform-actions">
+                        <a class="button button-primary"
+                           href="{{ config.extra.platform_url }}"
+                           data-analytics-event="platform_waitlist_clicked">Join the waitlist</a>
+                        <a class="button button-secondary"
+                           href="{{ get_url(path='@/docs/usage/platform.md') }}">How it works</a>
+                    </div>
+                    <p class="platform-note">
+                        Already invited? <a href="{{ config.extra.platform_url }}"
+    data-analytics-event="platform_login_clicked">Log in</a>. Agentty itself stays free and open source.
+                    </p>
+                </div>
+                <ul class="platform-points">
+                    <li class="platform-point">
+                        <h3 class="feature-title">Sessions from any browser</h3>
+                        <p class="feature-text">
+                            Follow and steer running sessions from a phone or another computer. Each device pairs with a one-time code, and everything is encrypted end to end.
+                        </p>
+                    </li>
+                    <li class="platform-point">
+                        <h3 class="feature-title">Pull request reviews</h3>
+                        <p class="feature-text">
+                            Get a review on every new pull request in the repositories you connect, reported as a GitHub check.
+                        </p>
+                    </li>
+                    <li class="platform-point">
+                        <h3 class="feature-title">
+                            Sync <span class="badge">soon</span>
+                        </h3>
+                        <p class="feature-text">
+                            One record of the work in progress across all your computers, so two sessions never start the same task.
+                        </p>
+                    </li>
+                </ul>
+            </div>
+        </div>
     </section>
     <section class="site-section">
         <div class="section-heading-group">
@@ -255,4 +314,22 @@
 {% endblock content %}
 {% block extra_scripts %}
     <script defer src="{{ get_url(path='glyph-art.js') }}"></script>
+    <script>
+(function () {
+  var copyBtn = document.querySelector('[data-hero-install-copy]');
+  var cmdText = document.querySelector('[data-hero-install-text]');
+  if (!copyBtn || !cmdText) return;
+
+  /** Copy the hero's install command and report it like the installation tabs do. */
+  copyBtn.addEventListener('click', function () {
+    navigator.clipboard.writeText(cmdText.textContent).then(function () {
+      copyBtn.textContent = 'copied!';
+      setTimeout(function () { copyBtn.textContent = 'copy'; }, 2000);
+      document.dispatchEvent(new CustomEvent('agentty:install-command-copied', {
+        detail: { method: 'npm' }
+      }));
+    });
+  });
+})();
+    </script>
 {% endblock extra_scripts %}

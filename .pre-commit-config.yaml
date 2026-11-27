@@ -585,6 +585,13 @@ repos:
         files: ^(Cargo\.(toml|lock)|rust-toolchain\.toml|crates/(ag-harness|ag-router)/(Cargo\.toml|public-api\.txt|src/.*\.rs))$
         pass_filenames: false
         stages: [manual]
+      - id: docs-site-version
+        name: docs site version
+        description: Verify the version the docs site header shows equals the workspace version.
+        entry: node --test docs/site/tests/site-version.test.mjs
+        language: system
+        files: ^(Cargo\.toml|docs/site/config\.toml|docs/site/tests/site-version\.test\.mjs|\.pre-commit-config\.yaml)$
+        pass_filenames: false
       - id: zola-check
         name: zola check
         description: Verify the Zola docs site builds without broken links.

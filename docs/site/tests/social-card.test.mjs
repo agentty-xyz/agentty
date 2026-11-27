@@ -39,7 +39,7 @@ test('readHero reads the eyebrow, title, and font stylesheet of the home page', 
   const hero = readHero(indexHtml);
 
   // Assert
-  assert.equal(hero.eyebrow, '// terminal-first agent workflows');
+  assert.equal(hero.eyebrow, '// open-source agentic development environment');
   assert.equal(hero.title, 'Ship AI-assisted changes with control.');
   assert.match(hero.fontHref, /^https:\/\/fonts\.googleapis\.com\/css2\?family=Martian\+Mono/);
 });

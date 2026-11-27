@@ -5,12 +5,12 @@ template = "website-analytics.html"
 +++
 
 This website uses PostHog to measure visits. Until you make a choice, PostHog records
-the pages you view and which getting-started, GitHub, and installation controls you use,
-but keeps its identifier only in page memory, so visits are not connected. Installation
-events contain only the method you selected or copied (`npm`, `Bun`, `pnpm`, `npx`,
-`cargo`, or `sh`). If you allow analytics, PostHog stores a browser identifier in local
-storage and a first-party cookie to connect those events across visits. Your IP address
-is part of the network request to PostHog.
+the pages you view and which GitHub, installation, and Agentty Platform controls you
+use, but keeps its identifier only in page memory, so visits are not connected.
+Installation events contain only the method you selected or copied (`npm`, `Bun`,
+`pnpm`, `npx`, `cargo`, or `sh`). If you allow analytics, PostHog stores a browser
+identifier in local storage and a first-party cookie to connect those events across
+visits. Your IP address is part of the network request to PostHog.
 
 Allowing analytics also enables PostHog session replay, which records the public page
 content and interactions such as clicks and scrolling. Input values are masked, and the
