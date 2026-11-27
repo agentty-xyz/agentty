@@ -585,12 +585,12 @@ repos:
         files: ^(Cargo\.(toml|lock)|rust-toolchain\.toml|crates/(ag-harness|ag-router)/(Cargo\.toml|public-api\.txt|src/.*\.rs))$
         pass_filenames: false
         stages: [manual]
-      - id: docs-site-version
-        name: docs site version
-        description: Verify the version the docs site header shows equals the workspace version.
-        entry: node --test docs/site/tests/site-version.test.mjs
+      - id: docs-site-tests
+        name: docs site tests
+        description: Run the docs site's script tests, including that the version its header shows equals the workspace version.
+        entry: bash -eu -o pipefail -c 'node --test docs/site/tests/*.mjs'
         language: system
-        files: ^(Cargo\.toml|docs/site/config\.toml|docs/site/tests/site-version\.test\.mjs|\.pre-commit-config\.yaml)$
+        files: ^(Cargo\.toml$|docs/site/|\.pre-commit-config\.yaml$)
         pass_filenames: false
       - id: zola-check
         name: zola check

@@ -32,10 +32,10 @@ Applies to site configuration, templates, content, and static assets.
 
 ## Header
 
-- The repository widget shows `extra.release_version` from `docs/site/config.toml` as
-  the latest release, and no page requests anything from GitHub. The `bump-version`
-  skill sets the value, and the `docs-site-version` hook fails while it differs from the
-  workspace version in the root `Cargo.toml`.
+- The repository widget shows `extra.agentty_version` from `docs/site/config.toml` as
+  the version, and no page requests anything from GitHub. The `bump-version` skill sets
+  the value, and the `docs-site-tests` hook, which runs `docs/site/tests`, fails while
+  it differs from the workspace version in the root `Cargo.toml`.
 - The theme toggle holds one glyph per theme, and CSS shows the one for the `theme-dark`
   class that the head script sets before the first paint. Keep it hidden without
   JavaScript, and keep its `agentty-themechange` event for the scripts that repaint.

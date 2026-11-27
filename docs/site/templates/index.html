@@ -46,11 +46,15 @@
             <div class="hero-install">
                 <div class="hero-install-command">
                     <span class="install-prompt" aria-hidden="true">$</span>
-                    <code class="hero-install-text" data-hero-install-text>npm install -g agentty</code>
+                    <code class="hero-install-text" data-hero-install-text>{{ config.extra.npm_install_command }}</code>
+                    {# The installation partial's script copies for this button too. #}
                     <button class="hero-install-copy"
                             type="button"
-                            data-hero-install-copy
+                            data-install-copy
+                            data-install-source="[data-hero-install-text]"
+                            data-install-method="npm"
                             aria-label="Copy the npm install command">copy</button>
+                    <span class="sr-only" role="status" data-install-copy-status></span>
                 </div>
                 <a class="hero-install-more" href="#installation">or Bun, pnpm, npx, brew, cargo, sh &darr;</a>
             </div>
@@ -126,7 +130,7 @@
                     <li class="platform-point">
                         <h3 class="feature-title">Sessions from any browser</h3>
                         <p class="feature-text">
-                            Follow and steer running sessions from a phone or another computer. Each device pairs with a one-time code, and everything is encrypted end to end.
+                            Follow and steer running sessions from a phone or another computer. Each device pairs with a one-time code and your approval in the terminal, and its traffic is encrypted end to end.
                         </p>
                     </li>
                     <li class="platform-point">
@@ -140,7 +144,7 @@
                             Sync <span class="badge">soon</span>
                         </h3>
                         <p class="feature-text">
-                            One record of the work in progress across all your computers, so two sessions never start the same task.
+                            One record of the work in progress across all your computers, so two sessions don't start the same work.
                         </p>
                     </li>
                 </ul>
@@ -314,22 +318,4 @@
 {% endblock content %}
 {% block extra_scripts %}
     <script defer src="{{ get_url(path='glyph-art.js') }}"></script>
-    <script>
-(function () {
-  var copyBtn = document.querySelector('[data-hero-install-copy]');
-  var cmdText = document.querySelector('[data-hero-install-text]');
-  if (!copyBtn || !cmdText) return;
-
-  /** Copy the hero's install command and report it like the installation tabs do. */
-  copyBtn.addEventListener('click', function () {
-    navigator.clipboard.writeText(cmdText.textContent).then(function () {
-      copyBtn.textContent = 'copied!';
-      setTimeout(function () { copyBtn.textContent = 'copy'; }, 2000);
-      document.dispatchEvent(new CustomEvent('agentty:install-command-copied', {
-        detail: { method: 'npm' }
-      }));
-    });
-  });
-})();
-    </script>
 {% endblock extra_scripts %}

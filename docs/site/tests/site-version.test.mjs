@@ -22,12 +22,12 @@ test('the site header shows the workspace version', () => {
 
   // Act
   const workspaceVersion = readTomlString(cargoToml, 'workspace.package', 'version');
-  const siteVersion = readTomlString(configToml, 'extra', 'release_version');
+  const siteVersion = readTomlString(configToml, 'extra', 'agentty_version');
 
   // Assert
   assert.equal(
     siteVersion,
     workspaceVersion,
-    'Set `extra.release_version` in `docs/site/config.toml` to the workspace version.',
+    'Set `extra.agentty_version` in `docs/site/config.toml` to the workspace version.',
   );
 });

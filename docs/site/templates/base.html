@@ -89,8 +89,8 @@
                         {% block extra_nav %}
                             {% set github_repo_slug = config.extra.github_repo_slug | default(value="agentty-xyz/agentty") %}
                             {# The repository widget: the GitHub mark beside the repository's name and, on
-                               a second line, its latest release. The release is `extra.release_version`,
-                               which the release process keeps current, so the page asks GitHub for nothing. #}
+                               a second line, its version. The version is `extra.agentty_version`, which
+                               the release process keeps current, so the page asks GitHub for nothing. #}
                             <a class="github-link github-repo"
                                href="{{ config.extra.github_repo }}"
                                target="_blank"
@@ -121,8 +121,8 @@
                                             <path d="M2 2.5v5l6.5 6.5 5-5L7 2.5z" />
                                             <circle cx="5" cy="5.5" r="0.6" />
                                         </svg>
-                                        <span class="sr-only">latest release</span>
-                                        v{{ config.extra.release_version }}
+                                        <span class="sr-only">version</span>
+                                        v{{ config.extra.agentty_version }}
                                     </span>
                                 </span>
                             </a>
@@ -273,7 +273,11 @@
         root.classList.toggle('theme-dark', theme === 'dark');
         themeToggle.setAttribute('aria-label', toggleLabel);
         themeToggle.title = toggleLabel;
-        localStorage.setItem(STORAGE_KEY, theme);
+        try {
+          localStorage.setItem(STORAGE_KEY, theme);
+        } catch (error) {
+          // Without storage the choice lasts for this page.
+        }
         globalThis.dispatchEvent(new CustomEvent('agentty-themechange', {
           detail: { theme: theme }
         }));
@@ -459,8 +463,7 @@
       }
 
       // Name the toggle after the theme already applied by the <head> script.
-      var savedTheme = localStorage.getItem(STORAGE_KEY);
-      applyTheme(savedTheme === 'dark' ? 'dark' : 'green');
+      applyTheme(root.classList.contains('theme-dark') ? 'dark' : 'green');
       syncResponsiveDetails();
       hydrateMotionDemos();
 

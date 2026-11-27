@@ -8,9 +8,18 @@
 @use "fonts";
 @use "base";
 
+/* `--site-gutter` is the side padding the shared header gives itself, and
+   `--site-header-offset` clears the sticky header, which is one row here and
+   several below the width where it wraps. */
 :root {
     --color-roadmap-grid: color-mix(in srgb, var(--color-border) 32%, transparent);
     --docs-sidebar-width: 230px;
+    --home-seal-width-phone: 300px;
+    --home-stage-max-width: 1400px;
+    --site-gutter: clamp(0.9rem, 3vw, var(--space-2xl));
+    --site-header-offset: calc(var(--space-5xl) + var(--space-lg));
+    --site-search-max-width: 28rem;
+    --site-search-min-width: 7rem;
 }
 
 .site-body {
@@ -42,12 +51,11 @@ svg {
    The widget's box ends `--space-2xs` after its last character, so the gap is
    that much less. */
 .site-nav-actions {
-    --site-nav-rhythm: clamp(0.9rem, 3vw, var(--space-2xl));
     display: flex;
     align-items: center;
     justify-content: flex-end;
     white-space: nowrap;
-    gap: calc(var(--site-nav-rhythm) - var(--space-2xs));
+    gap: calc(var(--site-gutter) - var(--space-2xs));
 }
 
 /* The header's groups sit in a row the site owns, so the site decides when
@@ -67,8 +75,8 @@ svg {
     display: flex;
     flex: 1 1 0;
     justify-content: center;
-    min-width: 7rem;
-    max-width: 28rem;
+    min-width: var(--site-search-min-width);
+    max-width: var(--site-search-max-width);
 }
 
 .site-nav-search .site-search-trigger {
@@ -92,7 +100,7 @@ svg {
     align-items: center;
     justify-content: center;
     gap: var(--space-md);
-    padding: var(--space-sm) clamp(0.9rem, 3vw, var(--space-2xl));
+    padding: var(--space-sm) var(--site-gutter);
     border-bottom: 1px solid var(--color-border);
     background: var(--color-surface);
 }
@@ -120,7 +128,7 @@ svg {
 
 .site-notice-text a:hover {
     text-decoration: underline;
-    text-underline-offset: 0.25rem;
+    text-underline-offset: var(--space-2xs);
 }
 
 
@@ -206,7 +214,7 @@ svg {
 }
 
 /* The repository widget: the GitHub mark beside two lines, the repository's
-   name over its latest release. */
+   name over its version. */
 .github-repo {
     display: inline-flex;
     align-items: center;
@@ -257,13 +265,14 @@ svg {
 
 /* The theme toggle: one square icon button showing the current theme's glyph.
    Both glyphs are in the page, and the `theme-dark` class the head script sets
-   before the first paint picks one. The glyph is 20px, drawn 1/12 of that in
+   before the first paint picks one. The glyph is drawn 1/12 of its size in
    from its box, inside a larger hit area; the negative margins take that inset
    back on both sides, so the glyph, not its hit area, keeps the actions'
    rhythm and ends where the header's content does. */
 .theme-toggle {
     --theme-toggle-size: var(--control-height-md);
-    --theme-toggle-inset: calc((var(--theme-toggle-size) - 20px) / 2 + 20px / 12);
+    --theme-toggle-glyph: 20px;
+    --theme-toggle-inset: calc((var(--theme-toggle-size) - var(--theme-toggle-glyph)) / 2 + var(--theme-toggle-glyph) / 12);
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
@@ -295,6 +304,10 @@ svg {
 }
 
 @media (pointer: coarse) {
+    .github-repo {
+        min-height: var(--control-height-lg);
+    }
+
     .theme-toggle {
         --theme-toggle-size: var(--control-height-lg);
     }
@@ -458,7 +471,7 @@ svg {
    wider than the 800px reading column, and the copy overlaps the lower edge of
    the art, where the mask has faded it to almost nothing. */
 .home-layout .home-stage {
-    --home-stage-width: min(1400px, calc(100vw - 2rem));
+    --home-stage-width: min(var(--home-stage-max-width), calc(100vw - 2 * var(--space-lg)));
     --home-stage-art-height: calc(var(--home-stage-width) / 4.8);
     --home-stage-overlap: calc(var(--home-stage-art-height) * 0.2);
     position: relative;
@@ -520,7 +533,7 @@ svg {
    them instead. */
 .home-stage .hero-title {
     max-width: 25ch;
-    margin: 0 0 clamp(var(--space-3xl), 4vw, 2.5rem);
+    margin: 0 0 clamp(var(--space-3xl), 4vw, calc(var(--space-3xl) + var(--space-sm)));
     font-family: "Martian Mono", var(--font-mono);
     font-size: clamp(1.75rem, 4.4vw, 3.5rem);
     font-weight: var(--font-weight-bold);
@@ -572,7 +585,7 @@ svg {
 
 /* The demo follows the stage without a rule, wider than the reading column. */
 .home-layout .home-demo {
-    --home-demo-width: min(var(--width-wide), calc(100vw - 2rem));
+    --home-demo-width: min(var(--width-wide), calc(100vw - 2 * var(--space-lg)));
     width: var(--home-demo-width);
     margin-inline: calc((100% - var(--home-demo-width)) / 2);
     padding-top: 0;
@@ -631,7 +644,7 @@ svg {
 .home-layout .home-install:not(:last-child) {
     margin-bottom: 0;
     /* The hero's link lands the heading below the sticky header. */
-    scroll-margin-top: 5rem;
+    scroll-margin-top: var(--site-header-offset);
 }
 
 .home-colophon {
@@ -648,7 +661,7 @@ svg {
 
 .home-colophon .glyph-art-nerpa {
     flex: 0 0 auto;
-    width: min(60%, 480px);
+    width: min(60%, calc(var(--width-wide) / 2));
 }
 
 /* On a phone the wordmark is a small logo again: nothing overlaps it, it fades
@@ -681,7 +694,7 @@ svg {
     }
 
     .home-colophon .glyph-art-nerpa {
-        width: min(100%, 300px);
+        width: min(100%, var(--home-seal-width-phone));
         margin-left: auto;
     }
 }
@@ -2116,9 +2129,73 @@ svg {
     }
 }
 
+@media (max-width: 640px) {
+    .roadmap-intro {
+        max-width: none;
+    }
+
+    .roadmap-primary-row,
+    .roadmap-future-row {
+        grid-template-columns: 1fr;
+        gap: 0.85rem;
+    }
+
+    .roadmap-primary-row .roadmap-node,
+    .roadmap-future-row .roadmap-node {
+        margin: 0;
+    }
+
+    .roadmap-node-direction {
+        margin: 0;
+    }
+
+    /* Convert command tabs into touch-friendly rows and prevent command text truncation. */
+    .install-tabs {
+        flex-wrap: wrap;
+        gap: var(--space-xs);
+        margin-bottom: 0.6rem;
+    }
+
+    .install-tab {
+        flex: 1 1 44%;
+        border-radius: var(--radius-sm);
+        border-bottom-color: var(--color-border);
+    }
+
+    .install-tab.is-active {
+        border-bottom-color: var(--color-border);
+    }
+
+    .install-command {
+        align-items: flex-start;
+        flex-wrap: wrap;
+        border-top-left-radius: var(--radius-sm);
+        border-top-right-radius: var(--radius-sm);
+        overflow: visible;
+    }
+
+    .install-cmd-text {
+        flex-basis: 100%;
+        order: 2;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+    }
+
+    .copy-btn {
+        order: 3;
+        margin-left: auto;
+    }
+}
+
 /* Below this width the header's groups no longer fit one row: the brand and
-   links, the search, and the actions each take a row of their own. */
+   links, the search, and the actions each take a row of their own, and the
+   offset that clears the header grows with them. */
 @media (max-width: 820px) {
+    :root {
+        --site-header-offset: calc(var(--space-5xl) * 3 + var(--space-sm));
+    }
+
     .site-nav-row {
         flex-wrap: wrap;
         row-gap: var(--space-sm);

@@ -384,12 +384,13 @@ keeps the same one.
   `.prose`: bare `table` elements and `code` elements without a class outside `pre`
   inside it take the same styles.
 - **Segmented control:** `fieldset.segmented` with a `legend.sr-only` holds `button`
-  options on `--color-surface`; the option with `aria-pressed="true"` sits on
-  `--color-surface-interactive` in `--color-accent`, a hovered one turns `--color-text`,
-  and a `disabled` one dims. On a touch screen each option is `--control-height-lg`
-  tall. The theme switch is one, with a `data-theme` attribute of `green` or `dark` on
-  each option: its script toggles the `theme-dark` class on the root element, sets
-  `aria-pressed` on the options, and saves the choice for the snippet in Themes.
+  options on `--color-surface`, for a small set of exclusive options; the option with
+  `aria-pressed="true"` sits on `--color-surface-interactive` in `--color-accent`, a
+  hovered one turns `--color-text`, and a `disabled` one dims. On a touch screen each
+  option is `--control-height-lg` tall. A theme switch is one possible use, with a
+  `data-theme` attribute of `green` or `dark` on each option: its script toggles the
+  `theme-dark` class on the root element, sets `aria-pressed` on the options, and saves
+  the choice for the snippet in Themes.
 
 ### Gallery Check
 
