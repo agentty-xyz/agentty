@@ -113,15 +113,14 @@ fn seed_successful_review_request_publish(
         .find(|path| path.is_file())
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
     let git_path = env.stub_bin.join("git");
-    let remote_lookup = if remote_branch_was_deleted {
-        r#"if [ "$1" = "ls-remote" ]; then
+    // Branch-existence lookups see only the published `main` review target.
+    let remote_lookup = r#"if [ "$1" = "ls-remote" ] && [ "$2" = "--heads" ]; then
+  case "$4" in
+    main) printf 'main\trefs/heads/main\n' ;;
+  esac
   exit 0
 fi
-"#
-        .to_string()
-    } else {
-        String::new()
-    };
+"#;
     let push_lease_guard = if remote_branch_was_deleted {
         format!(
             r#"  case "$*" in

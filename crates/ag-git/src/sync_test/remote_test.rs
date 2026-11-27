@@ -46,23 +46,43 @@ fn advertised_commits_require_exact_refs_and_full_object_ids() {
         let result = advertised_commit(&output, "refs/heads/release");
 
         // Assert
-        assert_eq!(result.is_ok(), accepted, "{output}");
+        assert_eq!(result.is_some(), accepted, "{output}");
     }
 }
 
 #[tokio::test]
 async fn remote_branch_commits_fetch_advertised_hashes_and_report_command_failures() {
     // Arrange
-    for failure in ["none", "lookup", "fetch"] {
+    for (failure, expected_error) in [
+        ("none", ""),
+        ("lookup", "lookup failure"),
+        (
+            "missing-base",
+            "Remote `review-remote` does not advertise review target branch `release`",
+        ),
+        (
+            "missing-source",
+            "Remote `review-remote` does not advertise published branch `review`",
+        ),
+        ("fetch", "fetch failure"),
+    ] {
         let base = "a".repeat(40);
         let source = "b".repeat(40);
         let mut runner = MockAsyncGitCommandRunner::new();
         let mut sequence = Sequence::new();
+        let source_line = format!("{source}\trefs/heads/review\n");
+        let base_line = format!("{base}\trefs/heads/release\n");
+        let advertisement = match failure {
+            "missing-base" => source_line,
+            "missing-source" => base_line,
+            _ => format!("{source_line}{base_line}"),
+        };
         let response = async_git_output(
             i32::from(failure == "lookup"),
-            format!("{source}\trefs/heads/review\n{base}\trefs/heads/release\n"),
+            advertisement,
             "lookup failure",
         );
+        let fetches = matches!(failure, "none" | "fetch");
         runner
             .expect_run()
             .once()
@@ -80,7 +100,7 @@ async fn remote_branch_commits_fetch_advertised_hashes_and_report_command_failur
                         ]
             })
             .return_once(move |_| Box::pin(async move { Ok(response) }));
-        if failure != "lookup" {
+        if fetches {
             let arguments = vec![
                 "fetch".into(),
                 "--no-tags".into(),
@@ -119,12 +139,8 @@ async fn remote_branch_commits_fetch_advertised_hashes_and_report_command_failur
         if failure == "none" {
             assert_eq!(result.expect("fetched commits"), (base, source));
         } else {
-            assert!(
-                result
-                    .expect_err("command failure")
-                    .to_string()
-                    .contains(failure)
-            );
+            let error = result.expect_err("command failure").to_string();
+            assert!(error.contains(expected_error), "{error}");
         }
     }
 }

@@ -325,7 +325,9 @@ unfinished ones target their root session's base branch.
 GitLab merge request. During a turn or rebase, publishing waits in the queue.
 
 1. Keep the default branch name or enter one that does not exist remotely. The name is
-   fixed after publishing.
+   fixed after publishing. A new review request targets the session's base branch, so
+   publishing stops before pushing when that branch is missing from the remote. An open
+   review request that already exists for the branch keeps its own target.
 1. Agentty pushes with a force-with-lease check, then creates or refreshes an open
    review request.
 1. The request URL appears in chat. Later completed turns push their new commits to the
