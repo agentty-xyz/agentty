@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "ag-agent"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-contracts",
  "ag-harness",
@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "ag-clipboard"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "image",
  "mockall",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "ag-contracts"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-protocol",
  "async-trait",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "ag-forge"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-telemetry",
  "mockall",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "ag-git"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-telemetry",
  "mockall",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-router",
  "ag-sqlite",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness-cli"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-harness",
  "ag-telemetry",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "ag-noise"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "hex",
  "sha2 0.11.1",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "ag-protocol"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "askama",
  "jsonschema",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "ag-relay"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-noise",
  "async-trait",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "ag-release"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "askama",
  "clap",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "ag-remote"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-noise",
  "ag-relay",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "ag-router"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "ag-runtime"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-agent",
  "ag-contracts",
@@ -313,14 +313,14 @@ dependencies = [
 
 [[package]]
 name = "ag-scheduler"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "ag-session"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-contracts",
  "ag-forge",
@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "ag-sqlite"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "sqlx",
  "tempfile",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "ag-store"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-contracts",
  "ag-protocol",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "ag-telemetry"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "ag-tui-text"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ratatui",
  "rustc-hash",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "ag-worker"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-contracts",
  "ag-protocol",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "ag-xtask"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "agentty"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "ag-clipboard",
  "ag-contracts",
@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "testty"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
