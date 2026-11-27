@@ -519,7 +519,8 @@ a:hover .badge-label {
 }
 
 /* ---- Segmented control: .segmented > button[aria-pressed] -------------
-   The theme switch is one, with a data-theme option per theme. */
+   A small set of exclusive options. A theme switch is one possible use,
+   with a data-theme option per theme. */
 .segmented {
   display: flex;
   align-items: center;

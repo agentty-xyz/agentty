@@ -30,6 +30,16 @@ Applies to site configuration, templates, content, and static assets.
   them there. Scripts and templates read colors and fonts from the custom properties at
   runtime. The theme switch leaves the `theme-color` meta at the default theme's value.
 
+## Header
+
+- The repository widget shows `extra.agentty_version` from `docs/site/config.toml` as
+  the version, and no page requests anything from GitHub. The `bump-version` skill sets
+  the value, and the `docs-site-tests` hook, which runs `docs/site/tests`, fails while
+  it differs from the workspace version in the root `Cargo.toml`.
+- The theme toggle holds one glyph per theme, and CSS shows the one for the `theme-dark`
+  class that the head script sets before the first paint. Keep it hidden without
+  JavaScript, and keep its `agentty-themechange` event for the scripts that repaint.
+
 ## Search Engine Metadata
 
 - `docs/site/templates/partials/seo.html` owns titles, descriptions, canonical URLs,

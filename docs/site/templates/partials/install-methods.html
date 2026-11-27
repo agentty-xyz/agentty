@@ -1,4 +1,4 @@
-{% set npm_install_command = "npm install -g agentty" %}
+{% set npm_install_command = config.extra.npm_install_command %}
 {% set bun_install_command = "bun add --global agentty" %}
 {% set pnpm_install_command = "pnpm add --global agentty" %}
 {% set npx_install_command = "npx agentty" %}
@@ -68,7 +68,10 @@
          aria-live="polite">
         <span class="install-prompt">$</span>
         <code class="install-cmd-text">{{ npm_install_command }}</code>
-        <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
+        <button class="copy-btn"
+                data-install-copy
+                title="Copy to clipboard"
+                aria-label="Copy command">copy</button>
     </div>
 </div>
 <noscript>
@@ -115,7 +118,6 @@
 (function () {
   var tabs = document.querySelectorAll('.install-tab');
   var cmdText = document.querySelector('.install-cmd-text');
-  var copyBtn = document.querySelector('.copy-btn');
   /** Deactivate all tabs then activate the given one. */
   function setActive(activeTab) {
     tabs.forEach(function (tab) {
@@ -151,14 +153,36 @@
     });
   });
 
-  copyBtn.addEventListener('click', function () {
-    navigator.clipboard.writeText(cmdText.textContent).then(function () {
+  /**
+   * Copy an install command and report it. A `[data-install-copy]` button
+   * copies the selected tab's command, or the command its
+   * `data-install-source` selector names, reported as `data-install-method`.
+   * A `[data-install-copy-status]` element beside the button announces the
+   * copy to screen readers.
+   */
+  function copyCommand(copyBtn) {
+    var source = copyBtn.dataset.installSource
+      ? document.querySelector(copyBtn.dataset.installSource)
+      : cmdText;
+    var status = copyBtn.parentElement.querySelector('[data-install-copy-status]');
+    navigator.clipboard.writeText(source.textContent).then(function () {
       copyBtn.textContent = 'copied!';
-      setTimeout(function () { copyBtn.textContent = 'copy'; }, 2000);
+      if (status) status.textContent = 'Copied the install command.';
+      setTimeout(function () {
+        copyBtn.textContent = 'copy';
+        if (status) status.textContent = '';
+      }, 2000);
       document.dispatchEvent(new CustomEvent('agentty:install-command-copied', {
-        detail: { method: document.querySelector('.install-tab.is-active').textContent.trim() }
+        detail: {
+          method: copyBtn.dataset.installMethod
+            || document.querySelector('.install-tab.is-active').textContent.trim()
+        }
       }));
     });
+  }
+
+  document.querySelectorAll('[data-install-copy]').forEach(function (copyBtn) {
+    copyBtn.addEventListener('click', function () { copyCommand(copyBtn); });
   });
 })();
 </script>

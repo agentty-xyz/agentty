@@ -46,6 +46,9 @@ duplicate commit, tag, push, or pull workflow steps here.
      to the selected version, refreshes `Cargo.lock`, and adds the
      `## [vX.Y.Z] - YYYY-MM-DD` changelog heading below `## [Unreleased]`. The Pacific
      date follows the repository's PST/PDT release calendar.
+   - Set `agentty_version` under `[extra]` in `docs/site/config.toml` to the selected
+     version. The site header shows it as the version, and the `docs-site-tests` hook
+     fails while it differs from the workspace version.
    - Update any other generated metadata affected by the bump. Check that no internal
      workspace dependency still pins the previous version.
 
