@@ -13,10 +13,11 @@ use super::super::session;
 use super::{
     BranchPublishTaskFailure, BranchPublishTaskSession, BranchPublishTaskSuccess,
     ReviewRequestCreationInfo, branch_push_success_message, create_or_refresh_review_request,
-    detected_forge_kind_from_git_push_error, git_push_authentication_message,
-    is_git_push_authentication_error, load_review_request_create_input, publish_pull_request,
-    push_session_branch, push_session_branch_to_remote, review_request_created_notice,
-    review_request_queued_label, review_request_remote,
+    detected_forge_kind_from_git_push_error, existing_review_request_display_id,
+    git_push_authentication_message, is_git_push_authentication_error,
+    load_review_request_create_input, publish_pull_request, push_session_branch,
+    push_session_branch_to_remote, review_request_created_notice, review_request_queued_label,
+    review_request_remote,
 };
 use crate::app::review_request::ReviewRequestGenerator;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Status};
@@ -63,7 +64,7 @@ async fn manual_review_request_refresh_reconciles_both_forges_and_propagates_fai
             }),
             status: Status::Review,
         };
-        let git_client = refresh_git_client(outcome);
+        let git_client: Arc<dyn git::GitClient> = Arc::new(refresh_git_client(outcome));
         let client = refresh_forge_client(forge_kind, outcome, summary);
         let run_client = refresh_run_client(outcome);
         let remote = forge::detect_remote(match forge_kind {
@@ -91,6 +92,7 @@ async fn manual_review_request_refresh_reconciles_both_forges_and_propagates_fai
             &generator,
             remote,
             "review/topic".into(),
+            Some("42".into()),
         )
         .await;
 
@@ -110,7 +112,7 @@ async fn manual_review_request_refresh_reconciles_both_forges_and_propagates_fai
     }
 }
 
-fn refresh_git_client(outcome: &'static str) -> Arc<dyn git::GitClient> {
+fn refresh_git_client(outcome: &'static str) -> git::MockGitClient {
     let mut git_client = git::MockGitClient::new();
     git_client
         .expect_head_commit_message()
@@ -130,7 +132,8 @@ fn refresh_git_client(outcome: &'static str) -> Arc<dyn git::GitClient> {
     if !matches!(outcome, "missing_commit" | "head_error" | "metadata_error") {
         expect_published_commit_diff(&mut git_client, "release", "review/topic");
     }
-    Arc::new(git_client)
+
+    git_client
 }
 
 fn expect_published_commit_diff(
@@ -158,13 +161,6 @@ fn refresh_forge_client(
     summary: forge::ReviewRequestSummary,
 ) -> forge::MockReviewRequestClient {
     let mut client = forge::MockReviewRequestClient::new();
-    if outcome == "discovered" {
-        let found = summary.clone();
-        client
-            .expect_find_by_source_branch()
-            .once()
-            .return_once(move |_, _| Box::pin(async move { Ok(Some(found)) }));
-    }
     let mut refreshed = summary.clone();
     refreshed.target_branch = "release".into();
     client
@@ -541,13 +537,7 @@ async fn review_request_remote_reports_repository_and_forge_detection_failures()
 #[tokio::test]
 async fn review_request_forge_and_persistence_failures_abort_publication() {
     // Arrange
-    for failure in [
-        "linked_refresh",
-        "find",
-        "found_refresh",
-        "create",
-        "persist",
-    ] {
+    for failure in ["refresh", "create", "persist"] {
         let (database, pool) = review_session_database_with_pool().await;
         database
             .sessions()
@@ -565,9 +555,10 @@ async fn review_request_forge_and_persistence_failures_abort_publication() {
             folder: PathBuf::from("/tmp/session-worktree"),
             id: "session-id".into(),
             published_upstream_ref: Some("origin/review/topic".into()),
-            review_request: (failure == "linked_refresh").then(published_review_request),
+            review_request: (failure == "refresh").then(published_review_request),
             status: Status::Review,
         };
+        let existing_display_id = (failure == "refresh").then(|| "#42".to_string());
         let mock_review_request_client = failing_publication_forge_client(failure);
         let mut mock_git_client = git::MockGitClient::new();
         let mut run_client = ag_worker::MockRunClient::new();
@@ -602,6 +593,7 @@ async fn review_request_forge_and_persistence_failures_abort_publication() {
             &generator,
             remote,
             "review/topic".into(),
+            existing_display_id,
         )
         .await;
 
@@ -698,22 +690,8 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
     expected_review_request.summary.target_branch = "review/parent".into();
     let mut mock_git_client = git::MockGitClient::new();
     expect_review_target_lookup(&mut mock_git_client, "review/parent", true);
-    expect_safe_session_branch_push(&mut mock_git_client, "session-id");
-    mock_git_client
-        .expect_push_current_branch_to_remote_branch_with_outcome()
-        .once()
-        .withf(|_, branch| branch == "review/topic")
-        .returning(|_, _| {
-            Box::pin(async {
-                Ok(BranchPushOutcome {
-                    updated: true,
-                    upstream_reference: "origin/review/topic".to_string(),
-                })
-            })
-        });
-    mock_git_client.expect_repo_url().once().returning(|_| {
-        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
-    });
+    expect_review_topic_push(&mut mock_git_client);
+    expect_github_repo_url(&mut mock_git_client);
     mock_git_client
         .expect_head_commit_message()
         .once()
@@ -779,7 +757,7 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
 }
 
 /// Verifies review-request publication to the default session branch stops
-/// before forge work when the session branch is mid-rebase.
+/// before pushing when the session branch is mid-rebase.
 #[tokio::test]
 async fn publish_pull_request_to_default_branch_blocks_while_rebase_is_in_progress() {
     // Arrange
@@ -793,6 +771,7 @@ async fn publish_pull_request_to_default_branch_blocks_while_rebase_is_in_progre
         status: Status::Review,
     };
     let mut mock_git_client = git::MockGitClient::new();
+    expect_github_repo_url(&mut mock_git_client);
     expect_review_target_lookup(&mut mock_git_client, "main", true);
     mock_git_client
         .expect_in_progress_operation()
@@ -801,7 +780,6 @@ async fn publish_pull_request_to_default_branch_blocks_while_rebase_is_in_progre
     mock_git_client
         .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(0);
-    mock_git_client.expect_repo_url().times(0);
     let git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
     let run_client = ag_worker::MockRunClient::new();
     let transcript = Mutex::new(SessionTranscript::default());
@@ -810,7 +788,10 @@ async fn publish_pull_request_to_default_branch_blocks_while_rebase_is_in_progre
     let result = publish_pull_request(
         &branch_publish_session,
         Arc::new(FixedClock::unix_epoch()),
-        Arc::new(forge::MockReviewRequestClient::new()),
+        Arc::new(review_request_lookup_forge_client(
+            &session::session_branch("session-id"),
+            None,
+        )),
         &ReviewRequestGenerator {
             db: &database,
             folder: &branch_publish_session.folder,
@@ -846,6 +827,7 @@ async fn publish_pull_request_blocks_before_push_when_base_branch_is_not_on_remo
         status: Status::Review,
     };
     let mut mock_git_client = git::MockGitClient::new();
+    expect_github_repo_url(&mut mock_git_client);
     expect_review_target_lookup(&mut mock_git_client, "fix/merged-parent", false);
     mock_git_client.expect_in_progress_operation().times(0);
     mock_git_client
@@ -859,7 +841,7 @@ async fn publish_pull_request_blocks_before_push_when_base_branch_is_not_on_remo
     let result = publish_pull_request(
         &branch_publish_session,
         Arc::new(FixedClock::unix_epoch()),
-        Arc::new(forge::MockReviewRequestClient::new()),
+        Arc::new(review_request_lookup_forge_client("review/topic", None)),
         &ReviewRequestGenerator {
             db: &database,
             folder: &branch_publish_session.folder,
@@ -885,12 +867,162 @@ async fn publish_pull_request_blocks_before_push_when_base_branch_is_not_on_remo
     );
 }
 
-/// Builds a forge client that finds no existing review request and creates
-/// `summary` from the generated `review/topic` publication.
-fn creating_publication_forge_client(
-    summary: forge::ReviewRequestSummary,
-) -> forge::MockReviewRequestClient {
-    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+/// Verifies an unlinked open review request for the session branch is linked
+/// and refreshed against its own target, even after the session base branch
+/// was deleted from the remote.
+#[tokio::test]
+async fn publish_pull_request_links_existing_review_request_without_base_branch_lookup() {
+    // Arrange
+    let database = review_session_database().await;
+    let branch_publish_session = BranchPublishTaskSession {
+        base_branch: "fix/merged-parent".to_string(),
+        folder: PathBuf::from("/tmp/session-worktree"),
+        id: "session-id".into(),
+        published_upstream_ref: Some("origin/review/topic".to_string()),
+        review_request: None,
+        status: Status::Review,
+    };
+    let summary = forge::ReviewRequestSummary {
+        display_id: "42".into(),
+        forge_kind: forge::ForgeKind::GitHub,
+        source_branch: "review/topic".into(),
+        state: forge::ReviewRequestState::Open,
+        status_summary: None,
+        target_branch: "main".into(),
+        title: "Stable title".into(),
+        web_url: "https://example.com/review/42".into(),
+    };
+    let mut mock_git_client = refresh_git_client("linked");
+    expect_github_repo_url(&mut mock_git_client);
+    mock_git_client.expect_remote_branch_exists().times(0);
+    expect_review_topic_push(&mut mock_git_client);
+    let git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
+    let mut mock_review_request_client =
+        refresh_forge_client(forge::ForgeKind::GitHub, "linked", summary.clone());
+    expect_review_request_lookup(
+        &mut mock_review_request_client,
+        "review/topic",
+        Some(summary),
+    );
+    let run_client = refresh_run_client("linked");
+    let transcript = Mutex::new(SessionTranscript::default());
+
+    // Act
+    let result = publish_pull_request(
+        &branch_publish_session,
+        Arc::new(FixedClock::unix_epoch()),
+        Arc::new(mock_review_request_client),
+        &ReviewRequestGenerator {
+            db: &database,
+            folder: &branch_publish_session.folder,
+            git_client: &git_client,
+            run_client: &run_client,
+            session_agent: model_fixture::codex_selection(),
+            session_id: "session-id",
+            transcript: &transcript,
+        },
+        Some("review/topic"),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(
+        result.expect("existing review request should be linked"),
+        BranchPublishTaskSuccess::PullRequestPublished { review_request, .. }
+            if review_request.summary.display_id == "42"
+    ));
+    let persisted_review_request = database
+        .reviews()
+        .load_session_review_request("session-id")
+        .await
+        .expect("review request should load")
+        .expect("review request should be persisted");
+    assert_eq!(persisted_review_request.display_id, "42");
+}
+
+/// Verifies the pre-push lookup reuses a linked review request without a
+/// forge query and reports forge lookup failures.
+#[tokio::test]
+async fn existing_review_request_lookup_prefers_linked_request_and_reports_failures() {
+    // Arrange
+    let mut linked_session = BranchPublishTaskSession {
+        base_branch: "main".into(),
+        folder: PathBuf::from("/tmp/session-worktree"),
+        id: "session-id".into(),
+        published_upstream_ref: None,
+        review_request: Some(published_review_request()),
+        status: Status::Review,
+    };
+    let mut linked_client = forge::MockReviewRequestClient::new();
+    linked_client.expect_find_by_source_branch().times(0);
+    let mut failing_client = forge::MockReviewRequestClient::new();
+    failing_client
+        .expect_find_by_source_branch()
+        .once()
+        .returning(|_, _| Box::pin(async { Err(forge_unavailable()) }));
+    let remote =
+        forge::detect_remote("https://github.com/agentty-xyz/agentty.git").expect("remote");
+
+    // Act
+    let linked = existing_review_request_display_id(
+        &linked_session,
+        &linked_client,
+        remote.clone(),
+        "review/topic",
+    )
+    .await;
+    linked_session.review_request = None;
+    let failed = existing_review_request_display_id(
+        &linked_session,
+        &failing_client,
+        remote,
+        "review/topic",
+    )
+    .await;
+
+    // Assert
+    assert_eq!(linked.expect("linked lookup"), Some("#42".to_string()));
+    let failure = failed.expect_err("forge lookup should fail");
+    assert_eq!(failure.title, "Review request publish failed");
+    assert!(
+        failure.message.contains("forge unavailable"),
+        "{}",
+        failure.message
+    );
+}
+
+/// Expects the session push to the `review/topic` remote branch.
+fn expect_review_topic_push(mock_git_client: &mut git::MockGitClient) {
+    expect_safe_session_branch_push(mock_git_client, "session-id");
+    mock_git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .once()
+        .withf(|_, branch| branch == "review/topic")
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/review/topic".to_string(),
+                })
+            })
+        });
+}
+
+/// Expects the repository URL lookup that resolves the GitHub forge remote.
+fn expect_github_repo_url(mock_git_client: &mut git::MockGitClient) {
+    mock_git_client.expect_repo_url().once().returning(|_| {
+        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+    });
+}
+
+/// Expects forge remote detection and the pre-push review-request lookup for
+/// `source_branch`, answering it with `found`.
+fn expect_review_request_lookup(
+    mock_review_request_client: &mut forge::MockReviewRequestClient,
+    source_branch: &str,
+    found: Option<forge::ReviewRequestSummary>,
+) {
+    let source_branch = source_branch.to_string();
     mock_review_request_client
         .expect_detect_remote()
         .once()
@@ -898,8 +1030,35 @@ fn creating_publication_forge_client(
     mock_review_request_client
         .expect_find_by_source_branch()
         .once()
-        .withf(|_, branch| branch == "review/topic")
-        .returning(|_, _| Box::pin(async { Ok(None) }));
+        .withf(move |_, branch| *branch == source_branch)
+        .return_once(move |_, _| Box::pin(async move { Ok(found) }));
+}
+
+/// Builds a forge client that only answers the pre-push review-request lookup.
+fn review_request_lookup_forge_client(
+    source_branch: &str,
+    found: Option<forge::ReviewRequestSummary>,
+) -> forge::MockReviewRequestClient {
+    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+    expect_review_request_lookup(&mut mock_review_request_client, source_branch, found);
+
+    mock_review_request_client
+}
+
+/// Builds the forge failure returned by failing review-request operations.
+fn forge_unavailable() -> forge::ReviewRequestError {
+    forge::ReviewRequestError::OperationFailed {
+        forge_kind: forge::ForgeKind::GitHub,
+        message: "forge unavailable".into(),
+    }
+}
+
+/// Builds a forge client that finds no existing review request and creates
+/// `summary` from the generated `review/topic` publication.
+fn creating_publication_forge_client(
+    summary: forge::ReviewRequestSummary,
+) -> forge::MockReviewRequestClient {
+    let mut mock_review_request_client = review_request_lookup_forge_client("review/topic", None);
     mock_review_request_client
         .expect_create_review_request()
         .once()
@@ -917,37 +1076,15 @@ fn creating_publication_forge_client(
     mock_review_request_client
 }
 
-/// Builds a forge client whose lookup, refresh, or creation step fails for
-/// one `failure` case; `persist` creates successfully.
+/// Builds a forge client whose refresh or creation step fails for one
+/// `failure` case; `persist` creates successfully.
 fn failing_publication_forge_client(failure: &'static str) -> forge::MockReviewRequestClient {
-    let forge_failure = || forge::ReviewRequestError::OperationFailed {
-        forge_kind: forge::ForgeKind::GitHub,
-        message: "forge unavailable".into(),
-    };
     let summary = published_review_request().summary;
     let mut client = forge::MockReviewRequestClient::new();
-    let found_summary = summary.clone();
-    client
-        .expect_find_by_source_branch()
-        .times(usize::from(failure != "linked_refresh"))
-        .returning(move |_, _| {
-            let found_summary = found_summary.clone();
-
-            Box::pin(async move {
-                match failure {
-                    "find" => Err(forge_failure()),
-                    "found_refresh" => Ok(Some(found_summary)),
-                    _ => Ok(None),
-                }
-            })
-        });
     client
         .expect_refresh_review_request()
-        .times(usize::from(matches!(
-            failure,
-            "linked_refresh" | "found_refresh"
-        )))
-        .returning(move |_, _| Box::pin(async move { Err(forge_failure()) }));
+        .times(usize::from(failure == "refresh"))
+        .returning(move |_, _| Box::pin(async move { Err(forge_unavailable()) }));
     client
         .expect_create_review_request()
         .times(usize::from(matches!(failure, "create" | "persist")))
@@ -956,7 +1093,7 @@ fn failing_publication_forge_client(failure: &'static str) -> forge::MockReviewR
 
             Box::pin(async move {
                 if failure == "create" {
-                    return Err(forge_failure());
+                    return Err(forge_unavailable());
                 }
 
                 Ok(summary)

@@ -460,15 +460,28 @@ async fn publish_pull_request(
         ));
     }
 
-    if branch_publish_session.review_request.is_none() {
-        ensure_review_target_published(branch_publish_session, generator.git_client.as_ref())
-            .await?;
-    }
-
     let branch_name = remote_branch_name.map_or_else(
         || session::session_branch(&branch_publish_session.id),
         str::to_string,
     );
+    let remote = review_request_remote(
+        branch_publish_session,
+        Arc::clone(generator.git_client),
+        review_request_client.as_ref(),
+    )
+    .await?;
+    let existing_display_id = existing_review_request_display_id(
+        branch_publish_session,
+        review_request_client.as_ref(),
+        remote.clone(),
+        &branch_name,
+    )
+    .await?;
+    if existing_display_id.is_none() {
+        ensure_review_target_published(branch_publish_session, generator.git_client.as_ref())
+            .await?;
+    }
+
     let push_outcome = push_session_branch_to_remote(
         generator.db,
         branch_publish_session.folder.clone(),
@@ -481,24 +494,15 @@ async fn publish_pull_request(
     .await?;
     let review_request = Span::child("review_request.publish")
         .run(
-            async {
-                let remote = review_request_remote(
-                    branch_publish_session,
-                    Arc::clone(generator.git_client),
-                    review_request_client.as_ref(),
-                )
-                .await?;
-
-                create_or_refresh_review_request(
-                    branch_publish_session,
-                    &clock,
-                    review_request_client,
-                    generator,
-                    remote,
-                    branch_name.clone(),
-                )
-                .await
-            },
+            create_or_refresh_review_request(
+                branch_publish_session,
+                &clock,
+                review_request_client,
+                generator,
+                remote,
+                branch_name.clone(),
+                existing_display_id,
+            ),
             BranchPublishTaskFailure::trace_outcome,
         )
         .await?;
@@ -510,9 +514,36 @@ async fn publish_pull_request(
     })
 }
 
+/// Returns the display id of the review request that publication refreshes:
+/// the session's linked request, or an open one the forge already has for
+/// `source_branch`. `None` means publication creates a new review request.
+async fn existing_review_request_display_id(
+    branch_publish_session: &BranchPublishTaskSession,
+    review_request_client: &dyn forge::ReviewRequestClient,
+    remote: forge::ForgeRemote,
+    source_branch: &str,
+) -> Result<Option<String>, BranchPublishTaskFailure> {
+    if let Some(review_request) = &branch_publish_session.review_request {
+        return Ok(Some(review_request.summary.display_id.clone()));
+    }
+
+    let discovered_review_request = review_request_client
+        .find_by_source_branch(remote, source_branch.to_string())
+        .await
+        .map_err(|error| {
+            BranchPublishTaskFailure::failed(
+                PublishBranchAction::PublishPullRequest,
+                error.detail_message(),
+            )
+        })?;
+
+    Ok(discovered_review_request.map(|summary| summary.display_id))
+}
+
 /// Blocks a new review request before pushing when its target, the session
 /// base branch, is absent from the remote, such as a local-only branch or one
-/// deleted after its own review request merged.
+/// deleted after its own review request merged. An existing review request
+/// keeps its own target, so callers skip this check when refreshing one.
 async fn ensure_review_target_published(
     branch_publish_session: &BranchPublishTaskSession,
     git_client: &dyn GitClient,
@@ -783,8 +814,9 @@ async fn review_request_remote(
         })
 }
 
-/// Creates or refreshes one review request for the published session branch and
-/// persists the normalized summary.
+/// Refreshes the review request named by `existing_display_id`, or creates one
+/// for the published session branch when it is `None`, and persists the
+/// normalized summary.
 async fn create_or_refresh_review_request(
     branch_publish_session: &BranchPublishTaskSession,
     clock: &Arc<dyn Clock>,
@@ -792,21 +824,12 @@ async fn create_or_refresh_review_request(
     generator: &review_request::ReviewRequestGenerator<'_>,
     remote: forge::ForgeRemote,
     source_branch: String,
+    existing_display_id: Option<String>,
 ) -> Result<ReviewRequest, BranchPublishTaskFailure> {
     let mut refresh_metadata = true;
-    let review_request_summary =
-        if let Some(review_request) = &branch_publish_session.review_request {
-            review_request_client
-                .refresh_review_request(remote.clone(), review_request.summary.display_id.clone())
-                .await
-                .map_err(|error| {
-                    BranchPublishTaskFailure::failed(
-                        PublishBranchAction::PublishPullRequest,
-                        error.detail_message(),
-                    )
-                })?
-        } else if let Some(existing_review_request) = review_request_client
-            .find_by_source_branch(remote.clone(), source_branch.clone())
+    let review_request_summary = if let Some(existing_display_id) = existing_display_id {
+        review_request_client
+            .refresh_review_request(remote.clone(), existing_display_id)
             .await
             .map_err(|error| {
                 BranchPublishTaskFailure::failed(
@@ -814,32 +837,22 @@ async fn create_or_refresh_review_request(
                     error.detail_message(),
                 )
             })?
-        {
-            review_request_client
-                .refresh_review_request(remote.clone(), existing_review_request.display_id)
-                .await
-                .map_err(|error| {
-                    BranchPublishTaskFailure::failed(
-                        PublishBranchAction::PublishPullRequest,
-                        error.detail_message(),
-                    )
-                })?
-        } else {
-            refresh_metadata = false;
-            let create_input =
-                load_review_request_create_input(branch_publish_session, generator, source_branch)
-                    .await?;
+    } else {
+        refresh_metadata = false;
+        let create_input =
+            load_review_request_create_input(branch_publish_session, generator, source_branch)
+                .await?;
 
-            review_request_client
-                .create_review_request(remote.clone(), create_input)
-                .await
-                .map_err(|error| {
-                    BranchPublishTaskFailure::failed(
-                        PublishBranchAction::PublishPullRequest,
-                        error.detail_message(),
-                    )
-                })?
-        };
+        review_request_client
+            .create_review_request(remote.clone(), create_input)
+            .await
+            .map_err(|error| {
+                BranchPublishTaskFailure::failed(
+                    PublishBranchAction::PublishPullRequest,
+                    error.detail_message(),
+                )
+            })?
+    };
     let review_request_summary =
         if review_request_summary.state == forge::ReviewRequestState::Open && refresh_metadata {
             refresh_review_request_metadata(
