@@ -607,6 +607,42 @@ fn interrupted_signaled_failed_and_preparing_rows_and_hidden_steps_render() {
 }
 
 #[test]
+fn finished_rows_show_a_clean_exit_a_slow_calls_time_and_a_failure_reason() {
+    // Arrange
+    let slow_command = call_row(ActivityEvent {
+        exit_code: Some(0),
+        facts: Box::new(ActivityFacts {
+            duration: Some(Duration::from_secs(36)),
+            ..ActivityFacts::default()
+        }),
+        input: Some("cargo check -p agentty --tests".into()),
+        status: ActivityStatus::Completed,
+        ..activity_event("slow")
+    });
+    let rejected_edit = call_row(ActivityEvent {
+        facts: Box::new(ActivityFacts {
+            failure: Some(ActivityFailure::Rejected),
+            reason: Some("hunk 1 context mismatch at line 1216".into()),
+            ..facts("a.rs")
+        }),
+        kind: ActivityKind::FileChange,
+        status: ActivityStatus::Failed,
+        ..activity_event("rejected")
+    });
+
+    // Act
+    let slow_command = painted_call(&slow_command, 120).remove(0);
+    let rejected_edit = painted_call(&rejected_edit, 120).remove(0);
+
+    // Assert
+    let exit = column(&slow_command, "exit 0").expect("exit column");
+    assert!(column(&slow_command, "cargo check").expect("command column") < exit);
+    assert!(slow_command.ends_with("36s"));
+    assert!(exit < column(&slow_command, "36s").expect("duration column"));
+    assert!(rejected_edit.ends_with("rejected · hunk 1 context mismatch at line 1216"));
+}
+
+#[test]
 fn running_rows_spin_and_paths_keep_their_file_name_when_cut() {
     // Arrange
     let mut timeline = TurnTimeline::default();
