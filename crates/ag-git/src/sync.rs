@@ -469,8 +469,15 @@ async fn fetch_remote_branch_commits_with_runner(
         runner,
     )
     .await?;
-    let base = advertised_commit(&output, &base_ref)?;
-    let source = advertised_commit(&output, &source_ref)?;
+    let missing_branch = |role: &str, branch: &str| {
+        GitError::OutputParse(format!(
+            "Remote `{remote}` does not advertise {role} branch `{branch}`"
+        ))
+    };
+    let base = advertised_commit(&output, &base_ref)
+        .ok_or_else(|| missing_branch("review target", &base_branch))?;
+    let source = advertised_commit(&output, &source_ref)
+        .ok_or_else(|| missing_branch("published", &source_branch))?;
     run_git_command_with_runner(
         AsyncGitCommand::new(
             repo_path,
@@ -497,7 +504,7 @@ async fn fetch_remote_branch_commits_with_runner(
 }
 
 /// Selects an exact ref name and accepts only full SHA-1 or SHA-256 object IDs.
-fn advertised_commit(output: &str, reference: &str) -> Result<String, GitError> {
+fn advertised_commit(output: &str, reference: &str) -> Option<String> {
     output
         .lines()
         .filter_map(|line| line.split_once('\t'))
@@ -507,11 +514,6 @@ fn advertised_commit(output: &str, reference: &str) -> Result<String, GitError> 
             matches!(hash.len(), 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
         })
         .map(str::to_string)
-        .ok_or_else(|| {
-            GitError::OutputParse(format!(
-                "Missing or invalid published commit for `{reference}`"
-            ))
-        })
 }
 
 /// Returns repository-relative changed paths using the same isolated index and

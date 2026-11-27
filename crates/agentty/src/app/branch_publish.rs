@@ -460,6 +460,11 @@ async fn publish_pull_request(
         ));
     }
 
+    if branch_publish_session.review_request.is_none() {
+        ensure_review_target_published(branch_publish_session, generator.git_client.as_ref())
+            .await?;
+    }
+
     let branch_name = remote_branch_name.map_or_else(
         || session::session_branch(&branch_publish_session.id),
         str::to_string,
@@ -503,6 +508,36 @@ async fn publish_pull_request(
         review_request,
         upstream_reference: push_outcome.upstream_reference,
     })
+}
+
+/// Blocks a new review request before pushing when its target, the session
+/// base branch, is absent from the remote, such as a local-only branch or one
+/// deleted after its own review request merged.
+async fn ensure_review_target_published(
+    branch_publish_session: &BranchPublishTaskSession,
+    git_client: &dyn GitClient,
+) -> Result<(), BranchPublishTaskFailure> {
+    let base_branch = &branch_publish_session.base_branch;
+    let is_published = remote_branch_exists(
+        git_client,
+        branch_publish_session.folder.clone(),
+        base_branch,
+        PublishBranchAction::PublishPullRequest,
+    )
+    .await?;
+    if is_published {
+        return Ok(());
+    }
+
+    Err(BranchPublishTaskFailure::blocked(
+        PublishBranchAction::PublishPullRequest,
+        format!(
+            "Base branch `{base_branch}` does not exist on the remote, so a review request cannot \
+             target it. It may be local-only, or deleted after it merged. Push `{base_branch}`, \
+             then {}.",
+            retry_action_text(PublishBranchAction::PublishPullRequest)
+        ),
+    ))
 }
 
 /// Pushes the session branch to the configured remote and persists the
@@ -566,28 +601,13 @@ async fn push_and_record_session_branch(
     if let Some(target_branch) = remote_branch_name
         && published_upstream_ref.is_none()
     {
-        let already_exists = git_client
-            .remote_branch_exists(folder.clone(), target_branch.to_string())
-            .await
-            .map_err(|error| {
-                let detail = error.to_string();
-                let normalized = detail.to_ascii_lowercase();
-
-                if has_authentication_error_keywords(&normalized) {
-                    BranchPublishTaskFailure::blocked(
-                        publish_branch_action,
-                        git_push_authentication_message(
-                            detected_forge_kind_from_git_push_error(&detail),
-                            retry_text,
-                        ),
-                    )
-                } else {
-                    BranchPublishTaskFailure::failed(
-                        publish_branch_action,
-                        format!("Failed to check remote branch existence: {error}"),
-                    )
-                }
-            })?;
+        let already_exists = remote_branch_exists(
+            git_client.as_ref(),
+            folder.clone(),
+            target_branch,
+            publish_branch_action,
+        )
+        .await?;
 
         if already_exists {
             return Err(BranchPublishTaskFailure::blocked(
@@ -647,6 +667,38 @@ async fn push_and_record_session_branch(
         })?;
 
     Ok(outcome)
+}
+
+/// Looks up one remote branch, turning credential failures into actionable
+/// sign-in guidance.
+async fn remote_branch_exists(
+    git_client: &dyn GitClient,
+    folder: PathBuf,
+    branch_name: &str,
+    publish_branch_action: PublishBranchAction,
+) -> Result<bool, BranchPublishTaskFailure> {
+    git_client
+        .remote_branch_exists(folder, branch_name.to_string())
+        .await
+        .map_err(|error| {
+            let detail = error.to_string();
+            let normalized = detail.to_ascii_lowercase();
+
+            if has_authentication_error_keywords(&normalized) {
+                BranchPublishTaskFailure::blocked(
+                    publish_branch_action,
+                    git_push_authentication_message(
+                        detected_forge_kind_from_git_push_error(&detail),
+                        retry_action_text(publish_branch_action),
+                    ),
+                )
+            } else {
+                BranchPublishTaskFailure::failed(
+                    publish_branch_action,
+                    format!("Failed to check remote branch existence: {error}"),
+                )
+            }
+        })
 }
 
 /// Blocks session-branch force-pushes while the worktree is in an unsafe git

@@ -318,6 +318,12 @@ if [ "$1" = "ls-remote" ] && [ "$2" = "--refs" ]; then
   done
   exit 0
 fi
+if [ "$1" = "ls-remote" ] && [ "$2" = "--heads" ]; then
+  case "$4" in
+    main) printf 'main\trefs/heads/main\n' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = "fetch" ] && [ "$2" = "--no-tags" ]; then
   exit 0
 fi

@@ -342,6 +342,19 @@ fn review_request_queued_label_describes_waiting_without_loading_punctuation() {
     assert_eq!(label, "review request — publish after this turn");
 }
 
+/// Expects the pre-push lookup of a new review request's target branch.
+fn expect_review_target_lookup(
+    mock_git_client: &mut git::MockGitClient,
+    base_branch: &'static str,
+    is_published: bool,
+) {
+    mock_git_client
+        .expect_remote_branch_exists()
+        .once()
+        .withf(move |_, branch| branch == base_branch)
+        .returning(move |_, _| Box::pin(async move { Ok(is_published) }));
+}
+
 fn expect_safe_session_branch_push(mock_git_client: &mut git::MockGitClient, session_id: &str) {
     let expected_branch = session::session_branch(session_id);
     mock_git_client
@@ -684,6 +697,7 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
     let mut expected_review_request = published_review_request();
     expected_review_request.summary.target_branch = "review/parent".into();
     let mut mock_git_client = git::MockGitClient::new();
+    expect_review_target_lookup(&mut mock_git_client, "review/parent", true);
     expect_safe_session_branch_push(&mut mock_git_client, "session-id");
     mock_git_client
         .expect_push_current_branch_to_remote_branch_with_outcome()
@@ -779,6 +793,7 @@ async fn publish_pull_request_to_default_branch_blocks_while_rebase_is_in_progre
         status: Status::Review,
     };
     let mut mock_git_client = git::MockGitClient::new();
+    expect_review_target_lookup(&mut mock_git_client, "main", true);
     mock_git_client
         .expect_in_progress_operation()
         .once()
@@ -814,6 +829,60 @@ async fn publish_pull_request_to_default_branch_blocks_while_rebase_is_in_progre
     assert!(failure.is_blocked);
     assert_eq!(failure.title, "Review request publish blocked");
     assert!(failure.message.contains("rebase is in progress"));
+}
+
+/// Verifies a new review request stops before pushing when its target, the
+/// session base branch, no longer exists on the remote.
+#[tokio::test]
+async fn publish_pull_request_blocks_before_push_when_base_branch_is_not_on_remote() {
+    // Arrange
+    let database = review_session_database().await;
+    let branch_publish_session = BranchPublishTaskSession {
+        base_branch: "fix/merged-parent".to_string(),
+        folder: PathBuf::from("/tmp/session-worktree"),
+        id: "session-id".into(),
+        published_upstream_ref: Some("origin/review/topic".to_string()),
+        review_request: None,
+        status: Status::Review,
+    };
+    let mut mock_git_client = git::MockGitClient::new();
+    expect_review_target_lookup(&mut mock_git_client, "fix/merged-parent", false);
+    mock_git_client.expect_in_progress_operation().times(0);
+    mock_git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .times(0);
+    let git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
+    let run_client = ag_worker::MockRunClient::new();
+    let transcript = Mutex::new(SessionTranscript::default());
+
+    // Act
+    let result = publish_pull_request(
+        &branch_publish_session,
+        Arc::new(FixedClock::unix_epoch()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+        &ReviewRequestGenerator {
+            db: &database,
+            folder: &branch_publish_session.folder,
+            git_client: &git_client,
+            run_client: &run_client,
+            session_agent: model_fixture::codex_selection(),
+            session_id: "session-id",
+            transcript: &transcript,
+        },
+        Some("review/topic"),
+    )
+    .await;
+
+    // Assert
+    let failure = result.expect_err("publication should be blocked");
+    assert!(failure.is_blocked);
+    assert_eq!(failure.title, "Review request publish blocked");
+    assert_eq!(
+        failure.message,
+        "Base branch `fix/merged-parent` does not exist on the remote, so a review request cannot \
+         target it. It may be local-only, or deleted after it merged. Push `fix/merged-parent`, \
+         then publish the review request again."
+    );
 }
 
 /// Builds a forge client that finds no existing review request and creates
