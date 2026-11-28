@@ -21,6 +21,7 @@ hex.workspace = true
 percent-encoding.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -33,6 +34,7 @@ tracing.workspace = true
 [dev-dependencies]
 ag-relay.workspace = true
 ag-session = { workspace = true, features = ["test-utils"] }
+jsonschema.workspace = true
 rcgen.workspace = true
 tokio = { workspace = true, features = ["net", "test-util"] }
 

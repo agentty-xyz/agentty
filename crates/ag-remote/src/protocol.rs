@@ -10,6 +10,15 @@
 //! [`ServerFrame::Response`] carrying the same `id`. The server also pushes
 //! [`ServerFrame::Changed`] when host session state changes, so the client can
 //! fetch fresh snapshots.
+//!
+//! Every frame type implements [`JsonSchema`]. The crate's
+//! `schema/remote_protocol.json` assembles them into one JSON Schema,
+//! describing [`ClientFrame`] as the server reads it and [`ServerFrame`] as
+//! the server writes it, and `schema/remote_protocol.ts` renders that schema
+//! as TypeScript declarations. A unit test fails when either file no longer
+//! matches these types; regenerate both with
+//! `AGENTTY_REMOTE_SCHEMA_UPDATE=1 cargo test --locked -p ag-remote --lib
+//! protocol::tests::schema`.
 
 use ag_session::{
     AgentSelection, AgentSelectionMetadata, CreateSessionMode, ExecutionGraphStatus,
@@ -22,11 +31,12 @@ use ag_session::{
     SessionGraphs, SessionId, SessionListEntry, SessionMessage, SessionMessageKind, SessionService,
     session_branch,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// A frame sent by a remote client.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
     /// Authenticates a previously paired device by the key its encrypted
@@ -68,7 +78,7 @@ pub enum ClientFrame {
 /// `projects` capability: an older server ignores the field it does not
 /// know and answers for its active project, so a client also checks that
 /// the project an answer names is the one it asked for.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum RemoteRequest {
     /// Acts on a session's execution graph as the terminal's inspector
@@ -317,6 +327,8 @@ pub enum RemoteRequest {
     },
     /// Any method this server does not know, such as one a newer client
     /// sends. The server answers it with an error and keeps the connection.
+    /// No client sends it, so the protocol schema leaves it out.
+    #[schemars(skip)]
     #[serde(other)]
     Unsupported,
 }
@@ -329,7 +341,11 @@ pub enum RemoteRequest {
 /// module; elsewhere the value only compares and hashes, which is how the
 /// requests that change one session queue behind each other. It travels
 /// as a plain string.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
+#[schemars(
+    description = "A session id, as a session listing or snapshot names it in `id`. A request \
+                   reaches only a session the host lists."
+)]
 #[serde(transparent)]
 pub struct RequestedSessionId(String);
 
@@ -371,7 +387,12 @@ impl From<&str> for RequestedSessionId {
 /// a project the host does not list. The id inside stays private to this
 /// module. It travels as a string, so no client has to keep a large integer
 /// exact.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[schemars(
+    description = "A project id: the decimal `id` of an entry `list_projects` returned, sent as a \
+                   string so no client has to keep a large integer exact. A request reaches only \
+                   a project the host lists."
+)]
 #[serde(transparent)]
 pub struct RequestedProjectId(String);
 
@@ -425,7 +446,7 @@ fn project_not_found() -> SessionError {
 }
 
 /// How a session created remotely runs.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteSessionMode {
     /// On the in-process harness with its default model.
@@ -459,7 +480,7 @@ impl RemoteSessionMode {
 /// The agent, model and settings a new session of one mode starts with, as
 /// `get_host` lists it. A device picks other settings for the new session,
 /// and another model among the `models` of the same `agent`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteModeModel {
     /// Agent that runs the session, as `models` names it.
     pub agent: String,
@@ -482,7 +503,7 @@ pub struct RemoteModeModel {
 }
 
 /// One model a session can switch to, as `get_host` lists it.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteModelOption {
     /// Agent that runs the model. A session switches to the models of
     /// another agent by naming it in `set_session_settings`, which a server
@@ -514,14 +535,14 @@ impl From<AgentSelection> for RemoteModelOption {
 }
 
 /// One image sent with a `send_message` request.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteImage {
     /// The PNG or JPEG file, in standard base64 with padding.
     pub data: String,
 }
 
 /// One answer to a pending clarification question.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteQuestionAnswer {
     /// Answer text.
     pub answer: String,
@@ -530,7 +551,7 @@ pub struct RemoteQuestionAnswer {
 }
 
 /// One execution graph action, sent as an `act_on_session_graph` request.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphActionRequest {
     /// What to do, one of the actions the `graphs` response lists on the
     /// graph, the node, or the output it applies to.
@@ -626,7 +647,7 @@ fn required_field<Value>(value: Option<Value>, field: &str) -> Result<Value, Ses
 }
 
 /// An action of the terminal's graph inspector.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteGraphAction {
     /// Accept a validated output, releasing the nodes that wait for it.
@@ -642,7 +663,9 @@ pub enum RemoteGraphAction {
     /// Run a failed or cancelled node again.
     Retry,
     /// Any action this server does not know, such as one a newer client
-    /// sends. The server answers it with an error.
+    /// sends. The server answers it with an error and never lists it, so
+    /// the protocol schema leaves it out.
+    #[schemars(skip)]
     #[serde(other)]
     Unsupported,
 }
@@ -666,7 +689,7 @@ fn remote_actions(actions: Vec<SessionGraphActionKind>) -> Vec<RemoteGraphAction
 }
 
 /// A frame sent by the server.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
     /// A valid pairing code was accepted and waits for approval in the
@@ -724,7 +747,7 @@ pub enum ServerFrame {
 
 /// Outcome of one remote request, serialized as `{"ok": …}` or
 /// `{"error": "…"}`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteResult {
     /// The host rejected or failed the operation.
@@ -734,7 +757,7 @@ pub enum RemoteResult {
 }
 
 /// Successful request payload.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RemoteResponse {
     /// The host admitted the mutation; its work may still be running.
@@ -1042,7 +1065,7 @@ fn capped_text(text: &str, max_bytes: usize) -> (&str, bool) {
 }
 
 /// One graph of a session in a `graphs` response.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphEntry {
     /// Graph identity, as `get_session_graphs` accepts it.
     pub id: String,
@@ -1054,7 +1077,7 @@ pub struct RemoteGraphEntry {
 }
 
 /// A session's latest graph proposal.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphProposal {
     /// Graph the approved version launched, absent before approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1110,7 +1133,7 @@ impl From<SessionGraphProposal> for RemoteGraphProposal {
 }
 
 /// Where a graph proposal stands.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteGraphProposalPhase {
     /// The user approved the version and its graph launched.
@@ -1144,7 +1167,7 @@ impl From<SessionGraphProposalPhase> for RemoteGraphProposalPhase {
 }
 
 /// The selected graph of a `graphs` response.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraph {
     /// What `act_on_session_graph` can do to the graph as a whole now:
     /// `cancel`, `extend_budget`, or `resume`, as the terminal's inspector
@@ -1237,7 +1260,7 @@ impl From<SessionGraph> for RemoteGraph {
 }
 
 /// A graph's spent provider-call budget.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphBudget {
     /// Budget name.
     pub id: String,
@@ -1246,7 +1269,7 @@ pub struct RemoteGraphBudget {
 }
 
 /// Live status of a graph.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteGraphStatus {
     /// Prerequisites, acceptance, clarification, or resources hold it.
@@ -1277,7 +1300,7 @@ impl From<ExecutionGraphStatus> for RemoteGraphStatus {
 }
 
 /// One node of a graph.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphNode {
     /// What `act_on_session_graph` can do to the node now: `reply` or
     /// `retry`, as the terminal's inspector offers them with the node
@@ -1389,7 +1412,7 @@ impl RemoteGraphNode {
 }
 
 /// Live state of a graph node.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteGraphNodeStatus {
     /// It waits for answers to its questions.
@@ -1423,7 +1446,7 @@ impl From<GraphNodeStatus> for RemoteGraphNodeStatus {
 }
 
 /// One dependency of a graph node.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphRequirement {
     /// What the dependency waits for, as the terminal's inspector says it.
     pub gate: String,
@@ -1437,7 +1460,7 @@ pub struct RemoteGraphRequirement {
 }
 
 /// One output of the selected graph node.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphOutput {
     /// What `act_on_session_graph` can do to the output now: `accept`, as
     /// the terminal's inspector offers it with the output selected. Absent
@@ -1461,7 +1484,7 @@ pub struct RemoteGraphOutput {
 }
 
 /// Evidence state of a graph output.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteGraphOutputState {
     /// The user accepted it.
@@ -1484,7 +1507,7 @@ impl From<GraphResultState> for RemoteGraphOutputState {
 
 /// What a session snapshot says about its latest graph proposal and, once
 /// approved, the graph it launched.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteSessionGraph {
     /// Outputs that wait for the user's approval, in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1528,7 +1551,7 @@ impl From<SessionGraphSummary> for RemoteSessionGraph {
 }
 
 /// One output that waits for the user's approval.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteGraphApproval {
     /// Node that produced the output.
     pub node_id: String,
@@ -1584,7 +1607,7 @@ impl From<HostContext> for RemoteResponse {
 }
 
 /// One project the host lists, as `list_projects` returns it.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteProjectEntry {
     /// Sessions of the project still in an active lifecycle state. Absent
     /// when there are none.
@@ -1619,7 +1642,7 @@ fn is_default<Value: Default + PartialEq>(value: &Value) -> bool {
 
 /// One project as the session list shows it: the host's active project, or
 /// the one a `list_sessions` request named.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteProject {
     /// Commits the branch is ahead of its upstream, as of the host's latest
     /// fetch. Absent while the host has not compared them.
@@ -1674,7 +1697,7 @@ impl From<HostProjectStatus> for RemoteProject {
 ///
 /// The count and message fields depend on `phase`; a page ignores the ones
 /// it does not expect.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteProjectSync {
     /// Branch the sync updates.
     pub branch: String,
@@ -1738,7 +1761,7 @@ impl From<HostProjectSync> for RemoteProjectSync {
 }
 
 /// How far a project sync has come.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteProjectSyncPhase {
     /// The host did not start the sync, such as while a merge runs.
@@ -1754,7 +1777,7 @@ pub enum RemoteProjectSyncPhase {
 }
 
 /// One file a session's diff changes.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteDiffFile {
     /// Lines the file's patch adds.
     pub added_lines: u64,
@@ -1787,7 +1810,7 @@ impl From<&SessionDiffFile> for RemoteDiffFile {
 }
 
 /// How a session's diff changes one file.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteDiffFileStatus {
     /// The file is new.
@@ -1801,7 +1824,7 @@ pub enum RemoteDiffFileStatus {
 }
 
 /// One file or directory in a session's worktree.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteFileEntry {
     /// Whether the entry is a directory.
     pub is_dir: bool,
@@ -1813,7 +1836,7 @@ pub struct RemoteFileEntry {
 ///
 /// The stats fields are optional: a host that lists only summaries, or an
 /// older server, omits them, and a page hides what is missing.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteSessionSummary {
     /// Lines the session's diff adds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1920,7 +1943,7 @@ impl From<SessionListEntry> for RemoteSessionSummary {
 }
 
 /// Whether a linked pull request can merge, as the forge reported it.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteReviewReadiness {
     /// Checks pass and the pull request can merge.
@@ -1947,7 +1970,7 @@ impl RemoteReviewReadiness {
 /// The settings, branch, and review-request fields are optional so a page
 /// and a server of different versions still understand each other: an older
 /// server omits them, and a page hides what is missing.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteSession {
     /// Agent provider, such as `codex`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2097,7 +2120,7 @@ impl From<Session> for RemoteSession {
 }
 
 /// Outcome of a session's latest focused review.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteFocusedReview {
     /// Whether the review finished or failed.
     pub state: RemoteFocusedReviewState,
@@ -2122,7 +2145,7 @@ impl From<SessionFocusedReview> for RemoteFocusedReview {
 }
 
 /// State of a focused review a remote client can show.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteFocusedReviewState {
     /// The review could not be produced.
@@ -2133,7 +2156,7 @@ pub enum RemoteFocusedReviewState {
 
 /// Pull or merge request linked to a session, as of the host's latest
 /// forge refresh.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteReviewRequest {
     /// Forge display id, such as `#123`.
     pub display_id: String,
@@ -2172,7 +2195,7 @@ impl From<ReviewRequestSummary> for RemoteReviewRequest {
 }
 
 /// What a `merge_review_request` did on the forge.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteReviewRequestMergeOutcome {
     /// The pull request merged into its target branch.
@@ -2210,7 +2233,7 @@ impl From<ReviewRequestMerge> for RemoteResponse {
 }
 
 /// One chat-visible transcript message.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteMessage {
     /// Message text.
     pub content: String,
@@ -2237,7 +2260,7 @@ impl RemoteMessage {
 }
 
 /// Display category of one transcript message.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteMessageKind {
     /// Tool and skill usage summary.
@@ -2251,7 +2274,7 @@ pub enum RemoteMessageKind {
 }
 
 /// One pending clarification question.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct RemoteQuestion {
     /// Suggested answers, recommended first.
     pub options: Vec<String>,

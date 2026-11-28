@@ -5,7 +5,7 @@ use std::error::Error;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
@@ -19,6 +19,8 @@ use ag_remote::{
 };
 use ag_session::{SessionBackend, SessionService};
 use futures_util::{SinkExt, StreamExt};
+use jsonschema::Validator;
+use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::watch;
@@ -92,14 +94,18 @@ impl Client {
         Ok(serde_json::from_str(&self.next_untimed_text().await?)?)
     }
 
-    /// Receives and decrypts the next frame as the text the server sent.
+    /// Receives and decrypts the next frame as the text the server sent,
+    /// failing when it breaks the committed protocol schema.
     pub(crate) async fn next_untimed_text(&mut self) -> TestResult<String> {
         loop {
             let message = self.socket.next().await.ok_or("stream ended")??;
             if let Message::Binary(bytes) = message
                 && let Some(frame) = self.session.open(&bytes)?
             {
-                return Ok(String::from_utf8(frame)?);
+                let text = String::from_utf8(frame)?;
+                check_frame(&SERVER_FRAME_SCHEMA, &serde_json::from_str(&text)?)?;
+
+                return Ok(text);
             }
         }
     }
@@ -436,8 +442,10 @@ pub(crate) fn hello_frame() -> ClientFrame {
     }
 }
 
-/// Encrypts and sends one JSON frame.
+/// Encrypts and sends one JSON frame, failing when it breaks the committed
+/// protocol schema.
 pub(crate) async fn send(client: &mut Client, frame: &ClientFrame) -> TestResult {
+    check_frame(&CLIENT_FRAME_SCHEMA, &serde_json::to_value(frame)?)?;
     client.send_text(&serde_json::to_string(frame)?).await
 }
 
@@ -475,4 +483,42 @@ pub(crate) async fn assert_rejected(client: &mut Client, reason: &str) -> TestRe
     assert!(closed(client).await?);
 
     Ok(())
+}
+
+/// Validates frames against one direction of the committed protocol
+/// schema, the copy clients build on.
+static CLIENT_FRAME_SCHEMA: LazyLock<Result<Validator, String>> =
+    LazyLock::new(|| frame_schema("ClientFrame"));
+/// Validates frames against the other direction of the committed schema.
+static SERVER_FRAME_SCHEMA: LazyLock<Result<Validator, String>> =
+    LazyLock::new(|| frame_schema("ServerFrame"));
+
+/// Compiles the committed schema with `definition` as its root.
+fn frame_schema(definition: &str) -> Result<Validator, String> {
+    let mut schema: Value = serde_json::from_str(include_str!("../../schema/remote_protocol.json"))
+        .map_err(|error| format!("the committed protocol schema does not parse: {error}"))?;
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("oneOf");
+        object.insert(
+            "$ref".to_string(),
+            Value::from(format!("#/$defs/{definition}")),
+        );
+    }
+
+    Validator::new(&schema)
+        .map_err(|error| format!("the committed protocol schema does not compile: {error}"))
+}
+
+/// Fails with every error of `frame` against `schema`.
+fn check_frame(schema: &Result<Validator, String>, frame: &Value) -> TestResult {
+    let schema = schema.as_ref().map_err(Clone::clone)?;
+    let errors: Vec<String> = schema
+        .iter_errors(frame)
+        .map(|error| format!("{error} at `{}`", error.instance_path()))
+        .collect();
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!("{frame} breaks the protocol schema: {}", errors.join("; ")).into())
 }

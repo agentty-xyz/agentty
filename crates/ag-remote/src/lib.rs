@@ -17,6 +17,9 @@
 //!
 //! The web client a device runs is served elsewhere, by a program that
 //! embeds the relay; [`pairing_link_on_page`] builds the link that opens it.
+//! It can build on the crate's `schema/` directory, which holds a JSON
+//! Schema of every [`protocol`] frame and TypeScript declarations rendered
+//! from it, both generated from the frame types.
 //!
 //! The `test-utils` feature adds the `test_support` module: an in-memory
 //! [`DeviceStore`] and a seeded session backend, so a program that embeds the
@@ -46,6 +49,7 @@ pub use server::{
 /// Version of the frame protocol that this server speaks.
 ///
 /// Clients send it in their first frame; the server rejects any other value.
+/// The protocol schema carries it as `x-protocol-version`.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 #[cfg(any(test, feature = "test-utils"))]

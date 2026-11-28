@@ -22,6 +22,10 @@ use crate::source_support::{host_fixture, project_status_fixture, session_fixtur
 mod graph;
 #[path = "protocol_test/project_test.rs"]
 mod project;
+#[path = "protocol_test/schema_test.rs"]
+mod schema;
+#[path = "protocol_test/typescript_test.rs"]
+mod typescript;
 
 #[test]
 fn client_frames_use_snake_case_type_and_method_tags() {

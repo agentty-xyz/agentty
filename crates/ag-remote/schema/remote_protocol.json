@@ -1,0 +1,2591 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RemoteFrame",
+  "description": "One JSON text frame of the Agentty remote-control protocol, which a\ndevice and a host exchange inside their encrypted stream: a\n`ClientFrame` the device sends or a `ServerFrame` the host sends.\n`ClientFrame` describes what a host accepts, so a field with a default\nis optional; `ServerFrame` describes what a host sends, so a field it\nmay leave out is optional and is never null.\n\nA host speaks exactly `x-protocol-version` and rejects a `hello` or\n`pair` frame that names another. A newer host of the same version may\nadd fields, frame types, response kinds, and enum values: a client\nignores fields it does not know, skips a frame of an unknown `type`,\ntreats a response of an unknown `kind` as an answer it cannot use, and\nshows an unknown enum value as unknown instead of failing. A client\nsends a request that names a capability only to a host whose\n`capabilities` lists it. The schema lists only what this version\nsends, so a client that rejects incoming frames failing it breaks\nwith a newer host.",
+  "x-protocol-version": 1,
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ClientFrame"
+    },
+    {
+      "$ref": "#/$defs/ServerFrame"
+    }
+  ],
+  "$defs": {
+    "ClientFrame": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hello"
+            },
+            "protocol_version": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Protocol version the client speaks."
+            }
+          },
+          "required": [
+            "type",
+            "protocol_version"
+          ],
+          "description": "Authenticates a previously paired device by the key its encrypted\nstream proves."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "pair"
+            },
+            "code": {
+              "type": "string",
+              "description": "Pairing code, matched ignoring case, dashes, and whitespace."
+            },
+            "device_name": {
+              "type": "string",
+              "description": "Name the terminal shows for this device."
+            },
+            "protocol_version": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Protocol version the client speaks."
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "device_name",
+            "protocol_version"
+          ],
+          "description": "Pairs a new device with a one-time code shown in the terminal."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "request"
+            },
+            "id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "description": "Client-chosen identifier echoed in the response."
+            },
+            "request": {
+              "$ref": "#/$defs/RemoteRequest",
+              "description": "Operation to run."
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "request"
+          ],
+          "description": "Invokes one session operation after authentication."
+        }
+      ],
+      "description": "A frame sent by a remote client."
+    },
+    "RemoteCapability": {
+      "description": "An optional request a host offers by listing it in the `capabilities`\nof `welcome` and `paired`; the requests of the first protocol version\nneed none. A newer host may list capabilities this version does not\nname, so `capabilities` stays a list of strings.",
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "host"
+        },
+        {
+          "type": "string",
+          "const": "create_session"
+        },
+        {
+          "type": "string",
+          "const": "merge"
+        },
+        {
+          "type": "string",
+          "const": "diff"
+        },
+        {
+          "type": "string",
+          "const": "files"
+        },
+        {
+          "type": "string",
+          "const": "project_files"
+        },
+        {
+          "type": "string",
+          "const": "stop_turn"
+        },
+        {
+          "type": "string",
+          "const": "sync"
+        },
+        {
+          "type": "string",
+          "const": "settings"
+        },
+        {
+          "type": "string",
+          "const": "settings_agent"
+        },
+        {
+          "type": "string",
+          "const": "publish"
+        },
+        {
+          "type": "string",
+          "const": "merge_review_request"
+        },
+        {
+          "type": "string",
+          "const": "sync_project"
+        },
+        {
+          "type": "string",
+          "const": "graphs"
+        },
+        {
+          "type": "string",
+          "const": "graph_actions"
+        },
+        {
+          "type": "string",
+          "const": "graph_proposal"
+        },
+        {
+          "type": "string",
+          "const": "images"
+        },
+        {
+          "type": "string",
+          "const": "projects"
+        }
+      ]
+    },
+    "RemoteDiffFile": {
+      "type": "object",
+      "properties": {
+        "added_lines": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Lines the file's patch adds."
+        },
+        "deleted_lines": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Lines the file's patch removes."
+        },
+        "old_path": {
+          "type": "string",
+          "description": "Path before a rename."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path after the change; a deleted file keeps its old path."
+        },
+        "status": {
+          "$ref": "#/$defs/RemoteDiffFileStatus",
+          "description": "How the change affects the file."
+        }
+      },
+      "required": [
+        "added_lines",
+        "deleted_lines",
+        "path",
+        "status"
+      ],
+      "description": "One file a session's diff changes."
+    },
+    "RemoteDiffFileStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "added",
+          "description": "The file is new."
+        },
+        {
+          "type": "string",
+          "const": "deleted",
+          "description": "The file is removed."
+        },
+        {
+          "type": "string",
+          "const": "modified",
+          "description": "The file's contents or mode changed."
+        },
+        {
+          "type": "string",
+          "const": "renamed",
+          "description": "The file moved, possibly with changes."
+        }
+      ],
+      "description": "How a session's diff changes one file."
+    },
+    "RemoteFileEntry": {
+      "type": "object",
+      "properties": {
+        "is_dir": {
+          "type": "boolean",
+          "description": "Whether the entry is a directory."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path relative to the worktree root."
+        }
+      },
+      "required": [
+        "is_dir",
+        "path"
+      ],
+      "description": "One file or directory in a session's worktree."
+    },
+    "RemoteFocusedReview": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/RemoteFocusedReviewState",
+          "description": "Whether the review finished or failed."
+        },
+        "text": {
+          "type": "string",
+          "description": "The review's Markdown when it is `ready`, or the plain-text failure\nmessage when it `failed`."
+        }
+      },
+      "required": [
+        "state",
+        "text"
+      ],
+      "description": "Outcome of a session's latest focused review."
+    },
+    "RemoteFocusedReviewState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "The review could not be produced."
+        },
+        {
+          "type": "string",
+          "const": "ready",
+          "description": "The review finished."
+        }
+      ],
+      "description": "State of a focused review a remote client can show."
+    },
+    "RemoteGraph": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteGraphAction"
+          },
+          "description": "What `act_on_session_graph` can do to the graph as a whole now:\n`cancel`, `extend_budget`, or `resume`, as the terminal's inspector\noffers them. Absent when it can do none."
+        },
+        "budget": {
+          "description": "The spent budget `extend_budget` adds provider calls to, present\nwhile `actions` offers it: the selected node's, or else the first\none a pending node waits for, as the terminal's inspector shows it.",
+          "$ref": "#/$defs/RemoteGraphBudget"
+        },
+        "id": {
+          "type": "string",
+          "description": "Graph identity."
+        },
+        "is_focused_review": {
+          "type": "boolean",
+          "description": "Whether the graph is a focused review that Agentty drives."
+        },
+        "node": {
+          "type": "string",
+          "description": "The selected node, absent while the graph has no progress."
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteGraphNode"
+          },
+          "description": "Every node in declaration order."
+        },
+        "note": {
+          "type": "string",
+          "description": "What Agentty says about how the graph is driven, when it says\nanything."
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteGraphOutput"
+          },
+          "description": "Outputs of the selected node's latest execution."
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Current revision."
+        },
+        "snapshot": {
+          "type": "string",
+          "description": "Opaque token of the shown graph state; it changes whenever the\ngraph's revision, status, or node progress does."
+        },
+        "status": {
+          "description": "Live status, absent when Agentty has no progress for the graph.",
+          "$ref": "#/$defs/RemoteGraphStatus"
+        },
+        "status_label": {
+          "type": "string",
+          "description": "`status` as the terminal shows it."
+        }
+      },
+      "required": [
+        "id",
+        "nodes",
+        "revision",
+        "snapshot",
+        "status_label"
+      ],
+      "description": "The selected graph of a `graphs` response."
+    },
+    "RemoteGraphAction": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "accept",
+          "description": "Accept a validated output, releasing the nodes that wait for it."
+        },
+        {
+          "type": "string",
+          "const": "cancel",
+          "description": "Cancel the graph for good."
+        },
+        {
+          "type": "string",
+          "const": "extend_budget",
+          "description": "Add provider calls to the graph's spent budget."
+        },
+        {
+          "type": "string",
+          "const": "reply",
+          "description": "Send guidance that revises a settled node's output."
+        },
+        {
+          "type": "string",
+          "const": "resume",
+          "description": "Restart a paused graph."
+        },
+        {
+          "type": "string",
+          "const": "retry",
+          "description": "Run a failed or cancelled node again."
+        }
+      ],
+      "description": "An action of the terminal's graph inspector."
+    },
+    "RemoteGraphActionRequest": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/RemoteGraphAction",
+          "description": "What to do, one of the actions the `graphs` response lists on the\ngraph, the node, or the output it applies to."
+        },
+        "additional_calls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "description": "Provider calls `extend_budget` adds, from one to the graph's\n`budget.max_additional_calls`."
+        },
+        "budget_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The spent budget `extend_budget` adds provider calls to: the graph's\n`budget.id` in the `graphs` response the action was chosen from."
+        },
+        "graph_id": {
+          "type": "string",
+          "description": "Graph to act on, as the `graphs` response names it."
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Guidance `reply` sends; it must not be blank."
+        },
+        "node_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Node `accept`, `reply`, and `retry` apply to."
+        },
+        "output_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Output of `node_id` that `accept` accepts."
+        },
+        "session_id": {
+          "$ref": "#/$defs/RequestedSessionId",
+          "description": "Session that owns the graph."
+        },
+        "snapshot": {
+          "type": "string",
+          "description": "The graph's `snapshot` in the `graphs` response the action was\nchosen from."
+        }
+      },
+      "required": [
+        "action",
+        "graph_id",
+        "session_id",
+        "snapshot"
+      ],
+      "description": "One execution graph action, sent as an `act_on_session_graph` request."
+    },
+    "RemoteGraphApproval": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": "Node that produced the output."
+        },
+        "revisable": {
+          "type": "boolean",
+          "description": "Whether a chat reply may revise the output instead of accepting it."
+        },
+        "text": {
+          "type": "string",
+          "description": "Line telling the user how to act on it, as the terminal says it."
+        }
+      },
+      "required": [
+        "node_id",
+        "text"
+      ],
+      "description": "One output that waits for the user's approval."
+    },
+    "RemoteGraphBudget": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Budget name."
+        },
+        "max_additional_calls": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "description": "Most provider calls one `extend_budget` action adds."
+        }
+      },
+      "required": [
+        "id",
+        "max_additional_calls"
+      ],
+      "description": "A graph's spent provider-call budget."
+    },
+    "RemoteGraphEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Graph identity, as `get_session_graphs` accepts it."
+        },
+        "is_focused_review": {
+          "type": "boolean",
+          "description": "Whether the graph is a focused review that Agentty drives."
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Current revision."
+        }
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "description": "One graph of a session in a `graphs` response."
+    },
+    "RemoteGraphNode": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteGraphAction"
+          },
+          "description": "What `act_on_session_graph` can do to the node now: `reply` or\n`retry`, as the terminal's inspector offers them with the node\nselected. Absent when it can do neither."
+        },
+        "agent": {
+          "type": "string",
+          "description": "Name of the agent definition the node runs."
+        },
+        "agent_kind": {
+          "type": "string",
+          "description": "Agent provider, such as `codex`."
+        },
+        "attempts": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "description": "Executions admitted so far, retries included."
+        },
+        "awaits_approval": {
+          "type": "boolean",
+          "description": "Whether a dependent waits for the user to accept the node's output."
+        },
+        "blocked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Why the pending node cannot dispatch, each as the terminal says it."
+        },
+        "error": {
+          "type": "string",
+          "description": "The latest failure, if any."
+        },
+        "hint": {
+          "type": "string",
+          "description": "How the user acts on the node while it waits for them."
+        },
+        "id": {
+          "type": "string",
+          "description": "Node identity, as `get_session_graphs` accepts it."
+        },
+        "label": {
+          "type": "string",
+          "description": "The node's status as the terminal shows it."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier the node runs."
+        },
+        "objective": {
+          "type": "string",
+          "description": "What the node should achieve."
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteQuestion"
+          },
+          "description": "Questions from the node's latest settled response."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Reasoning effort the node runs with, such as `high`."
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteGraphRequirement"
+          },
+          "description": "The node's dependencies in declaration order."
+        },
+        "status": {
+          "$ref": "#/$defs/RemoteGraphNodeStatus",
+          "description": "Live state of the node's latest execution."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Whether the server cut `objective`, `error`, or a question, at a\nline boundary, to keep the response small."
+        }
+      },
+      "required": [
+        "agent",
+        "agent_kind",
+        "attempts",
+        "id",
+        "label",
+        "model",
+        "objective",
+        "reasoning",
+        "status"
+      ],
+      "description": "One node of a graph."
+    },
+    "RemoteGraphNodeStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "awaiting_answers",
+          "description": "It waits for answers to its questions."
+        },
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "It or its graph was cancelled."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "It failed and needs a retry."
+        },
+        {
+          "type": "string",
+          "const": "pending",
+          "description": "It has not been admitted."
+        },
+        {
+          "type": "string",
+          "const": "queued",
+          "description": "It waits for a worker."
+        },
+        {
+          "type": "string",
+          "const": "running",
+          "description": "A worker runs it."
+        },
+        {
+          "type": "string",
+          "const": "succeeded",
+          "description": "It settled without questions."
+        }
+      ],
+      "description": "Live state of a graph node."
+    },
+    "RemoteGraphOutput": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteGraphAction"
+          },
+          "description": "What `act_on_session_graph` can do to the output now: `accept`, as\nthe terminal's inspector offers it with the output selected. Absent\nwhen it can do nothing."
+        },
+        "id": {
+          "type": "string",
+          "description": "Output identity."
+        },
+        "name": {
+          "type": "string",
+          "description": "Output name the node declares."
+        },
+        "state": {
+          "$ref": "#/$defs/RemoteGraphOutputState",
+          "description": "Whether the output was validated or accepted."
+        },
+        "text": {
+          "type": "string",
+          "description": "The output as Markdown, cut at a line boundary when it is too large;\nempty when earlier outputs left it no room."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Whether the server cut the end of `text` to keep the response small."
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Version within the node's named output."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "state",
+        "text",
+        "version"
+      ],
+      "description": "One output of the selected graph node."
+    },
+    "RemoteGraphOutputState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "accepted",
+          "description": "The user accepted it."
+        },
+        {
+          "type": "string",
+          "const": "produced",
+          "description": "It was saved but not validated."
+        },
+        {
+          "type": "string",
+          "const": "validated",
+          "description": "It was validated and can be accepted."
+        }
+      ],
+      "description": "Evidence state of a graph output."
+    },
+    "RemoteGraphProposal": {
+      "type": "object",
+      "properties": {
+        "graph_id": {
+          "type": "string",
+          "description": "Graph the approved version launched, absent before approval."
+        },
+        "hint": {
+          "type": "string",
+          "description": "How the user acts on the pending proposal, absent once it is\napproved or cancelled."
+        },
+        "id": {
+          "type": "string",
+          "description": "Proposal identity."
+        },
+        "phase": {
+          "$ref": "#/$defs/RemoteGraphProposalPhase",
+          "description": "Where the proposal stands."
+        },
+        "preview": {
+          "type": "string",
+          "description": "The proposal's details as Markdown, including the captured request\nand each proposed node's captured instructions."
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteQuestion"
+          },
+          "description": "Clarification questions the version asks before it resolves. Agentty\nbounds them with the size of the proposal's response."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Whether the server cut the end of `preview`, at a line boundary, to\nkeep the response small."
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Version number."
+        }
+      },
+      "required": [
+        "id",
+        "phase",
+        "preview",
+        "version"
+      ],
+      "description": "A session's latest graph proposal."
+    },
+    "RemoteGraphProposalPhase": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "approved",
+          "description": "The user approved the version and its graph launched."
+        },
+        {
+          "type": "string",
+          "const": "awaiting_approval",
+          "description": "The version resolved to a graph waiting for the user's approval."
+        },
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "The proposal was discarded."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "Generation failed."
+        },
+        {
+          "type": "string",
+          "const": "generating",
+          "description": "The model is generating the version."
+        },
+        {
+          "type": "string",
+          "const": "needs_input",
+          "description": "The model asked clarification questions."
+        },
+        {
+          "type": "string",
+          "const": "unresolved",
+          "description": "The model proposed a graph Agentty could not resolve."
+        }
+      ],
+      "description": "Where a graph proposal stands."
+    },
+    "RemoteGraphRequirement": {
+      "type": "object",
+      "properties": {
+        "gate": {
+          "type": "string",
+          "description": "What the dependency waits for, as the terminal's inspector says it."
+        },
+        "label": {
+          "type": "string",
+          "description": "The dependency as the terminal's node timeline shows it."
+        },
+        "node_id": {
+          "type": "string",
+          "description": "Node the dependency waits for."
+        },
+        "satisfied": {
+          "type": "boolean",
+          "description": "Whether the dependency no longer blocks the node."
+        }
+      },
+      "required": [
+        "gate",
+        "label",
+        "node_id"
+      ],
+      "description": "One dependency of a graph node."
+    },
+    "RemoteGraphStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "blocked",
+          "description": "Prerequisites, acceptance, clarification, or resources hold it."
+        },
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "It was cancelled."
+        },
+        {
+          "type": "string",
+          "const": "completed",
+          "description": "Every node settled successfully."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "A node needs a retry."
+        },
+        {
+          "type": "string",
+          "const": "paused",
+          "description": "No driver runs it; it needs a resume."
+        },
+        {
+          "type": "string",
+          "const": "running",
+          "description": "Work is queued or running."
+        }
+      ],
+      "description": "Live status of a graph."
+    },
+    "RemoteImage": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string",
+          "description": "The PNG or JPEG file, in standard base64 with padding."
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "description": "One image sent with a `send_message` request."
+    },
+    "RemoteMessage": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "Message text."
+        },
+        "kind": {
+          "$ref": "#/$defs/RemoteMessageKind",
+          "description": "Display category."
+        }
+      },
+      "required": [
+        "content",
+        "kind"
+      ],
+      "description": "One chat-visible transcript message."
+    },
+    "RemoteMessageKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "activity",
+          "description": "Tool and skill usage summary."
+        },
+        {
+          "type": "string",
+          "const": "assistant",
+          "description": "Agent answer."
+        },
+        {
+          "type": "string",
+          "const": "notice",
+          "description": "Workflow notice."
+        },
+        {
+          "type": "string",
+          "const": "user",
+          "description": "User prompt."
+        }
+      ],
+      "description": "Display category of one transcript message."
+    },
+    "RemoteModeModel": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "Agent that runs the session, as `models` names it."
+        },
+        "mode": {
+          "$ref": "#/$defs/RemoteSessionMode",
+          "description": "Creation mode, one of `session_modes`."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier, as `models` lists it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the model."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Reasoning level the new session starts with, such as `high`."
+        },
+        "response_style": {
+          "type": "string",
+          "description": "Style of the new session's answers, such as `concise`."
+        },
+        "speed_mode": {
+          "type": "string",
+          "description": "Speed the new session starts with, `normal` or `fast`. Absent when\nthe agent has no speed control."
+        }
+      },
+      "required": [
+        "agent",
+        "mode",
+        "model",
+        "name"
+      ],
+      "description": "The agent, model and settings a new session of one mode starts with, as\n`get_host` lists it. A device picks other settings for the new session,\nand another model among the `models` of the same `agent`."
+    },
+    "RemoteModelOption": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "Agent that runs the model. A session switches to the models of\nanother agent by naming it in `set_session_settings`, which a server\naccepts when it offers `settings_agent`."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short description of the model."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier, as a session snapshot reports `model_id` and\n`set_session_settings` accepts it as `model`."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the model, as a session snapshot reports `model`."
+        },
+        "supports_fast": {
+          "type": "boolean",
+          "description": "Whether the model can run in fast mode."
+        }
+      },
+      "required": [
+        "agent",
+        "description",
+        "model",
+        "name",
+        "supports_fast"
+      ],
+      "description": "One model a session can switch to, as `get_host` lists it."
+    },
+    "RemoteProject": {
+      "type": "object",
+      "properties": {
+        "ahead": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the branch is ahead of its upstream, as of the host's latest\nfetch. Absent while the host has not compared them."
+        },
+        "behind": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the branch is behind its upstream, as of the host's latest\nfetch. Absent while the host has not compared them."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch the project's checkout is on. Absent when it has none."
+        },
+        "id": {
+          "type": "string",
+          "description": "Identifier of the project, as `list_projects` names it, when the\nhost read the sessions and this status together. Absent otherwise\nand from older servers, so a client that asked for a project treats\na listing without it as not that project's."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the project."
+        },
+        "sync": {
+          "description": "Latest sync of this project, started by a device or in the terminal,\nwhile the host still shows it.",
+          "$ref": "#/$defs/RemoteProjectSync"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "One project as the session list shows it: the host's active project, or\nthe one a `list_sessions` request named."
+    },
+    "RemoteProjectEntry": {
+      "type": "object",
+      "properties": {
+        "active_sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Sessions of the project still in an active lifecycle state. Absent\nwhen there are none."
+        },
+        "id": {
+          "type": "string",
+          "description": "Opaque identifier a request's `project_id` names the project by."
+        },
+        "is_active": {
+          "type": "boolean",
+          "description": "Whether the project is the one the terminal has open. Absent when it\nis not."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the project."
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "description": "One project the host lists, as `list_projects` returns it."
+    },
+    "RemoteProjectSync": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string",
+          "description": "Branch the sync updates."
+        },
+        "conflicts": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "description": "Files in conflict that an agent is resolving, or has resolved once\nthe sync is complete."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why the sync is blocked or failed."
+        },
+        "phase": {
+          "$ref": "#/$defs/RemoteProjectSyncPhase",
+          "description": "How far the sync has come."
+        },
+        "pulled_commits": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits a complete sync pulled, when the host counted them."
+        },
+        "pushed_commits": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits a complete sync pushed, when the host counted them."
+        }
+      },
+      "required": [
+        "branch",
+        "phase"
+      ],
+      "description": "One sync of a project's branch with its upstream.\n\nThe count and message fields depend on `phase`; a page ignores the ones\nit does not expect."
+    },
+    "RemoteProjectSyncPhase": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "blocked",
+          "description": "The host did not start the sync, such as while a merge runs."
+        },
+        {
+          "type": "string",
+          "const": "complete",
+          "description": "The branch matches its upstream."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "Git, authentication, or conflict resolution failed."
+        },
+        {
+          "type": "string",
+          "const": "resolving_conflicts",
+          "description": "An agent is resolving conflicts."
+        },
+        {
+          "type": "string",
+          "const": "running",
+          "description": "The host is pulling, rebasing, or pushing."
+        }
+      ],
+      "description": "How far a project sync has come."
+    },
+    "RemoteQuestion": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Suggested answers, recommended first."
+        },
+        "text": {
+          "type": "string",
+          "description": "Question text."
+        }
+      },
+      "required": [
+        "options",
+        "text"
+      ],
+      "description": "One pending clarification question."
+    },
+    "RemoteQuestionAnswer": {
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": "string",
+          "description": "Answer text."
+        },
+        "question": {
+          "type": "string",
+          "description": "Exact question text being answered."
+        }
+      },
+      "required": [
+        "answer",
+        "question"
+      ],
+      "description": "One answer to a pending clarification question."
+    },
+    "RemoteRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RemoteGraphActionRequest",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "act_on_session_graph"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "Acts on a session's execution graph as the terminal's inspector\ndoes: accepts an output, retries or replies to a node, resumes or\ncancels the graph, or adds provider calls to its spent budget.\nCancelling is permanent. Agentty refuses an action the graph's\n`snapshot` no longer matches or does not offer. Offered through the\n`graph_actions` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "answer_questions"
+            },
+            "answers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteQuestionAnswer"
+              },
+              "description": "Answers paired with the exact question text."
+            },
+            "graph_question_target": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The snapshot's `graph_question_target` of the `graph_questions`\nanswered; absent when answering the turn's `questions`."
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session that asked the questions."
+            }
+          },
+          "required": [
+            "method",
+            "answers",
+            "session_id"
+          ],
+          "description": "Answers the session's complete current question set: its turn's\n`questions`, or, with `graph_question_target`, its `graph_questions`,\nwhich go to the graph work that asked them.\n\nAgentty refuses answers that name graph work other than the one whose\nquestions are pending now, even when it asks the same questions, and\nanswers naming graph work while the turn asks its own. Answers that\nname no graph work answer only the turn's questions, so a request\nfrom a page that predates graph questions never reaches graph work."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "cancel_session"
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session to cancel."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Cancels the whole session, not only its current turn.\n\nThe host stops the session's agent work, marks the session `Canceled`,\nand removes its worktree, Git record, and branch, which discards any\nunmerged and unpublished changes."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "create_session"
+            },
+            "mode": {
+              "$ref": "#/$defs/RemoteSessionMode",
+              "description": "How the session runs; one of the modes `get_host` lists for the\nsame project.",
+              "default": "regular"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestedProjectId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Listed project to create the session in, as `list_projects`\nnames it; absent for the active project. Understood only by a\nserver that offers `projects`."
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "Creates a session in the host's active project, or the one\n`project_id` names, with its worktree and branch. Offered through the\n`create_session` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "generate_graph_proposal"
+            },
+            "message": {
+              "type": "string",
+              "description": "Task the graph should carry out."
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session that owns the proposal."
+            }
+          },
+          "required": [
+            "method",
+            "message",
+            "session_id"
+          ],
+          "description": "Starts model work that proposes an execution graph for the task in\n`message`, as the terminal's `/graph` does. The proposal appears in\nthe session's `graph`; nothing launches until a chat reply approves\nit. Agentty refuses it unless the session is prepared and idle, so\nalso for a draft that has not started, and refuses an empty or\noversized task. Offered through the `graph_proposal` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "get_host"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestedProjectId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Listed project to describe, as `list_projects` names it; absent\nfor the active project. Understood only by a server that offers\n`projects`."
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "Describes the host's active project, or the one `project_id` names,\nas new sessions in it start. Offered through the `host` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "get_session_diff"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Changed file whose patch to return, as the file list names it."
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session to read."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Reads what a session changes against its base branch. Without `path`\nthe response lists the changed files; with `path` it also carries\nthat file's patch. Offered through the `diff` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "get_session"
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session to load."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Loads one session snapshot."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "get_session_graphs"
+            },
+            "graph_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Graph to select, one the response lists in `graphs`. Without it\nthe latest proposal's approved graph is selected, or else the\nfirst graph."
+            },
+            "known": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "`version` of the `graphs` response the device shows for this same\nselection. When the response would be that version again, it is\n`unchanged` instead and carries nothing else."
+            },
+            "node_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Node of the selected graph whose details and outputs to return.\nWithout it, or when the graph has no such node, the first node."
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session to read."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Reads a session's graph proposal and execution graphs as the\nterminal's inspector shows them, without acting on any. Offered\nthrough the `graphs` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "list_project_files"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestedProjectId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Listed project whose checkout to list, as `list_projects` names\nit; absent for the active project. Understood only by a server\nthat offers `projects`."
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "Lists the names of the files and directories in the checkout of the\nhost's active project, or the one `project_id` names, directories\nfirst, without their contents, for mentioning files in a new\nsession's first message. Offered through the `project_files`\ncapability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "list_projects"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "Lists the projects the host lists, in its project switcher's order:\nits active project and every other one the switcher offers. Offered\nthrough the `projects` capability, which a server lists only when its\nhost also reports project status, so a listing names its project."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "list_session_files"
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session whose worktree to list."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Lists the names of the files and directories in a session's worktree,\ndirectories first, without their contents. A session without a\nworktree lists nothing. Offered through the `files` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "list_sessions"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestedProjectId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Listed project whose sessions to list, as `list_projects` names\nit; absent for the active project. Understood only by a server\nthat offers `projects`."
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "Lists the sessions of the host's active project, or of the one\n`project_id` names, with that project's status."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "merge_review_request"
+            },
+            "bypass": {
+              "type": "boolean",
+              "description": "Whether to merge by bypassing branch protections; it must be\ntrue for a `ready_with_bypass` pull request and false for a\n`ready` one. Absent means false."
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session whose pull request merges."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Merges the session's open GitHub pull request on GitHub, with the\nuser's forge credentials, when the session's `review_ready` is\n`ready`, or `ready_with_bypass` and `bypass` is true. A draft is\nmarked ready for review first. A `ready` pull request whose base\nbranch requires a merge queue joins the queue instead; a bypass\nmerges past branch protections and any merge queue with the user's\nadministrator rights.\n\nAgentty reads the pull request again before acting and answers\n`refused` with a reason when it is no longer ready for the requested\nmerge, or no longer at the session branch's commit. It answers an\nerror when the session cannot merge it now: no ready GitHub pull\nrequest, another merge or publish running, or a turn or other work\npending. Offered through the `merge_review_request` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "merge_session"
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session to merge."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Merges a review-ready session into its base branch in the host's\ncheckout. Offered through the `merge` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "publish_session"
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session to publish."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Pushes a session to the branch it was published to before, or under\nits default name the first time, and opens or refreshes its review\nrequest with the user's forge credentials. Offered through the\n`publish` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "send_message"
+            },
+            "images": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteImage"
+              },
+              "description": "PNG or JPEG images the message refers to as `[Image #n]`,\nnumbered in this order from 1. Agentty stores them in its own\nprompt-image directory; a placeholder the text lacks is\nappended. Offered through the `images` capability."
+            },
+            "message": {
+              "type": "string",
+              "description": "Message text."
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session that receives the message."
+            }
+          },
+          "required": [
+            "method",
+            "message",
+            "session_id"
+          ],
+          "description": "Sends one chat message, starting, resuming, or queueing a turn."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "stop_turn"
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session whose turn stops."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Stops the session's running turn and returns the session to review,\nkeeping its worktree and changes. It also discards the session's\nqueued messages. Offered through the `stop_turn` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sync_project"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestedProjectId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Listed project to sync, as `list_projects` names it; absent for\nthe active project. Understood only by a server that offers\n`projects`."
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "Syncs the branch of the host's active project, or of the one\n`project_id` names, with its upstream: a pull with rebase, then a\npush, in that project's checkout with the user's Git credentials. A\nconflict starts an agent-assisted resolution. The `project` of a\n`list_sessions` response for the same project reports the progress\nand the outcome. Offered through the `sync_project` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sync_session"
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session whose branch is synced."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Rebases the session branch onto its base branch, or queues the rebase\nbehind a running turn. A conflict starts an agent-assisted resolution\nturn. Offered through the `sync` capability."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "set_session_settings"
+            },
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Agent to run `model`, as `get_host` names it; omitted, the\nsession keeps its own. Sent only together with `model`, since\nagents share model ids."
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Model identifier to switch to, one `get_host` lists for `agent`."
+            },
+            "reasoning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Reasoning level, such as `high`."
+            },
+            "response_style": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Style of the agent's answers, such as `concise`."
+            },
+            "session_id": {
+              "$ref": "#/$defs/RequestedSessionId",
+              "description": "Session whose settings change."
+            },
+            "speed_mode": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Speed preference, `normal` or `fast`."
+            }
+          },
+          "required": [
+            "method",
+            "session_id"
+          ],
+          "description": "Changes the session's settings for later turns; an omitted setting\nstays as it is. The fields carry the values a session snapshot\nreports, except that `model` is the snapshot's `model_id`. Reasoning\nand style apply at once; a model or speed change waits while the\nsession still has accepted work, as in the terminal. Offered through\nthe `settings` capability; `agent` is understood only by a server\nthat also offers `settings_agent`."
+        }
+      ],
+      "description": "Session operations a remote client may invoke.\n\nEach request beyond reading and chatting is a mutation the user approved\nfor remote devices. A server offers an optional request only through its\ncapability, and every request that names a session reaches only sessions\nthe host lists.\n\nThe requests about a project, `get_host`, `list_project_files`,\n`list_sessions`, `sync_project`, and `create_session`, are for the\nhost's active project, read when the host serves the request, unless they\nname another in `project_id`, which reaches only a project the host\nlists. A client sends `project_id` only to a server that offers the\n`projects` capability: an older server ignores the field it does not\nknow and answers for its active project, so a client also checks that\nthe project an answer names is the one it asked for."
+    },
+    "RemoteResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "accepted"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "The host admitted the mutation; its work may still be running."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "created"
+            },
+            "session_id": {
+              "type": "string",
+              "description": "Identifier of the new session."
+            }
+          },
+          "required": [
+            "kind",
+            "session_id"
+          ],
+          "description": "The host created a session."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "diff"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteDiffFile"
+              },
+              "description": "Changed files in diff order; only the requested file when the\nrequest names one."
+            },
+            "patch": {
+              "type": "string",
+              "description": "Unified patch of the requested file, cut at a line boundary when\nit is too large."
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "Whether the server left out the end of `files` or `patch` to\nkeep the response small."
+            }
+          },
+          "required": [
+            "kind",
+            "files"
+          ],
+          "description": "What a session changes, answering `get_session_diff`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "graphs"
+            },
+            "graph": {
+              "description": "The selected graph, absent when the session has none.",
+              "$ref": "#/$defs/RemoteGraph"
+            },
+            "graphs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteGraphEntry"
+              },
+              "description": "Every graph of the session in creation order."
+            },
+            "proposal": {
+              "description": "The session's latest graph proposal, absent when it has none.",
+              "$ref": "#/$defs/RemoteGraphProposal"
+            },
+            "unchanged": {
+              "type": "boolean",
+              "description": "Whether the response is the request's `known` version again; it\nthen carries only `version`, and the device keeps what it shows."
+            },
+            "version": {
+              "type": "string",
+              "description": "Opaque token for the content of this response: equal content\ngives an equal token within one Agentty process. Absent from\nolder servers."
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "A session's graphs, answering `get_session_graphs`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "host"
+            },
+            "base_branch": {
+              "type": "string",
+              "description": "Branch new sessions start from."
+            },
+            "default_model": {
+              "type": "string",
+              "description": "Model a new session starts with."
+            },
+            "mode_models": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteModeModel"
+              },
+              "description": "Agent and model a new session of each of `session_modes` starts\nwith, in the same order."
+            },
+            "models": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteModelOption"
+              },
+              "description": "Models a session can switch to now, in display order."
+            },
+            "project": {
+              "type": "string",
+              "description": "Display name of the project."
+            },
+            "project_id": {
+              "type": "string",
+              "description": "Identifier of the project, as `list_projects` names it. Absent\nfrom older servers."
+            },
+            "session_modes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteSessionMode"
+              },
+              "description": "Modes `create_session` accepts now, in display order."
+            }
+          },
+          "required": [
+            "kind",
+            "base_branch",
+            "default_model",
+            "project",
+            "session_modes"
+          ],
+          "description": "The project a `get_host` request is for, where `create_session` for\nthe same project creates new sessions."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "projects"
+            },
+            "projects": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteProjectEntry"
+              },
+              "description": "Listed projects in the host's project switcher's order."
+            }
+          },
+          "required": [
+            "kind",
+            "projects"
+          ],
+          "description": "The projects the host lists, answering `list_projects`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session"
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RemoteSession"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Loaded session, boxed to keep other responses small."
+            }
+          },
+          "required": [
+            "kind",
+            "session"
+          ],
+          "description": "One session snapshot, or `None` when it does not exist."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session_files"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteFileEntry"
+              },
+              "description": "Listed entries, directories first, then by path."
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "Whether the server left out the end of `files` to keep the\nresponse small."
+            }
+          },
+          "required": [
+            "kind",
+            "files"
+          ],
+          "description": "The files and directories in a session's worktree or the active\nproject's checkout, answering `list_session_files` or\n`list_project_files`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "review_request"
+            },
+            "review_request": {
+              "$ref": "#/$defs/RemoteReviewRequest",
+              "description": "Review request as the forge reported it."
+            }
+          },
+          "required": [
+            "kind",
+            "review_request"
+          ],
+          "description": "The review request a publish created or refreshed."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "review_request_merge"
+            },
+            "merge_commit": {
+              "type": "string",
+              "description": "Commit the merge created on the target branch, present for\n`merged` when the forge reports it."
+            },
+            "outcome": {
+              "$ref": "#/$defs/RemoteReviewRequestMergeOutcome",
+              "description": "Whether the pull request merged, joined the merge queue, or was\nleft unchanged."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why the forge state no longer allows the merge, present for\n`refused`."
+            },
+            "review_request": {
+              "description": "The pull request as the forge reported it after the attempt;\nabsent when that refresh failed. Boxed to keep other responses\nsmall.",
+              "$ref": "#/$defs/RemoteReviewRequest"
+            }
+          },
+          "required": [
+            "kind",
+            "outcome"
+          ],
+          "description": "What a `merge_review_request` did on the forge."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "sessions"
+            },
+            "project": {
+              "description": "The project the sessions belong to. Absent from hosts that do\nnot report it and from older servers.",
+              "$ref": "#/$defs/RemoteProject"
+            },
+            "sessions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RemoteSessionSummary"
+              },
+              "description": "Session listing entries."
+            }
+          },
+          "required": [
+            "kind",
+            "sessions"
+          ],
+          "description": "The sessions of the project a `list_sessions` request is for, in\ndisplay order."
+        }
+      ],
+      "description": "Successful request payload."
+    },
+    "RemoteResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "additionalProperties": false,
+          "description": "The host rejected or failed the operation."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/RemoteResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false,
+          "description": "The operation succeeded."
+        }
+      ],
+      "description": "Outcome of one remote request, serialized as `{\"ok\": …}` or\n`{\"error\": \"…\"}`."
+    },
+    "RemoteReviewReadiness": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "ready",
+          "description": "Checks pass and the pull request can merge."
+        },
+        {
+          "type": "string",
+          "const": "ready_with_bypass",
+          "description": "The pull request can merge only by bypassing branch protections."
+        }
+      ],
+      "description": "Whether a linked pull request can merge, as the forge reported it."
+    },
+    "RemoteReviewRequest": {
+      "type": "object",
+      "properties": {
+        "display_id": {
+          "type": "string",
+          "description": "Forge display id, such as `#123`."
+        },
+        "forge": {
+          "type": "string",
+          "description": "Forge name, such as `GitHub` or `GitLab`. Absent from older servers."
+        },
+        "source_branch": {
+          "type": "string",
+          "description": "Branch published for review."
+        },
+        "state": {
+          "type": "string",
+          "description": "Remote state: `Open`, `Merged`, or `Closed`."
+        },
+        "status_summary": {
+          "type": "string",
+          "description": "Condensed forge status, such as `PR ready`."
+        },
+        "target_branch": {
+          "type": "string",
+          "description": "Branch receiving the review request."
+        },
+        "title": {
+          "type": "string",
+          "description": "Review-request title."
+        },
+        "web_url": {
+          "type": "string",
+          "description": "Browser URL of the review request. Clients must check its scheme\nbefore they link it."
+        }
+      },
+      "required": [
+        "display_id",
+        "source_branch",
+        "state",
+        "target_branch",
+        "title",
+        "web_url"
+      ],
+      "description": "Pull or merge request linked to a session, as of the host's latest\nforge refresh."
+    },
+    "RemoteReviewRequestMergeOutcome": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "merged",
+          "description": "The pull request merged into its target branch."
+        },
+        {
+          "type": "string",
+          "const": "queued",
+          "description": "The pull request joined its target branch's merge queue, or is set\nto join it once the forge's requirements pass."
+        },
+        {
+          "type": "string",
+          "const": "refused",
+          "description": "The forge state no longer allows the merge, so nothing changed."
+        }
+      ],
+      "description": "What a `merge_review_request` did on the forge."
+    },
+    "RemoteSession": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "Agent provider, such as `codex`."
+        },
+        "base_branch": {
+          "type": "string",
+          "description": "Branch the session started from and merges into."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Session worktree branch."
+        },
+        "created_at": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Creation timestamp in Unix seconds."
+        },
+        "draft_prompt": {
+          "type": "string",
+          "description": "Messages a draft session has staged and will send together when it\nstarts. Absent when it has none and from older servers."
+        },
+        "focused_review": {
+          "description": "Latest focused review of the session's changes, while the terminal\nshows it. Absent when there is none, while a review runs, and from\nolder servers.",
+          "$ref": "#/$defs/RemoteFocusedReview"
+        },
+        "graph": {
+          "description": "The session's latest graph proposal and, once approved, its graph's\nprogress, as the terminal summarizes them beside the chat. Absent\nwhen the session has no proposal and from older servers.",
+          "$ref": "#/$defs/RemoteSessionGraph"
+        },
+        "graph_question_target": {
+          "type": "string",
+          "description": "Opaque key of the graph work that asks `graph_questions`, which other\ngraph work asking the same questions does not share, so a device can\ntell a new set from one it closed. It identifies no proposal or node;\n`answer_questions` echoes it as `graph_question_target` so the\nanswers reach only the work they were entered for. Absent without\ngraph questions and from older servers."
+        },
+        "graph_questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteQuestion"
+          },
+          "description": "Clarification questions of the session's graph work, its pending\ngraph proposal or one of its graph nodes, while its turn asks none.\n`answer_questions` naming their `graph_question_target` answers them,\nand so does a chat message, so the status need not be `Question`.\nAbsent when there are none and from older servers."
+        },
+        "id": {
+          "type": "string",
+          "description": "Stable session identifier."
+        },
+        "is_draft": {
+          "type": "boolean",
+          "description": "Whether the session defers its worktree until its first message."
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteMessage"
+          },
+          "description": "Durable transcript without hidden agent prompts."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name, as `get_host` reports `default_model`."
+        },
+        "model_id": {
+          "type": "string",
+          "description": "Model identifier, as `get_host` lists it in `models` and\n`set_session_settings` accepts it."
+        },
+        "progress": {
+          "type": "string",
+          "description": "Live line describing the session's current work, such as\n`Working... Reading files`, while it works or waits. Further lines add\ndetail. Absent from older servers."
+        },
+        "published_upstream_ref": {
+          "type": "string",
+          "description": "Upstream branch the session branch was published to."
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteQuestion"
+          },
+          "description": "Pending clarification questions of the session's turn."
+        },
+        "queued_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Labels of the workflow actions waiting behind the active turn, such\nas a queued sync or publish, in the order they run. Absent when none\nwait and from older servers."
+        },
+        "queued_messages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Chat messages waiting behind the active turn."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Reasoning level, such as `high`."
+        },
+        "response_style": {
+          "type": "string",
+          "description": "Style of the agent's answers, such as `concise`."
+        },
+        "review_request": {
+          "description": "Linked pull or merge request, when the session has one.",
+          "$ref": "#/$defs/RemoteReviewRequest"
+        },
+        "speed_mode": {
+          "type": "string",
+          "description": "Speed preference, `normal` or `fast`. Absent when the agent has no\nspeed control."
+        },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle status, such as `InProgress` or `Review`."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional user-visible title."
+        },
+        "updated_at": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Last update timestamp in Unix seconds."
+        }
+      },
+      "required": [
+        "id",
+        "messages",
+        "questions",
+        "queued_messages",
+        "status",
+        "title",
+        "updated_at"
+      ],
+      "description": "Chat-visible snapshot of one session.\n\nThe settings, branch, and review-request fields are optional so a page\nand a server of different versions still understand each other: an older\nserver omits them, and a page hides what is missing."
+    },
+    "RemoteSessionGraph": {
+      "type": "object",
+      "properties": {
+        "awaiting": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteGraphApproval"
+          },
+          "description": "Outputs that wait for the user's approval, in declaration order."
+        },
+        "done": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "description": "Nodes of the launched graph that succeeded."
+        },
+        "label": {
+          "type": "string",
+          "description": "Line describing `phase`, or `status` once known, as the terminal\nshows it."
+        },
+        "phase": {
+          "$ref": "#/$defs/RemoteGraphProposalPhase",
+          "description": "Where the latest proposal stands."
+        },
+        "status": {
+          "description": "Live status of the approved graph, once Agentty reads it.",
+          "$ref": "#/$defs/RemoteGraphStatus"
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "description": "Nodes of the resolved proposal; zero before it resolves."
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Number of the latest proposal version."
+        }
+      },
+      "required": [
+        "done",
+        "label",
+        "phase",
+        "total",
+        "version"
+      ],
+      "description": "What a session snapshot says about its latest graph proposal and, once\napproved, the graph it launched."
+    },
+    "RemoteSessionMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "harness",
+          "description": "On the in-process harness with its default model."
+        },
+        {
+          "type": "string",
+          "const": "regular",
+          "description": "On the project's default agent and model."
+        }
+      ],
+      "description": "How a session created remotely runs."
+    },
+    "RemoteSessionSummary": {
+      "type": "object",
+      "properties": {
+        "added_lines": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Lines the session's diff adds."
+        },
+        "base_ahead": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the session branch is ahead of its base branch. Absent while\nthe host has not compared them."
+        },
+        "base_behind": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the session branch is behind its base branch. Absent while\nthe host has not compared them."
+        },
+        "deleted_lines": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Lines the session's diff removes."
+        },
+        "has_merge_conflict": {
+          "type": "boolean",
+          "description": "Whether merging the session branch into its base would conflict."
+        },
+        "id": {
+          "type": "string",
+          "description": "Stable session identifier."
+        },
+        "in_progress_started_at": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Start of the current active-work interval in Unix seconds, while the\nsession is running."
+        },
+        "in_progress_total_seconds": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Active-work seconds completed before the current interval."
+        },
+        "is_published": {
+          "type": "boolean",
+          "description": "Whether the session branch was published to an upstream branch."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name, as `get_host` reports `default_model`."
+        },
+        "model_short_name": {
+          "type": "string",
+          "description": "Compact model name for dense rows, such as `opus-5.5`."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Reasoning level, such as `high`."
+        },
+        "review_display_id": {
+          "type": "string",
+          "description": "Forge display id of the linked review request, such as `#123`."
+        },
+        "review_ready": {
+          "description": "Whether the linked pull request can merge, when the forge says so.",
+          "$ref": "#/$defs/RemoteReviewReadiness"
+        },
+        "review_state": {
+          "type": "string",
+          "description": "State of the linked review request: `Open`, `Merged`, or `Closed`."
+        },
+        "size": {
+          "type": "string",
+          "description": "Host size bucket of the diff, from `XS` to `XXL`."
+        },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle status, such as `InProgress` or `Review`."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional user-visible title."
+        },
+        "updated_at": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Last update timestamp in Unix seconds."
+        },
+        "upstream_ahead": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the session branch is ahead of the upstream branch it\ntracks. Absent when it tracks none or the host has not compared\nthem."
+        },
+        "upstream_behind": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the session branch is behind the upstream branch it tracks.\nAbsent when it tracks none or the host has not compared them."
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "title",
+        "updated_at"
+      ],
+      "description": "Listing entry for one session.\n\nThe stats fields are optional: a host that lists only summaries, or an\nolder server, omits them, and a page hides what is missing."
+    },
+    "RequestedProjectId": {
+      "type": "string",
+      "description": "A project id: the decimal `id` of an entry `list_projects` returned, sent as a string so no client has to keep a large integer exact. A request reaches only a project the host lists."
+    },
+    "RequestedSessionId": {
+      "type": "string",
+      "description": "A session id, as a session listing or snapshot names it in `id`. A request reaches only a session the host lists."
+    },
+    "ServerFrame": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "awaiting_approval"
+            },
+            "confirmation": {
+              "type": "string",
+              "description": "Short code the user compares between the device and terminal."
+            }
+          },
+          "required": [
+            "type",
+            "confirmation"
+          ],
+          "description": "A valid pairing code was accepted and waits for approval in the\nterminal, which shows the same `confirmation` beside the request."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "changed"
+            },
+            "revision": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "description": "Latest host revision."
+            }
+          },
+          "required": [
+            "type",
+            "revision"
+          ],
+          "description": "Host session state changed after `revision` was last reported."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "paired"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional requests the server supports, as in\n`ServerFrame::Welcome`."
+            },
+            "device_id": {
+              "type": "string",
+              "description": "Identifier of the new device."
+            },
+            "protocol_version": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Protocol version the server speaks."
+            },
+            "revision": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "description": "Host revision at authentication time."
+            }
+          },
+          "required": [
+            "type",
+            "device_id",
+            "protocol_version",
+            "revision"
+          ],
+          "description": "Pairing succeeded; the device's key authenticates its later\nconnections."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "rejected"
+            },
+            "reason": {
+              "type": "string",
+              "description": "Human-readable reason."
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "description": "The server refused the connection and closes it next."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "response"
+            },
+            "id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "description": "Identifier from the request."
+            },
+            "result": {
+              "$ref": "#/$defs/RemoteResult",
+              "description": "Operation outcome."
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "result"
+          ],
+          "description": "Result of one `ClientFrame::Request`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "welcome"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional requests the server supports. A client offers a feature\nonly when its capability is listed, so it never sends a request\nan older server lacks. Absent when empty."
+            },
+            "device_id": {
+              "type": "string",
+              "description": "Identifier of the authenticated device."
+            },
+            "protocol_version": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "description": "Protocol version the server speaks."
+            },
+            "revision": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "description": "Host revision at authentication time."
+            }
+          },
+          "required": [
+            "type",
+            "device_id",
+            "protocol_version",
+            "revision"
+          ],
+          "description": "A paired device authenticated."
+        }
+      ],
+      "description": "A frame sent by the server."
+    }
+  }
+}
