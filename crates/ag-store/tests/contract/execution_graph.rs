@@ -162,6 +162,46 @@ async fn open_lifecycle_graph(
 }
 
 #[tokio::test]
+async fn saved_graphs_keep_two_level_hierarchies_and_refuse_deeper_nesting()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let database = Database::in_memory().await?;
+    let project = database.projects().upsert_project("project", None).await?;
+    database
+        .sessions()
+        .insert_session("session", "gpt-6.1-sol", "main", "Review", project)
+        .await?;
+    let mut hierarchy = graph();
+    hierarchy.nodes[1].parent_id = Some("plan".into());
+    let mut nested = hierarchy.clone();
+    nested.id = "nested".into();
+    let mut grandchild = nested.nodes[1].clone();
+    grandchild.id = "grandchild".into();
+    grandchild.execution.shared_budget_id = Some("review-budget".into());
+    grandchild.parent_id = Some("review".into());
+    nested.nodes.push(grandchild);
+
+    // Act
+    database.graphs().save_graph(&hierarchy, None).await?;
+    let refused = database.graphs().save_graph(&nested, None).await;
+
+    // Assert
+    assert_eq!(
+        database.graphs().load_graph("graph", None).await?,
+        Some(hierarchy)
+    );
+    assert!(
+        refused
+            .expect_err("deeper nesting")
+            .to_string()
+            .contains("cannot be a child of `review`, which is itself a child")
+    );
+    assert_eq!(database.graphs().load_graph("nested", None).await?, None);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn competing_revision_writes_have_one_winner() {
     // Arrange
     let directory = tempfile::Builder::new()
@@ -707,6 +747,7 @@ fn graph() -> ExecutionGraph {
             name: "response".into(),
             schema: ProtocolRequestProfile::SessionTurn,
         }],
+        parent_id: None,
         request: TurnPrompt {
             attachments: vec![TurnPromptAttachment {
                 local_image_path: "design.png".into(),

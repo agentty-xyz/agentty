@@ -134,6 +134,7 @@ async fn graph_reads_offer_what_the_terminal_inspector_offers_with_each_node_sel
             });
             view.is_proposal_selected = false;
             view.selected_node = index;
+            view.selects_first_node = false;
             app.load_graph_view(&mut view)
                 .await
                 .expect("view should load");

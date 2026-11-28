@@ -658,23 +658,7 @@ async fn generate_inner(
 /// The existing nodes an expansion extends, as generation input; `null` for
 /// a new graph.
 fn expansion_graph_data(state: &GraphProposalState) -> String {
-    serde_json::json!(state.base.as_ref().map(|base| {
-        base.nodes
-            .iter()
-            .map(|node| {
-                serde_json::json!({
-                    "agent_id": node.definition.id,
-                    "dependencies": node.dependencies,
-                    "id": node.id,
-                    "objective": node.objective,
-                    "outputs": node.outputs,
-                    "response_profile": node.execution.response_profile,
-                    "workspace_access": node.execution.workspace_access,
-                })
-            })
-            .collect::<Vec<_>>()
-    }))
-    .to_string()
+    serde_json::json!(state.base.as_ref().map(ExecutionGraph::proposal_input)).to_string()
 }
 
 /// Resolves `proposal` into the launch an approval of `state` starts: a new

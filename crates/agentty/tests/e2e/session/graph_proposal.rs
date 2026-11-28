@@ -79,14 +79,31 @@ async fn seed_gated(env: &BuilderEnv, node_count: usize, gate: GraphProposalGate
 }
 
 /// Seeds a chain of `node_count` copies of `first`, each waiting for its
-/// predecessor through `gate`, and a provider stub that answers generation,
-/// reply decisions, focused review, and node turns.
+/// predecessor through `gate`, as [`seed_proposal`] does.
 async fn seed_chain(
     env: &BuilderEnv,
     first: GraphProposalNode,
     node_count: usize,
     gate: GraphProposalGate,
 ) -> E2eResult {
+    let mut proposal = GraphProposal { nodes: vec![first] };
+    for index in 1..node_count {
+        let mut node = proposal.nodes[0].clone();
+        node.dependencies = vec![GraphProposalDependency {
+            gate: gate.clone(),
+            node_id: proposal.nodes[index - 1].id.clone(),
+        }];
+        node.id = format!("node-{index}");
+        proposal.nodes.push(node);
+    }
+
+    seed_proposal(env, proposal).await
+}
+
+/// Seeds a session whose `/graph` generation proposes `proposal`, and a
+/// provider stub that answers generation, reply decisions, focused review,
+/// and node turns.
+async fn seed_proposal(env: &BuilderEnv, proposal: GraphProposal) -> E2eResult {
     let worktree = env.agentty_root.join("wt").join("proposal");
     run_git(
         &env.workdir,
@@ -106,16 +123,6 @@ async fn seed_chain(
             .with_title("Graph proposals"),
     )
     .await?;
-    let mut proposal = GraphProposal { nodes: vec![first] };
-    for index in 1..node_count {
-        let mut node = proposal.nodes[0].clone();
-        node.dependencies = vec![GraphProposalDependency {
-            gate: gate.clone(),
-            node_id: proposal.nodes[index - 1].id.clone(),
-        }];
-        node.id = format!("node-{index}");
-        proposal.nodes.push(node);
-    }
     let expansion = expansion_response(&proposal.nodes[0]);
     let response = GraphProposalResponse {
         outcome: GraphProposalOutcome::Proposal { proposal },
@@ -276,6 +283,150 @@ async fn graph_proposal_request_preview_approval_execution() -> E2eResult {
         .await?;
 
     Ok(())
+}
+
+/// Seeds a proposal whose `inspect` parent has two children: `tests`, which
+/// runs after it and is declared before it, and `docs`, which runs beside
+/// it.
+async fn seed_hierarchy(env: &BuilderEnv) -> E2eResult {
+    let mut parent = fixture::graph_proposal().nodes.remove(0);
+    parent.agent_id = "planner".into();
+    let child = |id: &str| GraphProposalNode {
+        id: id.into(),
+        parent_id: Some(parent.id.clone()),
+        ..parent.clone()
+    };
+    let mut tests = child("tests");
+    tests.dependencies = vec![GraphProposalDependency {
+        gate: GraphProposalGate::ExecutionSucceeded {},
+        node_id: parent.id.clone(),
+    }];
+    let docs = child("docs");
+
+    seed_proposal(
+        env,
+        GraphProposal {
+            nodes: vec![tests, parent, docs],
+        },
+    )
+    .await
+}
+
+/// A proposal with a parent and two children shows the children indented
+/// under it, with the parent's progress line, before and after approval
+/// runs every node; the inspector lists them in the same order, opens on
+/// the parent, and `j` moves to each child with its parent named.
+#[tokio::test]
+async fn graph_proposal_children_show_under_their_parent_and_run() -> E2eResult {
+    // Arrange
+    FeatureTest::new("graph_proposal_children_show_under_their_parent_and_run")
+        .with_git()
+        .with_terminal_size(160, 50)
+        .setup(|env| Box::pin(seed_hierarchy(env)))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Graph proposals", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .write_text("/graph")
+                    .press_key("Enter")
+                    .wait_for_text("Describe the task for the execution graph", 5000)
+                    .write_text("inspect the change with its tests and docs")
+                    .press_key("Enter")
+                    .wait_for_text("Graph proposal v1 ready: 3 nodes", 10000)
+                    .wait_for_text("○ docs", 5000)
+                    .capture_labeled("preview", "Children wait indented under their parent")
+                    .press_key("Enter")
+                    .write_text("Approve it")
+                    .press_key("Enter")
+                    .wait_for_text("3/3 done", 10000)
+                    // The header can be redrawn before the rows below it, so
+                    // wait for the last asserted row.
+                    .wait_for_text("✓ docs", 10000)
+                    .capture_labeled("completed", "Parent and children ran to completion")
+                    .press_key("w")
+                    .wait_for_text("Children: tests, docs (2 of 2 children done)", 5000)
+                    .capture_labeled("inspector", "The inspector opens on the parent")
+                    .press_key("j")
+                    .wait_for_text("Parent: inspect (shares its workspace)", 5000)
+                    .capture_labeled("child", "j selects the first child")
+            },
+            |_, report| {
+                Box::pin(async move {
+                    // Assert
+                    assert_hierarchy_report(report);
+                    assert_hierarchy_inspector(report);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Asserts both captures draw `tests` and `docs` two columns right of their
+/// `inspect` parent, with the parent's progress line below it.
+fn assert_hierarchy_report(report: &ProofReport) {
+    let preview = common::frame_from_capture(&report.captures[0]);
+    let completed = common::frame_from_capture(&report.captures[1]);
+    let sidebar_width = preview.cols() * 35 / 100;
+    let sidebar = Region::new(
+        preview.cols() - sidebar_width,
+        0,
+        sidebar_width,
+        preview.rows(),
+    );
+    for (frame, glyph, progress) in [
+        (&preview, "○", "0 of 2 children done"),
+        (&completed, "✓", "2 of 2 children done"),
+    ] {
+        let column = |text: &str| {
+            let spans = frame.find_text_in_region(text, &sidebar);
+            assert_eq!(spans.len(), 1, "{text} once in the sidebar");
+
+            (spans[0].rect.row, spans[0].rect.col)
+        };
+        let (parent_row, parent_column) = column(&format!("{glyph} inspect"));
+        let (progress_row, progress_column) = column(progress);
+        let (tests_row, tests_column) = column(&format!("{glyph} tests"));
+        let (docs_row, docs_column) = column(&format!("{glyph} docs"));
+        assert_eq!(progress_row, parent_row + 1);
+        assert_eq!(progress_column, parent_column + 2);
+        assert!(parent_row < tests_row && tests_row < docs_row);
+        assert_eq!(tests_column, parent_column + 2);
+        assert_eq!(docs_column, parent_column + 2);
+        assertion::assert_text_in_region(frame, "after inspect", &sidebar);
+    }
+    assertion::assert_text_in_region(&completed, "✓ Completed", &sidebar);
+}
+
+/// Asserts the inspector lists `inspect`, then `tests` and `docs` indented
+/// under it, selects the parent first, and moves to `tests` on `j`.
+fn assert_hierarchy_inspector(report: &ProofReport) {
+    for (capture, selected) in [(2, "inspect"), (3, "tests")] {
+        let frame = common::frame_from_capture(&report.captures[capture]);
+        let row = |text: &str| {
+            let spans = frame.find_text(text);
+            assert_eq!(spans.len(), 1, "{text} once in the inspector");
+
+            spans[0].rect.row
+        };
+        let rows = [
+            row("inspect: Succeeded (2 of 2 children done)"),
+            row("  tests: Succeeded"),
+            row("  docs: Succeeded"),
+        ];
+        assert_eq!(rows, [rows[0], rows[0] + 1, rows[0] + 2]);
+        let indent = if selected == "inspect" { "" } else { "  " };
+        assertion::assert_text_in_region(
+            &frame,
+            &format!("> {indent}{selected}: Succeeded"),
+            &Region::full(frame.cols(), frame.rows()),
+        );
+    }
 }
 
 /// Asserts the preview, execution, and discussion captures place graph state

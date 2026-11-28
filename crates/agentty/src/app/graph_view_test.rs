@@ -7,7 +7,7 @@ use ag_session::{GraphNodeContinuation, GraphNodeStatus};
 use ag_store::{DbError, MockGraphRepository, StoredGraphResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::GraphViewAction;
+use super::{GraphNodeChoice, GraphViewAction};
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::execution_graph::tests::{budget_exhausted_view, graph_view};
 use crate::runtime::mode::execution_graph;
@@ -571,4 +571,21 @@ async fn inspector_refresh_and_exit_keep_errors_visible_and_restore_session() {
             if session_id == restore.session_id && scroll_offset == restore.scroll_offset)
         );
     }
+}
+
+#[test]
+fn first_node_choice_selects_the_first_listed_row_even_after_a_child() {
+    // Arrange: `first` is a child of `second`, declared before it.
+    let mut view = graph_view();
+    view.graphs[0].nodes[0].parent_id = Some("second".into());
+    let graph = view.graphs[0].clone();
+    let progress = view.progress.clone();
+
+    // Act
+    let first = GraphNodeChoice::First.index(Some(&graph), progress.as_ref());
+    let without_graph = GraphNodeChoice::First.index(None, progress.as_ref());
+    let without_progress = GraphNodeChoice::First.index(Some(&graph), None);
+
+    // Assert
+    assert_eq!((first, without_graph, without_progress), (1, 0, 0));
 }

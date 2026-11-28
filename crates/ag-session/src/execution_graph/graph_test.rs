@@ -224,6 +224,242 @@ fn assert_invalid_graphs(cases: &[InvalidGraphCase]) {
 }
 
 #[test]
+fn graphs_reject_children_outside_a_two_level_hierarchy_in_one_env() {
+    // Arrange
+    type Mutation = fn(&mut ExecutionGraph);
+    let cases: &[(Mutation, GraphContractError)] = &[
+        (
+            |graph| graph.nodes[1].parent_id = Some(" ".into()),
+            GraphContractError::EmptyField("parent_id"),
+        ),
+        (
+            |graph| graph.nodes[1].parent_id = Some("missing".into()),
+            GraphContractError::UnknownParent {
+                node: "second".into(),
+                parent: "missing".into(),
+            },
+        ),
+        (
+            |graph| graph.nodes[0].parent_id = Some("first".into()),
+            GraphContractError::SelfParent("first".into()),
+        ),
+        (
+            |graph| {
+                graph.nodes[1].parent_id = Some("first".into());
+                let mut grandchild = reader("third");
+                grandchild.parent_id = Some("second".into());
+                graph.nodes.push(grandchild);
+            },
+            GraphContractError::NestedParent {
+                node: "third".into(),
+                parent: "second".into(),
+            },
+        ),
+        (
+            |graph| {
+                graph.nodes[1].parent_id = Some("first".into());
+                graph.nodes[1].env_id = EnvId::TaskWorktree(TaskWorktreeId {
+                    session_id: graph.session_id.clone(),
+                    worktree_id: "writer".into(),
+                });
+            },
+            GraphContractError::ParentEnvMismatch {
+                node: "second".into(),
+                parent: "first".into(),
+            },
+        ),
+        (
+            |graph| {
+                graph.nodes[1].parent_id = Some("first".into());
+                graph.nodes[0].dependencies.push(GraphDependency {
+                    gate: GraphCompletionGate::ExecutionSucceeded,
+                    node_id: "second".into(),
+                });
+            },
+            GraphContractError::Cycle,
+        ),
+    ];
+
+    // Act and Assert
+    assert_invalid_graphs(cases);
+}
+
+#[test]
+fn task_worktree_rejection_yields_to_errors_found_before_it() {
+    // Arrange: `UnsupportedEnv` is checked per node after the first pass
+    // over every node and after that node's parent, so those errors win.
+    type Mutation = fn(&mut ExecutionGraph);
+    fn task_worktree(graph: &mut ExecutionGraph, index: usize) {
+        graph.nodes[index].env_id = EnvId::TaskWorktree(TaskWorktreeId {
+            session_id: graph.session_id.clone(),
+            worktree_id: "writer".into(),
+        });
+    }
+    let cases: &[(Mutation, GraphContractError)] = &[
+        (
+            |graph| task_worktree(graph, 0),
+            GraphContractError::UnsupportedEnv,
+        ),
+        (
+            |graph| {
+                task_worktree(graph, 0);
+                graph.nodes[1].objective.clear();
+            },
+            GraphContractError::EmptyField("objective"),
+        ),
+        (
+            |graph| {
+                task_worktree(graph, 0);
+                graph.nodes[1].env_id = EnvId::SessionWorktree("other".into());
+            },
+            GraphContractError::ForeignEnv,
+        ),
+        (
+            |graph| {
+                task_worktree(graph, 1);
+                graph.nodes[0].dependencies.push(GraphDependency {
+                    gate: GraphCompletionGate::ExecutionSucceeded,
+                    node_id: "missing".into(),
+                });
+            },
+            GraphContractError::UnknownNode("missing".into()),
+        ),
+        (
+            |graph| {
+                task_worktree(graph, 1);
+                graph.nodes[1].parent_id = Some("missing".into());
+            },
+            GraphContractError::UnknownParent {
+                node: "second".into(),
+                parent: "missing".into(),
+            },
+        ),
+        (
+            |graph| {
+                task_worktree(graph, 1);
+                graph.nodes[1].dependencies[0].node_id = "missing".into();
+            },
+            GraphContractError::UnsupportedEnv,
+        ),
+    ];
+
+    // Act and Assert
+    assert_invalid_graphs(cases);
+}
+
+#[test]
+fn hierarchy_rejections_name_the_fix() {
+    // Arrange
+    let (node, parent) = (String::from("tests"), String::from("change"));
+
+    // Act
+    let messages = [
+        GraphContractError::UnknownParent {
+            node: node.clone(),
+            parent: parent.clone(),
+        },
+        GraphContractError::SelfParent(node.clone()),
+        GraphContractError::NestedParent {
+            node: node.clone(),
+            parent: parent.clone(),
+        },
+        GraphContractError::ParentEnvMismatch { node, parent },
+    ]
+    .map(|error| error.to_string());
+
+    // Assert
+    assert_eq!(
+        messages,
+        [
+            "graph node `tests` names parent `change`, which is not a node of this graph; name a \
+             top-level node of this graph as its parent, or give it no parent",
+            "graph node `tests` names itself as its parent; name another top-level node of this \
+             graph as its parent, or give it no parent",
+            "graph node `tests` cannot be a child of `change`, which is itself a child; children \
+             cannot have children, so name a top-level node as its parent",
+            "child node `tests` is bound to another environment than its parent `change`; a host \
+             must bind a child to its parent's environment",
+        ]
+    );
+}
+
+#[test]
+fn children_are_ordinary_nodes_with_dependencies_in_either_direction() {
+    // Arrange
+    let mut graph = graph();
+    let mut before = reader("before");
+    before.parent_id = Some("second".into());
+    let mut after = reader("after");
+    after.parent_id = Some("second".into());
+    after.dependencies.push(GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "second".into(),
+    });
+    graph.nodes.insert(0, before);
+    graph.nodes.push(after);
+    graph.nodes[2].dependencies.push(GraphDependency {
+        gate: GraphCompletionGate::ExecutionSucceeded,
+        node_id: "before".into(),
+    });
+
+    // Act
+    let validation = graph.validate();
+
+    // Assert
+    assert_eq!(validation, Ok(()));
+}
+
+#[test]
+fn stored_snapshots_without_children_keep_their_bytes() {
+    // Arrange: a snapshot as stored before nodes could name a parent.
+    let stored = include_str!("fixture/stored_snapshot.json").trim_end();
+    let mut expected = graph();
+    task_node(&mut expected.nodes[1], "task");
+
+    // Act
+    let loaded: ExecutionGraph = serde_json::from_str(stored).expect("stored snapshot");
+    let snapshot = serde_json::json!(loaded).to_string();
+    let expansion_record = serde_json::json!(loaded.nodes).to_string();
+
+    // Assert
+    assert_eq!(loaded, expected);
+    assert_eq!(snapshot, stored);
+    assert!(stored.contains(&format!("\"nodes\":{expansion_record}")));
+}
+
+#[test]
+fn proposal_input_names_each_parent_without_captured_instructions() {
+    // Arrange
+    let mut graph = graph();
+    graph.nodes[1].parent_id = Some("first".into());
+
+    // Act
+    let input = graph.proposal_input();
+
+    // Assert
+    assert_eq!(input[0]["parent_id"], serde_json::Value::Null);
+    assert_eq!(input[1]["parent_id"], "first");
+    assert_eq!(input[1]["agent_id"], "reviewer");
+    assert!(!input.to_string().contains("Review the supplied diff"));
+}
+
+#[test]
+fn snapshots_with_children_round_trip_their_parent() {
+    // Arrange
+    let mut graph = graph();
+    graph.nodes[1].parent_id = Some("first".into());
+
+    // Act
+    let snapshot = serde_json::json!(graph).to_string();
+    let loaded: ExecutionGraph = serde_json::from_str(&snapshot).expect("snapshot");
+
+    // Assert
+    assert_eq!(loaded, graph);
+    assert_eq!(snapshot.matches("\"parent_id\":\"first\"").count(), 1);
+    assert_eq!(snapshot.matches("parent_id").count(), 1);
+}
+
+#[test]
 fn graphs_reject_self_dependencies_and_cycles_even_in_disconnected_components() {
     // Arrange
     for predecessor in ["second", "first"] {
@@ -521,6 +757,34 @@ fn expansion_rejects_empty_exhausted_reused_and_invalid_nodes() {
             Some(duplicate("node", "first")),
             Some(GraphContractError::UnknownNode("absent".into())),
         ]
+    );
+}
+
+#[test]
+fn expansion_adds_children_to_existing_top_level_nodes_only() {
+    // Arrange
+    let mut graph = graph();
+    graph.nodes[1].parent_id = Some("first".into());
+    let mut sibling = reader("third");
+    sibling.parent_id = Some("first".into());
+    let mut nested = reader("third");
+    nested.parent_id = Some("second".into());
+
+    // Act
+    let expanded = graph.expand(vec![sibling.clone()]);
+    let rejected = graph.expand(vec![nested]);
+
+    // Assert
+    assert_eq!(
+        expanded.expect("child of an existing node").nodes[2],
+        sibling
+    );
+    assert_eq!(
+        rejected,
+        Err(GraphContractError::NestedParent {
+            node: "third".into(),
+            parent: "second".into(),
+        })
     );
 }
 

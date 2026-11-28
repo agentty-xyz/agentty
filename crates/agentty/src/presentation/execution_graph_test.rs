@@ -45,6 +45,7 @@ pub(crate) fn graph_view() -> GraphView {
             name: "response".into(),
             schema: ProtocolRequestProfile::SessionTurn,
         }],
+        parent_id: None,
         request: TurnPrompt::from_agent_data("Inspect repository".into()),
     };
     let graph = ExecutionGraph {
@@ -594,4 +595,37 @@ fn budget_extension_drafts_reconcile_only_while_the_same_budget_is_spent() {
             "{scenario}"
         );
     }
+}
+
+#[test]
+fn inspector_navigation_follows_children_under_their_parent() {
+    // Arrange: `first` is a child of `second`, declared before it, and
+    // `third` is another top-level node.
+    let mut view = graph_view();
+    let mut third = view.graphs[0].nodes[1].clone();
+    third.id = "third".into();
+    view.graphs[0].nodes.push(third);
+    view.graphs[0].nodes[0].parent_id = Some("second".into());
+    let progress = view.progress.as_mut().expect("progress");
+    let mut third_progress = progress.nodes[1].clone();
+    third_progress.node_id = "third".into();
+    progress.nodes.push(third_progress);
+    view.selected_node = 1;
+
+    // Act
+    let mut forward = Vec::new();
+    for _ in 0..3 {
+        let next = view.adjacent_node(true).expect("next node");
+        forward.push(next);
+        view.selected_node = next;
+    }
+    let backward = view.adjacent_node(false);
+    view.progress = None;
+    let unloaded = view.adjacent_node(true);
+
+    // Assert
+    assert_eq!(forward, [0, 2, 1]);
+    assert_eq!(backward, Some(2));
+    assert_eq!(unloaded, None);
+    assert_eq!(view.node_order(), Vec::new());
 }

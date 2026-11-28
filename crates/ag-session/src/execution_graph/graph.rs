@@ -34,12 +34,15 @@ pub struct ExecutionGraph {
 }
 
 impl ExecutionGraph {
-    /// Checks identities, execution profiles, local references, and acyclicity.
+    /// Checks identities, execution profiles, local references, the two-level
+    /// node hierarchy, and acyclicity.
     ///
     /// # Errors
     /// Rejects empty graphs, blank or duplicate identities, foreign Envs,
     /// incompatible schemas/profiles, missing nodes/outputs, ungated inputs,
-    /// duplicate edges, and cycles. No storage or runtime is consulted.
+    /// duplicate edges, and cycles, plus children whose parent is missing, is
+    /// itself a child, or works in another Env. No storage or runtime is
+    /// consulted.
     pub fn validate(&self) -> Result<(), GraphContractError> {
         GraphContractError::require(&self.id, "graph_id")?;
         GraphContractError::require(self.session_id.as_str(), "session_id")?;
@@ -57,9 +60,6 @@ impl ExecutionGraph {
             if node.env_id.session_id() != &self.session_id {
                 return Err(GraphContractError::ForeignEnv);
             }
-            if matches!(node.env_id, EnvId::TaskWorktree(_)) {
-                return Err(GraphContractError::UnsupportedEnv);
-            }
             if let GraphContext::TaskConversation { task_id } = &node.execution.context
                 && !tasks.insert(task_id)
             {
@@ -67,6 +67,10 @@ impl ExecutionGraph {
             }
         }
         for node in &self.nodes {
+            Self::validate_parent(node, &nodes)?;
+            if matches!(node.env_id, EnvId::TaskWorktree(_)) {
+                return Err(GraphContractError::UnsupportedEnv);
+            }
             Self::validate_dependencies(node, &nodes)?;
         }
 
@@ -77,7 +81,8 @@ impl ExecutionGraph {
     ///
     /// Existing nodes stay exactly as they are, so their executions, results,
     /// and pinned inputs remain valid under the new revision. Appended nodes
-    /// may depend on existing nodes, never the reverse.
+    /// may depend on existing nodes, never the reverse, and may be children
+    /// of existing top-level nodes.
     ///
     /// # Errors
     /// Rejects an empty expansion, an exhausted revision counter, and any
@@ -97,6 +102,28 @@ impl ExecutionGraph {
         graph.validate()?;
 
         Ok(graph)
+    }
+
+    /// The nodes as proposal generation sees them when a request extends
+    /// this graph: each node's identity, agent, parent, dependencies,
+    /// outputs, and access, without captured instructions or host
+    /// identities.
+    pub fn proposal_input(&self) -> serde_json::Value {
+        self.nodes
+            .iter()
+            .map(|node| {
+                serde_json::json!({
+                    "agent_id": node.definition.id,
+                    "dependencies": node.dependencies,
+                    "id": node.id,
+                    "objective": node.objective,
+                    "outputs": node.outputs,
+                    "parent_id": node.parent_id,
+                    "response_profile": node.execution.response_profile,
+                    "workspace_access": node.execution.workspace_access,
+                })
+            })
+            .collect()
     }
 
     /// Pins one declared input to a host-loaded, validated or accepted version.
@@ -218,6 +245,42 @@ impl ExecutionGraph {
             if !inputs.insert(&input.name) {
                 return Err(Self::duplicate("input", &input.name));
             }
+        }
+
+        Ok(())
+    }
+
+    /// Requires a child's parent to be a top-level node of this graph that
+    /// shares the child's Env, so the hierarchy has two levels.
+    fn validate_parent(
+        node: &GraphNode,
+        nodes: &HashMap<&str, &GraphNode>,
+    ) -> Result<(), GraphContractError> {
+        let Some(parent_id) = &node.parent_id else {
+            return Ok(());
+        };
+        GraphContractError::require(parent_id, "parent_id")?;
+        if *parent_id == node.id {
+            return Err(GraphContractError::SelfParent(node.id.clone()));
+        }
+        let (child, named_parent) = (node.id.clone(), parent_id.clone());
+        let Some(parent) = nodes.get(parent_id.as_str()) else {
+            return Err(GraphContractError::UnknownParent {
+                node: child,
+                parent: named_parent,
+            });
+        };
+        if parent.parent_id.is_some() {
+            return Err(GraphContractError::NestedParent {
+                node: child,
+                parent: named_parent,
+            });
+        }
+        if parent.env_id != node.env_id {
+            return Err(GraphContractError::ParentEnvMismatch {
+                node: child,
+                parent: named_parent,
+            });
         }
 
         Ok(())

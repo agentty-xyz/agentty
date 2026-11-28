@@ -410,6 +410,146 @@ fn overflowing_sidebar_prioritizes_intervention_and_reserves_controls() {
 }
 
 #[test]
+fn children_are_indented_under_their_parent_with_its_progress_line() {
+    // Arrange
+    let snapshot = hierarchy_snapshot();
+    let row = |left: &str, right: &str| spread(left, right, 58);
+    let child_row = |left: &str, right: &str| format!("  {}", spread(left, right, 56));
+
+    // Act
+    let buffer = render_buffer(Some(&snapshot), 60, 30);
+    let rows = buffer_inner_rows(&buffer);
+
+    // Assert
+    assert_eq!(
+        rows[..20],
+        [
+            "◐ Running",
+            bar(43, 15).as_str(),
+            "",
+            row("✓ build", "Done").as_str(),
+            "  1 of 2 children working",
+            "  gpt-6.1-sol [high]",
+            "  Inspect the requested change",
+            child_row("✓ docs", "Done").as_str(),
+            "  │ gpt-6.1-sol [high]",
+            "  │ Inspect the requested change",
+            "  │ after build",
+            "  │",
+            child_row("◐ tests", "Working").as_str(),
+            "┊   gpt-6.1-sol [high]",
+            "┊   Inspect the requested change",
+            "┊ after tests",
+            "┊",
+            row("○ report", "Waiting").as_str(),
+            "  gpt-6.1-sol [high]",
+            "  Inspect the requested change",
+        ]
+    );
+    assert_eq!(buffer[(3, 5)].fg, palette::info());
+    assert_eq!(buffer[(3, 9)].fg, palette::success());
+}
+
+#[test]
+fn compact_sidebar_keeps_children_under_their_parent() {
+    // Arrange
+    let mut snapshot = hierarchy_snapshot();
+    let row = |left: &str, right: &str| spread(left, right, 26);
+    let child_row = |left: &str, right: &str| format!("  {}", spread(left, right, 24));
+
+    // Act
+    let working = inner_rows(Some(&snapshot), 28, 12);
+    let progress = snapshot.progress.as_mut().expect("progress");
+    progress.nodes[3].status = GraphNodeStatus::Succeeded;
+    progress.nodes[2].blocked.clear();
+    progress.status = ExecutionGraphStatus::Completed;
+    let completed = buffer_inner_rows(&render_buffer(Some(&snapshot), 60, 30));
+
+    // Assert
+    assert_eq!(
+        working,
+        [
+            "◐ Running",
+            row("○ report", "Waiting").as_str(),
+            row("✓ build", "Done").as_str(),
+            child_row("◐ tests", "Working").as_str(),
+            child_row("✓ docs", "Done").as_str(),
+            "",
+            "",
+            "",
+            "All nodes (compact)",
+            "w: details and actions",
+        ]
+    );
+    assert_eq!(completed[4], "  2 of 2 children done");
+}
+
+#[test]
+fn compact_sidebar_shows_the_child_that_needs_the_user_right_after_its_parent() {
+    // Arrange: a done parent whose last child needs answers, and a running
+    // top-level node, with room for three node rows.
+    let mut snapshot = graph_snapshot(6);
+    let ids = ["change", "c1", "c2", "c3", "c4", "run"];
+    if let GraphProposalVersionOutcome::Generated {
+        launch: Some(launch),
+        ..
+    } = &mut snapshot.proposal.version.outcome
+    {
+        for (node, id) in launch.graph.nodes.iter_mut().zip(ids) {
+            node.id = id.into();
+            if !["change", "run"].contains(&id) {
+                node.parent_id = Some("change".into());
+            }
+        }
+    }
+    let progress = snapshot.progress.as_mut().expect("progress");
+    for (node, id) in progress.nodes.iter_mut().zip(ids) {
+        node.node_id = id.into();
+    }
+    progress.nodes[4].status = GraphNodeStatus::AwaitingAnswers;
+    progress.nodes[5].status = GraphNodeStatus::Running;
+    snapshot.proposal.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: snapshot.proposal.limits.clone(),
+        version: 1,
+    });
+    let row = |left: &str, right: &str| spread(left, right, 26);
+    let child_row = |left: &str, right: &str| format!("  {}", spread(left, right, 24));
+
+    // Act
+    let rows = inner_rows(Some(&snapshot), 28, 8);
+
+    // Assert
+    assert_eq!(
+        rows,
+        [
+            "◐ Running",
+            row("✓ change", "Done").as_str(),
+            child_row("? c4", "Needs your input").as_str(),
+            child_row("✓ c1", "Done").as_str(),
+            "+3 more nodes",
+            "w: details and actions",
+        ]
+    );
+}
+
+#[test]
+fn a_failed_child_shows_in_the_parent_progress_line_in_the_failure_color() {
+    // Arrange
+    let mut snapshot = hierarchy_snapshot();
+    let progress = snapshot.progress.as_mut().expect("progress");
+    progress.nodes[3].status = GraphNodeStatus::Failed;
+
+    // Act
+    let buffer = render_buffer(Some(&snapshot), 60, 30);
+    let rows = buffer_inner_rows(&buffer);
+
+    // Assert
+    assert_eq!(rows[4], "  1 of 2 children done · 1 failed");
+    assert_eq!(buffer[(3, 5)].fg, palette::danger());
+}
+
+#[test]
 fn awaited_output_shows_approval_on_its_producer_and_prioritizes_it() {
     // Arrange
     let mut snapshot = awaiting_snapshot();
@@ -852,6 +992,47 @@ fn dependency_snapshot() -> GraphChatSnapshot {
             node_id: "followup".into(),
         });
     progress.nodes[3].status = GraphNodeStatus::Failed;
+
+    snapshot
+}
+
+/// A done `build` parent with a done child `docs`, declared before it, and a
+/// working child `tests`, followed by `report`, which waits for `tests`.
+fn hierarchy_snapshot() -> GraphChatSnapshot {
+    let mut snapshot = graph_snapshot(4);
+    let ids = ["docs", "build", "report", "tests"];
+    if let GraphProposalVersionOutcome::Generated {
+        launch: Some(launch),
+        ..
+    } = &mut snapshot.proposal.version.outcome
+    {
+        for (node, id) in launch.graph.nodes.iter_mut().zip(ids) {
+            node.id = id.into();
+        }
+        launch.graph.nodes[0].parent_id = Some("build".into());
+        launch.graph.nodes[2].dependencies =
+            vec![dependency("tests", GraphCompletionGate::ExecutionSucceeded)];
+        launch.graph.nodes[3].parent_id = Some("build".into());
+        launch.graph.nodes[3].dependencies =
+            vec![dependency("build", GraphCompletionGate::ExecutionSucceeded)];
+    }
+    let progress = snapshot.progress.as_mut().expect("progress");
+    for (node, id) in progress.nodes.iter_mut().zip(ids) {
+        node.node_id = id.into();
+    }
+    progress.nodes[2].status = GraphNodeStatus::Pending;
+    progress.nodes[2]
+        .blocked
+        .push(GraphBlockedReason::Dependency {
+            gate: GraphCompletionGate::ExecutionSucceeded,
+            node_id: "tests".into(),
+        });
+    progress.nodes[3].status = GraphNodeStatus::Running;
+    snapshot.proposal.version.approval = Some(GraphProposalApproval {
+        graph_id: "graph".into(),
+        limits: snapshot.proposal.limits.clone(),
+        version: 1,
+    });
 
     snapshot
 }

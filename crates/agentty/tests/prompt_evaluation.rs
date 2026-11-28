@@ -3,7 +3,9 @@
 //!
 //! Live runs require `AGENTTY_EVAL_PROVIDER`, `AGENTTY_EVAL_MODEL`,
 //! `AGENTTY_EVAL_EFFORT` (low/medium/high/xhigh), and
-//! `AGENTTY_EVAL_REPETITIONS` (2..=20). Harness providers read their API key
+//! `AGENTTY_EVAL_REPETITIONS` (2..=20); `AGENTTY_EVAL_CASES`, a
+//! comma-separated list of case names, optionally limits a run to the cases
+//! a prompt change affects. Harness providers read their API key
 //! from Agentty's key file, `auth/api_keys.json` under `AGENTTY_ROOT` (else
 //! `~/.agentty`), and import a key variable into it; point `AGENTTY_ROOT` at
 //! a scratch directory to keep a run away from real keys. The manual
@@ -176,6 +178,8 @@ impl Invocation {
 
 /// Explicit live evaluation settings from the environment.
 struct Settings {
+    /// Names of the cases to run; empty runs every case.
+    case_names: Vec<String>,
     effort: ReasoningLevel,
     model: String,
     provider: String,
@@ -203,7 +207,16 @@ impl Settings {
             return Err("use 2..=20 repetitions".into());
         }
 
+        let case_names = std::env::var("AGENTTY_EVAL_CASES")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(String::from)
+            .collect();
+
         Ok(Self {
+            case_names,
             effort,
             model: variable("AGENTTY_EVAL_MODEL")?,
             provider: variable("AGENTTY_EVAL_PROVIDER")?,
@@ -213,14 +226,27 @@ impl Settings {
 
     /// Returns the cases this provider runs: every shared case, plus the
     /// `bash` cases for Harness runs, the only ones that advertise
-    /// Agentty's `bash` description.
-    fn cases(&self) -> Vec<Case> {
+    /// Agentty's `bash` description, limited to `case_names` when set.
+    ///
+    /// # Errors
+    /// Returns an error naming a selected case that does not exist.
+    fn cases(&self) -> EvaluationResult<Vec<Case>> {
         let mut cases = grader::cases();
         if self.provider == "harness" {
             cases.extend(grader::bash_cases());
         }
+        if let Some(unknown) = self
+            .case_names
+            .iter()
+            .find(|name| !cases.iter().any(|case| case.name == name.as_str()))
+        {
+            return Err(format!("AGENTTY_EVAL_CASES names no case `{unknown}`").into());
+        }
+        if !self.case_names.is_empty() {
+            cases.retain(|case| self.case_names.iter().any(|name| name == case.name));
+        }
 
-        cases
+        Ok(cases)
     }
 }
 
@@ -428,7 +454,7 @@ async fn live_prompt_evaluation() -> EvaluationResult {
     let mut failures = Vec::new();
 
     // Act
-    for case in settings.cases() {
+    for case in settings.cases()? {
         let folder = fixture.folder(&case)?;
         for repetition in 0..settings.repetitions {
             let started = Instant::now();

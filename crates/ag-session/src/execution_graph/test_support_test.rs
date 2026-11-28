@@ -37,6 +37,7 @@ pub(super) fn reader(id: &str) -> GraphNode {
             name: "response".into(),
             schema: ProtocolRequestProfile::FocusedReview,
         }],
+        parent_id: None,
         request: TurnPrompt::from_agent_data("Review this captured diff: +changed line".into()),
     }
 }

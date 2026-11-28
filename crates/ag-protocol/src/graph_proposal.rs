@@ -60,6 +60,22 @@ pub struct GraphProposalNode {
     pub objective: String,
     /// Named outputs containing the complete response under its schema.
     pub outputs: Vec<GraphProposalOutput>,
+    /// Logical identifier of the top-level node, in this proposal or the
+    /// graph it extends, that this node is a child of; null for a top-level
+    /// node. A child shares its parent's workspace as part of the same
+    /// deliverable and cannot have children of its own. The parent adds no
+    /// ordering: each dependency waits only for the node it names.
+    #[schemars(
+        description = "ID of the top-level node, in this proposal or the extended graph, that \
+                       this node is a child of: a step of the same deliverable that shares its \
+                       parent's workspace. Null for a top-level node. Children cannot have \
+                       children. A parent adds no ordering: a child that runs after its parent \
+                       depends on it, a parent does not wait for its children, and depending on a \
+                       parent does not wait for them, so a node that needs a child's work depends \
+                       on that child."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 /// Execution requirements that contain no model, Env, task, or budget IDs.

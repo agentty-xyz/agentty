@@ -53,7 +53,7 @@ pub use execution_graph::{
     ExpandExecutionGraphRequest, ExtendGraphBudgetRequest, GenerateGraphProposalRequest,
     GraphBlockedReason, GraphCompletionGate, GraphContext, GraphContractError, GraphControlRequest,
     GraphDependency, GraphExecutionProfile, GraphExecutionRef, GraphInputBinding, GraphNode,
-    GraphNodeContinuation, GraphNodeProgress, GraphNodeStatus, GraphOutput,
+    GraphNodeContinuation, GraphNodePlacement, GraphNodeProgress, GraphNodeStatus, GraphOutput,
     GraphOutputReplyOutcome, GraphPostProcessing, GraphProposalAction, GraphProposalApproval,
     GraphProposalLimits, GraphProposalReplyOutcome, GraphProposalResolution, GraphProposalState,
     GraphProposalVersion, GraphProposalVersionOutcome, GraphQuestionAnswer, GraphResolvedInput,

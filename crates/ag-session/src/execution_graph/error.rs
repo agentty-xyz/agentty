@@ -34,6 +34,47 @@ pub enum GraphContractError {
         /// Missing output name.
         output: String,
     },
+    /// A child names a parent that is not a node of the graph.
+    #[error(
+        "graph node `{node}` names parent `{parent}`, which is not a node of this graph; name a \
+         top-level node of this graph as its parent, or give it no parent"
+    )]
+    UnknownParent {
+        /// Child naming the parent.
+        node: String,
+        /// Missing parent identity.
+        parent: String,
+    },
+    /// A node names itself as its parent.
+    #[error(
+        "graph node `{0}` names itself as its parent; name another top-level node of this graph \
+         as its parent, or give it no parent"
+    )]
+    SelfParent(String),
+    /// A child names a parent that is itself a child; graphs have two levels.
+    #[error(
+        "graph node `{node}` cannot be a child of `{parent}`, which is itself a child; children \
+         cannot have children, so name a top-level node as its parent"
+    )]
+    NestedParent {
+        /// Child naming the parent.
+        node: String,
+        /// Parent that is itself a child.
+        parent: String,
+    },
+    /// A child is bound to another Env than its parent. Proposal resolution
+    /// binds children to their parent's Env, so only a host that builds a
+    /// graph itself can cause this.
+    #[error(
+        "child node `{node}` is bound to another environment than its parent `{parent}`; a host \
+         must bind a child to its parent's environment"
+    )]
+    ParentEnvMismatch {
+        /// Child in another environment.
+        node: String,
+        /// Parent whose environment it must share.
+        parent: String,
+    },
     /// A dependency cycle, including a self-dependency, exists.
     #[error("graph dependencies contain a cycle")]
     Cycle,

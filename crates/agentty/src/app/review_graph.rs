@@ -375,6 +375,7 @@ fn review_graph(
             name: OUTPUT.into(),
             schema: ProtocolRequestProfile::FocusedReview,
         }],
+        parent_id: None,
         request: TurnPrompt::from_agent_data(request),
     };
     let mut nodes: Vec<_> = (0..fragments)

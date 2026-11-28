@@ -51,6 +51,7 @@ pub fn graph_proposal() -> ag_protocol::GraphProposal {
                 name: "report".into(),
                 schema: ag_protocol::ProtocolRequestProfile::UtilityPrompt,
             }],
+            parent_id: None,
         }],
     }
 }
@@ -104,6 +105,7 @@ pub fn graph_node(id: &str, session_id: &str) -> crate::GraphNode {
             name: "report".into(),
             schema: ag_protocol::ProtocolRequestProfile::UtilityPrompt,
         }],
+        parent_id: None,
         request: ag_protocol::TurnPrompt::from_agent_data(format!("Run {id}")),
     }
 }

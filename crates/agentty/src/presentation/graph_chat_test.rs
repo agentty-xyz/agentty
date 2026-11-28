@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 use ag_protocol::{GraphProposalOutcome, GraphProposalResponse, QuestionItem};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphCompletionGate,
-    GraphDependency, GraphNodeProgress, GraphNodeStatus, GraphProposalApproval,
+    GraphDependency, GraphNode, GraphNodeProgress, GraphNodeStatus, GraphProposalApproval,
     GraphProposalResolution, GraphProposalVersionOutcome, SessionGraphApproval,
     SessionGraphProposalPhase, SessionGraphSummary, StartExecutionGraphRequest, test_support,
 };
 
 use super::{
-    GraphChatCache, GraphChatSnapshot, edge_label, graph_summary, output_approval_notice,
-    proposal_chat_notice, proposal_preview, proposal_standing,
+    ChildrenProgress, GraphChatCache, GraphChatSnapshot, edge_label, graph_summary,
+    output_approval_notice, proposal_chat_notice, proposal_preview, proposal_standing,
 };
 
 #[test]
@@ -241,6 +241,127 @@ fn expansion_notice_and_preview_show_only_the_added_nodes() {
     assert!(preview.contains("### Nodes (1)"), "{preview}");
     assert!(preview.contains("#### 1. summary · inspector"), "{preview}");
     assert!(!preview.contains("Run inspect"), "{preview}");
+}
+
+#[test]
+fn preview_numbers_children_under_their_parent_and_names_each_parent() {
+    // Arrange
+    let mut state = test_support::graph_proposal_state("proposal", "session");
+    let child = |id: &str, parent: &str| GraphNode {
+        parent_id: Some(parent.into()),
+        ..test_support::graph_node(id, "session")
+    };
+    let graph = ExecutionGraph {
+        id: "graph".into(),
+        nodes: vec![
+            child("tests", "build"),
+            test_support::graph_node("build", "session"),
+            test_support::graph_node("report", "session"),
+            child("docs", "build"),
+        ],
+        revision: NonZeroU64::MIN,
+        session_id: "session".into(),
+    };
+    let base = ExecutionGraph {
+        nodes: vec![test_support::graph_node("build", "session")],
+        ..graph.clone()
+    };
+    let expanded = base.expand(vec![child("lint", "build")]).expect("expanded");
+    state.version.outcome = resolved_outcome(Some(graph));
+    let mut expansion = state.clone();
+    expansion.base = Some(base);
+    expansion.version.outcome = resolved_outcome(Some(expanded));
+
+    // Act
+    let preview = proposal_preview(&state);
+    let expansion_preview = proposal_preview(&expansion);
+
+    // Assert
+    let headings = preview
+        .lines()
+        .filter(|line| line.starts_with("#### "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        headings,
+        [
+            "#### 1. build · inspector",
+            "#### 1.1. tests · inspector",
+            "#### 1.2. docs · inspector",
+            "#### 2. report · inspector",
+        ]
+    );
+    assert_eq!(preview.matches("- **Parent:** `build`").count(), 2);
+    assert!(
+        expansion_preview.contains("#### 1. lint · inspector\n\n- **Parent:** `build`\n"),
+        "{expansion_preview}"
+    );
+}
+
+#[test]
+fn children_progress_says_whether_children_still_work() {
+    // Arrange
+    let child = |id: &str| GraphNode {
+        parent_id: Some("build".into()),
+        ..test_support::graph_node(id, "session")
+    };
+    let nodes = [
+        test_support::graph_node("build", "session"),
+        child("tests"),
+        child("docs"),
+        child("lint"),
+    ];
+    let state = |node_id: &str, status| GraphNodeProgress {
+        blocked: Vec::new(),
+        executions: Vec::new(),
+        last_error: None,
+        node_id: node_id.into(),
+        questions: Vec::new(),
+        results: Vec::new(),
+        status,
+    };
+    let mut progress = ExecutionGraphProgress {
+        graph_id: "graph".into(),
+        revision: NonZeroU64::MIN,
+        session_id: "session".into(),
+        status: ExecutionGraphStatus::Running,
+        nodes: vec![
+            state("build", GraphNodeStatus::Succeeded),
+            state("tests", GraphNodeStatus::Running),
+            state("docs", GraphNodeStatus::Queued),
+            state("lint", GraphNodeStatus::Succeeded),
+        ],
+    };
+
+    // Act
+    let working = ChildrenProgress::of(&nodes, Some(&progress), "build");
+    progress.nodes[1].status = GraphNodeStatus::Succeeded;
+    progress.nodes[2].status = GraphNodeStatus::Failed;
+    let settled = ChildrenProgress::of(&nodes, Some(&progress), "build");
+    progress.nodes[3].status = GraphNodeStatus::Running;
+    let failed_while_working = ChildrenProgress::of(&nodes, Some(&progress), "build");
+    let unloaded = ChildrenProgress::of(&nodes[..2], None, "build");
+
+    // Assert
+    assert_eq!(
+        working.map(ChildrenProgress::label).as_deref(),
+        Some("2 of 3 children working")
+    );
+    assert!(working.is_some_and(ChildrenProgress::is_working));
+    assert!(!working.is_some_and(ChildrenProgress::has_failed));
+    assert_eq!(
+        settled.map(ChildrenProgress::label).as_deref(),
+        Some("2 of 3 children done · 1 failed")
+    );
+    assert!(settled.is_some_and(ChildrenProgress::has_failed));
+    assert_eq!(
+        failed_while_working.map(ChildrenProgress::label).as_deref(),
+        Some("1 of 3 children working · 1 failed")
+    );
+    assert_eq!(
+        unloaded.map(ChildrenProgress::label).as_deref(),
+        Some("0 of 1 child done")
+    );
+    assert_eq!(ChildrenProgress::of(&nodes, Some(&progress), "tests"), None);
 }
 
 #[test]

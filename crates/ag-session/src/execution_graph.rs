@@ -24,7 +24,7 @@ pub use lifecycle::{
 };
 pub use node::{
     GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionProfile, GraphInputBinding,
-    GraphNode, GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
+    GraphNode, GraphNodePlacement, GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
 };
 pub use proposal::{GraphProposalLimits, GraphProposalResolution};
 pub use proposal_state::{

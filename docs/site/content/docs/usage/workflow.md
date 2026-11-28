@@ -666,8 +666,19 @@ each one waits for, such as `after inspect` or `needs report accepted`, in a hig
 label; it is dotted (`┊`) while blocked and solid (`│`) once satisfied. When space runs
 out, objectives shrink to one row and are then hidden along with models; when the graph
 is still taller than the pane, a one-row-per-node summary prioritizes nodes needing
-attention and counts hidden nodes. Proposals are restored when you reopen the session or
-restart Agentty.
+attention, each parent with its children, and counts hidden nodes. Proposals are
+restored when you reopen the session or restart Agentty.
+
+A node can have children: steps of the same deliverable that share its workspace, such
+as tests for the change it makes. Children appear indented under their parent, in the
+order they were proposed; in the summary, a parent comes first and the child that needs
+you most follows it. Below the parent's name, a line such as `1 of 2 children working`
+or `2 of 2 children done`, with `· 1 failed` in red when a child failed, shows how its
+children are doing. Children cannot have children of their own, and they run like any
+other node: a node waits only for the nodes it depends on, so a child waits for its
+parent only when it depends on it, and nothing waits for a parent's children unless it
+depends on them. The inspector preview numbers children under their parent, such as
+`1.2`.
 
 While a proposal is generated or a reply is being decided, a **Draft** or **Review**
 session shows **InProgress**, starting as soon as you send the message. A running graph
@@ -736,7 +747,10 @@ calls.
 Press `w` in session view to inspect the latest proposal or saved execution graphs,
 including branches and joins. It shows the proposal version, model, captured agent
 instructions, objectives, access, dependencies, output gates, limits, execution state,
-blocked reasons, questions, and output versions. Opening it never starts work. See
+blocked reasons, questions, and output versions. The node list shows children indented
+under their parent, with the parent's progress across them when the column fits it. It
+opens on the first row, and `j` / `k` move through it in that order; a node's details
+name its parent or its children. Opening it never starts work. See
 [Keybindings](@/docs/usage/keybindings.md#execution-graph-inspector) for navigation.
 
 Available controls appear below the graph. `a` accepts the displayed output, `e` sends

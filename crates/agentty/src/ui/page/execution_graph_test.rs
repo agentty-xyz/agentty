@@ -12,7 +12,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::CellWidth;
 use ratatui::style::Modifier;
 
-use super::{actions, details, render, render_details};
+use super::{actions, details, node_list, render, render_details};
 use crate::domain::input::InputState;
 use crate::presentation::execution_graph::tests::graph_view;
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphViewOutput};
@@ -101,6 +101,46 @@ fn nodes_awaiting_answers_point_to_chat_instead_of_an_editor() {
     assert!(!awaiting.contains(&"e reply/revise"), "{awaiting:?}");
     assert!(!settled.contains(&"reply in chat to answer"), "{settled:?}");
     assert!(settled.contains(&"e reply/revise"), "{settled:?}");
+}
+
+#[test]
+fn inspector_lists_children_under_their_parent_with_its_progress() {
+    // Arrange: `first` is a child of `second`, declared before it.
+    let mut view = graph_view();
+    view.graphs[0].nodes[0].parent_id = Some("second".into());
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+
+    // Act
+    let list = node_list(&view, &view.node_order(), 40);
+    let narrow = node_list(&view, &view.node_order(), 36);
+    let child_details = details(&view);
+    terminal
+        .draw(|frame| render(frame, frame.area(), &view, &MarkdownRenderCache::default()))
+        .expect("render");
+    view.selected_node = 1;
+    let parent_details = details(&view);
+
+    // Assert
+    assert_eq!(
+        list,
+        "  second: Pending (1 of 1 child done)\n>   first: Succeeded\n"
+    );
+    // A row too wide for the column drops the children's progress first,
+    // which the details pane repeats.
+    assert_eq!(narrow, "  second: Pending\n>   first: Succeeded\n");
+    assert!(child_details.contains("Parent: second (shares its workspace)\n"));
+    assert!(!child_details.contains("Children:"));
+    assert!(parent_details.contains("Children: first (1 of 1 child done)\n"));
+    let rows = (0..30)
+        .map(|row| {
+            (0..30)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert!(rows[4].starts_with("│  second: Pending  "), "{rows:?}");
+    assert!(!rows[4].contains("child"), "{rows:?}");
+    assert!(rows[5].contains(">   first: Succeeded"), "{rows:?}");
 }
 
 #[test]

@@ -291,6 +291,91 @@ pub(crate) fn is_dependency_satisfied(
             })
 }
 
+/// Leading cells of every row a terminal graph view draws for a child, so it
+/// sits under its parent.
+pub(crate) const CHILD_INDENT: &str = "  ";
+
+/// How far a parent's children are, for the progress line the terminal's
+/// graph views show for the parent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ChildrenProgress {
+    /// Children that succeeded.
+    pub(crate) done: usize,
+    /// Children whose latest execution failed.
+    pub(crate) failed: usize,
+    /// Children of the parent.
+    pub(crate) total: usize,
+    /// Children that are queued or running.
+    pub(crate) working: usize,
+}
+
+impl ChildrenProgress {
+    /// Counts the children of `parent_id` among `nodes` from the live
+    /// `progress`; `None` when it has no children. Children of an unapproved
+    /// or unloaded graph count as waiting.
+    pub(crate) fn of(
+        nodes: &[GraphNode],
+        progress: Option<&ExecutionGraphProgress>,
+        parent_id: &str,
+    ) -> Option<Self> {
+        let statuses = nodes
+            .iter()
+            .filter(|node| node.parent_id.as_deref() == Some(parent_id))
+            .map(|child| {
+                progress
+                    .and_then(|progress| {
+                        progress
+                            .nodes
+                            .iter()
+                            .find(|state| state.node_id == child.id)
+                    })
+                    .map_or(GraphNodeStatus::Pending, |state| state.status)
+            })
+            .collect::<Vec<_>>();
+        if statuses.is_empty() {
+            return None;
+        }
+        let count = |matches: fn(GraphNodeStatus) -> bool| {
+            statuses.iter().filter(|status| matches(**status)).count()
+        };
+
+        Some(Self {
+            done: count(|status| status == GraphNodeStatus::Succeeded),
+            failed: count(|status| status == GraphNodeStatus::Failed),
+            total: statuses.len(),
+            working: count(|status| {
+                matches!(status, GraphNodeStatus::Queued | GraphNodeStatus::Running)
+            }),
+        })
+    }
+
+    /// Whether any child is still queued or running.
+    pub(crate) fn is_working(self) -> bool {
+        self.working > 0
+    }
+
+    /// Whether any child failed.
+    pub(crate) fn has_failed(self) -> bool {
+        self.failed > 0
+    }
+
+    /// Says how many children still work, or else how many are done, and
+    /// how many failed, such as `1 of 2 children working · 1 failed`.
+    pub(crate) fn label(self) -> String {
+        let noun = if self.total == 1 { "child" } else { "children" };
+        let mut label = if self.is_working() {
+            format!("{} of {} {noun} working", self.working, self.total)
+        } else {
+            format!("{} of {} {noun} done", self.done, self.total)
+        };
+        if self.has_failed() {
+            let _ = write!(label, " · {} failed", self.failed);
+        }
+
+        label
+    }
+}
+
 /// Where `state`'s current version stands, with the summary row the
 /// sidebar shows for it before its graph's progress is read.
 pub(crate) fn proposal_standing(state: &GraphProposalState) -> (SessionGraphProposalPhase, String) {
@@ -405,14 +490,28 @@ fn push_preview_questions(text: &mut String, questions: &[QuestionItem]) {
 }
 
 /// Appends one section per proposed node, keeping long captured
-/// instructions after the short summary fields.
+/// instructions after the short summary fields. Children follow their
+/// parent, numbered under it, such as `1.2.`.
 fn push_launch_preview(text: &mut String, nodes: &[GraphNode]) {
     let _ = write!(
         text,
         "Awaiting approval of this exact version. Nodes have not launched.\n\n### Nodes ({})\n",
         nodes.len()
     );
-    for (index, node) in nodes.iter().enumerate() {
+    let (mut parent_number, mut child_number) = (0, 0);
+    for placement in GraphNode::hierarchy_order(nodes) {
+        let node = &nodes[placement.index];
+        let number = if placement.is_child {
+            child_number += 1;
+            format!("{parent_number}.{child_number}")
+        } else {
+            parent_number += 1;
+            child_number = 0;
+            parent_number.to_string()
+        };
+        let parent = node.parent_id.as_ref().map_or_else(String::new, |parent| {
+            format!("- **Parent:** `{}`\n", inline_literal(parent))
+        });
         let execution = &node.execution;
         let dependencies = node
             .dependencies
@@ -456,10 +555,9 @@ fn push_launch_preview(text: &mut String, nodes: &[GraphNode]) {
         };
         let _ = write!(
             text,
-            "\n#### {}. {} · {}\n\n- **Objective:**{}\n- **Access:** {} · **Context:** {} · \
-             **Effects:** {} · **Schema:** {}\n- **Requires:** {}\n- **Inputs:** {}\n- \
-             **Outputs:** {}\n\n**Captured instructions** (`{}`)\n\n{}\n",
-            index + 1,
+            "\n#### {number}. {} · {}\n\n{parent}- **Objective:**{}\n- **Access:** {} · \
+             **Context:** {} · **Effects:** {} · **Schema:** {}\n- **Requires:** {}\n- \
+             **Inputs:** {}\n- **Outputs:** {}\n\n**Captured instructions** (`{}`)\n\n{}\n",
             inline_literal(&node.id),
             inline_literal(&node.definition.name),
             inline_or_quoted(&node.objective),

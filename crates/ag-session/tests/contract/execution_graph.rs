@@ -175,6 +175,7 @@ fn node(id: &str, task_id: Option<&str>) -> GraphNode {
             name: "response".into(),
             schema: profile,
         }],
+        parent_id: None,
         request: "Inspect the captured inputs and perform this stage".into(),
     }
 }

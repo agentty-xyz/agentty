@@ -388,6 +388,7 @@ fn reader(id: &str) -> GraphNode {
             name: "response".into(),
             schema: ProtocolRequestProfile::UtilityPrompt,
         }],
+        parent_id: None,
         request: TurnPrompt::from_agent_data(id.into()),
     }
 }

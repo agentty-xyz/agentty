@@ -26,13 +26,32 @@ classified once by a read-only decision run. See
 
 An `ExecutionGraph` has an instance ID, a nonzero revision, and one owning session. Node
 IDs are unique within the graph. Each node captures its agent definition and model
-selection, objective, request, execution profile, Env reference, dependencies, and named
-inputs and outputs. Requests use `TurnPrompt` to keep image attachments and to
-distinguish user text from generated evidence.
+selection, objective, request, execution profile, Env reference, dependencies, named
+inputs and outputs, and an optional parent. Requests use `TurnPrompt` to keep image
+attachments and to distinguish user text from generated evidence.
 
 Validation rejects missing or duplicate references, incompatible execution profiles,
-foreign Envs, and cycles. Declaration order does not establish execution order. Env
-references are currently limited to the owning session's shared local worktree.
+foreign Envs, invalid parents, and cycles. Declaration order does not establish
+execution order. Env references are currently limited to the owning session's shared
+local worktree.
+
+## Node Hierarchy
+
+A node may name a top-level node of the same graph as its parent, so a graph has at most
+two levels. A child is a step of its parent's deliverable and shares its parent's Env;
+proposal resolution binds it to the parent's concrete Env rather than recording a
+separate Env kind, and reads a blank proposed parent as none. Validation rejects a
+missing parent, a node naming itself, and a parent that is itself a child, each with a
+reason that names the fix; it also rejects a blank parent and a child bound to another
+Env, which only a host building a graph itself can produce.
+
+The hierarchy constrains shape and Env and drives presentation: the terminal's graph
+views show each top-level node followed by its children, with the parent's progress
+across its children. It adds no execution semantics. A child is an ordinary node with
+ordinary dependencies and gates, and a dependency waits only for the node it names: a
+child waits for its parent only through an explicit dependency, and a parent, or a node
+depending on it, never waits for its children. Nodes without a parent omit the field, so
+snapshots and expansion records of graphs without children keep their stored bytes.
 
 ## Execution Requirements
 
@@ -166,10 +185,11 @@ ordinary session work, merges, and focused-review readers.
 
 `GraphRepository::expand_graph` appends nodes as the next revision of a launched graph.
 `ExecutionGraph::expand` keeps every existing node unchanged; appended nodes may depend
-on existing ones and pass the usual validation. The change is checked against the
-expected current revision and is idempotent by its expansion ID. Canceled and completed
-graphs are refused, and appended nodes must spend from the graph's existing budgets, so
-an expansion never adds provider calls.
+on existing ones, may be children of existing top-level nodes, and pass the usual
+validation. The change is checked against the expected current revision and is
+idempotent by its expansion ID. Canceled and completed graphs are refused, and appended
+nodes must spend from the graph's existing budgets, so an expansion never adds provider
+calls.
 
 Because no node changes, work addressed to an earlier revision that only expansions
 followed continues under the current one: admission, settlement, acceptance,
