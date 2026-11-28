@@ -86,6 +86,20 @@
   --color-muted: #adadad;
   --color-dim: #919191;
   --color-border: #333333;
-  --color-border-strong: #646464;
+  --color-border-strong: #6b6b6b;
   --color-focus: #ffffff;
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --color-accent-dim: #86c995;
+    --color-muted: #a5c8ad;
+    --color-dim: #94ba9d;
+  }
+
+  :root.theme-dark {
+    --color-accent-dim: #c8c8c8;
+    --color-muted: #bababa;
+    --color-dim: #ababab;
+  }
 }

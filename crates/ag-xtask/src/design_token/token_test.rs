@@ -2,7 +2,7 @@
 
 use serde_json::{Value as Json, json};
 
-use super::{DARK_THEME, DEFAULT_THEME, FontFace, FontStyle, TokenSet, Value};
+use super::{Contrast, DARK_THEME, DEFAULT_THEME, FontFace, FontStyle, TokenSet, Value};
 
 /// Returns an opaque sRGB colour value for `hex`.
 fn color(hex: &str, components: [f64; 3]) -> Json {
@@ -198,13 +198,135 @@ fn value_in_returns_the_dark_value_only_in_the_dark_theme() {
 
     // Act
     let values = [
-        bg.value_in(DEFAULT_THEME).css(),
-        bg.value_in(DARK_THEME).css(),
-        text.value_in(DARK_THEME).css(),
+        bg.value_in(DEFAULT_THEME, Contrast::Standard).css(),
+        bg.value_in(DARK_THEME, Contrast::Standard).css(),
+        bg.value_in(DARK_THEME, Contrast::High).css(),
+        text.value_in(DARK_THEME, Contrast::Standard).css(),
     ];
 
     // Assert
-    assert_eq!(values, ["#ffffff", "#000000", "#ffffff"]);
+    assert_eq!(values, ["#ffffff", "#000000", "#000000", "#ffffff"]);
+}
+
+#[test]
+fn value_in_returns_the_high_contrast_value_only_at_high_contrast() {
+    // Arrange
+    let source = json!({
+        "color": {
+            "$type": "color",
+            "dim": {
+                "$value": color("#808080", [0.502, 0.502, 0.502]),
+                "$extensions": {
+                    "xyz.agentty.theme": { "dark": color("#707070", [0.4392, 0.4392, 0.4392]) },
+                    "xyz.agentty.highContrast": {
+                        "green": color("#c0c0c0", [0.7529, 0.7529, 0.7529]),
+                        "dark": color("#b0b0b0", [0.6902, 0.6902, 0.6902])
+                    }
+                }
+            }
+        }
+    })
+    .to_string();
+    let set = TokenSet::parse(&source).expect("valid tokens");
+    let dim = set.find("color.dim").expect("dim");
+
+    // Act
+    let values = [
+        (DEFAULT_THEME, Contrast::Standard),
+        (DARK_THEME, Contrast::Standard),
+        (DEFAULT_THEME, Contrast::High),
+        (DARK_THEME, Contrast::High),
+    ]
+    .map(|(theme, contrast)| dim.value_in(theme, contrast).css());
+
+    // Assert
+    assert_eq!(values, ["#808080", "#707070", "#c0c0c0", "#b0b0b0"]);
+}
+
+#[test]
+fn stylesheet_sets_high_contrast_values_under_the_contrast_media_query_after_the_themes() {
+    // Arrange
+    let source = json!({
+        "color": {
+            "$type": "color",
+            "bg": { "$value": color("#000000", [0.0, 0.0, 0.0]) },
+            "dim": {
+                "$value": color("#808080", [0.502, 0.502, 0.502]),
+                "$extensions": {
+                    "xyz.agentty.theme": { "dark": color("#707070", [0.4392, 0.4392, 0.4392]) },
+                    "xyz.agentty.highContrast": {
+                        "green": color("#c0c0c0", [0.7529, 0.7529, 0.7529]),
+                        "dark": color("#b0b0b0", [0.6902, 0.6902, 0.6902])
+                    }
+                }
+            }
+        },
+        "tracking": {
+            "$type": "number",
+            "wide": {
+                "$value": 0.02,
+                "$extensions": {
+                    "xyz.agentty.unit": "em",
+                    "xyz.agentty.highContrast": { "green": 0.04, "dark": 0.05 }
+                }
+            }
+        }
+    })
+    .to_string();
+
+    // Act
+    let stylesheet = TokenSet::parse(&source)
+        .expect("valid tokens")
+        .stylesheet("/* Shared. */", None);
+
+    // Assert: the media block's dark rule follows the dark theme's rule at
+    // the same specificity, so the dark high-contrast values win.
+    assert_eq!(
+        stylesheet,
+        "/* Shared. */\n:root {\n  --color-bg: #000000;\n  --color-dim: #808080;\n  \
+         --tracking-wide: 0.02em;\n}\n\n:root.theme-dark {\n  --color-dim: #707070;\n}\n\n@media \
+         (prefers-contrast: more) {\n  :root {\n    --color-dim: #c0c0c0;\n    --tracking-wide: \
+         0.04em;\n  }\n\n  :root.theme-dark {\n    --color-dim: #b0b0b0;\n    --tracking-wide: \
+         0.05em;\n  }\n}\n"
+    );
+}
+
+#[test]
+fn invalid_high_contrast_values_report_each_problem() {
+    // Arrange
+    let black = color("#000000", [0.0, 0.0, 0.0]);
+    let source = json!({
+        "color": {
+            "$type": "color",
+            "shape": { "$value": black, "$extensions": { "xyz.agentty.highContrast": [] } },
+            "theme": {
+                "$value": black,
+                "$extensions": { "xyz.agentty.highContrast": { "green": black, "light": black } }
+            },
+            "missing": { "$value": black, "$extensions": { "xyz.agentty.highContrast": { "dark": black } } },
+            "values": {
+                "$value": black,
+                "$extensions": { "xyz.agentty.highContrast": { "green": "red", "dark": "blue" } }
+            }
+        }
+    })
+    .to_string();
+
+    // Act
+    let report = errors(&source);
+
+    // Assert
+    assert_eq!(
+        report,
+        [
+            "color.shape: the high-contrast extension must map theme names to values",
+            "color.theme: the high-contrast extension names unknown theme light; it names green \
+             and dark",
+            "color.missing: the high-contrast extension has no green value",
+            "color.values: high contrast green: expected an srgb colour",
+            "color.values: high contrast dark: expected an srgb colour",
+        ]
+    );
 }
 
 #[test]

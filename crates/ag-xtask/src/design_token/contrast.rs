@@ -1,9 +1,20 @@
 //! WCAG 2 contrast ratios for the colour pairs the token file declares.
 //!
-//! Every pair must reach its group's minimum in every theme; there is no way
-//! to record an exception.
+//! Every pair must reach its group's minimum in every theme, at standard
+//! contrast and when the system asks for more, unless the group names the
+//! one contrast level it applies to; there is no way to record an exception.
 
-use crate::design_token::token::{ContrastGroup, THEMES, TokenSet, Value};
+use crate::design_token::token::{
+    Contrast, ContrastGroup, DARK_THEME, DEFAULT_THEME, TokenSet, Value,
+};
+
+/// Every theme at every contrast level, in the order failures are reported.
+const MODES: [(&str, Contrast); 4] = [
+    (DEFAULT_THEME, Contrast::Standard),
+    (DARK_THEME, Contrast::Standard),
+    (DEFAULT_THEME, Contrast::High),
+    (DARK_THEME, Contrast::High),
+];
 
 /// Reports every pair that misses its minimum and every reference that names
 /// no opaque colour.
@@ -26,15 +37,32 @@ fn check_group(set: &TokenSet, group: &ContrastGroup, errors: &mut Vec<String>) 
     let backgrounds = resolve(set, usage, &group.backgrounds, errors);
     for (foreground, foreground_colors) in &foregrounds {
         for (background, background_colors) in &backgrounds {
-            for (theme_index, theme) in THEMES.iter().enumerate() {
-                let measured = ratio(
-                    foreground_colors[theme_index],
-                    background_colors[theme_index],
-                );
+            for (index, (theme, contrast)) in MODES.iter().enumerate() {
+                if group.contrast.is_some_and(|only| only != *contrast) {
+                    continue;
+                }
+                let pair = (foreground_colors[index], background_colors[index]);
+                // A pair that high contrast leaves unchanged was measured at
+                // standard contrast already.
+                let standard = MODES
+                    .iter()
+                    .position(|mode| *mode == (*theme, Contrast::Standard))
+                    .unwrap_or(index);
+                if *contrast == Contrast::High
+                    && group.contrast.is_none()
+                    && pair == (foreground_colors[standard], background_colors[standard])
+                {
+                    continue;
+                }
+                let measured = ratio(pair.0, pair.1);
                 if measured < group.minimum {
+                    let mode = match contrast {
+                        Contrast::High => format!("{theme}, high contrast"),
+                        Contrast::Standard => (*theme).to_owned(),
+                    };
                     errors.push(format!(
-                        "{theme}: {foreground} on {background} ({usage}) is {measured:.2}:1, \
-                         below {}:1; change a colour",
+                        "{mode}: {foreground} on {background} ({usage}) is {measured:.2}:1, below \
+                         {}:1; change a colour",
                         group.minimum
                     ));
                 }
@@ -43,14 +71,14 @@ fn check_group(set: &TokenSet, group: &ContrastGroup, errors: &mut Vec<String>) 
     }
 }
 
-/// Resolves `{path}` references to their opaque colour in each theme,
+/// Resolves `{path}` references to their opaque colour in each mode,
 /// reporting and skipping any that cannot be compared.
 fn resolve<'reference>(
     set: &TokenSet,
     usage: &str,
     references: &'reference [String],
     errors: &mut Vec<String>,
-) -> Vec<(&'reference String, [[u8; 3]; THEMES.len()])> {
+) -> Vec<(&'reference String, [[u8; 3]; MODES.len()])> {
     let mut resolved = Vec::new();
     for reference in references {
         let token = reference
@@ -58,9 +86,9 @@ fn resolve<'reference>(
             .and_then(|path| path.strip_suffix('}'))
             .and_then(|path| set.find(path));
         let colors = token.and_then(|token| {
-            let colors: Option<Vec<[u8; 3]>> = THEMES
+            let colors: Option<Vec<[u8; 3]>> = MODES
                 .iter()
-                .map(|theme| match token.value_in(theme) {
+                .map(|(theme, contrast)| match token.value_in(theme, *contrast) {
                     Value::Color(color) => color.opaque(),
                     Value::Css(_) => None,
                 })

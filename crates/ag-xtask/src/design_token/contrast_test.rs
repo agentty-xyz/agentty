@@ -22,6 +22,13 @@ fn set(contrast: &Json) -> TokenSet {
                 "$extensions": { "xyz.agentty.theme": { "dark": color("#333333", [0.2, 0.2, 0.2]) } }
             },
             "black": { "$value": color("#000000", [0.0, 0.0, 0.0]) },
+            "silver": {
+                "$value": color("#767676", [0.4627, 0.4627, 0.4627]),
+                "$extensions": { "xyz.agentty.highContrast": {
+                    "green": color("#595959", [0.349, 0.349, 0.349]),
+                    "dark": color("#cccccc", [0.8, 0.8, 0.8])
+                } }
+            },
             "wash": { "$value": { "colorSpace": "srgb", "components": [0, 0, 0], "alpha": 0.5, "hex": "#000000" } }
         },
         "radius": { "sm": { "$type": "dimension", "$value": { "value": 1, "unit": "px" } } },
@@ -96,6 +103,77 @@ fn every_pair_below_the_minimum_fails_in_each_theme() {
              colour",
             "dark: {color.grey} on {color.black} (Outlines) is 1.66:1, below 4.6:1; change a \
              colour",
+        ]
+    );
+}
+
+#[test]
+fn a_high_contrast_group_checks_pairs_that_high_contrast_leaves_unchanged() {
+    // Arrange
+    let contrast = json!([{
+        "use": "Text",
+        "contrast": "high",
+        "minimum": 4.6,
+        "foregrounds": ["{color.grey}"],
+        "backgrounds": ["{color.white}"]
+    }]);
+
+    // Act
+    let errors = errors(&contrast);
+
+    // Assert
+    assert_eq!(
+        errors,
+        [
+            "green, high contrast: {color.grey} on {color.white} (Text) is 4.54:1, below 4.6:1; \
+             change a colour"
+        ]
+    );
+}
+
+#[test]
+fn high_contrast_values_are_checked_against_every_minimum_that_applies() {
+    // Arrange
+    let contrast = json!([
+        {
+            "use": "Text",
+            "minimum": 4.5,
+            "foregrounds": ["{color.silver}"],
+            "backgrounds": ["{color.white}"]
+        },
+        {
+            "use": "Text at high contrast",
+            "contrast": "high",
+            "minimum": 7,
+            "foregrounds": ["{color.silver}"],
+            "backgrounds": ["{color.white}", "{color.black}"]
+        },
+        {
+            "use": "Text at standard contrast",
+            "contrast": "standard",
+            "minimum": 4.6,
+            "foregrounds": ["{color.silver}"],
+            "backgrounds": ["{color.white}"]
+        }
+    ]);
+
+    // Act
+    let errors = errors(&contrast);
+
+    // Assert
+    assert_eq!(
+        errors,
+        [
+            "dark, high contrast: {color.silver} on {color.white} (Text) is 1.61:1, below 4.5:1; \
+             change a colour",
+            "dark, high contrast: {color.silver} on {color.white} (Text at high contrast) is \
+             1.61:1, below 7:1; change a colour",
+            "green, high contrast: {color.silver} on {color.black} (Text at high contrast) is \
+             3.00:1, below 7:1; change a colour",
+            "green: {color.silver} on {color.white} (Text at standard contrast) is 4.54:1, below \
+             4.6:1; change a colour",
+            "dark: {color.silver} on {color.white} (Text at standard contrast) is 4.54:1, below \
+             4.6:1; change a colour",
         ]
     );
 }

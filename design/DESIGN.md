@@ -1,24 +1,32 @@
 # Agentty Design
 
-This guide describes how Agentty's web pages look and why. The values it names reach
-pages as CSS custom properties through `tokens.css`, which is generated from a token
-source in the W3C Design Tokens format. `fonts.css`, generated from the same source,
-embeds the self-hosted monospace face, and `base.css` holds the foundations and
-components that the pages share. Load `tokens.css` first, then `fonts.css`, then
-`base.css`, then a page's own rules, and build every color, font, type size, spacing,
-width, control height, radius, shadow, and transition from the custom properties instead
-of writing values by hand.
+This guide describes how Agentty's web pages and its native iOS and Android apps look
+and why. Both use the same token roles, and every token value has one home:
+`tokens.json`, a token source in the W3C Design Tokens format.
+
+- **Web pages** receive the values as CSS custom properties through `tokens.css`, which
+  is generated from the token source. `fonts.css`, generated from the same source,
+  embeds the self-hosted monospace face, and `base.css` holds the foundations and
+  components that the pages share. Load `tokens.css` first, then `fonts.css`, then
+  `base.css`, then a page's own rules, and build every color, font, type size, spacing,
+  width, control height, radius, shadow, and transition from the custom properties
+  instead of writing values by hand.
+- **Native apps** take the values from `tokens.json` through code that the app's own
+  build generates from it, with both themes and the high-contrast values, and never copy
+  a hex value. [Native Apps](#native-apps) describes where the apps follow their
+  platform instead of the web.
 
 ## Overview
 
-Agentty is a terminal application, and its web pages look like a well-kept terminal: a
-near-black field, one bright accent, monospace labels, and quiet panels framed like
-terminal windows. The tone is calm and precise. Pages are dark in every theme, keep
-decoration to the brand mark and the accent, and let content and status carry the color.
+Agentty is a terminal application, and its web pages and native apps look like a
+well-kept terminal: a near-black field, one bright accent, monospace labels, and quiet
+panels framed like terminal windows. The tone is calm and precise. Pages and apps are
+dark in every theme, keep decoration to the brand mark and the accent, and let content
+and status carry the color.
 
-- **Terminal identity:** the brand mark, the brand name, navigation, labels, code,
-  prompts, and window chrome use the monospace stack. Prose and large headings use the
-  sans-serif stack.
+- **Terminal identity:** on the web, the brand mark, the brand name, navigation, labels,
+  code, prompts, and window chrome use the monospace stack, and prose and large headings
+  use the sans-serif stack. For the native apps, see [Native Apps: Type](#type).
 - **One accent:** the accent marks what to act on or follow. Everything else is text,
   muted text, borders, and surfaces.
 - **Restraint:** borders separate, surfaces lift, and a single shadow marks floating
@@ -37,11 +45,12 @@ icon. Copy both from the export rather than redrawing them.
 ## Colors
 
 Each color token is a role, not a hue. Pick the role that matches the element's job, and
-the theme supplies the value.
+the theme supplies the value. The table names each role's custom property; a native app
+uses the same role under its token path, such as `color.bg` for `--color-bg`.
 
 | Token                         | Role                                                      |
 | ----------------------------- | --------------------------------------------------------- |
-| `--color-bg`                  | Page background                                           |
+| `--color-bg`                  | Page and screen background                                |
 | `--color-surface`             | Inset surfaces: inputs, inline code, badges, switches     |
 | `--color-surface-raised`      | Panels, cards, dialogs, menus, secondary buttons          |
 | `--color-surface-interactive` | Hovered, pressed, and selected controls                   |
@@ -89,7 +98,8 @@ saved, under the page's own storage key, and tolerates storage that is blocked:
 A page whose content security policy forbids inline scripts serves the same lines as a
 file and loads it with a plain `<script src>` in the head, neither deferred nor a
 module, so it still runs before the first paint. Offer both themes wherever a page lets
-people choose, and test every new component in both.
+people choose, and test every new component in both. For the native apps, see
+[Native Apps: Appearance and Color](#appearance-and-color).
 
 Code outside a stylesheet takes values from the same tokens instead of copying them. A
 script running in the page reads the custom property, such as
@@ -119,12 +129,14 @@ A status with no modifier is an unknown state, in `--color-dim` with a solid dot
 `.status--live` to any tone whose work is still running, such as syncing, so its dot
 glows and pulses too.
 
-Never let color alone carry a state: always pair the dot with its label.
+Never let color alone carry a state: always pair the dot with its label, on a page and
+in an app alike.
 
 ### Accessibility
 
-Every foreground and background pair the pages use meets WCAG 2 AA in both themes, with
-no exceptions:
+Every pair of color tokens that the pages and apps draw with, foreground on background,
+meets WCAG 2 AA in both themes, with no exceptions. System components in the apps that
+keep their platform colors are outside these pairs.
 
 - Text, including `--color-dim`, reaches 4.5:1 on `--color-bg`, `--color-surface`,
   `--color-surface-raised`, and `--color-surface-interactive`. Labels on a primary
@@ -132,14 +144,31 @@ no exceptions:
 - Focus rings, status dots, and primary button fills reach 3:1 on every surface.
 - A form field's boundary is what identifies it, so outline every field in
   `--color-border-strong`, which reaches 3:1 against `--color-bg`, `--color-surface`,
-  and `--color-surface-raised`, whichever is its fill or surrounds it. `--color-border`
-  is for dividers and the outlines of panels, cards, and badges, which WCAG does not
-  require to stand out; never outline a field with it.
+  `--color-surface-raised`, and `--color-surface-interactive`, whichever is its fill or
+  surrounds it, as on a native app's unchecked switch track. `--color-border` is for
+  dividers and the outlines of panels, cards, and badges, which WCAG does not require to
+  stand out; never outline a field with it.
+
+When the system asks for more contrast, `--color-muted`, `--color-dim`, and
+`--color-accent-dim` take their high-contrast values, which reach 7:1 on the same four
+surfaces in both themes. Every other token keeps its value, and every pair above keeps
+its minimum. Each platform asks as follows:
+
+- **Web:** `prefers-contrast: more`, under which `tokens.css` sets the values.
+- **iOS:** Increase Contrast, which UIKit reports as `UIAccessibilityContrast.high` and
+  SwiftUI as `colorSchemeContrast == .increased`.
+- **Android:** `UiModeManager.getContrast()` above 0, the standard level, on API 34 and
+  later, so the medium and high contrast settings both select the values. At 0, and on
+  earlier versions, the standard values apply.
+
+A native app follows a change to the setting while it runs: on iOS through the trait
+change, and on Android through `UiModeManager.addContrastChangeListener`.
 
 The token source lists these pairs, and its check fails when any of them falls below its
-minimum, so a new color or a new pairing must pass before it lands. Keep the shared
-focus ring on every focusable element, follow the system's reduced motion setting, and
-give every page a skip link to its main content.
+minimum in either theme, at standard or at high contrast, so a new color or a new
+pairing must pass before it lands. Keep the shared focus ring on every focusable
+element, follow the system's reduced motion setting, and give every page a skip link to
+its main content.
 
 ### Terminal Palette
 
@@ -198,6 +227,7 @@ green, review states info blue, and syncing and merging the full accent.
 - The documentation home page alone also uses Martian Mono, a display face for its hero
   and glyph art, loaded from Google Fonts on that page only. No other page or component
   uses it.
+- For the native apps' faces and sizes, see [Native Apps: Type](#type).
 
 ### Type Scale
 
@@ -409,23 +439,23 @@ node gallery-check.mjs gallery.html \
 
 For each page, it renders the gallery's markup once with the stylesheets the gallery
 links and once with the page's chain, in both themes, on a desktop and a touch phone
-viewport and on a desktop that asks for reduced motion, at rest and with each
-interactive element hovered, focused, and pressed, and compares the computed styles of
-every element inside a `data-specimen` element, other than the placement properties a
-page may set. A forced state compares the whole specimen, so a field that shows its
-input's focus with `:focus-within` counts. Animations and transitions are read, then
-frozen for the rest, and scripts are off. The browser refuses every request but a
-`data:` URI, so nothing leaves the machine, and the check fails on, and names, any
-stylesheet, font, or image a page tried to load. It also fails on a page rule that names
-a component, or a bare element inside `.prose`, to set anything but placement; hiding
-with `display: none` counts as placement. The optional `--markup` files and directories
-are the page's templates and scripts: a class that shares a quoted string with a
-component's class there, as in `class="status status-line"` or a script's
-`"status status-line"`, sits on the component's element, so a rule on it may only place
-it too. It reads only the files it is given and runs on Node.js with a Chromium-based
-browser: Chrome, Chromium, or `chrome-headless-shell`, which `CHROME_PATH` names, or
-which it finds in the usual install places. Compile a Sass or bundled stylesheet first,
-and pass its output.
+viewport, on a desktop that asks for reduced motion, and on one that asks for more
+contrast, at rest and with each interactive element hovered, focused, and pressed, and
+compares the computed styles of every element inside a `data-specimen` element, other
+than the placement properties a page may set. A forced state compares the whole
+specimen, so a field that shows its input's focus with `:focus-within` counts.
+Animations and transitions are read, then frozen for the rest, and scripts are off. The
+browser refuses every request but a `data:` URI, so nothing leaves the machine, and the
+check fails on, and names, any stylesheet, font, or image a page tried to load. It also
+fails on a page rule that names a component, or a bare element inside `.prose`, to set
+anything but placement; hiding with `display: none` counts as placement. The optional
+`--markup` files and directories are the page's templates and scripts: a class that
+shares a quoted string with a component's class there, as in
+`class="status status-line"` or a script's `"status status-line"`, sits on the
+component's element, so a rule on it may only place it too. It reads only the files it
+is given and runs on Node.js with a Chromium-based browser: Chrome, Chromium, or
+`chrome-headless-shell`, which `CHROME_PATH` names, or which it finds in the usual
+install places. Compile a Sass or bundled stylesheet first, and pass its output.
 
 The check does not see a page's own markup around a component, so keep these by hand:
 
@@ -438,6 +468,139 @@ The check does not see a page's own markup around a component, so keep these by 
 - A class the page adds to a component's element in a way the markup scan misses, such
   as a class string assembled from separate literals, escapes the rule audit.
 
+## Native Apps
+
+Agentty's native apps use the color roles, both themes, the status tones, and the
+accessibility minimums above. The stylesheets, components, and gallery are the web's: in
+an app, the platform's own components take their place, and the rules below say where
+each platform's conventions replace the web's. An app's screens and navigation belong to
+the app, with one rule: its top-level sections are tabs, three to five of them, and the
+tab set is the same for every account, administrators included.
+
+### System Components
+
+- Tab bars, navigation and app bars, alerts and dialogs, sheets, menus, and refresh
+  controls are the platform's own, and the app does not restyle them.
+- On iOS, never give a bar a custom background, which turns off Liquid Glass, and never
+  use Liquid Glass in the content layer.
+- The brand lives in the content layer that scrolls beneath the bars: solid token
+  surfaces, such as `color.bg` for the screen and `color.surface-raised` for cards, and
+  the accent only on the one prominent action, the selected tab, links, and badges.
+
+### Appearance and Color
+
+- **Dark only:** the app forces the dark appearance, so system alerts, menus, and
+  keyboards match its screens. This deliberately departs from Apple's guidance to follow
+  the system appearance: Agentty's identity is a terminal's, and no light theme has a
+  design for every token. The app offers both themes, Green and Dark.
+- **Android color:** a static brand scheme mapped onto Material roles; the app never
+  takes dynamic color from the wallpaper. The table sets every role of Material's dark
+  color scheme, so none keeps a Material default, and the token source's contrast list
+  holds every pair it creates.
+
+| Material roles                                                                 | Token                       | Use                                                    |
+| ------------------------------------------------------------------------------ | --------------------------- | ------------------------------------------------------ |
+| `primary`, `primaryFixed`, `primaryFixedDim`                                   | `color.accent`              | The primary action                                     |
+| `secondary`, `secondaryFixed`, `secondaryFixedDim`                             | `color.accent`              | The selected navigation item                           |
+| `onPrimaryContainer`, `onSecondaryContainer`                                   | `color.accent`              | Text and icons on a tonal fill                         |
+| `tertiary`, `tertiaryFixed`, `tertiaryFixedDim`, `onTertiaryContainer`         | `color.accent-dim`          | Quieter accents                                        |
+| `onPrimary`, `onPrimaryFixed`, `onPrimaryFixedVariant`                         | `color.on-accent`           | Labels on an accent fill                               |
+| `onSecondary`, `onSecondaryFixed`, `onSecondaryFixedVariant`                   | `color.on-accent`           | Labels on an accent fill                               |
+| `onTertiary`, `onTertiaryFixed`, `onTertiaryFixedVariant`, `onError`           | `color.on-accent`           | Labels on a quieter-accent or error fill               |
+| `inversePrimary`                                                               | `color.on-accent`           | An action on the inverse surface                       |
+| `background`, `surface`, `surfaceDim`, `surfaceContainerLowest`                | `color.bg`                  | The screen                                             |
+| `surfaceTint`                                                                  | `color.bg`                  | No tint: elevation comes from the container roles      |
+| `inverseOnSurface`                                                             | `color.bg`                  | Text on the inverse surface                            |
+| `surfaceContainerLow`                                                          | `color.surface`             | Inset surfaces and sheets                              |
+| `surfaceVariant`, `surfaceContainer`, `surfaceContainerHigh`, `errorContainer` | `color.surface-raised`      | Navigation bars, cards, menus, dialogs, error fills    |
+| `surfaceContainerHighest`, `surfaceBright`                                     | `color.surface-interactive` | The highest surfaces, such as filled fields and tracks |
+| `primaryContainer`, `secondaryContainer`, `tertiaryContainer`                  | `color.surface-interactive` | Tonal fills, such as the selected item's indicator     |
+| `onBackground`, `onSurface`                                                    | `color.text`                | Body text and headings                                 |
+| `inverseSurface`                                                               | `color.text`                | The inverse surface, such as a snackbar                |
+| `onSurfaceVariant`                                                             | `color.muted`               | Supporting text and icons                              |
+| `outline`                                                                      | `color.border-strong`       | Field and button outlines                              |
+| `outlineVariant`                                                               | `color.border`              | Dividers and card outlines                             |
+| `error`, `onErrorContainer`                                                    | `color.error`               | Errors and destructive actions                         |
+| `scrim`                                                                        | `color.scrim`               | The backdrop behind sheets and dialogs                 |
+
+### Type
+
+- Body text, titles, list rows, and buttons use the system sans: SF Pro through the iOS
+  text styles, and Roboto through the Material type scale.
+- Share Tech Mono is only for the brand name, eyebrows, status labels, badges, keycaps,
+  and the pairing code. It is never smaller than 11pt or 11sp, and it scales with
+  Dynamic Type and Android font scaling.
+- Transcript code, diffs, and logs use the platform monospace: SF Mono on iOS and the
+  system monospace on Android. Share Tech Mono has one weight; the platform monospace
+  has the weights that Bold Text needs and reads better at small sizes. Code wraps or
+  scrolls; it never truncates.
+- Text scales with the system everywhere. Cap scaling only on bar chrome, never on
+  content.
+
+Each web size takes the platform style below, whose default size is in parentheses. A
+lead paragraph starts at body size, as it does on a phone-width page.
+
+| Web size token                       | iOS text style     | Material 3 role        |
+| ------------------------------------ | ------------------ | ---------------------- |
+| `--font-size-3xs`, `--font-size-2xs` | Caption 2 (11pt)   | Label Small (11sp)     |
+| `--font-size-xs`, `--font-size-sm`   | Footnote (13pt)    | Body Small (12sp)      |
+| `--font-size-md`, `--font-size-lg`   | Subheadline (15pt) | Body Medium (14sp)     |
+| `--font-size-body`, `--font-size-xl` | Body (17pt)        | Body Large (16sp)      |
+| `--font-size-2xl`                    | Title 3 (20pt)     | Title Large (22sp)     |
+| `--font-size-3xl`                    | Title 1 (28pt)     | Headline Medium (28sp) |
+| Page titles                          | Large Title (34pt) | Headline Large (32sp)  |
+
+### Touch Targets
+
+Every control's hit area is at least 44×44pt on iOS and 48×48dp on Android. A control
+drawn smaller, such as an icon button, reaches it with a larger hit area, not a larger
+drawing.
+
+### Actions and Feedback
+
+- **Destructive and irreversible actions,** such as a merge that bypasses its
+  requirements or canceling a session, are confirmed in the system alert on iOS and the
+  system dialog on Android. The confirm label is a verb that names the outcome, such as
+  "Merge Anyway", beside a Cancel button, and neither is the default. The confirm button
+  takes the destructive style on iOS and `color.error` text on Android.
+- **Haptics:** notification haptics (success, warning, error) mark outcomes, selection
+  haptics mark a changing value, and ordinary taps have none. On Android, use the
+  system's haptic feedback constants, never raw vibration.
+- **Motion** is short and functional, as on the web: Android uses Material's Standard
+  motion scheme, not Expressive. When the system asks for reduced motion, the app drops
+  zooming, scaling, and repeated motion, including the live statuses' pulse.
+
+### Layout and States
+
+- Respect the safe areas. Backgrounds extend under the bars, and on Android the app
+  draws edge to edge, behind the status and navigation bars, and pads its controls by
+  the system insets.
+- A composer is keyboard-aware: it stays above the keyboard and moves with it.
+- A screen shows something at once, cached data or placeholders while content loads, and
+  refreshes on its own as well as on a pull.
+- An empty section still shows and says why it is empty.
+- Offline, the app shows cached data and a quiet offline label, never an alert. Any
+  other error it can recover from shows in place, with a way to retry.
+
+### App Icon
+
+- The icon is the brand mark in the Green theme's `color.accent` on its `color.bg`, with
+  no text, glows, or drawn shadows.
+- On iOS, it is a layered icon whose dark and tinted appearances keep the mark legible.
+- On Android, it is an adaptive icon with a monochrome layer, so the system never themes
+  it on its own.
+
+### Assistive Technology
+
+- Every control has a label for VoiceOver and TalkBack.
+- A status's dot and label are one accessibility element, and so are a row's title and
+  its metadata.
+- Reading order follows the visual order.
+- A streaming transcript is not a live region; the app announces state changes, such as
+  asking, ready, or failed, instead.
+- Test every screen with VoiceOver and TalkBack, at the largest Dynamic Type size, and
+  at 200% Android font scale.
+
 ## Do's and Don'ts
 
 - Do build every color, font, radius, shadow, and transition from the custom properties;
@@ -445,9 +608,11 @@ The check does not see a page's own markup around a component, so keep these by 
 - Do take sizes, weights, line heights, letter spacing, spacing, column widths, and
   control heights from their scales; don't add a value a hair off a step. A dimension
   that belongs to one element, such as an icon or a sidebar, may stay literal.
-- Do change a value only at its token source and regenerate `tokens.css`; don't edit
-  `tokens.css`.
-- Do keep one primary action per view; don't fill several buttons with the accent.
+- Do change a value only at its token source: regenerate `tokens.css` from it, and let
+  each app's build generate its token code from `tokens.json`. Don't edit either output,
+  and don't copy a hex value into an app.
+- Do keep one primary action per page or app screen; don't fill several buttons with the
+  accent.
 - Do pair every status color with a label; don't signal state by color alone.
 - Do outline form fields with `--color-border-strong`; don't outline them with
   `--color-border`, which is too faint to identify a control.
