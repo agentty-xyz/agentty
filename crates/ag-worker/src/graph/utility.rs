@@ -8,7 +8,7 @@ use ag_protocol::TurnPrompt;
 use ag_session::{GraphContext, GraphNode, GraphPostProcessing};
 use async_trait::async_trait;
 
-use super::{GraphNodeRunner, GraphRunRequest};
+use super::{GraphEnvLocation, GraphNodeRunner, GraphRunRequest};
 use crate::{RunInfo, RunWorker};
 
 /// Worker adapter for fresh utility nodes. Session conversations require a
@@ -45,6 +45,7 @@ impl GraphNodeRunner for GraphUtilityRunner {
         else {
             return Err(OneShotError::new("Utility node requires a utility run"));
         };
+        let GraphEnvLocation::Folder(folder) = request.location;
         let session_id = node.env_id.session_id();
         let profile = node.execution.response_profile;
         let request_kind = [
@@ -78,7 +79,7 @@ impl GraphNodeRunner for GraphUtilityRunner {
                     attachments: prompt.attachments,
                     child_pid: None,
                     execution_policy: ag_contracts::ExecutionPolicy::default(),
-                    folder: request.folder.clone(),
+                    folder: folder.clone(),
                     harness: node.agent.kind().to_string(),
                     model: node.agent.model().as_str().into(),
                     permission_mode: request.permission_mode,
@@ -89,7 +90,7 @@ impl GraphNodeRunner for GraphUtilityRunner {
                     speed_mode: SpeedMode::default(),
                 },
                 RunInfo {
-                    folder: request.folder,
+                    folder,
                     id: run_id.clone(),
                     parent_id: Some(request.dispatch.record.graph_id.clone()),
                     project_id: None,

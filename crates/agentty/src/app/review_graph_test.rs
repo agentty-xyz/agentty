@@ -16,7 +16,9 @@ use ag_session::{
     GraphWorkspaceAccess,
 };
 use ag_telemetry::KeyValue;
-use ag_worker::{GraphInputValue, GraphNodeRunner, GraphRunRequest, MockRunClient};
+use ag_worker::{
+    GraphEnvLocation, GraphInputValue, GraphNodeRunner, GraphRunRequest, MockRunClient,
+};
 use opentelemetry::trace::SpanId;
 
 use super::test_support::{ReviewGraphFixture, SESSION_ID};
@@ -654,7 +656,7 @@ async fn review_nodes_reject_foreign_profiles_and_task_attempts() {
     let result = runner
         .run(GraphRunRequest {
             dispatch,
-            folder: PathBuf::from("."),
+            location: GraphEnvLocation::Folder(PathBuf::from(".")),
             permission_mode: PermissionMode::ReadOnly,
             provider_call_budget: None,
         })

@@ -1,12 +1,16 @@
-//! Graph dispatch invariant tests for input readiness, execution gates, Env
-//! admission, and settlement rollback.
+//! Graph dispatch invariant tests for input readiness, execution gates,
+//! per-Env admission conflicts, and settlement rollback.
 
 use ag_protocol::ProtocolRequestProfile;
-use ag_session::{GraphCompletionGate, GraphExecutionRef};
-use ag_worker::{GraphDispatch, RunState};
+use ag_session::{
+    EnvId, GraphCompletionGate, GraphExecutionRef, GraphWorkspaceAccess, TaskWorktreeId,
+};
+use ag_worker::{GraphAdmission, GraphDispatch, RunState};
 
 use crate::execution_graph::SqliteGraphRepository;
-use crate::execution_graph::support_test::{evidence, graph, produced, record, reference, run};
+use crate::execution_graph::support_test::{
+    evidence, graph, produced, reader, record, reference, run, workspace,
+};
 
 #[tokio::test]
 async fn ready_inputs_checks_result_availability_after_execution_success() {
@@ -146,18 +150,209 @@ async fn env_admission_rejects_malformed_or_dangling_active_execution_references
             .execute(&mut *connection)
             .await
             .expect("corrupt reference");
+        // A writer must learn the holder's Env too, so it fails like a reader.
+        let mut writer = graph.nodes[0].clone();
+        writer.execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
+
+        for candidate in [&graph.nodes[0], &writer] {
+            // Act
+            let result = SqliteGraphRepository::env_busy(&mut connection, &graph, candidate).await;
+
+            // Assert
+            assert!(
+                result
+                    .expect_err("invalid active execution")
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn env_admission_treats_an_active_execution_of_an_unknown_node_as_a_conflict() {
+    // Arrange: the active execution's node is missing from its stored graph.
+    let database = crate::test_support::task_database_fixture().await;
+    database
+        .graphs()
+        .save_graph(&graph(), None)
+        .await
+        .expect("graph");
+    run(&database, "run", Some("session"), RunState::Running).await;
+    database
+        .graphs()
+        .link_execution(&record("run"))
+        .await
+        .expect("link");
+    let mut corrupt = graph();
+    corrupt.nodes = vec![reader("elsewhere")];
+    sqlx::query("UPDATE execution_graph_revision SET snapshot = ?")
+        .bind(serde_json::json!(corrupt).to_string())
+        .execute(database.pool())
+        .await
+        .expect("drop the active node");
+    let mut connection = database.pool().acquire().await.expect("connection");
+
+    for access in [
+        GraphWorkspaceAccess::SharedRead,
+        GraphWorkspaceAccess::BackgroundRead,
+    ] {
+        let mut candidate = reader("candidate");
+        candidate.execution.workspace_access = access;
 
         // Act
-        let result =
-            SqliteGraphRepository::env_busy(&mut connection, &graph, &graph.nodes[0]).await;
+        let busy = SqliteGraphRepository::env_busy(&mut connection, &graph(), &candidate)
+            .await
+            .expect("admission");
 
         // Assert
-        assert!(
-            result
-                .expect_err("invalid active execution")
-                .to_string()
-                .contains(expected)
-        );
+        assert!(busy, "{access:?} waits for an unknown holder");
+    }
+}
+
+#[test]
+fn env_conflicts_hold_only_within_one_env_under_the_access_rules() {
+    // Arrange: `None` stands for session work that is not a graph node.
+    let session = EnvId::SessionWorktree("session".into());
+    let worktree = |id: &str| {
+        EnvId::TaskWorktree(TaskWorktreeId {
+            session_id: "session".into(),
+            worktree_id: id.into(),
+        })
+    };
+    let pairs = [
+        (session.clone(), session.clone()),
+        (worktree("first"), worktree("first")),
+        (worktree("first"), session.clone()),
+        (session, worktree("first")),
+        (worktree("first"), worktree("second")),
+    ];
+    let same_env_rules = [
+        (GraphWorkspaceAccess::ExclusiveWrite, None, true),
+        (
+            GraphWorkspaceAccess::ExclusiveWrite,
+            Some(GraphWorkspaceAccess::SharedRead),
+            true,
+        ),
+        (
+            GraphWorkspaceAccess::ExclusiveWrite,
+            Some(GraphWorkspaceAccess::BackgroundRead),
+            true,
+        ),
+        (
+            GraphWorkspaceAccess::ExclusiveWrite,
+            Some(GraphWorkspaceAccess::ExclusiveWrite),
+            true,
+        ),
+        (GraphWorkspaceAccess::SharedRead, None, true),
+        (
+            GraphWorkspaceAccess::SharedRead,
+            Some(GraphWorkspaceAccess::SharedRead),
+            false,
+        ),
+        (
+            GraphWorkspaceAccess::SharedRead,
+            Some(GraphWorkspaceAccess::BackgroundRead),
+            false,
+        ),
+        (
+            GraphWorkspaceAccess::SharedRead,
+            Some(GraphWorkspaceAccess::ExclusiveWrite),
+            true,
+        ),
+        (GraphWorkspaceAccess::BackgroundRead, None, false),
+        (
+            GraphWorkspaceAccess::BackgroundRead,
+            Some(GraphWorkspaceAccess::SharedRead),
+            false,
+        ),
+        (
+            GraphWorkspaceAccess::BackgroundRead,
+            Some(GraphWorkspaceAccess::BackgroundRead),
+            false,
+        ),
+        (
+            GraphWorkspaceAccess::BackgroundRead,
+            Some(GraphWorkspaceAccess::ExclusiveWrite),
+            true,
+        ),
+    ];
+    for (access, holder, same_env_conflict) in same_env_rules {
+        for (node_env, holder_env) in &pairs {
+            let mut node = reader("candidate");
+            node.env_id = node_env.clone();
+            node.execution.workspace_access = access;
+
+            // Act
+            let conflict = SqliteGraphRepository::env_conflict(&node, holder_env, holder);
+
+            // Assert
+            assert_eq!(
+                conflict,
+                same_env_conflict && node_env == holder_env,
+                "{access:?} in {node_env:?} against {holder:?} in {holder_env:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn env_admission_ignores_session_worktree_work_for_a_node_in_another_env() {
+    // Arrange: a graph writer, a chat turn, and a session utility are active
+    // in the session worktree.
+    let database = crate::test_support::task_database_fixture().await;
+    let mut graph = graph();
+    graph.nodes = vec![reader("writer")];
+    graph.nodes[0].execution.workspace_access = GraphWorkspaceAccess::ExclusiveWrite;
+    database
+        .graphs()
+        .save_graph(&graph, None)
+        .await
+        .expect("graph");
+    let writer = database
+        .graph_dispatch()
+        .claim(
+            "graph",
+            graph.revision,
+            "writer",
+            "writer-run",
+            &workspace(),
+        )
+        .await
+        .expect("admission");
+    assert!(matches!(writer, GraphAdmission::Claimed(_)));
+    database
+        .operations()
+        .insert_session_operation("turn", "session", "reply")
+        .await
+        .expect("chat turn");
+    run(&database, "utility", Some("session"), RunState::Running).await;
+    let mut connection = database.pool().acquire().await.expect("connection");
+
+    for access in [
+        GraphWorkspaceAccess::ExclusiveWrite,
+        GraphWorkspaceAccess::SharedRead,
+        GraphWorkspaceAccess::BackgroundRead,
+    ] {
+        let mut node = reader("isolated");
+        node.execution.workspace_access = access;
+        node.env_id = EnvId::TaskWorktree(TaskWorktreeId {
+            session_id: "session".into(),
+            worktree_id: "isolated".into(),
+        });
+
+        // Act
+        let elsewhere = SqliteGraphRepository::env_busy(&mut connection, &graph, &node)
+            .await
+            .expect("task worktree admission");
+        node.env_id = EnvId::SessionWorktree("session".into());
+        let shared = SqliteGraphRepository::env_busy(&mut connection, &graph, &node)
+            .await
+            .expect("session worktree admission");
+
+        // Assert
+        assert!(!elsewhere, "{access:?} in a task worktree is free");
+        assert!(shared, "{access:?} in the session worktree waits");
     }
 }
 

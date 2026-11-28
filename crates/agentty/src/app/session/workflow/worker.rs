@@ -2403,7 +2403,7 @@ impl SessionManager {
                     | Status::Watching
                     | Status::InProgress
                     | Status::Question
-            ) || request.folder != session.folder
+            ) || request.location != ag_worker::GraphEnvLocation::Folder(session.folder.clone())
             {
                 return Err(SessionError::Workflow(
                     "Graph session is unavailable or its Env changed".into(),

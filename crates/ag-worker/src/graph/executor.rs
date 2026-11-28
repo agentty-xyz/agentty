@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::future::{Future, poll_fn};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::Poll;
 
@@ -15,7 +14,8 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, RwLock, Semaphore, oneshot, watc
 use tokio::task::JoinSet;
 
 use super::{
-    GraphAdmission, GraphDispatchRepository, GraphExecutionRecord, GraphNodeRunner, GraphRunRequest,
+    GraphAdmission, GraphDispatchRepository, GraphEnvResolver, GraphExecutionRecord,
+    GraphNodeRunner, GraphRunRequest,
 };
 use crate::scope::{RunContext, in_context};
 
@@ -193,13 +193,14 @@ impl GraphExecutor {
 
     /// Dispatches ready branches concurrently, then reevaluates joins. Returns
     /// only newly admitted receipts, never an inferred graph-complete status.
-    /// Nodes with exhausted shared budgets remain unclaimed for a later call.
-    /// Each wave reloads the graph that `revision` addresses, so nodes an
-    /// expansion appended dispatch in the same call.
+    /// Nodes with exhausted shared budgets, or whose Env `environments`
+    /// cannot offer yet, remain unclaimed for a later call. Each wave
+    /// reloads the graph that `revision` addresses, so nodes an expansion
+    /// appended dispatch in the same call.
     ///
     /// # Errors
     /// Rejects stale graphs, unsupported profiles, unknown budgets,
-    /// storage failures, and worker failures. Already admitted peers settle
+    /// storage, Env, and worker failures. Already admitted peers settle
     /// before a wave's failure is returned. Hosts invoke again after gate or
     /// resource changes; previously admitted nodes are never replayed.
     /// Hosts wait on `GraphResources::subscribe_releases`,
@@ -209,7 +210,7 @@ impl GraphExecutor {
         &self,
         graph_id: &str,
         revision: NonZeroU64,
-        folder: &Path,
+        environments: &Arc<dyn GraphEnvResolver>,
         session_permissions: PermissionMode,
     ) -> Result<Vec<GraphExecutionRecord>, OneShotError> {
         let mut receipts = Vec::new();
@@ -242,7 +243,7 @@ impl GraphExecutor {
                 let node_work = self.admit_and_run(
                     &graph,
                     node,
-                    folder,
+                    environments,
                     session_permissions,
                     admitted,
                     GraphNodeLease {
@@ -350,15 +351,15 @@ impl GraphExecutor {
         &self,
         graph: &ExecutionGraph,
         node: &GraphNode,
-        folder: &Path,
+        environments: &Arc<dyn GraphEnvResolver>,
         session_permissions: PermissionMode,
         admitted: oneshot::Sender<GraphNodeAdmission>,
         lease: GraphNodeLease,
     ) -> impl Future<Output = Result<(), OneShotError>> + Send + 'static {
         let graph_id = graph.id.clone();
         let revision = graph.revision;
-        let node_id = node.id.clone();
-        let folder = folder.to_path_buf();
+        let node = node.clone();
+        let environments = Arc::clone(environments);
         let permission_mode = node
             .execution
             .permission_mode(&node.definition, session_permissions);
@@ -386,19 +387,30 @@ impl GraphExecutor {
                 }
                 None => None,
             };
-            let dispatch = match repository
+            // Like the first provider call, an unavailable Env leaves the
+            // node unclaimed. Refund the call before the driver moves on, so
+            // a later node sharing the budget can reserve it.
+            let Some(location) = environments.locate(&graph_id, &node).await? else {
+                drop(provider_call_budget);
+                let _ = admitted.send(GraphNodeAdmission::Unclaimed(resource_lease));
+
+                return Ok(());
+            };
+            let admission = repository
                 .claim(
                     &graph_id,
                     revision,
-                    &node_id,
+                    &node.id,
                     &uuid::Uuid::new_v4().to_string(),
-                    &folder,
+                    &location,
                 )
-                .await?
-            {
-                GraphAdmission::Claimed(dispatch) => *dispatch,
-                GraphAdmission::Blocked | GraphAdmission::Existing(_) => {
+                .await;
+            let dispatch = match admission {
+                Ok(GraphAdmission::Claimed(dispatch)) => *dispatch,
+                unclaimed => {
                     drop(provider_call_budget);
+                    // A failed claim fails the pass; nothing was admitted.
+                    unclaimed?;
                     let _ = admitted.send(GraphNodeAdmission::Unclaimed(resource_lease));
 
                     return Ok(());
@@ -408,24 +420,27 @@ impl GraphExecutor {
             let record = dispatch.record.clone();
             let _unsettled = UnsettledExecution::track(unsettled, record.execution.clone());
             let _ = admitted.send(GraphNodeAdmission::Claimed(record.clone()));
-            let request = GraphRunRequest {
-                dispatch: dispatch.clone(),
-                folder,
-                permission_mode,
-                provider_call_budget,
-            };
-            let result = {
-                // Include future construction and every poll in the unwind
-                // boundary. Drop a panicked runner before settling its claim.
-                let work = async { runner.run(request).await };
-                tokio::pin!(work);
+            let prepared = Self::unwinding(
+                async { environments.prepare(&dispatch, &location).await },
+                "Graph node Env preparation panicked",
+            )
+            .await;
+            let result = match prepared {
+                Ok(()) => {
+                    let request = GraphRunRequest {
+                        dispatch: dispatch.clone(),
+                        location,
+                        permission_mode,
+                        provider_call_budget,
+                    };
 
-                poll_fn(|context| {
-                    catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(context))).unwrap_or_else(
-                        |_| Poll::Ready(Err(OneShotError::new("Graph node runner panicked"))),
+                    Self::unwinding(
+                        async { runner.run(request).await },
+                        "Graph node runner panicked",
                     )
-                })
-                .await
+                    .await
+                }
+                Err(error) => Err(error),
             };
             match result {
                 Ok(body) => repository.finish(&dispatch, &body).await,
@@ -454,6 +469,22 @@ impl GraphExecutor {
         }
 
         Ok(())
+    }
+
+    /// Runs `work` with its construction and every poll inside one unwind
+    /// boundary, turning a panic into `panic` as the error. The panicked
+    /// future is dropped before this returns, so before its claim settles.
+    async fn unwinding<T>(
+        work: impl Future<Output = Result<T, OneShotError>>,
+        panic: &'static str,
+    ) -> Result<T, OneShotError> {
+        tokio::pin!(work);
+
+        poll_fn(|context| {
+            catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(context)))
+                .unwrap_or_else(|_| Poll::Ready(Err(OneShotError::new(panic))))
+        })
+        .await
     }
 }
 

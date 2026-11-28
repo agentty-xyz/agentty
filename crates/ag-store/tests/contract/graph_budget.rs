@@ -270,7 +270,7 @@ async fn a_graph_that_executed_without_a_ledger_cannot_gain_fresh_limits()
             snapshot.revision,
             "node",
             &uuid::Uuid::new_v4().to_string(),
-            std::path::Path::new("workspace"),
+            &ag_worker::GraphEnvLocation::Folder("workspace".into()),
         )
         .await?;
     assert!(matches!(admission, ag_worker::GraphAdmission::Claimed(_)));

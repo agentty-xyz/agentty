@@ -1,9 +1,8 @@
-//! Repository, provider, and runner doubles plus graph fixtures for the graph
-//! dispatch contract tests.
+//! Repository, provider, and runner doubles plus graph and Env fixtures for
+//! the graph dispatch contract tests.
 
 use std::error::Error;
 use std::num::NonZeroU64;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
@@ -17,14 +16,26 @@ use ag_session::{
     GraphInputBinding, GraphNode, GraphOutput, GraphPostProcessing, GraphWorkspaceAccess,
 };
 use ag_store::Database;
+use ag_worker::test_support::FolderEnvs;
 use ag_worker::{
-    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphNodeRunner,
-    GraphRunRequest, RunClient, RunScope, RunState, RunWorker, in_scope,
+    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphEnvLocation, GraphEnvResolver,
+    GraphExecutionRecord, GraphNodeRunner, GraphRunRequest, RunClient, RunScope, RunState,
+    RunWorker, in_scope,
 };
 use async_trait::async_trait;
 use tokio::sync::{Barrier, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+/// Resolver locating every node in [`workspace`].
+pub(super) fn environments() -> Arc<dyn GraphEnvResolver> {
+    FolderEnvs::resolver("workspace")
+}
+
+/// The folder fixture nodes run in.
+pub(super) fn workspace() -> GraphEnvLocation {
+    GraphEnvLocation::Folder("workspace".into())
+}
 
 pub(super) struct ScannedAdmission {
     pub(super) repository: Arc<dyn GraphDispatchRepository>,
@@ -43,7 +54,7 @@ impl GraphDispatchRepository for ScannedAdmission {
         revision: NonZeroU64,
         node_id: &str,
         execution_id: &str,
-        folder: &Path,
+        location: &GraphEnvLocation,
     ) -> Result<GraphAdmission, OneShotError> {
         if node_id == "probe" {
             self.scanned.notify_one();
@@ -52,7 +63,7 @@ impl GraphDispatchRepository for ScannedAdmission {
         }
 
         self.repository
-            .claim(graph_id, revision, node_id, execution_id, folder)
+            .claim(graph_id, revision, node_id, execution_id, location)
             .await
     }
 
@@ -153,11 +164,11 @@ impl GraphDispatchRepository for PausedAdmission {
         revision: NonZeroU64,
         node_id: &str,
         execution_id: &str,
-        folder: &Path,
+        location: &GraphEnvLocation,
     ) -> Result<GraphAdmission, OneShotError> {
         let admission = self
             .repository
-            .claim(graph_id, revision, node_id, execution_id, folder)
+            .claim(graph_id, revision, node_id, execution_id, location)
             .await?;
         if matches!(admission, GraphAdmission::Claimed(_)) {
             self.committed.notify_one();

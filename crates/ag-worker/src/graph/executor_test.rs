@@ -1,10 +1,9 @@
-//! Graph executor tests for capacity, Env leases, budgets, waves, and panic
-//! cleanup.
+//! Graph executor tests for capacity, Env leases and resolution, budgets,
+//! waves, and panic cleanup.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Waker};
 
@@ -12,9 +11,11 @@ use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
 use tokio::sync::Notify;
 
 use super::UnsettledExecutions;
-use crate::graph::model::{MockGraphDispatchRepository, MockGraphNodeRunner};
-use crate::graph::support_test::{dispatch, graph};
-use crate::graph::{GraphAdmission, GraphExecutor, GraphResources};
+use crate::graph::model::{MockGraphDispatchRepository, MockGraphEnvResolver, MockGraphNodeRunner};
+use crate::graph::support_test::{dispatch, environments, graph};
+use crate::graph::{
+    GraphAdmission, GraphEnvLocation, GraphEnvResolver, GraphExecutor, GraphResources,
+};
 
 #[test]
 fn budget_progress_observes_shared_credit_without_reserving_it() {
@@ -222,7 +223,7 @@ async fn idle_scans_finish_before_waking_capacity_waiters() {
         .run_ready(
             "graph",
             NonZeroU64::MIN,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await
@@ -277,7 +278,7 @@ async fn session_adapters_acquire_their_environment_after_serial_selection() {
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await
@@ -327,7 +328,7 @@ async fn unclaimed_admissions_refund_the_initial_provider_call() {
             .run_ready(
                 "graph",
                 NonZeroU64::MIN,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly,
             )
             .await;
@@ -367,7 +368,7 @@ async fn exhausted_budget_defers_admission_and_releases_resource_leases() {
         .run_ready(
             "graph",
             NonZeroU64::MIN,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await
@@ -397,7 +398,7 @@ async fn env_writer_blocks_read_admission_without_consuming_capacity() {
         .run_ready(
             "graph",
             NonZeroU64::MIN,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await
@@ -546,7 +547,7 @@ async fn wave_limit_settles_each_wave_before_admitting_more_ready_nodes() {
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await
@@ -633,7 +634,7 @@ async fn panicked_node_settles_failure_before_releasing_resource_leases() {
             .run_ready(
                 "graph",
                 NonZeroU64::MIN,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly,
             )
             .await;
@@ -720,7 +721,7 @@ async fn nodes_appended_between_waves_dispatch_in_the_same_call() {
         .run_ready(
             "graph",
             NonZeroU64::MIN,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await
@@ -812,7 +813,7 @@ async fn admitted_execution_stays_unsettled_until_its_settlement_returns() {
             .run_ready(
                 "graph",
                 NonZeroU64::MIN,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly,
             )
             .await;
@@ -845,7 +846,7 @@ async fn admission_panic_returns_a_worker_error_and_releases_resource_leases() {
         .run_ready(
             "graph",
             NonZeroU64::MIN,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await;
@@ -859,6 +860,266 @@ async fn admission_panic_returns_a_worker_error_and_releases_resource_leases() {
     );
     assert_eq!(resources.capacity.available_permits(), 1);
     assert!(environment.try_write_owned().is_ok());
+}
+
+#[tokio::test]
+async fn env_locations_precede_claims_and_unclaimed_nodes_refund_their_call() {
+    let located = || GraphEnvLocation::Folder("node-env".into());
+    let cases = [
+        (Ok(None), None),
+        (Err(OneShotError::new("location failed")), None),
+        (Ok(Some(located())), Some(Ok(GraphAdmission::Blocked))),
+        (
+            Ok(Some(located())),
+            Some(Ok(GraphAdmission::Existing(dispatch().record))),
+        ),
+        (
+            Ok(Some(located())),
+            Some(Err(OneShotError::new("claim failed"))),
+        ),
+    ];
+    for (location, admission) in cases {
+        // Arrange
+        let failure = location
+            .as_ref()
+            .err()
+            .or_else(|| {
+                admission
+                    .as_ref()
+                    .and_then(|admission| admission.as_ref().err())
+            })
+            .map(ToString::to_string);
+        let claims = usize::from(admission.is_some());
+        let mut graph = graph();
+        graph.nodes[0].execution.shared_budget_id = Some("budget".into());
+        let budget = ProviderCallBudget::new(1);
+        let resources = Arc::new(GraphResources::new(
+            NonZeroUsize::MIN,
+            HashMap::from([("budget".into(), budget.clone())]),
+        ));
+        let mut environments = MockGraphEnvResolver::new();
+        let reserved_budget = budget.clone();
+        environments
+            .expect_locate()
+            .once()
+            .return_once(move |graph_id, node| {
+                assert_eq!((graph_id, node.id.as_str()), ("graph", "reader"));
+                assert_eq!(reserved_budget.remaining(), 0, "the call is reserved first");
+
+                location
+            });
+        environments.expect_prepare().never();
+        let mut repository = MockGraphDispatchRepository::new();
+        repository.expect_graph().return_const(Ok(graph));
+        repository
+            .expect_claim()
+            .times(claims)
+            .returning(move |_, _, _, _, location| {
+                assert_eq!(location, &located(), "the claim receives the location");
+
+                admission.clone().expect("claimed only after a location")
+            });
+        let mut runner = MockGraphNodeRunner::new();
+        runner.expect_supports().once().return_const(true);
+        let releases = resources.subscribe_releases();
+        let executor = GraphExecutor::new(Arc::new(repository), resources, Arc::new(runner));
+        let environments: Arc<dyn GraphEnvResolver> = Arc::new(environments);
+
+        // Act
+        let result = executor
+            .run_ready(
+                "graph",
+                NonZeroU64::MIN,
+                &environments,
+                PermissionMode::ReadOnly,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(
+            result
+                .map(|receipts| receipts.len())
+                .map_err(|error| error.to_string()),
+            failure.map_or(Ok(0), Err)
+        );
+        assert_eq!(budget.remaining(), 1, "unused reservation is refunded");
+        assert!(
+            !releases
+                .has_changed()
+                .expect("unclaimed scans do not wake drivers")
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_refused_env_leaves_its_shared_call_to_a_later_node() {
+    // Arrange: both nodes share one call; the first node's Env is refused.
+    let mut graph = graph();
+    graph.nodes[0].id = "refused".into();
+    graph.nodes[0].execution.shared_budget_id = Some("budget".into());
+    let mut later = graph.nodes[0].clone();
+    later.id = "reader".into();
+    graph.nodes.push(later);
+    let budget = ProviderCallBudget::new(1);
+    let resources = Arc::new(GraphResources::new(
+        NonZeroUsize::MIN,
+        HashMap::from([("budget".into(), budget.clone())]),
+    ));
+    let mut environments = MockGraphEnvResolver::new();
+    environments.expect_locate().returning(|_, node| {
+        Ok((node.id == "reader").then(|| GraphEnvLocation::Folder("workspace".into())))
+    });
+    environments.expect_prepare().once().return_const(Ok(()));
+    let mut repository = MockGraphDispatchRepository::new();
+    repository.expect_graph().return_const(Ok(graph));
+    let mut claims = 0;
+    repository
+        .expect_claim()
+        .times(2)
+        .returning(move |_, _, node_id, _, _| {
+            assert_eq!(node_id, "reader");
+            claims += 1;
+
+            Ok(if claims == 1 {
+                GraphAdmission::Claimed(Box::new(dispatch()))
+            } else {
+                GraphAdmission::Existing(dispatch().record)
+            })
+        });
+    repository.expect_finish().once().return_const(Ok(()));
+    let mut runner = MockGraphNodeRunner::new();
+    runner.expect_supports().return_const(true);
+    runner
+        .expect_run()
+        .once()
+        .returning(|_| Ok("response".into()));
+    let executor = GraphExecutor::new(Arc::new(repository), resources, Arc::new(runner));
+    let environments: Arc<dyn GraphEnvResolver> = Arc::new(environments);
+
+    // Act
+    let receipts = executor
+        .run_ready(
+            "graph",
+            NonZeroU64::MIN,
+            &environments,
+            PermissionMode::ReadOnly,
+        )
+        .await
+        .expect("dispatch pass");
+
+    // Assert
+    assert_eq!(receipts, [dispatch().record]);
+    assert_eq!(budget.remaining(), 1);
+}
+
+#[tokio::test]
+async fn env_preparation_runs_at_most_once_per_claim_and_its_failure_fails_the_claim() {
+    for outcome in ["prepares", "fails", "panics"] {
+        // Arrange
+        let prepares = outcome == "prepares";
+        let failure = match outcome {
+            "fails" => "worktree creation failed",
+            _ => "Graph node Env preparation panicked",
+        };
+        let located = || GraphEnvLocation::Folder("node-env".into());
+        let mut graph = graph();
+        graph.nodes[0].execution.shared_budget_id = Some("budget".into());
+        let budget = ProviderCallBudget::new(1);
+        let resources = Arc::new(GraphResources::new(
+            NonZeroUsize::MIN,
+            HashMap::from([("budget".into(), budget.clone())]),
+        ));
+        let environment = resources.environment(&graph.nodes[0].env_id);
+        // A successful node is rescanned once and found admitted already.
+        let scans = if prepares { 2 } else { 1 };
+        let mut environments = MockGraphEnvResolver::new();
+        environments
+            .expect_locate()
+            .times(scans)
+            .returning(move |_, _| Ok(Some(located())));
+        let prepared_environment = environment.clone();
+        environments
+            .expect_prepare()
+            .once()
+            .returning(move |admitted, location| {
+                assert_eq!(admitted, &dispatch());
+                assert_eq!(location, &located());
+                assert!(
+                    prepared_environment.try_write().is_err(),
+                    "the Env lease is held while preparing"
+                );
+
+                match outcome {
+                    "prepares" => Ok(()),
+                    "fails" => Err(OneShotError::new("worktree creation failed")),
+                    _ => std::panic::resume_unwind(Box::new("preparation panicked")),
+                }
+            });
+        let mut repository = MockGraphDispatchRepository::new();
+        repository.expect_graph().return_const(Ok(graph));
+        let mut claims = 0;
+        repository
+            .expect_claim()
+            .times(scans)
+            .returning(move |_, _, _, _, _| {
+                claims += 1;
+
+                Ok(if claims == 1 {
+                    GraphAdmission::Claimed(Box::new(dispatch()))
+                } else {
+                    GraphAdmission::Existing(dispatch().record)
+                })
+            });
+        repository
+            .expect_finish()
+            .times(usize::from(prepares))
+            .return_const(Ok(()));
+        repository
+            .expect_fail()
+            .times(usize::from(!prepares))
+            .returning(move |record, error| {
+                assert_eq!(record, &dispatch().record);
+                assert_eq!(error, failure);
+
+                Ok(())
+            });
+        let mut runner = MockGraphNodeRunner::new();
+        runner.expect_supports().return_const(true);
+        runner
+            .expect_run()
+            .times(usize::from(prepares))
+            .returning(move |request| {
+                assert_eq!(request.location, located());
+                assert!(request.provider_call_budget.is_some());
+
+                Ok("response".into())
+            });
+        let executor =
+            GraphExecutor::new(Arc::new(repository), resources.clone(), Arc::new(runner));
+        let environments: Arc<dyn GraphEnvResolver> = Arc::new(environments);
+
+        // Act
+        let result = executor
+            .run_ready(
+                "graph",
+                NonZeroU64::MIN,
+                &environments,
+                PermissionMode::ReadOnly,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(
+            result
+                .map(|receipts| receipts.len())
+                .map_err(|error| error.to_string()),
+            if prepares { Ok(1) } else { Err(failure.into()) }
+        );
+        assert_eq!(budget.remaining(), 1, "the runner spent no call");
+        assert_eq!(resources.capacity.available_permits(), 1);
+        assert!(environment.try_write_owned().is_ok());
+        assert_eq!(executor.unsettled_executions(), []);
+    }
 }
 
 #[tokio::test]
@@ -892,7 +1153,7 @@ async fn unsupported_profiles_and_unknown_budgets_are_rejected_before_admission(
             .run_ready(
                 "graph",
                 NonZeroU64::MIN,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly,
             )
             .await;
@@ -922,7 +1183,7 @@ async fn full_capacity_defers_admission_until_a_permit_returns() {
         .run_ready(
             "graph",
             NonZeroU64::MIN,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await

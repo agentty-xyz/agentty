@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,8 +12,8 @@ use ag_session::{
     GraphExecutionRef, GraphNode, GraphNodeStatus, GraphPostProcessing, StartExecutionGraphRequest,
 };
 use ag_worker::{
-    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,
-    GraphNodeRunner, GraphRunRequest, RunRepository, RunState,
+    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphEnvLocation, GraphExecutionRecord,
+    GraphExecutor, GraphNodeRunner, GraphRunRequest, RunRepository, RunState,
 };
 use async_trait::async_trait;
 use tokio::sync::{Notify, mpsc, watch};
@@ -793,10 +792,10 @@ impl GraphDispatchRepository for ObservedRepository {
         revision: NonZeroU64,
         node_id: &str,
         execution_id: &str,
-        folder: &Path,
+        location: &GraphEnvLocation,
     ) -> Result<GraphAdmission, OneShotError> {
         self.inner
-            .claim(graph_id, revision, node_id, execution_id, folder)
+            .claim(graph_id, revision, node_id, execution_id, location)
             .await
     }
 
@@ -828,10 +827,10 @@ impl GraphDispatchRepository for SettlingRepository {
         revision: NonZeroU64,
         node_id: &str,
         execution_id: &str,
-        folder: &Path,
+        location: &GraphEnvLocation,
     ) -> Result<GraphAdmission, OneShotError> {
         self.inner
-            .claim(graph_id, revision, node_id, execution_id, folder)
+            .claim(graph_id, revision, node_id, execution_id, location)
             .await
     }
 
@@ -866,7 +865,7 @@ impl GraphDispatchRepository for UnclaimedRepository {
         revision: NonZeroU64,
         node_id: &str,
         _execution_id: &str,
-        _folder: &Path,
+        _location: &GraphEnvLocation,
     ) -> Result<GraphAdmission, OneShotError> {
         self.entered.send(()).expect("observe claim check");
         let mut released = self.released.clone();

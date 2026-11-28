@@ -3,7 +3,6 @@
 //! nodes in the same graph.
 
 use std::num::NonZeroU64;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,7 +17,7 @@ use ag_session::{
     GraphNodeStatus, GraphProposalState, GraphProposalVersionOutcome, StartExecutionGraphRequest,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
-use ag_worker::{GraphAdmission, RunState};
+use ag_worker::{GraphAdmission, GraphEnvLocation, RunState};
 
 use crate::app::App;
 use crate::app::execution_graph::tests::seed_session;
@@ -350,7 +349,7 @@ async fn complete(app: &App, graph: &ExecutionGraph) {
             graph.revision,
             "only",
             &uuid::Uuid::new_v4().to_string(),
-            Path::new("workspace"),
+            &GraphEnvLocation::Folder("workspace".into()),
         )
         .await
         .expect("claim");

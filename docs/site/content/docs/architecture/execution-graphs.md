@@ -52,6 +52,10 @@ Workspace access is explicit:
 - `ExclusiveWrite` serializes against every other operation in that Env. It cannot relax
   host permission ceilings, definition restrictions, or worker policy.
 
+These rules apply within one Env; work in different Envs never conflicts. Session work
+that is not a graph node, such as chat turns, sync, merges, publication, and session
+utilities, holds the session worktree.
+
 A shared budget ID names a host-owned provider-call budget that covers retries and
 protocol repairs. The executor resolves it to one shared counter, reserves the first
 provider call before durable admission, and refunds unused reservations. A node with no
@@ -97,19 +101,28 @@ removes its graph records.
 
 `GraphExecutor::run_ready` drains ready nodes in declaration order, running compatible
 branches concurrently and reevaluating joins after settlement. `GraphDispatchRepository`
-checks the current revision, gates, Env conflicts, and exact inputs in the same
-transaction that creates the operation-backed task attempt or utility run. Competing
-admissions return the original receipt without dispatching again, including after a
-restart.
+checks the current revision, gates, conflicts in the node's Env, and exact inputs in the
+same transaction that creates the operation-backed task attempt or utility run.
+Competing admissions return the original receipt without dispatching again, including
+after a restart.
+
+The host's `GraphEnvResolver` places each node. After reserving the node's first
+provider call, the executor asks the resolver where the node would run, without any
+durable effect, and passes that location to the claim; a fresh utility run records it. A
+node whose Env cannot be offered stays unclaimed and returns its call until the host
+wakes its drivers. A live executor prepares the Env at most once per claim before the
+runner starts, and a failed or panicking preparation fails the execution like a runner
+error. The executor passes the location through without inspecting it. Agentty's
+resolver places every node in its session worktree.
 
 The executor intersects the host ceiling with definition permissions and keeps worker
 policy and capacity ceilings. Hosts share one `GraphResources` lease pool with other
-work in those Envs, and the database also excludes conflicting active work across
-graphs. Session adapters publish active ownership before waiting for Env access, so
-concurrent sync queues behind the turn. Leases are held through ordered effects and
-settlement; each settled node releases its capacity and Env lease and wakes only the
-drivers waiting for them. Dropping a driver leaves admitted work owned through cleanup,
-and runner panics follow the same durable failure path as returned errors.
+work in those Envs, and the database also excludes conflicting active work in the same
+Env across graphs. Session adapters publish active ownership before waiting for Env
+access, so concurrent sync queues behind the turn. Leases are held through ordered
+effects and settlement; each settled node releases its capacity and Env lease and wakes
+only the drivers waiting for them. Dropping a driver leaves admitted work owned through
+cleanup, and runner panics follow the same durable failure path as returned errors.
 
 Successful settlement saves the complete schema-valid response. Question-free outputs
 receive validation evidence; user acceptance and task completion remain separate
@@ -146,8 +159,8 @@ refund is written to a durable ledger, so no relaunch refills spent calls. Only
 action ID, refuses canceled or completed graphs, and credits a retained driver's live
 budget after the record commits. Launch limits stay unchanged, so a proposal graph still
 relaunches against its approved limits. Acceptance uses `accept_execution_graph_result`
-with an exact validated reference. Graph writers exclude ordinary session work, merges,
-and focused-review readers.
+with an exact validated reference. Graph writers in the session worktree exclude
+ordinary session work, merges, and focused-review readers.
 
 ## Controlled Expansion
 

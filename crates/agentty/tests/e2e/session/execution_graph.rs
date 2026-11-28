@@ -12,7 +12,7 @@ use ag_session::{
     GraphExecutionRef, GraphNode, GraphNodeContinuation, GraphOutput, GraphPostProcessing,
     GraphWorkspaceAccess, test_support as model_fixture,
 };
-use ag_worker::{GraphAdmission, GraphDispatch};
+use ag_worker::{GraphAdmission, GraphDispatch, GraphEnvLocation};
 use agentty::db::{Database, GraphOutputReplyRecord};
 use testty::assertion;
 use testty::journey::Journey;
@@ -289,7 +289,7 @@ async fn claim_running(
             graph.revision,
             id,
             &uuid::Uuid::from_u128(index as u128 + 1).to_string(),
-            &env.workdir,
+            &GraphEnvLocation::Folder(env.workdir.clone()),
         )
         .await?;
     let dispatch = match admission {

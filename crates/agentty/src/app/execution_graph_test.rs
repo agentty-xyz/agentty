@@ -21,7 +21,7 @@ use ag_session::{
 use ag_worker::SessionRunClient;
 use tokio::sync::{Notify, mpsc, watch};
 
-use super::{GraphDriverSession, GraphNodeLeases, can_still_finish};
+use super::{GraphDriverSession, GraphNodeLeases, SessionWorktreeEnvs, can_still_finish};
 use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::SessionManager;
@@ -128,7 +128,9 @@ async fn graph_handoffs_reject_stale_or_conflicting_claims_before_worker_deliver
                     run_id: "utility".into(),
                 }
             }
-            "env" => request.folder = "other-workspace".into(),
+            "env" => {
+                request.location = ag_worker::GraphEnvLocation::Folder("other-workspace".into());
+            }
             "node" => request.dispatch.node.objective.push_str("changed"),
             "receipt" => request.dispatch.record.node_id = "missing".into(),
             "running" => {
@@ -829,6 +831,34 @@ async fn assert_reader_result(
     );
 }
 
+#[tokio::test]
+async fn session_worktree_envs_locate_only_their_session_worktree_nodes() {
+    // Arrange
+    let environments =
+        SessionWorktreeEnvs::resolver(SessionId::from("sess"), PathBuf::from("workspace"));
+    let node = graph().nodes.remove(0);
+    let mut foreign = node.clone();
+    foreign.env_id = EnvId::SessionWorktree("other".into());
+    let location = ag_worker::GraphEnvLocation::Folder("workspace".into());
+
+    // Act
+    let placed = environments.locate("graph", &node).await;
+    let refused = environments.locate("graph", &foreign).await;
+    let prepared = environments
+        .prepare(&run_request().dispatch, &location)
+        .await;
+
+    // Assert
+    assert_eq!(placed, Ok(Some(location)));
+    assert_eq!(
+        refused,
+        Err(ag_contracts::OneShotError::new(
+            "Graph node first names an Env other than its session worktree"
+        ))
+    );
+    assert_eq!(prepared, Ok(()));
+}
+
 async fn claimed_handoff_request(app: &mut App) -> ag_worker::GraphRunRequest {
     let mut graph = graph();
     graph.nodes.truncate(1);
@@ -847,14 +877,14 @@ async fn claimed_handoff_request(app: &mut App) -> ag_worker::GraphRunRequest {
                 graph.revision,
                 "first",
                 "aaaaaaaa-0000-0000-0000-000000000001",
-                std::path::Path::new("workspace"),
+                &ag_worker::GraphEnvLocation::Folder("workspace".into()),
             )
             .await
             .expect("claim"),
     );
     ag_worker::GraphRunRequest {
         dispatch,
-        folder: "workspace".into(),
+        location: ag_worker::GraphEnvLocation::Folder("workspace".into()),
         permission_mode: PermissionMode::ReadOnly,
         provider_call_budget: None,
     }
@@ -918,7 +948,10 @@ pub(in crate::app) async fn seed_session(manager: &mut SessionManager, db: &AppR
 /// empty chat.
 fn driver_session() -> GraphDriverSession {
     GraphDriverSession {
-        folder: PathBuf::from("workspace"),
+        environments: SessionWorktreeEnvs::resolver(
+            SessionId::from("sess"),
+            PathBuf::from("workspace"),
+        ),
         leases: GraphNodeLeases::default(),
         transcript: Arc::new(Mutex::new(SessionTranscript::ephemeral(Vec::new()))),
     }
@@ -988,7 +1021,7 @@ pub(crate) fn run_request() -> ag_worker::GraphRunRequest {
                 node_id: "first".into(),
             },
         },
-        folder: "workspace".into(),
+        location: ag_worker::GraphEnvLocation::Folder("workspace".into()),
         permission_mode: PermissionMode::ReadOnly,
         provider_call_budget: None,
     }

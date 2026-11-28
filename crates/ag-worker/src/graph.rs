@@ -6,8 +6,8 @@ mod utility;
 
 pub use executor::{GraphExecutor, GraphResources};
 pub use model::{
-    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphInputValue,
-    GraphNodeRunner, GraphRunRequest,
+    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphEnvLocation, GraphEnvResolver,
+    GraphExecutionRecord, GraphInputValue, GraphNodeRunner, GraphRunRequest,
 };
 pub use utility::GraphUtilityRunner;
 

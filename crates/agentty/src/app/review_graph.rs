@@ -7,7 +7,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ag_contracts::{
@@ -23,15 +22,17 @@ use ag_session::{
 use ag_store::AppRepositories;
 use ag_telemetry::{KeyValue, Outcome, Span};
 use ag_worker::{
-    GraphDispatch, GraphExecutor, GraphNodeRunner, GraphResources, GraphRunRequest, RunClient,
-    RunInfo, RunScope, RunWorker,
+    GraphDispatch, GraphEnvLocation, GraphEnvResolver, GraphExecutor, GraphNodeRunner,
+    GraphResources, GraphRunRequest, RunClient, RunInfo, RunScope, RunWorker,
 };
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, sleep_until, timeout_at};
 use tokio_util::sync::CancellationToken;
 
-use super::execution_graph::{EnvironmentLease, GraphDriverRegistration, GraphDrivers};
+use super::execution_graph::{
+    EnvironmentLease, GraphDriverRegistration, GraphDrivers, SessionWorktreeEnvs,
+};
 use super::review::ReviewProgress;
 use super::review_prompt::{
     self, BatchOutcome, BatchProgress, Fragment, REVIEW_CONCURRENCY, ReviewOutcome, ReviewedBatches,
@@ -212,7 +213,7 @@ impl ReviewGraphHost {
             .drive(
                 &graph,
                 &executor,
-                &request.folder,
+                &SessionWorktreeEnvs::resolver(env_id.session_id().clone(), request.folder.clone()),
                 &registration.cancellation,
                 launch.deadline,
             )
@@ -244,7 +245,7 @@ impl ReviewGraphHost {
         &self,
         graph: &ExecutionGraph,
         executor: &GraphExecutor,
-        folder: &Path,
+        environments: &Arc<dyn GraphEnvResolver>,
         cancellation: &CancellationToken,
         deadline: Instant,
     ) -> Option<OneShotError> {
@@ -259,7 +260,12 @@ impl ReviewGraphHost {
             releases.borrow_and_update();
             match ag_worker::in_scope(
                 scope.clone(),
-                executor.run_ready(&graph.id, graph.revision, folder, PermissionMode::ReadOnly),
+                executor.run_ready(
+                    &graph.id,
+                    graph.revision,
+                    environments,
+                    PermissionMode::ReadOnly,
+                ),
             )
             .await
             {
@@ -526,8 +532,9 @@ impl GraphNodeRunner for ReviewNodeRunner {
             return Err(OneShotError::new("Review node requires a utility run"));
         };
         let session_id = request.dispatch.node.env_id.session_id();
+        let GraphEnvLocation::Folder(folder) = request.location;
         let run = RunInfo {
-            folder: request.folder.clone(),
+            folder: folder.clone(),
             id: run_id.clone(),
             parent_id: Some(request.dispatch.record.graph_id.clone()),
             project_id: None,
@@ -535,7 +542,7 @@ impl GraphNodeRunner for ReviewNodeRunner {
             session_id: Some(session_id.to_string()),
         };
         let mut phase_request = self.request.clone();
-        phase_request.folder = request.folder;
+        phase_request.folder = folder;
         phase_request.permission_mode = request.permission_mode;
         let phase = ReviewPhase {
             budget: self.budget.clone(),

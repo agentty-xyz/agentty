@@ -8,13 +8,14 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{OneShotError, PermissionMode, ProviderCallBudget};
 use ag_session::{
-    ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
+    ContinueGraphNodeRequest, EnvId, ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus,
     GraphBlockedReason, GraphContext, GraphControlRequest, GraphExecutionRef, GraphNode,
     GraphNodeStatus, GraphResult, GraphResultRef, ResumeExecutionGraphRequest,
     StartExecutionGraphRequest,
 };
 use ag_worker::{
-    GraphExecutionRecord, GraphExecutor, GraphNodeRunner, GraphRunRequest, GraphUtilityRunner,
+    GraphDispatch, GraphEnvLocation, GraphEnvResolver, GraphExecutionRecord, GraphExecutor,
+    GraphNodeRunner, GraphRunRequest, GraphUtilityRunner,
 };
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -55,12 +56,56 @@ impl GraphDriver {
 
 /// Session state a graph driver works in and reports to.
 pub(super) struct GraphDriverSession {
-    /// Session worktree the graph's nodes run in.
-    pub(super) folder: PathBuf,
+    /// Places each of the graph's nodes in its Env.
+    pub(super) environments: Arc<dyn GraphEnvResolver>,
     /// Status leases the driver settles after each dispatch pass.
     pub(super) leases: GraphNodeLeases,
     /// Live session chat that receives the driver's notices.
     pub(super) transcript: Arc<Mutex<SessionTranscript>>,
+}
+
+/// Locates every node in its session's worktree, the only Env a graph can
+/// name today. Session setup provisions that worktree and session cleanup
+/// removes it, so preparing a node changes nothing.
+pub(super) struct SessionWorktreeEnvs {
+    env: EnvId,
+    folder: PathBuf,
+}
+
+impl SessionWorktreeEnvs {
+    /// Locates `session_id`'s worktree at `folder`, the session's own.
+    pub(super) fn resolver(session_id: SessionId, folder: PathBuf) -> Arc<dyn GraphEnvResolver> {
+        Arc::new(Self {
+            env: EnvId::SessionWorktree(session_id),
+            folder,
+        })
+    }
+}
+
+#[async_trait]
+impl GraphEnvResolver for SessionWorktreeEnvs {
+    async fn locate(
+        &self,
+        _graph_id: &str,
+        node: &GraphNode,
+    ) -> Result<Option<GraphEnvLocation>, OneShotError> {
+        if node.env_id != self.env {
+            return Err(OneShotError::new(format!(
+                "Graph node {} names an Env other than its session worktree",
+                node.id
+            )));
+        }
+
+        Ok(Some(GraphEnvLocation::Folder(self.folder.clone())))
+    }
+
+    async fn prepare(
+        &self,
+        _dispatch: &GraphDispatch,
+        _location: &GraphEnvLocation,
+    ) -> Result<(), OneShotError> {
+        Ok(())
+    }
 }
 
 /// Status leases taken by one driver's running nodes.
@@ -566,7 +611,8 @@ impl App {
                 "Graph execution requires a prepared, active session".into(),
             ));
         }
-        let folder = session.folder.clone();
+        let environments =
+            SessionWorktreeEnvs::resolver(session.id.clone(), session.folder.clone());
         let status = Arc::clone(&handles.status);
         let transcript = Arc::clone(&handles.transcript);
         let cancellation = CancellationToken::new();
@@ -606,7 +652,7 @@ impl App {
                 executor,
                 running,
                 GraphDriverSession {
-                    folder,
+                    environments,
                     leases,
                     transcript,
                 },
@@ -621,7 +667,7 @@ impl App {
                 runner,
                 status,
                 GraphDriverSession {
-                    folder,
+                    environments,
                     leases: GraphNodeLeases::default(),
                     transcript,
                 },
@@ -842,7 +888,7 @@ impl AppServices {
                     usage_purpose: Some(ag_contracts::UsagePurpose::Other),
                     ..ag_worker::RunScope::default()
                 },
-                executor.run_ready(&graph.id, graph.revision, &session.folder, permission),
+                executor.run_ready(&graph.id, graph.revision, &session.environments, permission),
             );
             let result = self
                 .announce_settlements_during(&graph.session_id, pass)
