@@ -62,7 +62,8 @@ new slow test against a `Postsubmit` report, and keep an allowlist entry until a
 
 ## Timing Collector
 
-`test-timing-action` checks the collector's lifecycle and failure paths with 100%
-JavaScript line coverage and writes a fresh `timing-action.lcov`; the coverage job runs
-it before scanning so SonarCloud imports JavaScript coverage alongside Rust. Rust report
-parsing and comparison are covered by the ordinary `ag-xtask` suites and coverage gate.
+`test-timing-action` checks the collector's lifecycle and failure paths on Bun with 100%
+JavaScript line and function coverage and writes a fresh `timing-action.lcov`; the
+coverage job runs it before scanning so SonarCloud imports JavaScript coverage alongside
+Rust. Rust report parsing and comparison are covered by the ordinary `ag-xtask` suites
+and coverage gate.

@@ -71,11 +71,11 @@ jobs:
           for hook in $SOURCE_TEST_HOOKS; do
             echo "::group::$hook"
             export INPUT_SUITE="$hook" INPUT_PHASE=prepare
-            node .github/actions/test-timing/index.mjs
+            bun --no-install .github/actions/test-timing/index.mjs
             outcome=success
             prek run "$hook" --all-files --hook-stage manual || { status=1; outcome=failure; }
             export INPUT_PHASE=finish INPUT_OUTCOME="$outcome"
-            node .github/actions/test-timing/index.mjs
+            bun --no-install .github/actions/test-timing/index.mjs
             echo "::endgroup::"
           done
           exit "$status"

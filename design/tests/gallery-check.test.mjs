@@ -7,7 +7,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
-import {
+const SCRIPT = fileURLToPath(new URL("../gallery-check.mjs", import.meta.url));
+
+// Bun measures coverage in its own process only, so the script's first evaluation runs
+// in process as though started directly, before anything else imports it.
+const DIRECT = await startDirectly();
+const {
   Browser,
   LAYOUT_PROPERTIES,
   Page,
@@ -28,10 +33,29 @@ import {
   readMarkup,
   selectorParts,
   stateChanges,
-} from "../gallery-check.mjs";
-import { FakeElement, FakePage, fakeBrowser, fakeProcess, fakeSheet, fakeWindow, styleRule } from "./support.mjs";
+} = await import("../gallery-check.mjs");
+const { FakeElement, FakePage, fakeBrowser, fakeProcess, fakeSheet, fakeWindow, styleRule } = await import("./support.mjs");
 
-const SCRIPT = fileURLToPath(new URL("../gallery-check.mjs", import.meta.url));
+// Imports the script with no arguments on its command line and returns its exit code
+// and error output, restoring the process afterwards.
+async function startDirectly() {
+  const { argv, exitCode } = process;
+  const { error } = console;
+  const errors = [];
+  process.argv = [argv[0], SCRIPT];
+  console.error = (line) => errors.push(line);
+  try {
+    await import("../gallery-check.mjs");
+
+    return { errors: errors, exitCode: process.exitCode };
+  } finally {
+    process.argv = argv;
+    console.error = error;
+    // Bun keeps a set exit code when assigned `undefined`.
+    process.exitCode = exitCode ?? 0;
+  }
+}
+
 const VIEWPORT = { height: 900, mobile: false, name: "desktop", width: 1280 };
 
 // One specimen: a link holding a badge, and an input; plus an element
@@ -609,6 +633,9 @@ test("the script runs main when started directly", () => {
 
   assert.equal(run.status, 2);
   assert.match(run.stderr, /usage: gallery-check.mjs/);
+  assert.equal(DIRECT.exitCode, 2);
+  assert.equal(DIRECT.errors.length, 1);
+  assert.match(DIRECT.errors[0], /usage: gallery-check.mjs/);
 });
 
 test("Browser.launch starts the browser headless over a pipe with a fresh profile", async () => {

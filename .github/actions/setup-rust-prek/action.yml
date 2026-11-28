@@ -1,5 +1,5 @@
 name: Setup Rust Prek Workspace
-description: Install the shared Rust and `prek` CI tooling after checkout.
+description: Install the shared Rust, `prek`, and Bun CI tooling after checkout.
 
 inputs:
   cargo-audit:
@@ -53,6 +53,15 @@ runs:
         mkdir -p "$UV_TOOL_BIN_DIR"
         uv tool install --no-build prek==0.4.14
         echo "/tmp/agentty-uv-tools/bin" >> "$GITHUB_PATH"
+
+    # Bun runs the hooks' JavaScript: the timing collector, the design gallery
+    # check, and the docs site's script tests. Pinned to an exact release, with
+    # the binary cache off so no job restores a Bun that another run saved.
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version: 1.4.5
+        no-cache: "true"
 
     - name: Install pinned Rust nightly toolchain
       shell: bash
