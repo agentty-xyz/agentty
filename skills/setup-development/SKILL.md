@@ -34,6 +34,10 @@ prerequisites and backend authentication; this skill covers contributor tooling 
    local profile inherits CI's resource limits and timeouts. `prek install -f` installs
    the fast `pre-commit` checks; CI runs the full validation gates.
 
+1. Install Bun, the repository's JavaScript runtime for hooks and scripts, at the
+   version `.github/actions/setup-rust-prek/action.yml` pins, using its
+   [official installation guide](https://bun.com/docs/installation).
+
 1. Launch the application from the workspace with `cargo run -p agentty --bin agentty`.
 
 ## Tooling for Specific Hooks
@@ -56,10 +60,9 @@ prerequisites and backend authentication; this skill covers contributor tooling 
   18 or newer and `npm`, which GitHub-hosted runners provide.
 
 - **Timing collector:** changes under `.github/actions/test-timing/` or to the hook
-  catalog also run `test-timing-action`, which requires Node.js 24. GitHub-hosted
-  runners provide it, and the JavaScript action uses the runner's Node.js runtime inside
-  E2E jobs. This is a repository tooling requirement, not an application runtime
-  dependency.
+  catalog also run `test-timing-action` on Bun. In CI, the JavaScript action itself runs
+  on the runner's Node.js 24, also inside E2E jobs. This is a repository tooling
+  requirement, not an application runtime dependency.
 
 - **Website:** install Zola before running the `zola-check` hook or previewing
   `docs/site/`:
@@ -74,12 +77,11 @@ prerequisites and backend authentication; this skill covers contributor tooling 
   enabled in the PostHog project's settings.
 
 - **Design gallery:** changes to `design/` or the docs site's styles, templates, or
-  scripts run the `design-gallery` hook, which needs Zola, Node.js, and a Chromium-based
+  scripts run the `design-gallery` hook, which needs Zola, Bun, and a Chromium-based
   browser: Google Chrome or Chromium in its usual install path, a headless shell that
   Playwright installed, or any of them named by `CHROME_PATH`. Changes to the gallery
-  check itself run `design-gallery-check-test`, which needs Node.js 22.8 or newer for
-  its coverage flags. GitHub-hosted runners provide Node.js and Chrome, and the workflow
-  installs Zola.
+  check itself run `design-gallery-check-test` on Bun. GitHub-hosted runners provide
+  Chrome, the workflow installs Zola, and the setup action installs Bun.
 
 - **Feature recording:** intentional recording also needs a running Podman environment;
   follow `skills/refresh-feature-recordings/references/recording.md` for the canonical

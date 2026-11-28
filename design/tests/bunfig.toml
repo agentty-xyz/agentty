@@ -1,0 +1,4 @@
+# The `design-gallery-check-test` hook loads this file with `bun --config`: every line
+# and function of the gallery check and its test fakes stays covered.
+[test]
+coverageThreshold = { lines = 1.0, functions = 1.0 }

@@ -430,7 +430,7 @@ give the script each page's whole stylesheet chain, in load order, as it reaches
 browser:
 
 ```sh
-node gallery-check.mjs gallery.html \
+bun gallery-check.mjs gallery.html \
   --surface site=tokens.css,fonts.css,base.css,site.css \
   --markup site=templates \
   --surface app=compiled/app.css \
@@ -453,9 +453,10 @@ anything but placement; hiding with `display: none` counts as placement. The opt
 shares a quoted string with a component's class there, as in
 `class="status status-line"` or a script's `"status status-line"`, sits on the
 component's element, so a rule on it may only place it too. It reads only the files it
-is given and runs on Node.js with a Chromium-based browser: Chrome, Chromium, or
-`chrome-headless-shell`, which `CHROME_PATH` names, or which it finds in the usual
-install places. Compile a Sass or bundled stylesheet first, and pass its output.
+is given and runs on Bun or Node.js, since it imports only `node:` modules, with a
+Chromium-based browser: Chrome, Chromium, or `chrome-headless-shell`, which
+`CHROME_PATH` names, or which it finds in the usual install places. Compile a Sass or
+bundled stylesheet first, and pass its output.
 
 The check does not see a page's own markup around a component, so keep these by hand:
 

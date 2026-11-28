@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { host, run } from './timing.mjs';
 
@@ -145,10 +146,45 @@ test('real adapter and action entry preserve reports and propagate failures', t 
   assert.ok(result.hook_seconds >= 0);
   assert.ok(result.environment.available_parallelism > 0);
   assert.equal(fs.readFileSync(resolve(directory, 'target/test-results/workspace/junit.xml'), 'utf8'), '<testsuites/>');
-  assert.equal(host.version(process.execPath, ['--version']), process.version);
+  // Bun prints its own version, not the Node.js version it reports compatibility with.
+  assert.equal(host.version(process.execPath, ['--version']), process.versions.bun ?? process.version);
   assert.deepEqual(host.hardware([{ model: 'Z' }, { model: 'A' }, { model: 'Z' }], 2),
     { cpu_models: ['A', 'Z'], available_parallelism: 2 });
   assert.equal(host.version('/nonexistent-agentty-program', []), null);
   assert.equal(host.read(resolve(directory, 'missing')), null);
   assert.throws(() => host.read(directory));
+  const adapter = resolve(directory, 'adapter');
+  host.mkdir(adapter);
+  host.write(resolve(adapter, 'report'), 'fresh');
+  host.append(resolve(adapter, 'report'), ' XML');
+  assert.equal(host.read(resolve(adapter, 'report')).toString(), 'fresh XML');
+  host.remove(adapter);
+  assert.equal(host.read(resolve(adapter, 'report')), null);
+  const now = host.now();
+  assert.equal(new Date(now).toISOString(), now);
+});
+
+// Bun measures coverage in its own process only, so the entry also runs in process; a
+// module evaluates once per process, so this run takes the failure path.
+test('action entry in process reports a failure through the exit code', async t => {
+  // Arrange
+  const saved = { ...process.env };
+  const exitCode = process.exitCode;
+  const errors = t.mock.method(console, 'error', () => {});
+  // Bun keeps a set exit code when assigned `undefined`.
+  const restore = () => { process.exitCode = exitCode ?? 0; };
+  t.after(() => {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+    restore();
+  });
+  Object.assign(process.env, base, { INPUT_PHASE: 'invalid' });
+  // Act
+  await import(pathToFileURL(resolve(import.meta.dirname, 'index.mjs')).href);
+  const failed = process.exitCode;
+  restore();
+  // Assert
+  assert.equal(failed, 1);
+  assert.equal(errors.mock.callCount(), 1);
+  assert.match(errors.mock.calls[0].arguments[0], /Expected prepare or finish/);
 });

@@ -1,19 +1,20 @@
 // Regenerate `docs/site/static/social-card.png`, the 1200x630 link preview.
 //
-// Run from the repository root: `node docs/site/scripts/social-card.mjs`.
+// Run from the repository root: `bun docs/site/scripts/social-card.mjs`.
 //
 // The card copies the home page hero text from `templates/index.html`, the
 // default theme colors from the generated `sass/_tokens.scss`, the domain from `config.toml`,
-// and the glyph art from `static/glyph-art.js`. A pinned Playwright CLI
-// captures it with `chrome-headless-shell`. The glyph font loads from Google
-// Fonts, so the capture needs network access.
+// and the glyph art from `static/glyph-art.js`. A pinned Playwright CLI, run
+// on Bun, captures it with `chrome-headless-shell`. The glyph font loads from
+// Google Fonts, so the capture needs network access.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PLAYWRIGHT_VERSION = '1.62.1';
+// Playwright runs on Bun since 1.65.
+export const PLAYWRIGHT_VERSION = '1.65.1';
 export const CARD_WIDTH = 1200;
 export const CARD_HEIGHT = 630;
 export const SITE_ROOT = 'docs/site';
@@ -131,12 +132,12 @@ window.matchMedia = function (query) {
 
 /** Commands, as `[command, args]`, that install the browser and capture `htmlPath`. */
 export function captureCommands(htmlPath, outputPath) {
-  const playwright = ['--yes', `playwright@${PLAYWRIGHT_VERSION}`];
+  const playwright = ['x', '--bun', `playwright@${PLAYWRIGHT_VERSION}`];
 
   return [
-    ['npx', [...playwright, 'install', '--only-shell', 'chromium']],
+    ['bun', [...playwright, 'install', '--only-shell', 'chromium']],
     [
-      'npx',
+      'bun',
       [
         ...playwright,
         'screenshot',

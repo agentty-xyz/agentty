@@ -25,9 +25,10 @@ fn source_loop_records_each_outcome_without_stale_results() -> Result<(), Box<dy
     for (name, contents) in [
         ("prek", "#!/bin/sh\n[ \"$2\" != bad ]\n"),
         (
-            "node",
-            "#!/bin/sh\nprintf '%s %s %s\\n' \"$INPUT_SUITE\" \"$INPUT_PHASE\" \
-             \"${INPUT_OUTCOME:-}\" >> calls\n",
+            "bun",
+            "#!/bin/sh\n[ \"$*\" = '--no-install .github/actions/test-timing/index.mjs' ] || exit \
+             9\nprintf '%s %s %s\\n' \"$INPUT_SUITE\" \"$INPUT_PHASE\" \"${INPUT_OUTCOME:-}\" >> \
+             calls\n",
         ),
     ] {
         let path = directory.path().join(name);

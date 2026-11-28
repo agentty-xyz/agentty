@@ -52,38 +52,41 @@ repos:
         stages: [manual]
       - id: test-timing-action
         name: test timing artifact lifecycle
-        description: Verify artifact freshness and provenance with complete JavaScript line coverage.
+        description: Verify artifact freshness and provenance on Bun with complete JavaScript line and function coverage, and write its LCOV report for SonarQube.
         entry: >-
           bash -eu -o pipefail -c 'rm -f timing-action.lcov;
-          node --test --experimental-test-coverage --test-coverage-lines=100
-          --test-coverage-include=.github/actions/test-timing/index.mjs
-          --test-coverage-include=.github/actions/test-timing/timing.mjs
-          --test-reporter=spec --test-reporter-destination=stdout
-          --test-reporter=lcov --test-reporter-destination=timing-action.lcov
-          .github/actions/test-timing/timing.test.mjs && test -s timing-action.lcov'
+          coverage="$(mktemp -d)"; trap "rm -rf \"$coverage\"" EXIT;
+          bun --no-install --config=.github/actions/test-timing/bunfig.toml test --timeout=30000
+          --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir="$coverage"
+          ./.github/actions/test-timing/timing.test.mjs;
+          mv "$coverage/lcov.info" timing-action.lcov;
+          for file in index.mjs timing.mjs; do grep -qx "SF:.github/actions/test-timing/$file" timing-action.lcov
+          || { echo "Bun measured no coverage of $file: a test must import it" >&2; exit 1; }; done'
         language: system
         files: ^(\.github/actions/test-timing/|\.pre-commit-config\.yaml$)
         pass_filenames: false
       - id: design-gallery-check-test
         name: design gallery check tests
-        description: Test the exported design gallery check against a fake page and browser process, with complete JavaScript line coverage, and write its LCOV report for SonarQube.
+        description: Test the exported design gallery check on Bun against a fake page and browser process, with complete JavaScript line and function coverage, and write its LCOV report for SonarQube.
         entry: >-
           bash -eu -o pipefail -c 'rm -f design-gallery-check.lcov;
-          node --test --experimental-test-coverage --test-coverage-lines=100
-          --test-coverage-include=design/gallery-check.mjs
-          --test-reporter=spec --test-reporter-destination=stdout
-          --test-reporter=lcov --test-reporter-destination=design-gallery-check.lcov
-          design/tests/gallery-check.test.mjs && test -s design-gallery-check.lcov'
+          coverage="$(mktemp -d)"; trap "rm -rf \"$coverage\"" EXIT;
+          bun --no-install --config=design/tests/bunfig.toml test --timeout=30000
+          --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir="$coverage"
+          ./design/tests/gallery-check.test.mjs;
+          mv "$coverage/lcov.info" design-gallery-check.lcov;
+          grep -qx "SF:design/gallery-check.mjs" design-gallery-check.lcov
+          || { echo "Bun measured no coverage of gallery-check.mjs: a test must import it" >&2; exit 1; }'
         language: system
         files: ^(design/gallery-check\.mjs|design/tests/|\.pre-commit-config\.yaml$)
         pass_filenames: false
       - id: design-gallery
         name: design gallery
-        description: Render `design/gallery.html` under the docs site's whole stylesheet chain, as Zola compiles it, in a local headless Chromium-based browser (`CHROME_PATH` or a usual install), and fail when the site renders a shared component differently from the shared stylesheets alone or restyles one, including through a class its templates and scripts set beside a shared class.
+        description: Render `design/gallery.html` under the docs site's whole stylesheet chain, as Zola compiles it, on Bun in a local headless Chromium-based browser (`CHROME_PATH` or a usual install), and fail when the site renders a shared component differently from the shared stylesheets alone or restyles one, including through a class its templates and scripts set beside a shared class.
         entry: >-
           bash -eu -o pipefail -c 'site="$(mktemp -d)"; trap "rm -rf \"$site\"" EXIT;
           zola --root docs/site build --output-dir "$site/public" >/dev/null;
-          node design/gallery-check.mjs design/gallery.html
+          bun --no-install design/gallery-check.mjs design/gallery.html
           --surface "docs-site=$site/public/site.css"
           --markup "docs-site=docs/site/templates,docs/site/static"'
         language: system
@@ -587,8 +590,8 @@ repos:
         stages: [manual]
       - id: docs-site-tests
         name: docs site tests
-        description: Run the docs site's script tests, including that the version its header shows equals the workspace version.
-        entry: bash -eu -o pipefail -c 'node --test docs/site/tests/*.mjs'
+        description: Run the docs site's script tests on Bun, including that the version its header shows equals the workspace version.
+        entry: bun --no-install test --timeout=30000 ./docs/site/tests
         language: system
         files: ^(Cargo\.toml$|docs/site/|\.pre-commit-config\.yaml$)
         pass_filenames: false

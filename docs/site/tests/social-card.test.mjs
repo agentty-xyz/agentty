@@ -194,7 +194,7 @@ test('buildCardHtml refuses glyph-art source that would close the inline script'
   assert.throws(build, /cannot be inlined/);
 });
 
-test('captureCommands installs the pinned headless shell and then captures the card', () => {
+test('captureCommands installs the pinned headless shell and then captures the card on Bun', () => {
   // Arrange
   const htmlPath = '/tmp/card dir/card.html';
 
@@ -202,11 +202,13 @@ test('captureCommands installs the pinned headless shell and then captures the c
   const commands = captureCommands(htmlPath, OUTPUT_PATH);
 
   // Assert
-  const playwright = ['--yes', `playwright@${PLAYWRIGHT_VERSION}`];
+  const [major, minor] = PLAYWRIGHT_VERSION.split('.').map(Number);
+  assert.ok(major > 1 || minor >= 65, `Playwright ${PLAYWRIGHT_VERSION} predates Bun support`);
+  const playwright = ['x', '--bun', `playwright@${PLAYWRIGHT_VERSION}`];
   assert.deepEqual(commands, [
-    ['npx', [...playwright, 'install', '--only-shell', 'chromium']],
+    ['bun', [...playwright, 'install', '--only-shell', 'chromium']],
     [
-      'npx',
+      'bun',
       [
         ...playwright,
         'screenshot',
@@ -237,7 +239,7 @@ test('generateSocialCard captures the site-derived card page and then removes it
 
   // Assert
   assert.equal(outputPath, OUTPUT_PATH);
-  assert.deepEqual(calls.map((call) => call.args[2]), ['install', 'screenshot']);
+  assert.deepEqual(calls.map((call) => [call.command, call.args[3]]), [['bun', 'install'], ['bun', 'screenshot']]);
   const capture = calls[1];
   assert.ok(capture.card.includes('<h1 class="title">Ship AI-assisted changes with control.</h1>'));
   assert.ok(capture.card.includes('<p class="domain">agentty.xyz</p>'));

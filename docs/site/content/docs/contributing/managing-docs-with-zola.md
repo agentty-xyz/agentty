@@ -41,9 +41,9 @@ documentation maintainable as it grows.
 - Set `extra.sitemap_exclude = true` on sections that only redirect.
 - `static/social-card.png` is the 1200x630 link preview for every page except feature
   pages, which use their own poster. It shows the home page glyph art and hero text.
-  Regenerate it from the repository root with `node docs/site/scripts/social-card.mjs`
+  Regenerate it from the repository root with `bun docs/site/scripts/social-card.mjs`
   when the hero text, `static/glyph-art.js` scenes, or the theme colors change. The
-  script needs network access for `npx` and the glyph font.
+  script needs network access for `bun x` and the glyph font.
 
 ## Preserve the Site Design System
 

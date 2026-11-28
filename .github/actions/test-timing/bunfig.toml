@@ -1,0 +1,4 @@
+# The `test-timing-action` hook loads this file with `bun --config`: every line and
+# function of the collector and its entry stays covered.
+[test]
+coverageThreshold = { lines = 1.0, functions = 1.0 }
