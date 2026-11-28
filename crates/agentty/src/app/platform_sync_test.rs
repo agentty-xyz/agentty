@@ -426,6 +426,30 @@ fn has_started(app: &App, session_id: &str) -> bool {
     status(app, session_id).is_some_and(|status| status != Status::Draft)
 }
 
+/// Applies background events until the session's turn has ended in
+/// `Review` and the store holds that status, which the turn writes after
+/// the app can show it.
+async fn wait_for_turn_end(app: &mut App, session_id: &str) {
+    drive_until(app, |app| status(app, session_id) == Some(Status::Review)).await;
+    let sessions = app.services.db().sessions();
+    let stored = async {
+        loop {
+            let row = sessions
+                .load_session(session_id)
+                .await
+                .expect("session should load");
+            if row.is_some_and(|row| row.status == Status::Review.to_string()) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), stored)
+        .await
+        .expect("the turn's status should be stored");
+}
+
 /// Returns the platform task notice of the session.
 fn notice(app: &App, session_id: &str) -> Option<String> {
     app.sessions
@@ -988,10 +1012,12 @@ async fn ended_sessions_finish_or_release_their_tasks_once() {
         ..ScriptedSync::with_starts(vec![Ok(start(true)), Ok(start(true))])
     });
     let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
+    // A turn stores its session's status when it ends, so each session ends
+    // below only once its first turn has.
     let merged = start_first_message(&mut app, &runs).await;
-    drive_until(&mut app, |app| has_started(app, &merged)).await;
+    wait_for_turn_end(&mut app, &merged).await;
     let canceled = start_first_message(&mut app, &runs).await;
-    drive_until(&mut app, |app| has_started(app, &canceled)).await;
+    wait_for_turn_end(&mut app, &canceled).await;
     let sessions = app.services.db().sessions();
     sessions
         .update_session_title(&merged, "Fix the relay reconnect")
@@ -1485,7 +1511,8 @@ async fn sign_out_forgets_claims_without_a_request() {
     let platform = Arc::new(ScriptedSync::with_starts(vec![Ok(start(true))]));
     let (mut app, _base_dir, runs) = sync_app(Arc::clone(&platform), Some(ORIGIN)).await;
     let session_id = start_first_message(&mut app, &runs).await;
-    drive_until(&mut app, |app| has_started(app, &session_id)).await;
+    // The turn's own status would otherwise land over the cancel below.
+    wait_for_turn_end(&mut app, &session_id).await;
 
     // Act
     app.sign_out_platform().await;

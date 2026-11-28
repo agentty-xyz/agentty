@@ -79,6 +79,28 @@ pub(crate) fn hold_background_polls(app: &mut App) -> SyncOrchestrator {
     orchestrator
 }
 
+/// Applies `app`'s background events one at a time until the Git status
+/// that the sync orchestrator reports once at startup has been applied, so
+/// no later batch of events applies it over a status the test sets.
+///
+/// Use it with an app whose active project has a git branch, which the
+/// orchestrator polls at once and then only on its periodic cadence or
+/// when asked to refresh.
+pub(crate) async fn apply_startup_git_status(app: &mut App) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = app.next_app_event().await.expect("startup event");
+            let is_git_status = matches!(event, AppEvent::GitStatusUpdated { .. });
+            app.apply_single_app_event(event).await;
+            if is_git_status {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("startup Git status should arrive");
+}
+
 /// Builds the git-status event of `project_id` at `generation`, reporting
 /// `status` for the project branch and `session_status` for `session_id`.
 pub(crate) fn git_status_updated(

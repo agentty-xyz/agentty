@@ -22,12 +22,22 @@ use super::support::{
 use crate::app::session::{SessionGitStatus, session_branch};
 use crate::app::test_support::{
     MockSyncMainRunner, ProjectSyncContext, SyncMainCompletion, SyncMainOutcome,
-    SyncSessionStartError, add_listed_project, git_status_updated, hide_project,
-    hold_background_polls, insert_loadable_session, start_fake_remote_control,
+    SyncSessionStartError, add_listed_project, apply_startup_git_status, git_status_updated,
+    hide_project, hold_background_polls, insert_loadable_session, start_fake_remote_control,
 };
 use crate::app::{App, AppEvent, ProjectSyncPhase, ProjectSyncStatus};
 use crate::domain::session::Status;
 use crate::domain::setting::SettingName;
+
+/// Builds a git-backed app that has already applied the Git status its
+/// sync orchestrator reports at startup, so no later event batch applies
+/// that report over a status the test sets or applies.
+async fn git_app_after_startup_poll() -> (App, TempDir) {
+    let (mut app, temp_dir) = crate::test_support::new_git_test_app().await;
+    apply_startup_git_status(&mut app).await;
+
+    (app, temp_dir)
+}
 
 /// Lets `app` start project syncs without running Git.
 fn accept_project_syncs(app: &mut App, expected_starts: usize) {
@@ -63,7 +73,7 @@ fn sync_completed(
 #[tokio::test]
 async fn runtime_backend_reports_the_project_and_each_phase_of_its_sync() {
     // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let (mut app, _temp_dir) = git_app_after_startup_poll().await;
     accept_project_syncs(&mut app, 1);
     app.projects
         .set_git_status(app.active_project_id(), Some((1, 2)));
@@ -244,7 +254,7 @@ async fn runtime_backend_leaves_out_the_sync_of_another_project() {
 #[tokio::test]
 async fn git_status_updates_advance_the_remote_revision_only_when_they_change() {
     // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let (mut app, _temp_dir) = git_app_after_startup_poll().await;
     app.sessions
         .push_session(crate::test_support::session_fixture(
             "session-1",
