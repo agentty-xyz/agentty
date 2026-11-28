@@ -36,6 +36,7 @@ fn test_agent_response_to_display_text_joins_answer_and_questions() {
     // Arrange
     let response = AgentResponse {
         answer: "Primary answer".to_string(),
+        notes: Vec::new(),
         questions: vec![QuestionItem::new("Need one clarification.")],
         review_comment_outcomes: Vec::new(),
     };
@@ -53,6 +54,7 @@ fn test_agent_response_answers_skip_blank_answer_text() {
     // Arrange
     let answered = AgentResponse {
         answer: "Primary answer".to_string(),
+        notes: Vec::new(),
         questions: vec![QuestionItem::new("Hidden from answer text.")],
         review_comment_outcomes: Vec::new(),
     };
@@ -98,6 +100,7 @@ fn test_agent_response_review_comment_outcomes_round_trip() {
     // Arrange
     let response = AgentResponse {
         answer: "Addressed the comment.".to_string(),
+        notes: Vec::new(),
         questions: Vec::new(),
         review_comment_outcomes: vec![ReviewCommentOutcome {
             reply: "Added the missing validation.".to_string(),
@@ -117,11 +120,34 @@ fn test_agent_response_review_comment_outcomes_round_trip() {
 }
 
 #[test]
+/// Session notes round-trip, and a response without notes keeps the shape
+/// stored before the field existed.
+fn test_agent_response_notes_round_trip_and_stay_out_of_note_free_responses() {
+    // Arrange
+    let mut response = AgentResponse::plain("Mapped the parser.");
+    let without_notes = serde_json::to_string(&response).expect("response should serialize");
+    response.notes = vec!["Parser lives in src/parse.rs.".to_string()];
+
+    // Act
+    let serialized = serde_json::to_string(&response).expect("response should serialize");
+    let deserialized =
+        serde_json::from_str::<AgentResponse>(&serialized).expect("response should deserialize");
+
+    // Assert
+    assert_eq!(deserialized, response);
+    assert_eq!(
+        without_notes,
+        r#"{"answer":"Mapped the parser.","questions":[],"review_comment_outcomes":[]}"#
+    );
+}
+
+#[test]
 /// Ensures question extraction respects the protocol question cap.
 fn test_agent_response_question_items_applies_question_cap() {
     // Arrange
     let response = AgentResponse {
         answer: String::new(),
+        notes: Vec::new(),
         questions: (0..=MAX_QUESTIONS)
             .map(|index| QuestionItem::new(format!("Question {index}")))
             .collect(),

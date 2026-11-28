@@ -23,8 +23,8 @@ const PNG_PREFIX: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0];
 /// Smallest prefix recognized as a JPEG file.
 const JPEG_PREFIX: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
 use crate::{
-    GenerateGraphProposalRequest, ReasoningLevel, SessionGraphAction, SessionGraphActionRequest,
-    SessionGraphs, SessionGraphsRequest,
+    GenerateGraphProposalRequest, ReasoningLevel, SessionDocument, SessionDocumentAuthor,
+    SessionGraphAction, SessionGraphActionRequest, SessionGraphs, SessionGraphsRequest,
 };
 
 #[tokio::test]
@@ -179,6 +179,41 @@ async fn existing_hosts_report_unsupported_session_diffs() {
         ))
     );
     assert!(!supports_diff);
+}
+
+#[tokio::test]
+async fn session_documents_are_read_only_from_hosts_that_serve_them() {
+    // Arrange
+    let existing = SessionService::new(Arc::new(FakeBackend::default()));
+    let backend = Arc::new(OptionalBackend::default());
+    let serving = SessionService::new(backend.clone());
+    let session_id = SessionId::from("session-1");
+
+    // Act
+    let unsupported = existing.get_session_document(&session_id).await;
+    let document = serving.get_session_document(&session_id).await;
+
+    // Assert
+    assert_eq!(
+        unsupported,
+        Err(SessionError::Operation(
+            "Host does not serve session documents".to_string()
+        ))
+    );
+    assert!(!existing.supports(SessionOperation::SessionDocument));
+    assert_eq!(
+        document.map(|document| (document.version, document.body)),
+        Ok((1, "## Note 1 from the user\n\nKeep the API.".to_string()))
+    );
+    assert!(serving.supports(SessionOperation::SessionDocument));
+    assert_eq!(
+        backend
+            .document_reads
+            .lock()
+            .expect("document reads")
+            .as_slice(),
+        [session_id]
+    );
 }
 
 #[tokio::test]
@@ -513,6 +548,8 @@ async fn service_delegates_review_request_merges_with_their_bypass_choice() {
 /// Host that serves the optional operations and records each call.
 #[derive(Default)]
 struct OptionalBackend {
+    /// Session documents read, in order.
+    document_reads: Mutex<Vec<SessionId>>,
     /// Graph proposals asked for, in order.
     generations: Mutex<Vec<GenerateGraphProposalRequest>>,
     /// Graph actions asked for, in order.
@@ -546,7 +583,26 @@ impl SessionBackend for OptionalBackend {
                 | SessionOperation::GraphActions
                 | SessionOperation::GenerateGraphProposal
                 | SessionOperation::MessageImages
+                | SessionOperation::SessionDocument
         )
+    }
+
+    // Every session holds one note from the user.
+    async fn get_session_document(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<SessionDocument, SessionError> {
+        self.document_reads
+            .lock()
+            .expect("document reads")
+            .push(session_id.clone());
+        let body = SessionDocument::note_section(1, &SessionDocumentAuthor::User, "Keep the API.");
+
+        Ok(SessionDocument {
+            body,
+            entries: Vec::new(),
+            version: 1,
+        })
     }
 
     async fn send_message_with_images(

@@ -16,6 +16,7 @@ pub(crate) mod prompt;
 pub(crate) mod question;
 pub(crate) mod remote_control;
 pub(crate) mod review_comment;
+pub(crate) mod session_document;
 pub(crate) mod session_output_metric;
 pub(crate) mod session_view;
 pub(crate) mod sync_blocked;

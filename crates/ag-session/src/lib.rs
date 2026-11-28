@@ -18,6 +18,7 @@ mod project;
 mod question;
 mod review;
 mod service;
+mod session_document;
 mod setting;
 mod task;
 mod task_execution;
@@ -94,6 +95,12 @@ pub use service::{
     ProjectSessions, QuestionAnswer, SessionBackend, SessionDiffFile, SessionDiffFileStatus,
     SessionFileEntry, SessionOperation, SessionService, SessionSettingsChange,
     StartExecutionGraphRequest,
+};
+pub use session_document::{
+    SESSION_DOCUMENT_BODY_MAX_BYTES, SESSION_DOCUMENT_NOTE_MAX_BYTES,
+    SESSION_DOCUMENT_NOTES_PER_RESPONSE, SessionDocument, SessionDocumentAppend,
+    SessionDocumentAuthor, SessionDocumentEntry, SessionDocumentEntryKind, SessionDocumentReplace,
+    SessionDocumentTail,
 };
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};

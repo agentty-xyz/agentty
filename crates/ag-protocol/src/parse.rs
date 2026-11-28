@@ -10,6 +10,10 @@ use super::model::{
 use super::review::FocusedReview;
 
 /// Top-level keys the protocol recognizes in a structured response payload.
+///
+/// `notes` is deliberately absent: a real turn always carries `answer` or
+/// `questions`, so an object holding only notes, such as one quoted in
+/// prose, is not taken for the response.
 const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "review_comment_outcomes"];
 
 /// Parses one raw assistant message strictly as protocol payload.

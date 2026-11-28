@@ -504,6 +504,7 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
     };
     let turn_result = TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: "Implemented one change.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: vec![ReviewCommentOutcome {

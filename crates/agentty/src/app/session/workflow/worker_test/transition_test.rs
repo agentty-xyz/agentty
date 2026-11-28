@@ -291,6 +291,7 @@ async fn test_should_skip_worker_command_allows_new_operation_after_cancel() {
 fn test_build_assistant_message_content_prefers_answer_messages() {
     // Arrange
     let response = AgentResponse {
+        notes: Vec::new(),
         answer: "Implemented the fix.".to_string(),
         questions: vec![QuestionItem::new("Need me to run tests?")],
         review_comment_outcomes: Vec::new(),
@@ -311,6 +312,7 @@ fn test_build_assistant_message_content_prefers_answer_messages() {
 fn test_build_assistant_message_content_returns_none_for_blank_messages() {
     // Arrange
     let response = AgentResponse {
+        notes: Vec::new(),
         answer: String::new(),
         questions: vec![QuestionItem::new("\n")],
         review_comment_outcomes: Vec::new(),
@@ -725,6 +727,7 @@ async fn test_run_channel_turn_proceeds_after_previous_cancellation() {
             Box::pin(async {
                 Ok(TurnResult {
                     assistant_message: AgentResponse {
+                        notes: Vec::new(),
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
@@ -815,6 +818,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
             Box::pin(async {
                 Ok(TurnResult {
                     assistant_message: AgentResponse {
+                        notes: Vec::new(),
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
@@ -921,6 +925,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
             Box::pin(async {
                 Ok(TurnResult {
                     assistant_message: AgentResponse {
+                        notes: Vec::new(),
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
@@ -1014,6 +1019,7 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
             Box::pin(async {
                 Ok(TurnResult {
                     assistant_message: AgentResponse {
+                        notes: Vec::new(),
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),

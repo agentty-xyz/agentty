@@ -114,6 +114,20 @@ pub struct AgentResponse {
                        them through `questions` instead."
     )]
     pub answer: String,
+    /// Notes this turn adds to its session's shared document.
+    ///
+    /// Only graph task nodes, whose prompt invites notes, have them
+    /// appended; every other turn leaves this empty and hosts ignore it.
+    /// Omitted from serialized responses when empty, so responses without
+    /// notes keep their stored shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(
+        title = "notes",
+        description = "Short notes for the session's shared document: findings, decisions, or \
+                       hand-offs that other agents of this session need. Emit an empty array \
+                       unless the prompt explicitly invites session notes."
+    )]
+    pub notes: Vec<String>,
     /// Ordered clarification questions emitted for this turn.
     ///
     /// The canonical JSON Schema description for this field is produced by
@@ -144,6 +158,7 @@ impl AgentResponse {
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
             answer: text.into(),
+            notes: Vec::new(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
         }

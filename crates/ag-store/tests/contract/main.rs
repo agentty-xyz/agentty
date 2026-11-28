@@ -7,6 +7,7 @@ mod graph_dispatch;
 mod graph_proposal;
 mod repository;
 mod schema_naming;
+mod session_document;
 mod task;
 mod task_agent;
 mod task_agent_turn;

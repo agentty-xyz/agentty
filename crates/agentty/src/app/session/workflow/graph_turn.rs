@@ -8,7 +8,8 @@ use ag_contracts::{
     AgentDefinitionPrompt, AgentRequestKind, OneShotError, TurnContinuation, TurnRequest,
 };
 use ag_session::{
-    GraphExecutionRef, GraphPostProcessing, GraphWorkspaceAccess, node_question_notice,
+    GraphExecutionRef, GraphPostProcessing, GraphWorkspaceAccess, SessionDocumentAuthor,
+    TranscriptNotice, node_question_notice,
 };
 use ag_worker::{GraphRunRequest, RunClient};
 use async_trait::async_trait;
@@ -19,7 +20,7 @@ use super::base_branch::BaseBranchSnapshot;
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::task::SessionTaskService;
 use super::worker::{SessionWorkerContext, TurnMetadata};
-use super::{StatusTransition, isolation, post_turn, turn};
+use super::{StatusTransition, isolation, post_turn, session_document, turn};
 use crate::app::service::SessionRunFactory;
 use crate::app::session::SessionError;
 use crate::app::{platform_sync, spawn};
@@ -28,7 +29,7 @@ use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::session_usage::LiveUsageRun;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
-use crate::infra::db::TaskAgentTurnMetadata;
+use crate::infra::db::{DbError, TaskAgentTurnMetadata};
 
 /// Captured graph input and completion owned by one serial mailbox command.
 pub(super) struct GraphTaskCommand {
@@ -213,12 +214,16 @@ async fn execute(
             "Graph conversation requires a task attempt".into(),
         ));
     };
-    let prepared = tokio::select! {
+    let author = SessionDocumentAuthor::GraphNode {
+        execution_id: attempt_id.clone(),
+        graph_id: dispatch.record.graph_id.clone(),
+        node_id: dispatch.node.id.clone(),
+    };
+    let (prepared, effects_prompt) = tokio::select! {
         biased;
         () = task.cancellation.cancelled() => return Err(stopped()),
-        prepared = prepare(context, &task.request) => prepared?,
+        prepared = prepare(context, &task.request, &author) => prepared?,
     };
-    let prompt = prepared.prompt.clone();
     let permission_mode = prepared.permission_mode;
     let client = task
         .factory
@@ -247,7 +252,11 @@ async fn execute(
         .map_err(turn::session_error_from_agent_error)?;
     cleanup.map_err(turn::session_error_from_agent_error)?;
     check_cancellation(&task.cancellation)?;
-    let body = serde_json::json!(result.assistant_message).to_string();
+    // Notes reach other nodes only through the session document, so the
+    // saved response and the output bound consumers read leave them out.
+    let mut saved_response = result.assistant_message.clone();
+    saved_response.notes.clear();
+    let body = serde_json::json!(saved_response).to_string();
     let instruction_conversation_id =
         if ag_worker::uses_persistent_session(dispatch.node.agent.kind()) {
             ag_contracts::normalize_instruction_conversation_id(
@@ -284,12 +293,17 @@ async fn execute(
             context,
             run_client,
             task,
-            &prompt,
+            &effects_prompt,
             &result.assistant_message,
         )
         .await?;
     }
     check_cancellation(&task.cancellation)?;
+    // Only a complete turn publishes its notes: one that asked questions
+    // publishes nothing, and its continuation publishes its own.
+    if effects_succeeded {
+        publish_notes(context, &author, &result.assistant_message.notes, recorded).await;
+    }
     *task
         .completion
         .body
@@ -324,7 +338,9 @@ fn mirror_node_questions(
     );
 }
 
-/// Runs host effects with only the graph node's explicit input and response.
+/// Runs host effects with only the graph node's explicit input and
+/// response: `prompt` is the node's prompt without the session document,
+/// so commit messages and review requests never quote other nodes' notes.
 async fn apply_effects(
     context: &SessionWorkerContext,
     run_client: Arc<dyn RunClient>,
@@ -370,10 +386,84 @@ async fn apply_effects(
     Ok(())
 }
 
+/// Publishes the `notes` of a graph node's completed turn as `author` and
+/// says in session chat what the document did not add.
+///
+/// Publication never fails the node: a document that cannot be written
+/// leaves one warning instead. A redelivered turn, which `recorded` is
+/// `false` for, repeats no warning about notes it refused or could not
+/// save before.
+async fn publish_notes(
+    context: &SessionWorkerContext,
+    author: &SessionDocumentAuthor,
+    notes: &[String],
+    recorded: bool,
+) {
+    if notes.is_empty() {
+        return;
+    }
+    let notice =
+        match session_document::publish_node_notes(&context.db, &context.session_id, author, notes)
+            .await
+        {
+            Ok(notice) => {
+                // An open notes panel reloads on the session's update.
+                SessionTaskService::emit_session_updated(
+                    &context.app_event_tx,
+                    &context.session_update_versions,
+                    &context.session_id,
+                );
+
+                notice.filter(|_| recorded)
+            }
+            Err(error) => recorded.then(|| {
+                TranscriptNotice::SessionNotesWarning.format(format!(
+                    "Could not save the notes from {}: {error}",
+                    author.label()
+                ))
+            }),
+        };
+    if let Some(notice) = notice {
+        SessionTaskService::append_workflow_notice(
+            &context.transcript,
+            &context.db,
+            &context.app_event_tx,
+            &context.session_update_versions,
+            &context.session_id,
+            &notice,
+        )
+        .await;
+    }
+}
+
+/// Says once in session chat that the nodes of graph `graph_id` run
+/// without the session notes, which could not be read.
+async fn warn_unreadable_document(context: &SessionWorkerContext, graph_id: &str, error: &DbError) {
+    let key = format!("Graph `{graph_id}` runs its nodes without the session notes");
+    SessionTaskService::append_workflow_notice_once(
+        &context.transcript,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        &key,
+        &TranscriptNotice::SessionNotesWarning
+            .format(format!("{key}, which could not be read: {error}")),
+    )
+    .await;
+}
+
+/// Builds the node's turn request, whose prompt carries the session
+/// document as `author` reads it, and the same prompt without the document
+/// for host effects.
+///
+/// A document that cannot be read fails no node: the node runs without the
+/// document section, and session chat says so once per graph.
 async fn prepare(
     context: &SessionWorkerContext,
     request: &GraphRunRequest,
-) -> Result<TurnRequest, SessionError> {
+    author: &SessionDocumentAuthor,
+) -> Result<(TurnRequest, TurnPrompt), SessionError> {
     drop(context.branch_operation_lock.lock().await);
     let env = isolation::validate_session_worktree(
         context.fs_client.as_ref(),
@@ -391,14 +481,30 @@ async fn prepare(
     let reply_attachments = history
         .as_ref()
         .map_or_else(Vec::new, |history| history.attachments.clone());
+    let document = match context
+        .db
+        .session_documents()
+        .load_session_document_tail(&context.session_id)
+        .await
+    {
+        Ok(tail) => Some(session_document::prompt_section(&tail, author)),
+        Err(error) => {
+            warn_unreadable_document(context, &request.dispatch.record.graph_id, &error).await;
+
+            None
+        }
+    };
+    let continuation_prompt = history
+        .as_ref()
+        .and_then(|history| history.continuation_prompt.as_deref());
     let prompt = graph_prompt(
         request,
+        document.as_deref(),
         &reply_attachments,
-        history
-            .as_ref()
-            .and_then(|history| history.continuation_prompt.as_deref()),
+        continuation_prompt,
     );
-    Ok(TurnRequest {
+    let effects_prompt = graph_prompt(request, None, &reply_attachments, continuation_prompt);
+    let turn = TurnRequest {
         agent_profile: AgentDefinitionPrompt::active(node.definition.prompt.clone(), true),
         // Graph nodes run bounded work whose results their graph keeps, and
         // no transcript shows their compaction notices.
@@ -422,14 +528,18 @@ async fn prepare(
             .await,
         speed_mode: turn::load_session_speed_mode(&context.db, &context.session_id).await,
         task_milestone: platform_sync::load_task_milestone(&context.db, &context.session_id).await,
-    })
+    };
+
+    Ok((turn, effects_prompt))
 }
 
-/// Places every image after the JSON data with unique transport placeholders.
-/// Composer numbering restarts on each reply, so cumulative attachments must
-/// not reuse those markers or replace strings inside the JSON data.
+/// Places every image after the JSON data and the session document section,
+/// when given, with unique transport placeholders. Composer numbering
+/// restarts on each reply, so cumulative attachments must not reuse those
+/// markers or replace strings inside the JSON data or the document.
 fn graph_prompt(
     request: &GraphRunRequest,
+    document: Option<&str>,
     reply_attachments: &[TurnPromptAttachment],
     continuation_prompt: Option<&str>,
 ) -> TurnPrompt {
@@ -446,6 +556,9 @@ fn graph_prompt(
         prompt.text,
         "\n\nGraph objective and exact bound results (JSON data):\n{input}"
     );
+    if let Some(document) = document {
+        let _ = write!(prompt.text, "\n\n{document}");
+    }
     if let Some(continuation) = continuation_prompt {
         let _ = write!(
             prompt.text,

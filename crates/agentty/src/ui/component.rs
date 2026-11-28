@@ -32,6 +32,8 @@ pub mod publish_branch_overlay;
 pub mod queue_pulse;
 /// New-session action selector popup.
 pub mod session_creation_overlay;
+/// Session notes popup and its clear confirmation.
+pub(crate) mod session_document_overlay;
 /// Session transcript, progress, and result rendering.
 pub mod session_output;
 /// Application and session status header.

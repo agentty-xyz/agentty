@@ -205,6 +205,7 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
     };
     let turn_result = Ok(TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: "Implemented the change.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),

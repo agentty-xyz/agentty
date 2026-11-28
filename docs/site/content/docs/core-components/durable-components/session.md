@@ -18,6 +18,7 @@ flowchart LR
   S -->|workflow actions| O[Operation]
   S -->|desired outcomes| T[Task]
   S -->|graphs| G[Execution Graph]
+  S -->|shared notes| D[Session Document]
   S -->|workspace identity| E[Env]
   S -->|one serial queue| W[Run Worker]
 ```
@@ -27,8 +28,9 @@ flowchart LR
 <a id="execution-environment"></a> A session owns its
 [messages](@/docs/core-components/durable-components/message.md),
 [operations](@/docs/core-components/durable-components/operation.md),
-[tasks](@/docs/core-components/durable-components/task.md), and
-[execution graphs](@/docs/core-components/durable-components/execution-graph.md);
+[tasks](@/docs/core-components/durable-components/task.md),
+[execution graphs](@/docs/core-components/durable-components/execution-graph.md), and
+[session document](@/docs/core-components/durable-components/session-document.md);
 deleting the session deletes them. It also owns the
 [Env](@/docs/core-components/durable-components/env.md) its turns execute in, including
 provisioning, branch operations, and cleanup.

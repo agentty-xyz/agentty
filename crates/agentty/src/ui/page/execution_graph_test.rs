@@ -67,6 +67,7 @@ fn proposal_inspector_renders_scrollable_details_and_available_actions() {
             "[/] execution graphs",
             "r refresh",
             "J/K scroll",
+            "N notes",
             hint
         ]
     );

@@ -7,6 +7,8 @@ use super::{read_frame_time, visible_review_session_id};
 use crate::app::Tab;
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, DiffFocus, DiffLineComments};
+use crate::presentation::execution_graph::GraphView;
+use crate::presentation::session_document::{SessionDocumentPanel, SessionDocumentRestore};
 
 /// Unix timestamp where the test clock's local offset switches from summer to
 /// winter time.
@@ -68,6 +70,33 @@ fn visible_review_session_id_includes_the_usage_panel_session() {
 
     // Assert
     assert_eq!(session_id, Some("usage-session"));
+}
+
+#[test]
+fn visible_review_session_id_follows_the_page_behind_the_notes_panel() {
+    // Arrange
+    let view = ConfirmationViewMode {
+        scroll_offset: None,
+        session_id: "notes-session".into(),
+    };
+    let panel = |restore| {
+        AppMode::SessionDocument(Box::new(SessionDocumentPanel::new(
+            Ok(ag_session::SessionDocument::default()),
+            restore,
+        )))
+    };
+    let over_view = panel(SessionDocumentRestore::View(view.clone()));
+    let over_graph = panel(SessionDocumentRestore::Graph(Box::new(GraphView::new(
+        view,
+    ))));
+
+    // Act
+    let view_session = visible_review_session_id(&over_view);
+    let graph_session = visible_review_session_id(&over_graph);
+
+    // Assert
+    assert_eq!(view_session, Some("notes-session"));
+    assert_eq!(graph_session, None);
 }
 
 #[test]

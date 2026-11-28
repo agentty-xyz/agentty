@@ -151,6 +151,10 @@ pub(crate) enum SessionQuery {
     GetDiff {
         response_tx: oneshot::Sender<Result<Option<Vec<SessionDiffFile>>, SessionError>>,
     },
+    /// Reads the session's shared notes document.
+    GetDocument {
+        response_tx: oneshot::Sender<Result<ag_session::SessionDocument, SessionError>>,
+    },
     /// Reads the session's graphs as the terminal inspector loads them.
     GetGraphs {
         graph_id: Option<String>,
@@ -164,8 +168,8 @@ pub(crate) enum SessionQuery {
 
 impl SessionQuery {
     /// Answers the read as the host answers a session it does not list: no
-    /// session, diff, or files, and not found for its graphs, as remote
-    /// control reports a session it cannot see.
+    /// session, diff, or files, and not found for its document and graphs,
+    /// as remote control reports a session it cannot see.
     pub(crate) fn answer_unlisted(self) {
         match self {
             Self::Get { response_tx } => {
@@ -173,6 +177,9 @@ impl SessionQuery {
             }
             Self::GetDiff { response_tx } => {
                 let _ = response_tx.send(Ok(None));
+            }
+            Self::GetDocument { response_tx } => {
+                let _ = response_tx.send(Err(SessionError::NotFound));
             }
             Self::GetGraphs { response_tx, .. } => {
                 let _ = response_tx.send(Err(SessionError::NotFound));
@@ -562,6 +569,17 @@ impl SessionRuntimeHandle {
     ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
         self.request_session(session_id.clone(), |response_tx| SessionQuery::GetDiff {
             response_tx,
+        })
+        .await
+    }
+
+    /// Reads one session's shared notes document through the runtime actor.
+    pub(crate) async fn get_session_document(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<ag_session::SessionDocument, SessionError> {
+        self.request_session(session_id.clone(), |response_tx| {
+            SessionQuery::GetDocument { response_tx }
         })
         .await
     }

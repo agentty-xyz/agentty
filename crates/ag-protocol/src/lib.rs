@@ -15,6 +15,7 @@ mod prompt;
 mod question;
 mod review;
 mod schema;
+mod text;
 
 pub use envelope::{
     ProtocolSchemaInstructionMode, build_protocol_repair_prompt, prepend_protocol_instructions,
@@ -45,3 +46,4 @@ pub use review::{
     FocusedReviewSide, FocusedReviewSuggestion,
 };
 pub use schema::{SchemaRequiredPolicy, agent_response_output_schema, protocol_output_schema};
+pub use text::{escaped_json_string, is_hidden_character};

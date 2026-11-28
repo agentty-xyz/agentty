@@ -59,7 +59,9 @@ flowchart TD
   S -->|desired outcomes| T[Task]
   S -->|utility executions| R[Run]
   S -->|graphs| G[Execution Graph]
+  S -->|shared notes| D[Session Document]
   S -->|workspace identity| E[Env]
+  G -->|nodes read and add notes| D
   T -->|each attempt uses| O
   G -->|task-conversation node| T
   G -->|fresh node| R

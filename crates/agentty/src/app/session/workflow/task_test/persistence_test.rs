@@ -135,6 +135,7 @@ async fn test_workflow_notice_append_survives_hydration_during_persistence() {
             "session-id",
             SessionMessageKind::WorkflowNotice,
             "\n[Sync] Successfully synced onto main\n",
+            None,
             async move {
                 let _ = persistence_started_tx.send(());
                 let _ = release_persistence_rx.await;
@@ -200,6 +201,7 @@ async fn test_workflow_notice_append_remains_live_after_persistence_error() {
         "session-id",
         SessionMessageKind::WorkflowNotice,
         "\n[Sync Error] persistence failed\n",
+        None,
         async { Err(DbError::Query(sqlx::Error::RowNotFound)) },
         "failed to persist workflow notice",
     )
@@ -233,6 +235,7 @@ async fn test_workflow_notice_append_still_persists_when_live_transcript_is_pois
         "session-id",
         SessionMessageKind::WorkflowNotice,
         "\n[Sync] Successfully synced onto main\n",
+        None,
         {
             let persisted = Arc::clone(&persisted);
 
@@ -284,4 +287,50 @@ async fn test_auto_address_notice_is_skipped_for_a_session_without_a_project() {
         &[] as &[SessionMessage]
     );
     assert!(app_event_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn test_a_once_keyed_notice_is_appended_and_persisted_once() {
+    // Arrange
+    let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
+    let persisted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let append = |message: &'static str| {
+        let transcript = Arc::clone(&transcript);
+        let persisted = Arc::clone(&persisted);
+
+        async move {
+            SessionTaskService::append_live_and_persist_transcript_message(
+                &transcript,
+                "session-id",
+                SessionMessageKind::WorkflowNotice,
+                message,
+                Some("graph `review`"),
+                async move {
+                    persisted.fetch_add(1, Ordering::SeqCst);
+
+                    Ok(())
+                },
+                "failed to persist workflow notice",
+            )
+            .await;
+        }
+    };
+
+    // Act
+    append("\n[Warning] graph `review` first\n").await;
+    append("\n[Warning] graph `review` second\n").await;
+
+    // Assert
+    assert_eq!(
+        transcript
+            .lock()
+            .expect("transcript lock should not be poisoned")
+            .messages(),
+        &[SessionMessage::new(
+            0,
+            SessionMessageKind::WorkflowNotice,
+            "\n[Warning] graph `review` first\n"
+        )]
+    );
+    assert_eq!(persisted.load(Ordering::SeqCst), 1);
 }

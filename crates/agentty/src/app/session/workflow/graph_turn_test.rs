@@ -1,5 +1,5 @@
 //! Graph turn unit tests covering image marker disambiguation, continuation
-//! prompts, and effect budgets.
+//! prompts, the session document section, and effect budgets.
 
 use std::sync::Arc;
 
@@ -29,10 +29,11 @@ fn graph_images_disambiguate_reused_reply_markers_without_rewriting_json_data() 
         placeholder: "[Image #1]".into(),
     }];
     let continuation = "Use [Image #1], keeping literal [Task image #2] in the example.";
+    let document = "Session document (version 1): literal [Task image #3] in a note.";
 
     // Act
-    let prompt = graph_prompt(&request, &replies, Some(continuation));
-    let initial = graph_prompt(&request, &[], None);
+    let prompt = graph_prompt(&request, Some(document), &replies, Some(continuation));
+    let initial = graph_prompt(&request, None, &[], None);
     let paths = prompt
         .content_parts()
         .into_iter()
@@ -56,6 +57,11 @@ fn graph_images_disambiguate_reused_reply_markers_without_rewriting_json_data() 
     assert_eq!(paths, ["initial.png", "revision.png"]);
     assert_eq!(prompt.attachments[0].placeholder, "[#Task image #1]");
     assert_eq!(prompt.attachments[1].placeholder, "[#Task image #2]");
+    assert!(prompt.text.contains(document));
+    assert!(!initial.text.contains("Session document"));
+    let document_at = prompt.text.find(document);
+    let attachments_at = prompt.text.find("Task input attachment 1");
+    assert!(document_at < attachments_at, "images follow the document");
 }
 
 #[test]
@@ -66,7 +72,7 @@ fn graph_continuations_are_current_instructions_with_literal_user_guidance() {
                         \\\"search\\\".\\nKeep the tests.\"}";
 
     // Act
-    let prompt = graph_prompt(&request, &[], Some(continuation));
+    let prompt = graph_prompt(&request, None, &[], Some(continuation));
 
     // Assert
     assert!(prompt.text.contains(&format!(

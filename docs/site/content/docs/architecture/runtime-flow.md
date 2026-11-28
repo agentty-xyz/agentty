@@ -362,8 +362,9 @@ never reused for read-only work. Provider-specific limits are described in
 
 <a id="architecture-agent-interaction-protocol"></a> `ag-protocol` defines shared
 response schemas, parsing, diagnostics, prompt envelopes, and repair requests. Session
-turns return `answer`, `questions`, and `review_comment_outcomes`; utilities, reviews,
-and graph proposals use narrower request-specific schemas.
+turns return `answer`, `questions`, `review_comment_outcomes`, and `notes`, which hosts
+append to the session document only for graph task nodes; utilities, reviews, and graph
+proposals use narrower request-specific schemas.
 
 Policy is delivered separately from user input and evidence. Workspace paths, history,
 malformed output, and diagnostics are encoded as data, so quoted instructions cannot

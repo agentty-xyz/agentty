@@ -25,6 +25,7 @@ use crate::domain::turn_prompt::TurnPrompt;
 fn test_build_assistant_message_content_falls_back_to_question_text() {
     // Arrange
     let response = AgentResponse {
+        notes: Vec::new(),
         answer: String::new(),
         questions: vec![QuestionItem::new("Should I apply the patch?")],
         review_comment_outcomes: Vec::new(),
@@ -44,6 +45,7 @@ fn test_build_assistant_message_content_falls_back_to_question_text() {
 fn test_agent_response_questions_returns_only_question_messages() {
     // Arrange
     let agent_response = AgentResponse {
+        notes: Vec::new(),
         answer: "Implemented the feature.".to_string(),
         questions: vec![
             QuestionItem::new("Need a target branch?"),
@@ -72,6 +74,7 @@ fn test_agent_response_questions_preserves_ordered_list_as_single_question_text(
                               keyd instructions rewritten to the safer `/etc/keyd/default.conf` \
                               path with existence checks and\nrollback notes?";
     let agent_response = AgentResponse {
+        notes: Vec::new(),
         answer: String::new(),
         questions: vec![QuestionItem::new(numbered_questions)],
         review_comment_outcomes: Vec::new(),

@@ -55,6 +55,7 @@ pub(crate) mod session;
 mod session_api;
 mod session_creation;
 mod session_diff;
+mod session_document;
 mod session_runtime;
 pub mod session_state;
 pub(crate) mod session_usage;

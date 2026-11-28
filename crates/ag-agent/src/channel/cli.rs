@@ -447,6 +447,7 @@ async fn parse_or_keep_follow_up_response(
 fn append_follow_up_response(response: &mut AgentResponse, follow_up: AgentResponse) {
     let AgentResponse {
         answer,
+        notes,
         questions,
         review_comment_outcomes,
     } = follow_up;
@@ -456,6 +457,7 @@ fn append_follow_up_response(response: &mut AgentResponse, follow_up: AgentRespo
         }
         response.answer.push_str(&answer);
     }
+    response.notes.extend(notes);
     response.questions.extend(questions);
     response
         .review_comment_outcomes

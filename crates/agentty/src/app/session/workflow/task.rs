@@ -1617,6 +1617,33 @@ impl SessionTaskService {
     }
 
     /// Appends one formatted workflow notice to the in-memory transcript and
+    /// durable message store, unless the transcript already holds a workflow
+    /// notice containing `key`. The check and the in-memory append share one
+    /// lock, so concurrent callers add the notice once.
+    pub(crate) async fn append_workflow_notice_once(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        db: &AppRepositories,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        key: &str,
+        message: &str,
+    ) {
+        Self::append_live_and_persist_transcript_message(
+            transcript,
+            id,
+            SessionMessageKind::WorkflowNotice,
+            message,
+            Some(key),
+            db.sessions()
+                .append_session_message(id, SessionMessageKind::WorkflowNotice, message),
+            "failed to persist workflow notice",
+        )
+        .await;
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
+    }
+
+    /// Appends one formatted workflow notice to the in-memory transcript and
     /// durable message store.
     pub(crate) async fn append_workflow_notice(
         transcript: &Arc<Mutex<SessionTranscript>>,
@@ -1631,6 +1658,7 @@ impl SessionTaskService {
             id,
             SessionMessageKind::WorkflowNotice,
             message,
+            None,
             db.sessions()
                 .append_session_message(id, SessionMessageKind::WorkflowNotice, message),
             "failed to persist workflow notice",
@@ -1655,6 +1683,7 @@ impl SessionTaskService {
             id,
             SessionMessageKind::UserPrompt,
             message,
+            None,
             db.sessions()
                 .append_session_message(id, SessionMessageKind::UserPrompt, message),
             "failed to persist user prompt",
@@ -1715,6 +1744,7 @@ impl SessionTaskService {
             id,
             message.kind,
             message.raw_content,
+            None,
             db.sessions()
                 .append_session_message(id, message.kind, message.raw_content),
             "failed to persist session transcript message",
@@ -1725,17 +1755,29 @@ impl SessionTaskService {
 
     /// Appends one live message before awaiting persistence so the render
     /// snapshot remains current while durable storage is in flight.
+    ///
+    /// With `once_key`, a transcript that already holds a message of `kind`
+    /// containing it gains nothing and persists nothing.
     async fn append_live_and_persist_transcript_message(
         transcript: &Arc<Mutex<SessionTranscript>>,
         id: &str,
         kind: SessionMessageKind,
         content: &str,
+        once_key: Option<&str>,
         persistence: impl Future<Output = Result<(), DbError>>,
         persistence_error_message: &'static str,
     ) {
         let should_persist;
         match transcript.lock() {
             Ok(mut transcript) => {
+                if once_key.is_some_and(|key| {
+                    transcript
+                        .messages()
+                        .iter()
+                        .any(|message| message.kind == kind && message.content.contains(key))
+                }) {
+                    return;
+                }
                 should_persist = transcript.should_persist();
                 transcript.append_message(kind, content);
             }

@@ -40,11 +40,41 @@ fn test_agent_response_output_schema_contains_required_fields() {
             .iter()
             .any(|value| value.as_str() == Some("review_comment_outcomes"))
     );
-    assert_eq!(required_fields.len(), 3);
-    assert_eq!(properties.len(), 3);
+    assert!(
+        required_fields
+            .iter()
+            .any(|value| value.as_str() == Some("notes"))
+    );
+    assert_eq!(required_fields.len(), 4);
+    assert_eq!(properties.len(), 4);
     assert!(properties.contains_key("answer"));
+    assert!(properties.contains_key("notes"));
     assert!(properties.contains_key("questions"));
     assert!(properties.contains_key("review_comment_outcomes"));
+}
+
+#[test]
+/// Session notes are a plain string array on every transport: Codex lists
+/// them as required, other validators leave them optional, and neither gets
+/// a keyword a provider might reject.
+fn session_notes_are_a_plain_string_array_on_every_transport() {
+    for (policy, is_required) in [
+        (SchemaRequiredPolicy::AllProperties, true),
+        (SchemaRequiredPolicy::MinimumProtocolKeys, false),
+    ] {
+        // Act
+        let schema = protocol_output_schema(ProtocolRequestProfile::SessionTurn, policy);
+        let notes = &schema["properties"]["notes"];
+        let required = schema["required"].as_array().expect("required keys");
+
+        // Assert
+        assert_eq!(notes["type"], "array");
+        assert_eq!(notes["items"], serde_json::json!({ "type": "string" }));
+        assert_eq!(
+            required.contains(&Value::String("notes".to_string())),
+            is_required
+        );
+    }
 }
 
 #[test]
@@ -418,6 +448,14 @@ fn test_agent_response_json_schema_preserves_field_metadata() {
             .and_then(|value| value.get("description"))
             .and_then(Value::as_str),
         Some(expected_questions_description.as_str())
+    );
+    assert_schema_property_title_and_description(
+        response_properties,
+        "notes",
+        "notes",
+        "Short notes for the session's shared document: findings, decisions, or hand-offs that \
+         other agents of this session need. Emit an empty array unless the prompt explicitly \
+         invites session notes.",
     );
     assert_schema_property_title_and_description(
         response_properties,

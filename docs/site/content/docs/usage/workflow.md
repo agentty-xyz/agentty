@@ -768,6 +768,23 @@ happens on its own; completed and canceled graphs cannot get more. Nothing repla
 automatically on restart; only a chat reply you sent before it is still applied.
 Focused-review graphs can be inspected and canceled here; regenerate them with `f`.
 
+### Session Notes
+
+Graph nodes share notes through one document per session, kept across all its graphs:
+each node that runs a task conversation reads it when it starts and can add up to five
+short findings, decisions, or hand-offs for the nodes after it. A node's notes are added
+once its commit or other follow-up step succeeds and it asked you no question, just
+before the node finishes; a node stopped or failing in that last moment can leave its
+notes in place, and a retried or continued node may add similar notes again. Press `N`
+in session view or the graph inspector to read it; entries are listed oldest first with
+their version and author, and the panel refreshes as nodes add notes. A note can be at
+most 2 KiB and the whole document 32 KiB; notes that do not fit are not added, and one
+`[Session Notes Warning]` in chat says why. You cannot edit notes, but `x` clears the
+whole document after you type `clear`; if a note arrives while you type, the
+confirmation closes so you can look again. Clearing hides every note from the nodes that
+start afterwards, including hand-offs meant for nodes that have not started yet; the
+panel keeps the history.
+
 Programmatic integrations can track outcomes through the
 [Task API](@/docs/core-components/durable-components/task.md) and query, answer, retry,
 resume, extend, or cancel graphs through `SessionService`; see

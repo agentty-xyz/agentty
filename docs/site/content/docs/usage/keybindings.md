@@ -124,6 +124,7 @@ The full set in **Review**, subject to session and forge availability:
 | `c`                 | Show linked review-request comments                 |
 | `d`                 | Show diff in any state, including live edits        |
 | `w`                 | Inspect saved execution graphs                      |
+| `N`                 | Show the session's shared notes                     |
 | `u`                 | Show token usage and estimated cost                 |
 | `f`                 | Show, generate, or regenerate focused review        |
 | `F`                 | Fork session with copied transcript history         |
@@ -173,6 +174,21 @@ Press `u` from session view or run `/usage` in the composer; see
 | `PgDn` / `PgUp` | Scroll down / up one page                     |
 | `Esc`           | Close and return to the view or composer      |
 
+## Session Notes Panel
+
+Press `N` from session view or the execution graph inspector; see
+[Session Notes](@/docs/usage/workflow.md#session-notes).
+
+| Key             | Action                                           |
+| --------------- | ------------------------------------------------ |
+| `j` / `↓`       | Scroll down one line when the panel overflows    |
+| `k` / `↑`       | Scroll up one line                               |
+| `PgDn` / `PgUp` | Scroll down / up one page                        |
+| `x`             | Clear the whole document after typing `clear`    |
+| `Enter`         | Confirm clearing once the input reads `clear`    |
+| `Esc`           | Cancel clearing, or close and return to the page |
+| `q`             | Close and return to the page, outside the input  |
+
 ## Execution Graph Inspector
 
 Press `w` from session view. Actions appear only when the displayed snapshot supports
@@ -184,6 +200,7 @@ them; see [Workflow](@/docs/usage/workflow.md#execution-graph-inspector).
 | `p`                              | Return to the pending proposal                   |
 | `j` / `k`, `Down` / `Up`         | Select node                                      |
 | `r`                              | Refresh graph state                              |
+| `N`                              | Show the session's shared notes                  |
 | `o`                              | Inspect next output                              |
 | `J` / `K`, `PageDown` / `PageUp` | Scroll details                                   |
 | `Home`                           | Scroll to top                                    |

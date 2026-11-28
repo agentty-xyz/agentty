@@ -1104,6 +1104,7 @@ pub(super) fn github_forge_remote() -> forge::ForgeRemote {
 pub(super) fn successful_turn_result(answer: &str) -> TurnResult {
     TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: answer.to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
@@ -1119,6 +1120,7 @@ pub(super) fn successful_turn_result(answer: &str) -> TurnResult {
 pub(super) fn fixed_review_turn_result() -> TurnResult {
     TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: "Implemented the change.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: vec![ReviewCommentOutcome {
@@ -1227,6 +1229,7 @@ pub(super) fn mock_existing_session_rebase_channel(
             Box::pin(async {
                 Ok(TurnResult {
                     assistant_message: AgentResponse {
+                        notes: Vec::new(),
                         answer: "Resolved conflicts inside existing session.".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),

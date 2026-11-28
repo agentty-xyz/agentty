@@ -232,6 +232,9 @@ pub enum SessionOperation {
     /// Merging a session's open pull request on its forge, or adding it to
     /// its merge queue, through [`SessionBackend::merge_review_request`].
     MergeReviewRequest,
+    /// Reading a session's shared notes document through
+    /// [`SessionBackend::get_session_document`].
+    SessionDocument,
 }
 
 /// Project that a request which takes a project is for.
@@ -797,6 +800,20 @@ pub trait SessionBackend: Send + Sync {
 
         Err(SessionError::Operation(
             "Host does not serve session diffs".to_string(),
+        ))
+    }
+
+    /// Reads a session's shared notes document with its attributed entries,
+    /// without changing it. Hosts that do not serve the document report it
+    /// as an error.
+    async fn get_session_document(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::SessionDocument, SessionError> {
+        let _ = session_id;
+
+        Err(SessionError::Operation(
+            "Host does not serve session documents".to_string(),
         ))
     }
 
@@ -1416,6 +1433,23 @@ impl SessionService {
         session_id: &SessionId,
     ) -> Result<Option<Vec<SessionDiffFile>>, SessionError> {
         self.backend.get_session_diff(session_id).await
+    }
+
+    /// Reads one session's shared notes document: its current body and
+    /// version, and every accepted write with its author, in version order.
+    /// A session that never wrote one, or that the host does not know, reads
+    /// as the empty document at version zero.
+    ///
+    /// # Errors
+    /// Returns an error when the host does not serve the document or cannot
+    /// load it, and [`SessionError::NotFound`] when the caller's scope does
+    /// not reach the session, such as a paired device asking about a session
+    /// the host does not list.
+    pub async fn get_session_document(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::SessionDocument, SessionError> {
+        self.backend.get_session_document(session_id).await
     }
 
     /// Lists the files and directories in one session's worktree,

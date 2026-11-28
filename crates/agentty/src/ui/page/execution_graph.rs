@@ -236,12 +236,25 @@ fn block(title: &str) -> Block<'_> {
 }
 
 fn actions(view: &GraphView) -> Vec<&'static str> {
-    let mut actions = vec!["q back", "[/] graph", "j/k node", "r refresh", "o output"];
+    let mut actions = vec![
+        "q back",
+        "[/] graph",
+        "j/k node",
+        "r refresh",
+        "o output",
+        "N notes",
+    ];
     if view.proposal.is_some() {
         actions.push("p proposal");
     }
     if view.selected_proposal().is_some() {
-        let mut actions = vec!["q back", "[/] execution graphs", "r refresh", "J/K scroll"];
+        let mut actions = vec![
+            "q back",
+            "[/] execution graphs",
+            "r refresh",
+            "J/K scroll",
+            "N notes",
+        ];
         if view
             .selected_proposal()
             .is_some_and(|state| !state.version.is_cancelled && state.version.approval.is_none())

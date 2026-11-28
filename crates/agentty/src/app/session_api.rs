@@ -80,6 +80,7 @@ impl SessionBackend for SessionRuntimeHandle {
                 | SessionOperation::GraphActions
                 | SessionOperation::GenerateGraphProposal
                 | SessionOperation::MessageImages
+                | SessionOperation::SessionDocument
         )
     }
 
@@ -273,6 +274,13 @@ impl SessionBackend for SessionRuntimeHandle {
         session_id: &SessionId,
     ) -> Result<Option<Vec<ag_session::SessionDiffFile>>, ApiSessionError> {
         SessionRuntimeHandle::get_session_diff(self, session_id).await
+    }
+
+    async fn get_session_document(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<ag_session::SessionDocument, ApiSessionError> {
+        SessionRuntimeHandle::get_session_document(self, session_id).await
     }
 
     async fn list_session_files(
@@ -639,6 +647,17 @@ impl App {
             }
             SessionQuery::GetDiff { response_tx } => {
                 self.start_api_session_diff(&session_id, response_tx);
+            }
+            SessionQuery::GetDocument { response_tx } => {
+                let result = self
+                    .services
+                    .db()
+                    .session_documents()
+                    .load_session_document(&session_id)
+                    .await
+                    .map_err(SessionError::from)
+                    .map_err(api_error_from_session);
+                let _ = response_tx.send(result);
             }
             SessionQuery::GetGraphs {
                 graph_id,

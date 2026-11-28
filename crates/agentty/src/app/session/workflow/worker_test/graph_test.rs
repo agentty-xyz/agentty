@@ -10,8 +10,11 @@ use ag_contracts::{
 };
 use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_protocol::QuestionItem;
-use ag_session::{ExecutionGraph, GraphPostProcessing, GraphWorkspaceAccess, TaskAttemptStatus};
-use ag_store::SessionMessageRow;
+use ag_session::{
+    ExecutionGraph, GraphPostProcessing, GraphWorkspaceAccess, SESSION_DOCUMENT_NOTE_MAX_BYTES,
+    SessionDocumentAuthor, TaskAttemptStatus,
+};
+use ag_store::{MockGraphRepository, SessionMessageRow};
 use ag_worker::{
     GraphEnvLocation, GraphRunRequest, MockRunClient, ScheduledWork, SessionRunClient, WorkerHost,
 };
@@ -30,6 +33,7 @@ use crate::app::AppEvent;
 use crate::app::execution_graph::tests::{claimed_dispatch, graph, run_request, task_operation_id};
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::workflow::graph_turn::{GraphTaskCommand, GraphTaskCompletion};
+use crate::app::session::workflow::task::SessionTaskService;
 use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessage;
 use crate::infra::db::TaskAgentTurnMetadata;
@@ -183,13 +187,9 @@ async fn graph_task_failures_and_cancellation_stay_out_of_chat_while_questions_a
             .join()
             .expect_err("poisoned lock");
         }
+        let effect_prompts = Arc::new(Mutex::new(Vec::new()));
+        let run_client = seeded_effect_client(&context, scenario, &effect_prompts).await;
         // Act
-        let mut run_client = MockRunClient::new();
-        if ["effects", "unbudgeted-effects"].contains(&scenario) {
-            run_client
-                .expect_submit()
-                .returning(|_| Err(ag_contracts::OneShotError::new("repair failed")));
-        }
         let result = SessionWorkerService::process_session_command(
             &context,
             &(Arc::new(run_client) as Arc<dyn ag_worker::RunClient>),
@@ -221,6 +221,14 @@ async fn graph_task_failures_and_cancellation_stay_out_of_chat_while_questions_a
             succeeds || ["effects", "unbudgeted-effects"].contains(&scenario),
             "{scenario}"
         );
+        assert_notes_stay_with_complete_turns(
+            &context,
+            scenario,
+            succeeds,
+            response.as_deref().ok(),
+            &effect_prompts,
+        )
+        .await;
         assert_eq!(
             task.attempts[0].status,
             if succeeds {
@@ -233,6 +241,71 @@ async fn graph_task_failures_and_cancellation_stay_out_of_chat_while_questions_a
         );
         assert_only_questions_reach_chat(&context, scenario).await;
     }
+}
+
+/// Seeds an earlier note, which the node reads and its effects must not,
+/// and returns the run client the effects of `scenario` submit to, which
+/// records each prompt in `effect_prompts` and fails it.
+async fn seeded_effect_client(
+    context: &SessionWorkerContext,
+    scenario: &str,
+    effect_prompts: &Arc<Mutex<Vec<String>>>,
+) -> MockRunClient {
+    context
+        .db
+        .session_documents()
+        .append_session_notes(
+            "sess",
+            &SessionDocumentAuthor::User,
+            &["SEEDED_NOTE".into()],
+        )
+        .await
+        .expect("seeded note");
+    let mut run_client = MockRunClient::new();
+    if ["effects", "unbudgeted-effects"].contains(&scenario) {
+        let effect_prompts = Arc::clone(effect_prompts);
+        run_client.expect_submit().returning(move |request| {
+            effect_prompts
+                .lock()
+                .expect("effect prompts")
+                .push(request.prompt);
+
+            Err(ag_contracts::OneShotError::new("repair failed"))
+        });
+    }
+
+    run_client
+}
+
+/// Asserts that only a complete turn published its note, not one that
+/// failed, was canceled, asked questions, or whose effects failed; that
+/// the output body leaves notes out; and that no effect prompt quotes the
+/// document.
+async fn assert_notes_stay_with_complete_turns(
+    context: &SessionWorkerContext,
+    scenario: &str,
+    succeeds: bool,
+    body: Option<&str>,
+    effect_prompts: &Mutex<Vec<String>>,
+) {
+    let mut expected_notes = vec!["SEEDED_NOTE".to_string()];
+    if succeeds && scenario != "questions" {
+        expected_notes.push(node_note(scenario));
+    }
+    assert_eq!(session_notes(context).await, expected_notes, "{scenario}");
+    if let Some(body) = body {
+        assert!(!body.contains("\"notes\""), "{scenario}: {body}");
+    }
+    let effect_prompts = effect_prompts.lock().expect("effect prompts");
+    for prompt in effect_prompts.iter() {
+        assert!(!prompt.contains("SEEDED_NOTE"), "{scenario}");
+        assert!(!prompt.contains("Session document"), "{scenario}");
+    }
+    assert_eq!(
+        effect_prompts.is_empty(),
+        !["effects", "unbudgeted-effects"].contains(&scenario),
+        "{scenario}"
+    );
 }
 
 /// Asserts persisted and live chat hold the question notice for the
@@ -281,27 +354,7 @@ async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
     recorded_message
         .questions
         .push(QuestionItem::new("Task question?"));
-    context
-        .db
-        .operations()
-        .mark_session_operation_running(&task.operation_id)
-        .await
-        .expect("running operation");
-    let first_delivery = context
-        .db
-        .graphs()
-        .record_task_turn(
-            &task.request.dispatch,
-            &TaskAgentTurnMetadata {
-                assistant_message: serde_json::json!(recorded_message).to_string(),
-                harness_turn_report: None,
-                instruction_conversation_id: Some("task-provider".into()),
-                provider_conversation_id: Some("task-provider".into()),
-                usage: ag_contracts::TurnUsage::default(),
-            },
-        )
-        .await
-        .expect("first delivery");
+    let first_delivery = record_first_delivery(&context, &task, &recorded_message).await;
 
     // Act
     let result = SessionWorkerService::process_session_command(
@@ -339,6 +392,278 @@ async fn redelivered_graph_questions_are_not_asked_in_chat_again() {
             .len(),
         0
     );
+    // A turn that asks questions publishes no notes.
+    assert_eq!(session_notes(&context).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_redelivered_turn_repeats_no_warning_about_its_refused_note() {
+    // Arrange: an earlier delivery recorded this response, whose note the
+    // document refused and warned about then.
+    let context = graph_context("long-note-redelivered").await;
+    let (task, receiver) = graph_task_fixture(&context, "long-note-redelivered").await;
+    let recorded_message = successful_turn_result("task response").assistant_message;
+    let first_delivery = record_first_delivery(&context, &task, &recorded_message).await;
+
+    // Act
+    let result = SessionWorkerService::process_session_command(
+        &context,
+        &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+        SessionCommand::RunGraphTask(Box::new(task)),
+    )
+    .await
+    .expect("selected");
+
+    // Assert
+    assert!(first_delivery);
+    assert!(result.is_ok(), "{result:?}");
+    assert!(receiver.await.expect("worker completion").is_ok());
+    assert_eq!(session_notes(&context).await, Vec::<String>::new());
+    assert_eq!(
+        context
+            .db
+            .sessions()
+            .load_session_messages("sess")
+            .await
+            .expect("chat"),
+        Vec::<SessionMessageRow>::new()
+    );
+}
+
+#[tokio::test]
+async fn a_document_that_cannot_be_written_warns_without_failing_the_node() {
+    for redelivered in [false, true] {
+        // Arrange
+        let (context, pool) = context_with_pool("unwritable-notes").await;
+        let (task, receiver) = graph_task_fixture(&context, "unwritable-notes").await;
+        if redelivered {
+            let message = successful_turn_result("task response").assistant_message;
+            assert!(record_first_delivery(&context, &task, &message).await);
+        }
+        sqlx::query(
+            "CREATE TRIGGER reject_notes BEFORE INSERT ON session_document_entry BEGIN SELECT \
+             RAISE(FAIL, 'NOTES_REJECTED'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("trigger");
+
+        // Act
+        let result = SessionWorkerService::process_session_command(
+            &context,
+            &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+            SessionCommand::RunGraphTask(Box::new(task)),
+        )
+        .await
+        .expect("selected");
+
+        // Assert: a redelivery repeats no warning the first delivery gave.
+        assert!(result.is_ok(), "{result:?}");
+        assert!(receiver.await.expect("worker completion").is_ok());
+        let persisted = context
+            .db
+            .sessions()
+            .load_session_messages("sess")
+            .await
+            .expect("chat");
+        assert_eq!(persisted.len(), usize::from(!redelivered), "{redelivered}");
+        for message in &persisted {
+            assert!(message.content.contains(
+                "[Session Notes Warning] Could not save the notes from node `first` of graph"
+            ));
+            assert!(message.content.contains("NOTES_REJECTED"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_unreadable_document_runs_the_node_without_it_and_warns_once_per_graph() {
+    for sibling_warned in [false, true] {
+        // Arrange: the document has a note, then its entries cannot be read.
+        let (context, pool) = context_with_pool("unreadable-notes").await;
+        let (task, receiver) = graph_task_fixture(&context, "unreadable-notes").await;
+        let graph_id = task.request.dispatch.record.graph_id.clone();
+        context
+            .db
+            .session_documents()
+            .append_session_notes("sess", &SessionDocumentAuthor::User, &["Kept.".into()])
+            .await
+            .expect("note");
+        sqlx::query("DROP TABLE session_document_entry")
+            .execute(&pool)
+            .await
+            .expect("break the entries");
+        if sibling_warned {
+            // Another node of the same graph warned already.
+            SessionTaskService::append_workflow_notice(
+                &context.transcript,
+                &context.db,
+                &context.app_event_tx,
+                &context.session_update_versions,
+                &context.session_id,
+                &format!("Graph `{graph_id}` runs its nodes without the session notes, earlier."),
+            )
+            .await;
+        }
+
+        // Act
+        let result = SessionWorkerService::process_session_command(
+            &context,
+            &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+            SessionCommand::RunGraphTask(Box::new(task)),
+        )
+        .await
+        .expect("selected");
+
+        // Assert
+        assert!(result.is_ok(), "{result:?}");
+        assert!(receiver.await.expect("worker completion").is_ok());
+        let persisted = context
+            .db
+            .sessions()
+            .load_session_messages("sess")
+            .await
+            .expect("chat");
+        assert_eq!(persisted.len(), 1, "{sibling_warned}");
+        let expected = if sibling_warned {
+            "earlier."
+        } else {
+            "[Session Notes Warning] Graph `"
+        };
+        assert!(
+            persisted[0].content.contains(expected),
+            "{}",
+            persisted[0].content
+        );
+        assert!(persisted[0].content.contains(&format!(
+            "Graph `{graph_id}` runs its nodes without the session notes"
+        )));
+    }
+}
+
+/// Returns the context of `scenario` over a fresh database whose pool the
+/// test can change, with the `sess` session stored.
+async fn context_with_pool(scenario: &'static str) -> (SessionWorkerContext, sqlx::SqlitePool) {
+    let mut context = graph_context(scenario).await;
+    let (db, pool) = crate::infra::db::AppRepositories::in_memory_with_pool()
+        .await
+        .expect("database");
+    context.db = db;
+    let project = context
+        .db
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    context
+        .db
+        .sessions()
+        .insert_session("sess", "gpt-6.1-sol", "main", "Review", project)
+        .await
+        .expect("session");
+
+    (context, pool)
+}
+
+/// Records `message` as an earlier delivery of `task`'s turn, as the
+/// scripted provider returns it with its notes left out, and returns
+/// whether storage took it.
+async fn record_first_delivery(
+    context: &SessionWorkerContext,
+    task: &GraphTaskCommand,
+    message: &ag_protocol::AgentResponse,
+) -> bool {
+    context
+        .db
+        .operations()
+        .mark_session_operation_running(&task.operation_id)
+        .await
+        .expect("running operation");
+
+    context
+        .db
+        .graphs()
+        .record_task_turn(
+            &task.request.dispatch,
+            &TaskAgentTurnMetadata {
+                assistant_message: serde_json::json!(message).to_string(),
+                harness_turn_report: None,
+                instruction_conversation_id: Some("task-provider".into()),
+                provider_conversation_id: Some("task-provider".into()),
+                usage: ag_contracts::TurnUsage::default(),
+            },
+        )
+        .await
+        .expect("first delivery")
+}
+
+#[tokio::test]
+async fn a_refused_graph_node_note_is_reported_in_chat_and_not_stored() {
+    // Arrange
+    let context = graph_context("long-note").await;
+    let (task, receiver) = graph_task_fixture(&context, "long-note").await;
+
+    // Act
+    let result = SessionWorkerService::process_session_command(
+        &context,
+        &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+        SessionCommand::RunGraphTask(Box::new(task)),
+    )
+    .await
+    .expect("selected");
+
+    // Assert: the node still succeeds; only its note is refused.
+    assert!(result.is_ok(), "{result:?}");
+    assert!(receiver.await.expect("worker completion").is_ok());
+    assert_eq!(session_notes(&context).await, Vec::<String>::new());
+    let persisted = context
+        .db
+        .sessions()
+        .load_session_messages("sess")
+        .await
+        .expect("chat");
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(persisted[0].kind, "workflow_notice");
+    assert!(
+        persisted[0]
+            .content
+            .contains("[Session Notes Warning] The session notes did not add 1 of the 1 notes"),
+        "{}",
+        persisted[0].content
+    );
+}
+
+#[tokio::test]
+async fn a_graph_node_stopped_after_its_response_is_saved_adds_no_notes() {
+    // Arrange: stopping lands while the response is being saved.
+    let mut context = graph_context("canceled-after-save").await;
+    let (task, receiver) = graph_task_fixture(&context, "canceled-after-save").await;
+    let cancellation = task.cancellation.as_ref().clone();
+    let mut graphs = MockGraphRepository::new();
+    graphs.expect_execution_history().returning(|_| Ok(None));
+    graphs
+        .expect_record_task_turn()
+        .once()
+        .returning(move |_, _| {
+            cancellation.cancel();
+
+            Ok(true)
+        });
+    context.db = context.db.with_graph_repository(Arc::new(graphs));
+
+    // Act
+    let result = SessionWorkerService::process_session_command(
+        &context,
+        &(Arc::new(MockRunClient::new()) as Arc<dyn ag_worker::RunClient>),
+        SessionCommand::RunGraphTask(Box::new(task)),
+    )
+    .await
+    .expect("selected");
+
+    // Assert
+    assert!(result.is_err(), "{result:?}");
+    assert!(receiver.await.expect("worker completion").is_err());
+    assert_eq!(session_notes(&context).await, Vec::<String>::new());
 }
 
 #[tokio::test]
@@ -631,6 +956,11 @@ fn graph_factory(
                 assert_eq!(request.continuation.provider_conversation_id(), None);
                 assert_eq!(request.continuation.replay_transcript(), None);
                 assert_eq!(request.host_caches, HostCacheSharing::Shared);
+                // A document that cannot be read leaves the section out.
+                assert_eq!(
+                    request.prompt.text.contains("Session document (version"),
+                    scenario != "unreadable-notes"
+                );
                 Box::pin(async move {
                     if scenario == "provider" {
                         return Err(AgentError::Backend("provider failed".into()));
@@ -641,6 +971,9 @@ fn graph_factory(
                         _ => "task response",
                     };
                     let mut result = successful_turn_result(answer);
+                    if scenario != "unreadable-notes" {
+                        result.assistant_message.notes = vec![node_note(scenario)];
+                    }
                     if ["questions", "question-only", "blank-question"].contains(&scenario) {
                         result.assistant_message.questions.push(QuestionItem::new(
                             if scenario == "blank-question" {
@@ -678,6 +1011,31 @@ fn graph_factory(
     }
 
     factory
+}
+
+/// Returns the note the scripted provider's response carries in
+/// `scenario`: one longer than the session document takes for the
+/// `long-note` scenarios, a short finding otherwise.
+fn node_note(scenario: &str) -> String {
+    if scenario.starts_with("long-note") {
+        return "n".repeat(SESSION_DOCUMENT_NOTE_MAX_BYTES + 1);
+    }
+
+    format!("{scenario} finding")
+}
+
+/// Returns the notes of the session document of `sess`, in version order.
+async fn session_notes(context: &SessionWorkerContext) -> Vec<String> {
+    context
+        .db
+        .session_documents()
+        .load_session_document("sess")
+        .await
+        .expect("session document")
+        .entries
+        .into_iter()
+        .map(|entry| entry.text)
+        .collect()
 }
 
 #[tokio::test]

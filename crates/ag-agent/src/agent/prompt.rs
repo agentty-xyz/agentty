@@ -1,13 +1,13 @@
 //! Shared prompt-shaping helpers for agent-facing markdown prompts.
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ag_contracts::{AgentDefinitionPromptUpdate, TaskMilestone, TurnRequest};
 use ag_protocol::{
     ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt, TurnPromptAttachment,
-    TurnPromptContentPart, prepend_protocol_instructions as protocol_prepend_instructions,
+    TurnPromptContentPart, escaped_json_string, is_hidden_character,
+    prepend_protocol_instructions as protocol_prepend_instructions,
     prepend_protocol_refresh_reminder as protocol_prepend_refresh_reminder,
     split_turn_prompt_content,
 };
@@ -247,8 +247,8 @@ fn fenced_milestone(milestone: &TaskMilestone) -> Option<String> {
     Some(format!(
         "{{\"number\":{},\"title\":{},\"goal\":{}}}",
         milestone.number,
-        fenced_json_string(&title),
-        fenced_json_string(&goal)
+        escaped_json_string(&title),
+        escaped_json_string(&goal)
     ))
 }
 
@@ -269,61 +269,6 @@ fn normalized_milestone_text(text: &str, max_chars: usize, line_break: char) -> 
     let text: String = text.trim().chars().take(max_chars).collect();
 
     text.trim_end().to_string()
-}
-
-/// Returns whether `character` is a control character, a Unicode format
-/// character such as a bidirectional override, a zero-width space, or a
-/// tag character, or another character that renders as nothing, such as a
-/// variation selector or a Hangul filler. Any of them could hide text from
-/// a person reading the milestone while a model still reads it.
-fn is_hidden_character(character: char) -> bool {
-    character.is_control()
-        || matches!(
-            character,
-            '\u{00AD}'
-                | '\u{034F}'
-                | '\u{0600}'..='\u{0605}'
-                | '\u{061C}'
-                | '\u{06DD}'
-                | '\u{070F}'
-                | '\u{0890}'..='\u{0891}'
-                | '\u{08E2}'
-                | '\u{115F}'..='\u{1160}'
-                | '\u{17B4}'..='\u{17B5}'
-                | '\u{180B}'..='\u{180F}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{206F}'
-                | '\u{3164}'
-                | '\u{FE00}'..='\u{FE0F}'
-                | '\u{FEFF}'
-                | '\u{FFA0}'
-                | '\u{FFF9}'..='\u{FFFB}'
-                | '\u{110BD}'
-                | '\u{110CD}'
-                | '\u{13430}'..='\u{1343F}'
-                | '\u{1BCA0}'..='\u{1BCA3}'
-                | '\u{1D173}'..='\u{1D17A}'
-                | '\u{E0000}'..='\u{E007F}'
-                | '\u{E0100}'..='\u{E01EF}'
-        )
-}
-
-/// Returns `text` as a JSON string in which `<`, `>`, `&`, `@`, `[`, and
-/// `]` appear only as `\u` escapes.
-fn fenced_json_string(text: &str) -> String {
-    let encoded = serde_json::Value::String(text.to_string()).to_string();
-    let mut fenced = String::with_capacity(encoded.len());
-    for character in encoded.chars() {
-        match character {
-            '<' | '>' | '&' | '@' | '[' | ']' => {
-                let _ = write!(fenced, "\\u{:04x}", u32::from(character));
-            }
-            character => fenced.push(character),
-        }
-    }
-
-    fenced
 }
 
 /// Prepends current agent instructions to one full bootstrap prompt.

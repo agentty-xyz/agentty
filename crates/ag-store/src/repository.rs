@@ -72,6 +72,11 @@ impl AppRepositories {
         self.repositories.session.as_ref()
     }
 
+    /// Returns each session's shared notes document.
+    pub fn session_documents(&self) -> &dyn crate::SessionDocumentRepository {
+        self.repositories.session_document.as_ref()
+    }
+
     /// Returns the settings repository.
     pub fn settings(&self) -> &dyn setting::SettingRepository {
         self.repositories.setting.as_ref()
@@ -132,6 +137,12 @@ impl AppRepositories {
                     pool.clone(),
                     Arc::clone(&timestamp_source),
                 )),
+                session_document: Arc::new(
+                    crate::session_document::SqliteSessionDocumentRepository::new(
+                        pool.clone(),
+                        Arc::clone(&timestamp_source),
+                    ),
+                ),
                 setting: Arc::new(setting::SqliteSettingRepository::new(pool.clone())),
                 task: Arc::new(crate::task::SqliteTaskRepository::new(
                     pool.clone(),
@@ -161,6 +172,7 @@ struct RepositorySet {
     review: Arc<dyn review::ReviewRepository>,
     run: Arc<dyn ag_worker::RunRepository>,
     session: Arc<dyn session::SessionRepository>,
+    session_document: Arc<dyn crate::SessionDocumentRepository>,
     setting: Arc<dyn setting::SettingRepository>,
     task: Arc<dyn crate::task::TaskRepository>,
     task_worktree: Arc<dyn crate::TaskWorktreeRepository>,

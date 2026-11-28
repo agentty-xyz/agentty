@@ -228,7 +228,7 @@ fn test_session_transcript_conversation_replay_text_ignores_notice_only_transcri
 }
 
 #[test]
-fn provider_replay_keeps_workflow_notices_but_not_context_or_sandbox_notices() {
+fn provider_replay_keeps_workflow_notices_but_not_context_sandbox_or_notes_notices() {
     // Arrange
     let transcript = SessionTranscript::new(vec![
         SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "keep going"),
@@ -251,6 +251,11 @@ fn provider_replay_keeps_workflow_notices_but_not_context_or_sandbox_notices() {
             2,
             SessionMessageKind::WorkflowNotice,
             "\n[Context Warning] Could not summarize earlier turns (transport).\n",
+        ),
+        SessionMessage::new(
+            2,
+            SessionMessageKind::WorkflowNotice,
+            "\n[Session Notes Warning] The session notes did not add 1 note from node `plan`.\n",
         ),
         SessionMessage::new(
             3,
@@ -282,6 +287,7 @@ fn provider_replay_keeps_workflow_notices_but_not_context_or_sandbox_notices() {
     assert!(displayed.contains("[Context Warning]"));
     assert!(displayed.contains("[Sandbox Warning]"));
     assert!(displayed.contains("[Sandbox] A command"));
+    assert!(displayed.contains("[Session Notes Warning]"));
     assert_eq!(notices_only.provider_replay_text(), None);
 }
 

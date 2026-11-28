@@ -1420,6 +1420,7 @@ impl App {
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
+        self.refresh_notes_panel(&event_batch.session_ids).await;
         // A session event may change only its stored transcript, which the
         // foreground fingerprint does not hold.
         if !event_batch.session_ids.is_empty() {
@@ -2303,6 +2304,7 @@ impl App {
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Help { .. }
+            | AppMode::SessionDocument(_)
             | AppMode::Usage(_) => false,
         }
     }
