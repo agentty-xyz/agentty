@@ -98,12 +98,15 @@ AGENTTY_MARKETING_ASSETS='demo sessions tab_tour' \
 ```
 
 An unknown name, or a combination with `AGENTTY_TEST_FILTER`, fails before a container
-starts. The generator always re-records and fails when VHS is missing or writes no GIF.
-Like testty, it records to a hidden staging file, replaces the GIF only after a nonempty
-recording, and then removes the same-named PNG poster; refresh that poster with the
-procedure below. A rewritten GIF makes `prek` report the hook as failed with
-`files were modified by this hook`; the generator's `Recorded` lines above that message
-show which assets succeeded.
+starts. The generator always re-records and fails when VHS is missing or captures no
+frames. VHS captures only the frames; the generator encodes the GIF itself in two
+streaming `ffmpeg` passes, palette then dithering, because VHS's one-pass encode holds
+every frame in memory until it has built the palette, and the demo's frames outgrow a 6
+GiB Podman machine. Like testty, it records to a hidden staging file, replaces the GIF
+only after a nonempty recording, and then removes the same-named PNG poster; refresh
+that poster with the procedure below. A rewritten GIF makes `prek` report the hook as
+failed with `files were modified by this hook`; the generator's `Recorded` lines above
+that message show which assets succeeded.
 
 ## Create or Refresh the PNG Poster
 
