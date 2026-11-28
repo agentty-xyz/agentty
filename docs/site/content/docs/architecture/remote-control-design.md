@@ -37,6 +37,33 @@ flowchart LR
 The web client is not part of this repository. The platform serves it; it speaks the
 frame protocol and runs the device side of the handshake.
 
+## Frame schema
+
+`ag-remote`'s frame types are the source of truth for the frames, and two files are
+generated from them for clients:
+
+- `crates/ag-remote/schema/remote_protocol.json`, a JSON Schema (draft 2020-12) of every
+  frame, with `PROTOCOL_VERSION` as its `x-protocol-version`. It describes `ClientFrame`
+  as the server reads it, so a field with a default is optional, and `ServerFrame` as
+  the server writes it, so a field the server may leave out is optional and never
+  `null`.
+- `crates/ag-remote/schema/remote_protocol.ts`, TypeScript declarations rendered from
+  that schema.
+
+Only the frames are JSON. The relay's `registered` and `stream` notices are plain text,
+and the handshakes and the encrypted transport are binary; this page describes them
+instead. A unit test fails when either file no longer matches the types; regenerate both
+with
+`AGENTTY_REMOTE_SCHEMA_UPDATE=1 cargo test --locked -p ag-remote --lib protocol::tests::schema`
+and review the diff.
+
+A client tolerates a newer server, as
+[Capabilities instead of version bumps](#capabilities-instead-of-version-bumps)
+requires: it ignores fields it does not know, skips a frame of an unknown `type`, treats
+a response of an unknown `kind` as an answer it cannot use, and shows an unknown enum
+value, such as a graph status, as unknown instead of failing. The schema lists only what
+this version sends, so a client must not reject an incoming frame for failing it.
+
 ## Trust model
 
 The relay is untrusted. It learns which instance a device asks for, when they connect,

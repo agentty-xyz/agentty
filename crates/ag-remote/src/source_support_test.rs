@@ -196,6 +196,7 @@ pub(crate) struct RecordingBackend {
     diff_files: Option<Vec<SessionDiffFile>>,
     graphs: Option<SessionGraphs>,
     is_failing: bool,
+    is_serving_everything: bool,
     session_files: Option<Vec<SessionFileEntry>>,
     supported: Vec<SessionOperation>,
 }
@@ -250,6 +251,15 @@ impl RecordingBackend {
         }
     }
 
+    /// Creates a backend that serves every optional operation, including
+    /// ones added after this fixture was written.
+    pub(crate) fn serving_everything() -> Self {
+        Self {
+            is_serving_everything: true,
+            ..Self::default()
+        }
+    }
+
     /// Creates a backend whose every operation fails.
     pub(crate) fn failing() -> Self {
         Self {
@@ -276,7 +286,7 @@ impl RecordingBackend {
 #[async_trait]
 impl SessionBackend for RecordingBackend {
     fn supports(&self, operation: SessionOperation) -> bool {
-        self.supported.contains(&operation)
+        self.is_serving_everything || self.supported.contains(&operation)
     }
 
     async fn create_session(
