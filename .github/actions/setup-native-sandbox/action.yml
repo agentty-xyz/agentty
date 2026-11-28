@@ -11,35 +11,18 @@ runs:
         sudo apt-get install --yes bubblewrap apparmor
 
     - name: Load Bubblewrap AppArmor profile
-      id: apparmor
       shell: bash
       env:
         NATIVE_SANDBOX_ACTION_PATH: ${{ github.action_path }}
-      # A kernel without AppArmor does not restrict unprivileged user
-      # namespaces through it and has nowhere to load a profile.
-      run: |
-        if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
-          sudo apparmor_parser --replace --skip-cache "$NATIVE_SANDBOX_ACTION_PATH/bwrap.apparmor"
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "AppArmor is not enabled on this kernel; no profile to load."
-        fi
+      run: sudo apparmor_parser --replace --skip-cache "$NATIVE_SANDBOX_ACTION_PATH/bwrap.apparmor"
 
     - name: Verify unprivileged namespace startup
       shell: bash
-      env:
-        APPARMOR_ENABLED: ${{ steps.apparmor.outputs.enabled }}
-      # The sandbox cannot probe AppArmor itself: its `/dev/null` is unusable,
-      # so the host's answer is passed in.
       run: |
         bwrap --version
         timeout 10s bwrap --unshare-all --uid 0 --gid 0 --cap-drop ALL \
           --as-pid-1 --ro-bind / / --proc /proc -- /bin/sh -ec '
             test "$(id -u)" = 0
             grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
-            if [ "$APPARMOR_ENABLED" = true ]; then
-              grep -F unpriv_bwrap /proc/self/attr/current
-            else
-              echo "AppArmor is not enabled; confinement is not checked."
-            fi
+            grep -F unpriv_bwrap /proc/self/attr/current
           '
