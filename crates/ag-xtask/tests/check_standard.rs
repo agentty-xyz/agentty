@@ -11,15 +11,25 @@ use std::{env, fs, io};
 use tempfile::{TempDir, tempdir};
 
 /// Repository files the fixture writes and its stub `git ls-files` lists.
-const FILES: [(&str, &str); 13] = [
+const FILES: [(&str, &str); 15] = [
     (
         "standards.toml",
-        "version = 3\nfiles = [\"clippy.toml\"]\nskills = []\n\n[toolchain]\nfile = \
+        "version = 4\nfiles = [\"clippy.toml\"]\nskills = []\n\n[toolchain]\nfile = \
          \"rust-toolchain.toml\"\n\n[lints]\nmanifest = \"Cargo.toml\"\n\n[rules]\ndirectory = \
          \"lint/rules/shared\"\ntests = \"lint/rule-tests/shared\"\n\n[[instructions]]\nfile = \
          \"AGENTS.md\"\nsections = [\"Shared\"]\n\n[design]\nguide = \"design/DESIGN.md\"\nfiles \
          = [\"design/tokens.css\"]\ntokens = \"design/tokens.json\"\nassets = \
-         [\"design/mark.svg\"]\n",
+         [\"design/mark.svg\"]\n\n[protocol]\nschema = \"schema/protocol.json\"\ntypes = \
+         \"schema/protocol.ts\"\n",
+    ),
+    (
+        "schema/protocol.json",
+        "{ \"x-protocol-version\": 1, \"$ref\": \"#/$defs/Frame\", \"$defs\": { \"Frame\": {} } \
+         }\n",
+    ),
+    (
+        "schema/protocol.ts",
+        "// Generated from `ag-demo`.\nexport type ProtocolVersion = 1;\n",
     ),
     ("design/DESIGN.md", "# Design\n\nLoad `tokens.css` first.\n"),
     ("design/tokens.css", ":root {\n  --color-bg: #000000;\n}\n"),
@@ -130,13 +140,16 @@ fn cli_reports_success_and_the_location_of_unportable_exports() {
             "# Instructions\n\n## Shared\n\n- Run `ag-demo` through `prek run check-standards`.\n",
         )
         .expect("unportable guide");
+    fixture
+        .write("schema/protocol.ts", "export type ProtocolVersion = 2;\n")
+        .expect("protocol types out of step");
     let invalid = fixture.run().expect("invalid standards check");
 
     // Assert
     assert!(valid.status.success(), "{valid:?}");
     assert!(
         String::from_utf8_lossy(&valid.stdout)
-            .contains("Standards manifest passed (7 exported documents).")
+            .contains("Standards manifest passed (9 exported documents).")
     );
     assert!(!invalid.status.success());
     let report = String::from_utf8_lossy(&invalid.stdout);
@@ -146,6 +159,13 @@ fn cli_reports_success_and_the_location_of_unportable_exports() {
     );
     assert!(
         report.contains("AGENTS.md:5: names workspace hook check-standards"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "schema/protocol.ts: ProtocolVersion 2 differs from x-protocol-version 1 in \
+             schema/protocol.json"
+        ),
         "{report}"
     );
 }

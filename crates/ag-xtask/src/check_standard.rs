@@ -3,19 +3,22 @@
 //! the design guide, stylesheets, token file, and text assets name no
 //! workspace crate, hook, or repository path that the manifest does not
 //! export, no shared rule is anchored to a repository path, no design
-//! stylesheet uses Sass or imports another file, and no design export loads
-//! anything but an exported file beside it.
+//! stylesheet uses Sass or imports another file, no design export loads
+//! anything but an exported file beside it, and the protocol schema and its
+//! TypeScript types reference nothing outside themselves and name one
+//! protocol version.
 
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::io;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
+use std::{io, iter};
 
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use regex::Regex;
 use serde::Deserialize;
+use serde_json::Value;
 use tracing::info;
 
 use crate::repository;
@@ -24,12 +27,28 @@ use crate::repository;
 const MANIFEST: &str = "standards.toml";
 
 /// Manifest schema version this check understands. Version 2 added the
-/// required `[design]` table, and version 3 its `tokens` and `assets` keys.
-const VERSION: u32 = 3;
+/// required `[design]` table, version 3 its `tokens` and `assets` keys, and
+/// version 4 the required `[protocol]` table.
+const VERSION: u32 = 4;
 
 /// Largest design asset, in bytes, so a consumer copying the design export
 /// never vendors a heavy file by accident.
 const ASSET_LIMIT: usize = 256 * 1024;
+
+/// Largest protocol file, in bytes, with room for the protocol to grow while
+/// keeping a generated file a consumer can still review when it moves its pin.
+const PROTOCOL_LIMIT: usize = 512 * 1024;
+
+/// The only JSON Schema dialect an exported protocol schema declares, and
+/// only at its root.
+const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+
+/// JSON Schema keywords that give a schema a base URI or a name, so a
+/// reference could resolve somewhere other than a JSON pointer into the file.
+const SCHEMA_IDENTIFIERS: [&str; 4] = ["$anchor", "$dynamicAnchor", "$id", "$recursiveAnchor"];
+
+/// JSON Schema keywords whose string value references another schema.
+const SCHEMA_REFERENCES: [&str; 3] = ["$dynamicRef", "$recursiveRef", "$ref"];
 
 /// Hook catalog that names this workspace's hooks.
 const CATALOG: &str = ".pre-commit-config.yaml";
@@ -59,6 +78,9 @@ pub(crate) fn run() -> Result<(), String> {
 #[cfg_attr(test, mockall::automock)]
 trait Host {
     fn inventory(&self, root: &Path) -> Result<Vec<PathBuf>, String>;
+    /// Returns whether `path` is a regular file rather than a symbolic link,
+    /// directory, or other entry, without following a link.
+    fn is_file(&self, path: &Path) -> io::Result<bool>;
     fn read(&self, path: &Path) -> io::Result<String>;
     fn read_bytes(&self, path: &Path) -> io::Result<Vec<u8>>;
 }
@@ -67,11 +89,15 @@ trait Host {
 struct StandardCheck<'host> {
     at_rule: Regex,
     attribute: Regex,
+    directive: Regex,
     hook: Regex,
     host: &'host dyn Host,
     import: Regex,
     inline: Regex,
+    lexeme: Regex,
     literal: Regex,
+    module_load: Regex,
+    protocol_version: Regex,
     script: Regex,
     script_load: Regex,
     tag: Regex,
@@ -85,11 +111,21 @@ impl<'host> StandardCheck<'host> {
             attribute: Self::pattern(
                 r#"(?i)(?:^|\s)((?:xlink:)?href|src|srcset|poster|data|ping|on[a-z]+)\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+)"#,
             )?,
+            directive: Self::pattern(r"(?m)^[ \t]*///[ \t]*<")?,
             hook: Self::pattern(r"\bprek\s+run\s+([a-z][a-z0-9-]*)")?,
             host,
             import: Self::pattern(r#"@import\s+["']([^"']*)"#)?,
             inline: Self::pattern(r"`[^`\n]+`")?,
+            lexeme: Self::pattern(
+                r#""(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|(?s:/\*.*?\*/)|//[^\n]*"#,
+            )?,
             literal: Self::pattern(r"^[\w./-]+$")?,
+            module_load: Self::pattern(
+                r#"(?:\bfrom|\bimport|\brequire)\s*\(?\s*["']([^"']*)["']"#,
+            )?,
+            protocol_version: Self::pattern(
+                r"\bexport\s+type\s+ProtocolVersion\s*=\s*(0|[1-9][0-9]*)\s*;",
+            )?,
             script: Self::pattern(r"(?is)<script\b.*?</script>")?,
             script_load: Self::pattern(
                 r#"(?:\bfrom|\bimport|\bfetch\s*\()\s*\(?\s*["'`]([^"'`]*)["'`]"#,
@@ -140,6 +176,7 @@ impl<'host> StandardCheck<'host> {
             count += self.check_instructions(root, &context, instructions, &mut errors)?;
         }
         count += self.check_design(root, &context, &manifest.design, &mut errors)?;
+        count += self.check_protocol(root, &inventory, &manifest.protocol, &mut errors)?;
         if !errors.is_empty() {
             return Err(errors.join("\n"));
         }
@@ -774,6 +811,304 @@ impl<'host> StandardCheck<'host> {
         );
     }
 
+    /// Checks the protocol schema and its TypeScript types and returns how
+    /// many were checked. Each is a regular UTF-8 file that Git lists, within
+    /// the size limit, that references nothing outside itself, and both name
+    /// the same protocol version. They describe this workspace's own
+    /// protocol, so they may name the crate they are generated from.
+    fn check_protocol(
+        &self,
+        root: &Path,
+        inventory: &BTreeSet<PathBuf>,
+        protocol: &Protocol,
+        errors: &mut Vec<String>,
+    ) -> Result<usize, String> {
+        let schema_path = Path::new(&protocol.schema);
+        let types_path = Path::new(&protocol.types);
+        let schema =
+            self.read_protocol(root, inventory, schema_path, ("schema", "json"), errors)?;
+        let types = self.read_protocol(root, inventory, types_path, ("types", "ts"), errors)?;
+        let schema_version = schema
+            .as_deref()
+            .and_then(|text| Self::check_schema(schema_path, text, errors));
+        let types_version = types
+            .as_deref()
+            .and_then(|text| self.check_types(types_path, text, errors));
+        if let (Some(schema_version), Some(types_version)) = (schema_version, types_version)
+            && schema_version != types_version
+        {
+            errors.push(format!(
+                "{}: ProtocolVersion {types_version} differs from x-protocol-version \
+                 {schema_version} in {}",
+                protocol.types, protocol.schema
+            ));
+        }
+
+        Ok(usize::from(schema.is_some()) + usize::from(types.is_some()))
+    }
+
+    /// Reads one protocol file, the `kind` of file a consumer expects with
+    /// that extension, and returns its text when it is a regular UTF-8 file
+    /// that Git lists. Git lists a linked directory as one entry and never
+    /// the files reached through it, so the inventory rejects a path behind
+    /// one, and an ignored file.
+    fn read_protocol(
+        &self,
+        root: &Path,
+        inventory: &BTreeSet<PathBuf>,
+        path: &Path,
+        (kind, extension): (&str, &str),
+        errors: &mut Vec<String>,
+    ) -> Result<Option<String>, String> {
+        let source = root.join(path);
+        let is_file = Self::existing(&source, self.host.is_file(&source))?;
+        let Some(is_file) = Self::found(path, is_file, errors) else {
+            return Ok(None);
+        };
+        if !is_file {
+            errors.push(format!(
+                "{}: a protocol file must be a regular file, not a link or directory",
+                path.display()
+            ));
+
+            return Ok(None);
+        }
+        if !inventory.contains(path) {
+            errors.push(format!(
+                "{}: Git does not list this protocol file; it must not be ignored or lie behind a \
+                 linked directory",
+                path.display()
+            ));
+
+            return Ok(None);
+        }
+        if path.extension().is_none_or(|actual| actual != extension) {
+            errors.push(format!(
+                "{}: the protocol {kind} must be a .{extension} file",
+                path.display()
+            ));
+        }
+        let bytes = self
+            .host
+            .read_bytes(&source)
+            .map_err(|error| format!("Failed to read {}: {error}", source.display()))?;
+        if bytes.len() > PROTOCOL_LIMIT {
+            errors.push(format!(
+                "{}: {} bytes is over the {PROTOCOL_LIMIT}-byte limit for a protocol file",
+                path.display(),
+                bytes.len()
+            ));
+        }
+        let Ok(text) = String::from_utf8(bytes) else {
+            errors.push(format!(
+                "{}: a protocol file must be UTF-8 text",
+                path.display()
+            ));
+
+            return Ok(None);
+        };
+        if text.starts_with('\u{feff}') {
+            errors.push(format!(
+                "{}: starts with a byte order mark; a protocol file is plain UTF-8 text",
+                path.display()
+            ));
+
+            return Ok(None);
+        }
+
+        Ok(Some(text))
+    }
+
+    /// Checks that the protocol schema is a JSON object whose references all
+    /// point into itself, and returns its `x-protocol-version`.
+    fn check_schema(path: &Path, text: &str, errors: &mut Vec<String>) -> Option<u64> {
+        let schema = match serde_json::from_str::<Value>(text) {
+            Ok(schema) if schema.is_object() => schema,
+            Ok(_) => {
+                errors.push(format!(
+                    "{}: the protocol schema's root must be a schema object",
+                    path.display()
+                ));
+
+                return None;
+            }
+            Err(error) => {
+                errors.push(format!(
+                    "{}: the protocol schema is not valid JSON: {error}",
+                    path.display()
+                ));
+
+                return None;
+            }
+        };
+        Self::check_keywords(path, &schema, &schema, true, errors);
+        let version = schema.get("x-protocol-version").and_then(Value::as_u64);
+        if version.is_none() {
+            errors.push(format!(
+                "{}: the protocol schema must name its version in an integer x-protocol-version",
+                path.display()
+            ));
+        }
+
+        version
+    }
+
+    /// Reports the keywords in `value`, the root of `schema` when `is_root`,
+    /// that could make a reference leave the file: any identifier or anchor,
+    /// a `$schema` other than [`SCHEMA_DIALECT`] at the root, and a string
+    /// reference that is not a JSON pointer fragment resolving within
+    /// `schema`. Keywords count wherever they appear as object keys.
+    fn check_keywords(
+        path: &Path,
+        schema: &Value,
+        value: &Value,
+        is_root: bool,
+        errors: &mut Vec<String>,
+    ) {
+        match value {
+            Value::Object(members) => {
+                for (key, member) in members {
+                    let key = key.as_str();
+                    let problem = if SCHEMA_IDENTIFIERS.contains(&key) {
+                        Some(format!(
+                            "holds {key}; an exported protocol schema names no base URI or \
+                             anchor, so every reference is a JSON pointer into it"
+                        ))
+                    } else if key == "$schema"
+                        && !(is_root && member.as_str() == Some(SCHEMA_DIALECT))
+                    {
+                        Some(format!(
+                            "declares the dialect {member}; an exported protocol schema declares \
+                             only {SCHEMA_DIALECT}, at its root"
+                        ))
+                    } else {
+                        member
+                            .as_str()
+                            .filter(|target| {
+                                SCHEMA_REFERENCES.contains(&key)
+                                    && target
+                                        .strip_prefix('#')
+                                        .and_then(|pointer| schema.pointer(pointer))
+                                        .is_none()
+                            })
+                            .map(|target| {
+                                format!(
+                                    "references {target}; an exported protocol schema references \
+                                     only JSON pointers into itself"
+                                )
+                            })
+                    };
+                    if let Some(problem) = problem {
+                        errors.push(format!("{}: {problem}", path.display()));
+                    }
+                    Self::check_keywords(path, schema, member, false, errors);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    Self::check_keywords(path, schema, item, false, errors);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Checks that the protocol types import nothing, through a statement,
+    /// an `import()` type, `require`, or a triple-slash directive, and holds
+    /// no template literal or unterminated string, and returns the version
+    /// their one `ProtocolVersion` declaration names. Comments and the
+    /// contents of single-line string literals are ignored, so prose and
+    /// literal types may say anything.
+    fn check_types(&self, path: &Path, text: &str, errors: &mut Vec<String>) -> Option<u64> {
+        for directive in self.directive.find_iter(text) {
+            Self::report(
+                errors,
+                path,
+                text,
+                directive.start(),
+                "holds a triple-slash directive; exported protocol types import nothing",
+            );
+        }
+        let code = self.code(path, text, errors);
+        for target in self
+            .module_load
+            .captures_iter(&code)
+            .filter_map(|capture| capture.get(1))
+        {
+            Self::report(
+                errors,
+                path,
+                text,
+                target.start(),
+                &format!(
+                    "imports {}; exported protocol types import nothing",
+                    &text[target.range()]
+                ),
+            );
+        }
+        let versions: Vec<_> = self
+            .protocol_version
+            .captures_iter(&code)
+            .filter_map(|capture| capture.get(1))
+            .collect();
+        let version = match versions.as_slice() {
+            [version] => version.as_str().parse().ok(),
+            _ => None,
+        };
+        if version.is_none() {
+            errors.push(format!(
+                "{}: the protocol types must declare one export type ProtocolVersion = <integer>;",
+                path.display()
+            ));
+        }
+
+        version
+    }
+
+    /// Returns TypeScript `text` with every comment and the contents of
+    /// every single-line string literal blanked byte for byte, keeping line
+    /// breaks and quotes, so offsets into it are offsets into `text`.
+    /// Reports any backtick or quote left in the code between them, so a
+    /// template literal or an unterminated string cannot hide code.
+    fn code(&self, path: &Path, text: &str, errors: &mut Vec<String>) -> String {
+        let mut code = String::with_capacity(text.len());
+        let mut end = 0;
+        for lexeme in self.lexeme.find_iter(text) {
+            Self::check_code(path, text, end..lexeme.start(), errors);
+            code.push_str(&text[end..lexeme.start()]);
+            let quote = usize::from(!lexeme.as_str().starts_with('/'));
+            let range = lexeme.start() + quote..lexeme.end() - quote;
+            code.push_str(&text[lexeme.start()..range.start]);
+            for char in text[range.clone()].chars() {
+                if char == '\n' {
+                    code.push('\n');
+                } else {
+                    code.extend(iter::repeat_n(' ', char.len_utf8()));
+                }
+            }
+            code.push_str(&text[range.end..lexeme.end()]);
+            end = lexeme.end();
+        }
+        Self::check_code(path, text, end..text.len(), errors);
+        code.push_str(&text[end..]);
+
+        code
+    }
+
+    /// Reports each backtick and quote in `text[range]`, code outside every
+    /// comment and terminated string literal.
+    fn check_code(path: &Path, text: &str, range: Range<usize>, errors: &mut Vec<String>) {
+        for (offset, quote) in text[range.clone()].match_indices(['`', '"', '\'']) {
+            let problem = if quote == "`" {
+                "holds a template literal; template literals are not allowed in the exported types"
+            } else {
+                "holds an unterminated string; a string literal in the exported types ends on its \
+                 own line"
+            };
+            Self::report(errors, path, text, range.start + offset, problem);
+        }
+    }
+
     fn headings(text: &str) -> Vec<Heading> {
         let mut headings = Vec::new();
         let mut current = None;
@@ -930,6 +1265,7 @@ struct Manifest {
     files: Vec<String>,
     instructions: Vec<Instructions>,
     lints: Lints,
+    protocol: Protocol,
     rules: Rules,
     skills: Vec<String>,
     toolchain: Toolchain,
@@ -949,6 +1285,8 @@ impl Manifest {
                 &self.design.tokens,
                 &self.toolchain.file,
                 &self.lints.manifest,
+                &self.protocol.schema,
+                &self.protocol.types,
                 &self.rules.directory,
                 &self.rules.tests,
             ])
@@ -985,6 +1323,15 @@ struct Instructions {
 #[serde(deny_unknown_fields)]
 struct Lints {
     manifest: String,
+}
+
+/// The remote-control frame schema and the TypeScript types generated from
+/// it, which a client of the protocol copies byte for byte.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Protocol {
+    schema: String,
+    types: String,
 }
 
 #[derive(Deserialize)]
@@ -1048,6 +1395,10 @@ struct RealHost {
 impl Host for RealHost {
     fn inventory(&self, root: &Path) -> Result<Vec<PathBuf>, String> {
         repository::git_files(&self.git, root)
+    }
+
+    fn is_file(&self, path: &Path) -> io::Result<bool> {
+        std::fs::symlink_metadata(path).map(|metadata| metadata.file_type().is_file())
     }
 
     fn read(&self, path: &Path) -> io::Result<String> {

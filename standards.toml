@@ -1,7 +1,8 @@
 # Coding and design standards that another workspace can reuse. Paths are relative to the repository root.
 # The `check-standards` hook keeps every export present and portable.
-# Version 2 added the required `[design]` table, and version 3 its `tokens` and `assets` keys.
-version = 3
+# Version 2 added the required `[design]` table, version 3 its `tokens` and `assets` keys, and version 4 the required
+# `[protocol]` table.
+version = 4
 
 # Copied byte-for-byte to the same path.
 files = [".rustfmt.toml", "clippy.toml"]
@@ -51,3 +52,10 @@ assets = [
     "design/gallery.html",
     "design/gallery-check.mjs",
 ]
+
+# The remote-control frame schema and its TypeScript types, generated from `ag-remote`'s protocol types and copied
+# byte-for-byte. Each is UTF-8 text of at most 512 KiB that references nothing outside itself, and both name the same
+# protocol version: the schema's `x-protocol-version` and the types' `ProtocolVersion`.
+[protocol]
+schema = "crates/ag-remote/schema/remote_protocol.json"
+types = "crates/ag-remote/schema/remote_protocol.ts"
