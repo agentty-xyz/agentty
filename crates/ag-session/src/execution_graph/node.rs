@@ -1,6 +1,8 @@
 //! Execution graph nodes with their execution profiles, dependencies,
 //! outputs, and input bindings.
 
+use std::collections::HashSet;
+
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use serde::{Deserialize, Serialize};
 
@@ -32,9 +34,72 @@ pub struct GraphNode {
     /// Named outputs with protocol-owned schemas, not implicit conversation
     /// replay.
     pub outputs: Vec<GraphOutput>,
+    /// Top-level node of the same graph this node is a child of, or `None`
+    /// for a top-level node. A child works in its parent's Env and is shown
+    /// under it; it runs as an ordinary node with ordinary dependencies.
+    /// Omitted from JSON when absent, so snapshots and expansion records of
+    /// graphs without children keep their bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
     /// Captured initial request and workflow evidence, excluding bound results.
     /// Hosts supply result bodies explicitly; this is not a template language.
     pub request: TurnPrompt,
+}
+
+impl GraphNode {
+    /// Orders `nodes` for display: each top-level node in declaration order,
+    /// directly followed by its children in declaration order.
+    ///
+    /// The order depends only on declarations, so progress never moves a
+    /// node. A node whose parent is not a top-level node among `nodes`, such
+    /// as a new child of an existing node in an expansion preview, is placed
+    /// as a top-level node.
+    pub fn hierarchy_order(nodes: &[Self]) -> Vec<GraphNodePlacement> {
+        let top_level = nodes
+            .iter()
+            .filter(|node| node.parent_id.is_none())
+            .map(|node| node.id.as_str())
+            .collect::<HashSet<_>>();
+        let parents = nodes
+            .iter()
+            .map(|node| {
+                node.parent_id
+                    .as_deref()
+                    .filter(|parent_id| top_level.contains(parent_id))
+            })
+            .collect::<Vec<_>>();
+        let mut order = Vec::with_capacity(nodes.len());
+        for (index, node) in nodes.iter().enumerate() {
+            if parents[index].is_some() {
+                continue;
+            }
+            order.push(GraphNodePlacement {
+                index,
+                is_child: false,
+            });
+            order.extend(
+                parents
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, parent)| **parent == Some(node.id.as_str()))
+                    .map(|(index, _)| GraphNodePlacement {
+                        index,
+                        is_child: true,
+                    }),
+            );
+        }
+
+        order
+    }
+}
+
+/// Where a node appears in [`GraphNode::hierarchy_order`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GraphNodePlacement {
+    /// Position of the node in the declaration-ordered slice.
+    pub index: usize,
+    /// Whether the node is shown as a child of the top-level node above it.
+    pub is_child: bool,
 }
 
 /// Requirements interpreted by a host before worker submission.

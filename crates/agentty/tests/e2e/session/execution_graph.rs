@@ -269,6 +269,7 @@ fn reader_node(agent: AgentSelection, definition: &AgentDefinition, id: &str) ->
             name: "response".into(),
             schema: ProtocolRequestProfile::SessionTurn,
         }],
+        parent_id: None,
         request: TurnPrompt::from_agent_data("Inspect repository".into()),
     }
 }

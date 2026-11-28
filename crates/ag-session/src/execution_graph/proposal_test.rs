@@ -7,8 +7,11 @@ use ag_protocol::{
     TurnPromptAttachment,
 };
 
-use crate::test_support::{graph_proposal, graph_proposal_state};
-use crate::{GraphContext, GraphProposalResolution, GraphProposalState, PermissionMode};
+use crate::test_support::{graph_node, graph_proposal, graph_proposal_state};
+use crate::{
+    EnvId, GraphContext, GraphNode, GraphProposalResolution, GraphProposalState, PermissionMode,
+    TaskWorktreeId,
+};
 
 #[test]
 fn graph_proposal_state_persists_its_permission_ceiling_as_a_stable_label() {
@@ -220,6 +223,132 @@ fn graph_expansion_resolution_appends_nodes_after_the_base_tasks() {
         mismatched,
         Err("Graph expansion targets a different graph or session".into())
     );
+}
+
+#[test]
+fn graph_proposal_resolution_binds_children_to_their_parent_env() {
+    // Arrange
+    let state = graph_proposal_state("preview", "session");
+    let resolution = GraphProposalResolution {
+        agent: state.agent,
+        answers: &state.version.answers,
+        definitions: &state.definitions,
+        graph_id: "host-graph",
+        limits: &state.limits,
+        permission: state.permission,
+        request: &state.input.request,
+        revision_attachments: &state.version.attachments,
+        session_id: &state.input.session_id,
+    };
+    let mut proposal = graph_proposal();
+    let mut child = proposal.nodes[0].clone();
+    child.id = "tests".into();
+    child.parent_id = Some("inspect".into());
+    proposal.nodes.insert(0, child.clone());
+    let base = resolution.resolve(&graph_proposal()).expect("base");
+    child.id = "docs".into();
+    let added = ag_protocol::GraphProposal {
+        nodes: vec![child.clone()],
+    };
+    let mut nested = child.clone();
+    nested.parent_id = Some("tests".into());
+    let mut orphan = child;
+    orphan.parent_id = Some("missing".into());
+
+    // Act
+    let graph = resolution.resolve(&proposal).expect("resolved");
+    let expanded = resolution
+        .resolve_expansion(&base, &added)
+        .expect("child of an existing node");
+    let nested = resolution.resolve(&ag_protocol::GraphProposal {
+        nodes: vec![nested, proposal.nodes[0].clone(), proposal.nodes[1].clone()],
+    });
+    let orphan = resolution.resolve(&ag_protocol::GraphProposal {
+        nodes: vec![orphan],
+    });
+
+    // Assert
+    assert_eq!(graph.nodes[0].parent_id.as_deref(), Some("inspect"));
+    assert_eq!(graph.nodes[0].env_id, graph.nodes[1].env_id);
+    assert_eq!(graph.nodes[1].parent_id, None);
+    assert_eq!(expanded.nodes[1].parent_id.as_deref(), Some("inspect"));
+    assert_eq!(expanded.nodes[1].env_id, base.nodes[0].env_id);
+    assert_eq!(
+        nested,
+        Err(
+            "graph node `docs` cannot be a child of `tests`, which is itself a child; children \
+             cannot have children, so name a top-level node as its parent"
+                .into()
+        )
+    );
+    assert_eq!(
+        orphan,
+        Err(
+            "graph node `docs` names parent `missing`, which is not a node of this graph; name a \
+             top-level node of this graph as its parent, or give it no parent"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn children_take_their_parent_env_from_the_base_or_the_proposal() {
+    // Arrange: the base parent works in a task worktree, which proposals
+    // cannot name, so only the binding can give the child that Env.
+    let worktree = EnvId::TaskWorktree(TaskWorktreeId {
+        session_id: "session".into(),
+        worktree_id: "writer".into(),
+    });
+    let base = [GraphNode {
+        env_id: worktree.clone(),
+        ..graph_node("change", "session")
+    }];
+    let child = |id: &str, parent: &str| GraphNode {
+        parent_id: Some(parent.into()),
+        ..graph_node(id, "session")
+    };
+    let mut nodes = [
+        child("tests", "change"),
+        child("notes", "summary"),
+        graph_node("summary", "session"),
+        child("orphan", "missing"),
+    ];
+
+    // Act
+    GraphProposalResolution::bind_child_envs(&mut nodes, &base);
+
+    // Assert
+    let session = EnvId::SessionWorktree("session".into());
+    assert_eq!(
+        nodes.map(|node| node.env_id),
+        [worktree, session.clone(), session.clone(), session]
+    );
+}
+
+#[test]
+fn a_blank_proposed_parent_means_a_top_level_node() {
+    // Arrange
+    let state = graph_proposal_state("preview", "session");
+    let mut proposal = graph_proposal();
+    proposal.nodes[0].parent_id = Some(" ".into());
+
+    // Act
+    let graph = GraphProposalResolution {
+        agent: state.agent,
+        answers: &state.version.answers,
+        definitions: &state.definitions,
+        graph_id: "host-graph",
+        limits: &state.limits,
+        permission: state.permission,
+        request: &state.input.request,
+        revision_attachments: &state.version.attachments,
+        session_id: &state.input.session_id,
+    }
+    .resolve(&proposal)
+    .expect("blank parent resolves as top-level");
+
+    // Assert
+    assert_eq!(graph.nodes[0].parent_id, None);
 }
 
 fn configure_case(

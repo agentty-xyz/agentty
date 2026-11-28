@@ -73,12 +73,13 @@ impl GraphProposalResolution<'_> {
     ///
     /// # Errors
     /// Rejects size limits, unknown definitions, unsupported profiles,
-    /// permissions, and invalid graphs. Request attachments, followed by
-    /// revision attachments, are copied to every node unchanged.
+    /// permissions, and invalid graphs, including an invalid node hierarchy.
+    /// Request attachments, followed by revision attachments, are copied to
+    /// every node unchanged. A child works in its parent's Env.
     pub fn resolve(&self, proposal: &GraphProposal) -> Result<ExecutionGraph, String> {
         let graph = ExecutionGraph {
             id: self.graph_id.into(),
-            nodes: self.nodes(proposal, 0)?,
+            nodes: self.nodes(proposal, &[])?,
             revision: NonZeroU64::MIN,
             session_id: self.session_id.clone(),
         };
@@ -88,9 +89,10 @@ impl GraphProposalResolution<'_> {
     }
 
     /// Resolves `proposal` as nodes appended to `base`, returning its next
-    /// revision. Proposed nodes may depend on `base` nodes; task identities
-    /// continue after the base's nodes, and every node spends from the
-    /// graph's existing `{graph_id}:calls` budget.
+    /// revision. Proposed nodes may depend on `base` nodes and be children
+    /// of its top-level nodes; task identities continue after the base's
+    /// nodes, and every node spends from the graph's existing
+    /// `{graph_id}:calls` budget.
     ///
     /// # Errors
     /// Rejects everything [`Self::resolve`] rejects, a `base` that is not
@@ -105,17 +107,18 @@ impl GraphProposalResolution<'_> {
             return Err("Graph expansion targets a different graph or session".into());
         }
 
-        base.expand(self.nodes(proposal, base.nodes.len())?)
+        base.expand(self.nodes(proposal, &base.nodes)?)
             .map_err(|error| error.to_string())
     }
 
-    /// Resolves proposed nodes, numbering task identities from
-    /// `first_task_index`.
+    /// Resolves proposed nodes appended to `base`, numbering task identities
+    /// after its nodes and binding each child to its parent's Env.
     fn nodes(
         &self,
         proposal: &GraphProposal,
-        first_task_index: usize,
+        base: &[GraphNode],
     ) -> Result<Vec<GraphNode>, String> {
+        let first_task_index = base.len();
         if self.limits.generations == 0
             || self.limits.generation_provider_calls == 0
             || self.limits.provider_calls == 0
@@ -196,9 +199,16 @@ impl GraphProposalResolution<'_> {
                         schema: output.schema,
                     })
                     .collect(),
+                // A transport that must emit every key may send a blank
+                // parent for a top-level node.
+                parent_id: node
+                    .parent_id
+                    .clone()
+                    .filter(|parent_id| !parent_id.trim().is_empty()),
                 request: request.clone(),
             });
         }
+        Self::bind_child_envs(&mut nodes, base);
 
         Ok(nodes)
     }
@@ -253,6 +263,28 @@ impl GraphProposalResolution<'_> {
             shared_budget_id: Some(format!("{}:calls", self.graph_id)),
             workspace_access,
         })
+    }
+
+    /// Gives each child among `nodes` its parent's concrete Env, looking the
+    /// parent up in `base` and then in `nodes`. A child whose parent is
+    /// missing keeps the session Env; validation rejects it, as it does a
+    /// parent that is itself a child.
+    fn bind_child_envs(nodes: &mut [GraphNode], base: &[GraphNode]) {
+        let parent_envs = nodes
+            .iter()
+            .map(|node| {
+                let parent_id = node.parent_id.as_deref()?;
+                base.iter()
+                    .chain(nodes.iter())
+                    .find(|parent| parent.id == parent_id)
+                    .map(|parent| parent.env_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for (node, env_id) in nodes.iter_mut().zip(parent_envs) {
+            if let Some(env_id) = env_id {
+                node.env_id = env_id;
+            }
+        }
     }
 }
 

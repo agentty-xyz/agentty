@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use ag_protocol::GraphProposalOutcome;
 use ag_session::{
-    ExecutionGraphProgress, ExecutionGraphStatus, GraphNode, GraphNodeProgress, GraphNodeStatus,
-    GraphProposalVersionOutcome,
+    ExecutionGraphProgress, ExecutionGraphStatus, GraphNode, GraphNodePlacement, GraphNodeProgress,
+    GraphNodeStatus, GraphProposalVersionOutcome,
 };
 use ag_tui_text::text_util::{
     inline_text, truncate_spans_with_ellipsis, truncate_with_ellipsis,
@@ -24,8 +24,8 @@ use crate::presentation::execution_graph::{
     node_reasoning_level, outputs_awaiting_acceptance, takes_revision_guidance,
 };
 use crate::presentation::graph_chat::{
-    AWAITING_APPROVAL_LABEL, CANCELLED_LABEL, GENERATING_LABEL, GraphChatSnapshot,
-    NEEDS_INPUT_LABEL, NodeStatus, STARTING_LABEL, approval_request, edge_label,
+    AWAITING_APPROVAL_LABEL, CANCELLED_LABEL, CHILD_INDENT, ChildrenProgress, GENERATING_LABEL,
+    GraphChatSnapshot, NEEDS_INPUT_LABEL, NodeStatus, STARTING_LABEL, approval_request, edge_label,
     generation_failed_label, graph_status_label, is_dependency_satisfied, launched_graph_nodes,
 };
 use crate::ui::help_format;
@@ -385,13 +385,16 @@ enum ObjectiveDetail {
     Hidden,
 }
 
-/// Vertical node timeline in declaration order. Each node row leads with its
-/// status glyph, and the rail column below it carries one highlighted label
-/// row per dependency of the next node: solid once satisfied, dotted while it
-/// still blocks. A bare rail row sets those labels apart from the next node.
-/// Each node's model and `reasoning_level`, then its objective at
-/// `objective_detail`, follow its name beside the rail; both are omitted when
-/// objectives are hidden. Unconnected roots are separated by a blank row.
+/// Vertical node timeline with each top-level node followed by its children,
+/// indented, in declaration order. Each node row leads with its status
+/// glyph, and the rail column below it carries one highlighted label row per
+/// dependency of the next node: solid once satisfied, dotted while it still
+/// blocks. A bare rail row sets those labels apart from the next node. A
+/// parent's progress line follows its name and says whether its children
+/// still work. Each node's model and `reasoning_level`, then its objective at
+/// `objective_detail`, follow beside the rail; both are omitted when
+/// objectives are hidden. Unconnected top-level roots are separated by a
+/// blank row.
 fn graph_lines(
     snapshot: &GraphChatSnapshot,
     nodes: &[GraphNode],
@@ -401,6 +404,7 @@ fn graph_lines(
     reasoning_level: ReasoningLevel,
     spinner_frame: usize,
 ) -> Vec<Line<'static>> {
+    let order = GraphNode::hierarchy_order(nodes);
     let satisfied = nodes
         .iter()
         .map(|node| {
@@ -413,48 +417,64 @@ fn graph_lines(
         })
         .collect::<Vec<_>>();
     let mut lines = Vec::new();
-    for (index, node) in nodes.iter().enumerate() {
-        let previous = index
+    for (position, placement) in order.iter().enumerate() {
+        let node = &nodes[placement.index];
+        let node_satisfied = &satisfied[placement.index];
+        let previous = position
             .checked_sub(1)
-            .map(|previous| nodes[previous].id.as_str());
-        if node.dependencies.is_empty() && index > 0 {
+            .map(|previous| nodes[order[previous].index].id.as_str());
+        if node.dependencies.is_empty() && position > 0 && !placement.is_child {
             lines.push(Line::default());
         }
-        for (dependency, is_satisfied) in node.dependencies.iter().zip(&satisfied[index]) {
-            lines.push(fitted_line(
-                vec![
-                    rail(*is_satisfied),
-                    Span::raw(" "),
-                    Span::styled(
-                        edge_label(dependency, previous),
-                        edge_label_style(*is_satisfied),
-                    ),
-                ],
-                width,
-            ));
+        for (dependency, is_satisfied) in node.dependencies.iter().zip(node_satisfied) {
+            let mut spans = level_indent(placement.is_child);
+            spans.extend([
+                rail(*is_satisfied),
+                Span::raw(" "),
+                Span::styled(
+                    edge_label(dependency, previous),
+                    edge_label_style(*is_satisfied),
+                ),
+            ]);
+            lines.push(fitted_line(spans, width));
         }
         if !node.dependencies.is_empty() {
-            let is_satisfied = satisfied[index].iter().all(|is_satisfied| *is_satisfied);
-            lines.push(Line::from(rail(is_satisfied)));
+            let mut spans = level_indent(placement.is_child);
+            spans.push(rail(
+                node_satisfied.iter().all(|is_satisfied| *is_satisfied),
+            ));
+            lines.push(Line::from(spans));
         }
-        lines.extend(node_lines(
-            node,
-            node_status(snapshot, node, awaited),
-            width,
-            spinner_frame,
-        ));
+        let indent_width = if placement.is_child {
+            CHILD_INDENT.width()
+        } else {
+            0
+        };
+        lines.extend(
+            node_lines(
+                node,
+                node_status(snapshot, node, awaited),
+                width.saturating_sub(indent_width),
+                spinner_frame,
+            )
+            .into_iter()
+            .map(|line| {
+                let mut spans = level_indent(placement.is_child);
+                spans.extend(line.spans);
+
+                Line::from(spans)
+            }),
+        );
+        let next = order
+            .get(position + 1)
+            .map(|next| (next.is_child, satisfied[next.index].as_slice()));
+        let prefix = detail_prefix(placement.is_child, next);
+        if let Some(children) = ChildrenProgress::of(nodes, snapshot.progress.as_ref(), &node.id) {
+            lines.push(children_line(children, &prefix, width));
+        }
         if objective_detail == ObjectiveDetail::Hidden {
             continue;
         }
-        let prefix = match satisfied.get(index + 1) {
-            Some(next) if !next.is_empty() => {
-                vec![
-                    rail(next.iter().all(|is_satisfied| *is_satisfied)),
-                    Span::raw(" "),
-                ]
-            }
-            _ => vec![Span::raw(DETAIL_INDENT)],
-        };
         lines.push(model_line(node, reasoning_level, &prefix, width));
         lines.extend(objective_lines(
             &node.objective,
@@ -465,6 +485,66 @@ fn graph_lines(
     }
 
     lines
+}
+
+/// Leading cells of a row drawn at a node's level: none for a top-level
+/// node, [`CHILD_INDENT`] for a child.
+fn level_indent(is_child: bool) -> Vec<Span<'static>> {
+    if is_child {
+        return vec![Span::raw(CHILD_INDENT)];
+    }
+
+    Vec::new()
+}
+
+/// Prefix of the detail rows below a node, so its text starts one
+/// [`DETAIL_INDENT`] past the node's own indent. When the `next` node, given
+/// as its level and dependency states, has dependencies and is not nested
+/// deeper, the prefix carries that node's rail in its column, solid once
+/// every dependency is satisfied; a child's rail starts at its own edges.
+fn detail_prefix(is_child: bool, next: Option<(bool, &[bool])>) -> Vec<Span<'static>> {
+    match next {
+        Some((next_is_child, next_satisfied))
+            if !next_satisfied.is_empty() && (is_child || !next_is_child) =>
+        {
+            let mut prefix = level_indent(next_is_child);
+            prefix.extend([
+                rail(next_satisfied.iter().all(|is_satisfied| *is_satisfied)),
+                Span::raw(" "),
+            ]);
+            if is_child && !next_is_child {
+                prefix.push(Span::raw(CHILD_INDENT));
+            }
+
+            prefix
+        }
+        _ => {
+            let mut prefix = level_indent(is_child);
+            prefix.push(Span::raw(DETAIL_INDENT));
+
+            prefix
+        }
+    }
+}
+
+/// A parent's progress line after `prefix`, in the failure color once a
+/// child failed, info-colored while a child works, and muted otherwise.
+fn children_line(
+    children: ChildrenProgress,
+    prefix: &[Span<'static>],
+    width: usize,
+) -> Line<'static> {
+    let style = if children.has_failed() {
+        color_style(palette::danger())
+    } else if children.is_working() {
+        color_style(palette::info())
+    } else {
+        muted_style()
+    };
+    let mut spans = prefix.to_vec();
+    spans.push(Span::styled(children.label(), style));
+
+    fitted_line(spans, width)
 }
 
 /// Muted `model [effort]` row after `prefix`, shortened to `width`.
@@ -506,7 +586,7 @@ fn objective_lines(
         return vec![row(objective)];
     }
     let objective = truncate_with_ellipsis(&objective, OBJECTIVE_MAX_WIDTH);
-    let room = width.saturating_sub(DETAIL_INDENT.width());
+    let room = width.saturating_sub(prefix.iter().map(Span::width).sum());
 
     wrap_lines_breaking_long_words(&objective, room)
         .into_iter()
@@ -571,8 +651,11 @@ fn node_lines(
 }
 
 /// Fits one row per node, keeping intervention and active work ahead of
-/// settled nodes. Stable sorting retains declaration order within each
-/// priority. Long node names are shortened so statuses stay visible.
+/// settled nodes. Each parent moves with its indented children, ranked by
+/// its most urgent member, and its children follow it by priority, so the
+/// child that needs the user comes right after its parent. Stable sorting
+/// retains declaration order within each priority. Long node names are
+/// shortened so statuses stay visible.
 fn compact_lines(
     snapshot: &GraphChatSnapshot,
     nodes: &[GraphNode],
@@ -588,20 +671,40 @@ fn compact_lines(
         .map(|(text, style)| Line::styled(truncate_with_ellipsis(text, width), *style))
         .collect::<Vec<_>>();
     let capacity = usize::from(area.height).saturating_sub(lines.len());
-    let mut ordered = nodes
-        .iter()
-        .map(|node| (node, node_progress(snapshot, node)))
-        .collect::<Vec<_>>();
-    ordered.sort_by_key(|(node, progress)| node_priority(awaited, node, *progress));
-    for (node, _) in &ordered[..capacity.min(ordered.len())] {
+    let priority = |placement: &GraphNodePlacement| {
+        let node = &nodes[placement.index];
+
+        node_priority(awaited, node, node_progress(snapshot, node))
+    };
+    let mut groups: Vec<Vec<GraphNodePlacement>> = Vec::new();
+    for placement in GraphNode::hierarchy_order(nodes) {
+        match (placement.is_child, groups.last_mut()) {
+            (true, Some(group)) => group.push(placement),
+            _ => groups.push(vec![placement]),
+        }
+    }
+    for group in &mut groups {
+        group[1..].sort_by_key(priority);
+    }
+    groups.sort_by_key(|group| group.iter().map(priority).min());
+    let ordered = groups.into_iter().flatten().collect::<Vec<_>>();
+    for placement in &ordered[..capacity.min(ordered.len())] {
+        let node = &nodes[placement.index];
+        let indent = level_indent(placement.is_child);
+        let row_width = width.saturating_sub(indent.iter().map(Span::width).sum());
         let status = node_status(snapshot, node, awaited);
-        let name_room = width.saturating_sub(status_label_width(status) + STATUS_GAP);
-        lines.push(node_row(
-            truncate_with_ellipsis(&node.id, name_room),
-            status,
-            width,
-            spinner_frame,
-        ));
+        let name_room = row_width.saturating_sub(status_label_width(status) + STATUS_GAP);
+        let mut spans = indent;
+        spans.extend(
+            node_row(
+                truncate_with_ellipsis(&node.id, name_room),
+                status,
+                row_width,
+                spinner_frame,
+            )
+            .spans,
+        );
+        lines.push(Line::from(spans));
     }
     let hidden = nodes.len().saturating_sub(capacity);
     let overflow = if hidden == 0 {

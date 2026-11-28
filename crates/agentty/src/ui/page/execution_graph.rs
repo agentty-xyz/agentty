@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use ag_session::GraphNodeStatus;
+use ag_session::{GraphNodePlacement, GraphNodeStatus};
 use ag_tui_text::text_util::{
     borrowed_paint_line, split_line_at_width, wrap_lines_breaking_long_words,
 };
@@ -10,12 +10,15 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::presentation::execution_graph::{
     FOCUSED_REVIEW_NOTE, GraphEditKind, GraphEditor, GraphView, PROPOSAL_REPLY_HINT,
     QUESTION_REPLY_HINT, UNAVAILABLE_STATUS_LABEL, blocked_reason_label,
 };
-use crate::presentation::graph_chat::{gate_label, proposal_preview};
+use crate::presentation::graph_chat::{
+    CHILD_INDENT, ChildrenProgress, gate_label, proposal_preview,
+};
 use crate::ui::Component;
 use crate::ui::component::chat_input::ChatInput;
 use crate::ui::markdown::MarkdownRenderCache;
@@ -64,28 +67,17 @@ pub(crate) fn render(
     );
     let columns = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(panes[1]);
-    let nodes = view.progress.as_ref().map_or_else(String::new, |progress| {
-        progress
-            .nodes
-            .iter()
-            .enumerate()
-            .fold(String::new(), |mut text, (index, node)| {
-                let _ = writeln!(
-                    text,
-                    "{} {}: {:?}",
-                    if index == view.selected_node {
-                        ">"
-                    } else {
-                        " "
-                    },
-                    node.node_id,
-                    node.status
-                );
-
-                text
-            })
-    });
-    let node_scroll = u16::try_from(view.selected_node)
+    let order = view.node_order();
+    let nodes = node_list(
+        view,
+        &order,
+        usize::from(columns[0].width.saturating_sub(2)),
+    );
+    let selected_row = order
+        .iter()
+        .position(|placement| placement.index == view.selected_node)
+        .unwrap_or_default();
+    let node_scroll = u16::try_from(selected_row)
         .unwrap_or(u16::MAX)
         .saturating_sub(columns[0].height.saturating_sub(3));
     if view.selected_proposal().is_none() {
@@ -116,6 +108,42 @@ pub(crate) fn render(
             panes[2],
         );
     }
+}
+
+/// Node rows in the inspector's order, marking the selected one: children
+/// indented under their parent, and a parent's status followed by how far
+/// its children are. When a parent's row is wider than `width`, its
+/// children's progress is dropped first, since the details pane repeats it.
+fn node_list(view: &GraphView, order: &[GraphNodePlacement], width: usize) -> String {
+    let (Some(graph), Some(progress)) = (view.graph(), view.progress.as_ref()) else {
+        return String::new();
+    };
+
+    order.iter().fold(String::new(), |mut text, placement| {
+        let node = &progress.nodes[placement.index];
+        let row = format!(
+            "{} {}{}: {:?}",
+            if placement.index == view.selected_node {
+                ">"
+            } else {
+                " "
+            },
+            if placement.is_child { CHILD_INDENT } else { "" },
+            node.node_id,
+            node.status
+        );
+        let children = ChildrenProgress::of(
+            &graph.nodes,
+            Some(progress),
+            &graph.nodes[placement.index].id,
+        )
+        .map(|children| format!(" ({})", children.label()))
+        .filter(|children| row.width() + children.width() <= width)
+        .unwrap_or_default();
+        let _ = writeln!(text, "{row}{children}");
+
+        text
+    })
 }
 
 fn render_details(frame: &mut Frame, area: Rect, view: &GraphView, markdown: &MarkdownRenderCache) {
@@ -268,6 +296,23 @@ fn details(view: &GraphView) -> String {
         node.agent.model().as_str(),
         node.objective
     );
+    if let Some(parent) = &node.parent_id {
+        let _ = writeln!(text, "Parent: {parent} (shares its workspace)");
+    }
+    if let Some(progress) = ChildrenProgress::of(&graph.nodes, view.progress.as_ref(), &node.id) {
+        let children = graph
+            .nodes
+            .iter()
+            .filter(|child| child.parent_id.as_deref() == Some(node.id.as_str()))
+            .map(|child| child.id.as_str())
+            .collect::<Vec<_>>();
+        let _ = writeln!(
+            text,
+            "Children: {} ({})",
+            children.join(", "),
+            progress.label()
+        );
+    }
     if view.is_focused_review() {
         text.push_str(FOCUSED_REVIEW_NOTE);
         text.push('\n');

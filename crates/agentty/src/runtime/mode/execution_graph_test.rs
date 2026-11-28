@@ -101,6 +101,13 @@ fn navigation_selects_graph_node_and_output_without_editing_chat() {
             (graph_index, node_index)
         );
     }
+    view.selects_first_node = false;
+    key(&mut view, KeyCode::Char(']'));
+    assert!(
+        view.selects_first_node,
+        "another graph starts on its first row"
+    );
+    key(&mut view, KeyCode::Char('['));
     key(&mut view, KeyCode::Char('o'));
     assert_eq!(view.selected_output, 1);
     key(&mut view, KeyCode::PageDown);

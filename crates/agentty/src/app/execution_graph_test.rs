@@ -1055,6 +1055,7 @@ fn node(id: &str) -> GraphNode {
             name: "response".into(),
             schema: ProtocolRequestProfile::SessionTurn,
         }],
+        parent_id: None,
         request: TurnPrompt {
             text: "Inspect @src/main.rs [Image #1]".into(),
             attachments: vec![TurnPromptAttachment {

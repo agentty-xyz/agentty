@@ -93,6 +93,97 @@ async fn expanded_nodes_dispatch_with_inputs_pinned_under_the_earlier_revision()
 }
 
 #[tokio::test]
+async fn expansions_record_a_childs_parent_and_omit_it_for_top_level_nodes() {
+    // Arrange
+    let database = database(&graph()).await;
+    let request = expansion("child", NonZeroU64::MIN, vec![child_of("third", "first")]);
+
+    // Act
+    let recorded = database
+        .graphs()
+        .expand_graph(&request)
+        .await
+        .expect("expand");
+    let snapshots: Vec<String> =
+        sqlx::query_scalar("SELECT snapshot FROM execution_graph_revision ORDER BY revision")
+            .fetch_all(database.pool())
+            .await
+            .expect("snapshots");
+    let expansion_record: String =
+        sqlx::query_scalar("SELECT nodes FROM execution_graph_expansion WHERE id = 'child'")
+            .fetch_one(database.pool())
+            .await
+            .expect("expansion record");
+    let current = database
+        .graphs()
+        .load_graph("graph", None)
+        .await
+        .expect("load")
+        .expect("graph");
+
+    // Assert
+    assert!(recorded);
+    assert!(!snapshots[0].contains("parent_id"));
+    assert_eq!(snapshots[1].matches("\"parent_id\":\"first\"").count(), 1);
+    assert_eq!(
+        expansion_record,
+        serde_json::json!([child_of("third", "first")]).to_string()
+    );
+    assert_eq!(current.nodes[2].parent_id.as_deref(), Some("first"));
+    assert_eq!(current.nodes[..2], graph().nodes[..]);
+}
+
+#[tokio::test]
+async fn expansions_without_children_store_the_bytes_recorded_before_children_existed() {
+    // Arrange: a snapshot that the graph model serialized before nodes
+    // could name a parent. Its first node is the base and its second is
+    // appended, so the expansion record must hold that node's exact bytes.
+    let stored =
+        include_str!("../../../ag-session/src/execution_graph/fixture/stored_snapshot.json")
+            .trim_end();
+    let before: ExecutionGraph = serde_json::from_str(stored).expect("stored snapshot");
+    let (_, second_bytes) = stored
+        .split_once("\"nodes\":[")
+        .and_then(|(_, rest)| rest.rsplit_once("],\"revision\""))
+        .and_then(|(nodes, _)| nodes.split_once("},{"))
+        .expect("two stored nodes");
+    let base = ExecutionGraph {
+        nodes: before.nodes[..1].to_vec(),
+        ..before.clone()
+    };
+    let database = database(&base).await;
+    let request = expansion("before", NonZeroU64::MIN, before.nodes[1..].to_vec());
+
+    // Act
+    let recorded = database
+        .graphs()
+        .expand_graph(&request)
+        .await
+        .expect("expand");
+    let expansion_record: String =
+        sqlx::query_scalar("SELECT nodes FROM execution_graph_expansion WHERE id = 'before'")
+            .fetch_one(database.pool())
+            .await
+            .expect("expansion record");
+    let snapshot: String =
+        sqlx::query_scalar("SELECT snapshot FROM execution_graph_revision WHERE revision = 2")
+            .fetch_one(database.pool())
+            .await
+            .expect("expanded snapshot");
+    let redelivered = database
+        .graphs()
+        .expand_graph(&request)
+        .await
+        .expect("redeliver");
+
+    // Assert
+    assert!(recorded);
+    assert_eq!(expansion_record, format!("[{{{second_bytes}]"));
+    assert_eq!(snapshot, stored.replace("\"revision\":1", "\"revision\":2"));
+    assert!(!redelivered, "redelivery is answered as already applied");
+}
+
+#[tokio::test]
 async fn invalid_or_conflicting_expansions_record_nothing() {
     // Arrange
     let database = database(&graph()).await;
@@ -111,6 +202,8 @@ async fn invalid_or_conflicting_expansions_record_nothing() {
         gate: GraphCompletionGate::ExecutionSucceeded,
         node_id: "missing".into(),
     });
+    let child = child_of("fourth", "first");
+    let grandchild = child_of("fifth", "fourth");
 
     // Act
     let rejected = [
@@ -128,6 +221,7 @@ async fn invalid_or_conflicting_expansions_record_nothing() {
         expansion("dangling", current, vec![dangling]),
         expansion("unbudgeted", current, vec![unbudgeted]),
         expansion("foreign", current, vec![foreign]),
+        expansion("nested", current, vec![child, grandchild]),
     ];
     let mut messages = Vec::new();
     for (index, mut request) in rejected.into_iter().enumerate() {
@@ -156,6 +250,7 @@ async fn invalid_or_conflicting_expansions_record_nothing() {
         "unknown graph node: missing",
         "existing provider budgets",
         "existing provider budgets",
+        "graph node `fifth` cannot be a child of `fourth`, which is itself a child",
     ]) {
         assert!(message.contains(expected), "{message}");
     }
@@ -429,6 +524,14 @@ fn consumer(id: &str) -> GraphNode {
     });
 
     node
+}
+
+/// A reader shown under `parent`, in its Env.
+fn child_of(id: &str, parent: &str) -> GraphNode {
+    GraphNode {
+        parent_id: Some(parent.into()),
+        ..reader(id)
+    }
 }
 
 fn expansion(id: &str, revision: NonZeroU64, nodes: Vec<GraphNode>) -> ExpandExecutionGraphRequest {

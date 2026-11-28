@@ -353,6 +353,7 @@ fn graph(id: &str) -> ExecutionGraph {
                 name: "response".into(),
                 schema: ProtocolRequestProfile::UtilityPrompt,
             }],
+            parent_id: None,
             request: TurnPrompt::from_agent_data("Inspect".into()),
         }],
         revision: NonZeroU64::MIN,

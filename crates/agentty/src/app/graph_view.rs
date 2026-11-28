@@ -4,7 +4,8 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphProgress, ExtendGraphBudgetRequest,
-    GraphControlRequest, GraphNodeContinuation, GraphProposalState, ResumeExecutionGraphRequest,
+    GraphControlRequest, GraphNode, GraphNodeContinuation, GraphProposalState,
+    ResumeExecutionGraphRequest,
 };
 use uuid::Uuid;
 
@@ -34,10 +35,15 @@ impl App {
                     follows_approval: view.is_proposal_selected,
                     graph_id: graph_id.as_deref(),
                     keeps_proposal: view.is_proposal_selected,
-                    node: GraphNodeChoice::Index(view.selected_node),
+                    node: if view.selects_first_node {
+                        GraphNodeChoice::First
+                    } else {
+                        GraphNodeChoice::Index(view.selected_node)
+                    },
                 },
             )
             .await?;
+        view.selects_first_node = false;
         view.selected_output = view
             .selected_output
             .min(snapshot.outputs.len().saturating_sub(1));
@@ -98,7 +104,12 @@ impl App {
                 .map_err(|error| error.to_string())?,
             None => None,
         };
-        let selected_node = selection.node.index(progress.as_ref());
+        let selected_node = selection.node.index(
+            definitions
+                .get(selected_graph)
+                .filter(|_| !is_proposal_selected),
+            progress.as_ref(),
+        );
         let mut outputs = Vec::new();
         if let Some(node) = progress
             .as_ref()
@@ -322,8 +333,12 @@ pub(crate) struct GraphSelection<'a> {
     pub(crate) node: GraphNodeChoice<'a>,
 }
 
-/// A node chosen by declaration position or by identity.
+/// A node chosen by declaration position, by identity, or as the first row
+/// of the inspector's list.
 pub(crate) enum GraphNodeChoice<'a> {
+    /// The node the inspector lists first: the first top-level node, even
+    /// when a child is declared before it.
+    First,
     /// The node at this position, or the last one when the graph has fewer.
     Index(usize),
     /// The node with this identity, or the first one when the graph has
@@ -332,11 +347,19 @@ pub(crate) enum GraphNodeChoice<'a> {
 }
 
 impl GraphNodeChoice<'_> {
-    /// Returns the position of the chosen node in `progress`, or zero when
-    /// there is no progress.
-    fn index(&self, progress: Option<&ExecutionGraphProgress>) -> usize {
+    /// Returns the position of the chosen node of `graph` in `progress`, or
+    /// zero when there is no progress.
+    fn index(
+        &self,
+        graph: Option<&ExecutionGraph>,
+        progress: Option<&ExecutionGraphProgress>,
+    ) -> usize {
         let nodes = progress.map_or_default(|progress| progress.nodes.as_slice());
         match self {
+            Self::First => graph
+                .and_then(|graph| GraphNode::hierarchy_order(&graph.nodes).first().copied())
+                .map_or(0, |placement| placement.index)
+                .min(nodes.len().saturating_sub(1)),
             Self::Index(index) => (*index).min(nodes.len().saturating_sub(1)),
             Self::Id(node_id) => nodes
                 .iter()

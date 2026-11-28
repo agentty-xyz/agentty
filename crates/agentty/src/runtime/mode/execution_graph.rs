@@ -106,22 +106,16 @@ fn resolve_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
                 (view.selected_graph + count - 1) % count
             };
             view.selected_node = 0;
+            view.selects_first_node = true;
             view.selected_output = 0;
             view.scroll = 0;
 
             return GraphKeyAction::Refresh;
         }
         KeyCode::Char('j' | 'k') | KeyCode::Down | KeyCode::Up => {
-            let count = view
-                .progress
-                .as_ref()
-                .map_or(0, |progress| progress.nodes.len());
-            if count > 0 {
-                view.selected_node = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) {
-                    (view.selected_node + 1) % count
-                } else {
-                    (view.selected_node + count - 1) % count
-                };
+            let forward = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
+            if let Some(node) = view.adjacent_node(forward) {
+                view.selected_node = node;
                 view.selected_output = 0;
                 view.scroll = 0;
 

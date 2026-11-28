@@ -56,6 +56,7 @@ pub(super) fn dispatch() -> GraphDispatch {
             inputs: Vec::new(),
             objective: "Review".into(),
             outputs: Vec::new(),
+            parent_id: None,
             request: TurnPrompt::from_agent_data("Evidence".into()),
         },
         record: GraphExecutionRecord {

@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use ag_protocol::{ProtocolRequestProfile, parse_protocol_response_strict};
 use ag_session::{
     ExecutionGraph, ExecutionGraphProgress, ExecutionGraphStatus, GraphBlockedReason,
-    GraphCompletionGate, GraphContext, GraphNode, GraphNodeProgress, GraphNodeStatus,
-    GraphProposalState, GraphResult, GraphResultState, GraphWorkspaceAccess,
+    GraphCompletionGate, GraphContext, GraphNode, GraphNodePlacement, GraphNodeProgress,
+    GraphNodeStatus, GraphProposalState, GraphResult, GraphResultState, GraphWorkspaceAccess,
 };
 use ag_worker::GraphUtilityRunner;
 
@@ -45,6 +45,9 @@ pub struct GraphView {
     pub(crate) selected_node: usize,
     /// Selected output for inspection and acceptance.
     pub(crate) selected_output: usize,
+    /// Whether the next load selects the node listed first rather than
+    /// `selected_node`, as on opening the inspector or another graph.
+    pub(crate) selects_first_node: bool,
 }
 
 impl GraphView {
@@ -63,6 +66,7 @@ impl GraphView {
             selected_graph: 0,
             selected_node: 0,
             selected_output: 0,
+            selects_first_node: true,
         }
     }
 
@@ -79,6 +83,43 @@ impl GraphView {
 
     pub(crate) fn node(&self) -> Option<&GraphNodeProgress> {
         self.progress.as_ref()?.nodes.get(self.selected_node)
+    }
+
+    /// The selected graph's nodes in the order the inspector lists them:
+    /// each top-level node followed by its children. Only nodes with
+    /// loaded progress are listed.
+    pub(crate) fn node_order(&self) -> Vec<GraphNodePlacement> {
+        let count = self
+            .progress
+            .as_ref()
+            .map_or(0, |progress| progress.nodes.len());
+
+        self.graph()
+            .map_or_default(|graph| GraphNode::hierarchy_order(&graph.nodes))
+            .into_iter()
+            .filter(|placement| placement.index < count)
+            .collect()
+    }
+
+    /// The node `j` (`forward`) or `k` selects next in [`Self::node_order`],
+    /// wrapping around, or `None` when no node is listed.
+    pub(crate) fn adjacent_node(&self, forward: bool) -> Option<usize> {
+        let order = self.node_order();
+        let count = order.len();
+        if count == 0 {
+            return None;
+        }
+        let position = order
+            .iter()
+            .position(|placement| placement.index == self.selected_node)
+            .unwrap_or_default();
+        let next = if forward {
+            (position + 1) % count
+        } else {
+            (position + count - 1) % count
+        };
+
+        Some(order[next].index)
     }
 
     /// Reconciliation may update other branches, but never retarget a retained

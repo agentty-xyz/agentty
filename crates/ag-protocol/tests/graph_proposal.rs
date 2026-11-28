@@ -48,9 +48,11 @@ fn proposal_response() -> Value {
             "id": id,
             "inputs": [],
             "objective": format!("Perform {id}"),
-            "outputs": [{"name": "result", "schema": profile}]
+            "outputs": [{"name": "result", "schema": profile}],
+            "parent_id": null
         }));
     }
+    nodes[2]["parent_id"] = json!("plan");
     nodes[1]["dependencies"] = json!([
         {"node_id": "plan", "gate": {"kind": "execution_succeeded"}},
         {"node_id": "plan", "gate": {"kind": "result_validated", "output_name": "result"}}
@@ -70,14 +72,36 @@ fn proposal_response() -> Value {
     json!({"outcome": {"kind": "proposal", "proposal": {"nodes": nodes}}})
 }
 
+/// `raw` as the typed response serializes it: a null or missing parent is
+/// omitted, so top-level nodes keep their bytes.
+fn without_null_parents(mut raw: Value) -> Value {
+    if let Some(nodes) = raw
+        .pointer_mut("/outcome/proposal/nodes")
+        .and_then(Value::as_array_mut)
+    {
+        for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
+            if node.get("parent_id") == Some(&Value::Null) {
+                node.remove("parent_id");
+            }
+        }
+    }
+
+    raw
+}
+
 #[test]
 fn proposal_outcomes_round_trip_without_entering_session_question_state() {
     // Arrange
     let clarification = json!({"outcome": {"kind": "clarification", "questions": [
         {"text": "Which component?", "options": ["Protocol", "Storage"]}
     ]}});
+    let mut omitted_parents = without_null_parents(proposal_response());
+    omitted_parents["outcome"]["proposal"]["nodes"][2]
+        .as_object_mut()
+        .expect("node object")
+        .remove("parent_id");
 
-    for raw in [proposal_response(), clarification] {
+    for raw in [proposal_response(), omitted_parents, clarification] {
         // Act
         let response =
             parse_protocol_response_strict(&raw.to_string(), ProtocolRequestProfile::GraphProposal)
@@ -86,7 +110,10 @@ fn proposal_outcomes_round_trip_without_entering_session_question_state() {
             serde_json::from_str(&response.answer).expect("typed response preserved");
 
         // Assert
-        assert_eq!(serde_json::to_value(&typed).expect("round trip"), raw);
+        assert_eq!(
+            serde_json::to_value(&typed).expect("round trip"),
+            without_null_parents(raw)
+        );
         assert_eq!(response.questions, Vec::<QuestionItem>::new());
         assert_eq!(
             response.review_comment_outcomes,
@@ -96,6 +123,7 @@ fn proposal_outcomes_round_trip_without_entering_session_question_state() {
             GraphProposalOutcome::Proposal { proposal } => {
                 assert_eq!(proposal.nodes.len(), 3);
                 assert_eq!(proposal.nodes[2].inputs[0].name, "accepted_plan");
+                assert_eq!(proposal.nodes[0].parent_id, None);
             }
             GraphProposalOutcome::Clarification { questions } => {
                 assert_eq!(questions[0].text, "Which component?");
@@ -119,6 +147,7 @@ fn proposal_parser_rejects_incomplete_mixed_or_host_authored_fields() {
     ];
     for (pointer, value) in [
         ("/outcome/proposal/nodes/0/id", json!(null)),
+        ("/outcome/proposal/nodes/2/parent_id", json!(5)),
         (
             "/outcome/proposal/nodes/0/execution/context",
             json!("unknown"),
@@ -207,6 +236,20 @@ fn proposal_schemas_enforce_exclusive_outcomes_for_both_transport_policies() {
         let mut host_field = proposal.clone();
         host_field["outcome"]["proposal"]["nodes"][0]["execution"]["task_id"] = json!("host");
         assert!(!validator.is_valid(&host_field));
+        // Every node names its parent or null where all keys are required;
+        // other transports may omit a top-level node's parent.
+        let mut omitted_parent = proposal.clone();
+        omitted_parent["outcome"]["proposal"]["nodes"][0]
+            .as_object_mut()
+            .expect("node object")
+            .remove("parent_id");
+        assert_eq!(
+            validator.is_valid(&omitted_parent),
+            policy == SchemaRequiredPolicy::MinimumProtocolKeys
+        );
+        let mut numeric_parent = proposal.clone();
+        numeric_parent["outcome"]["proposal"]["nodes"][2]["parent_id"] = json!(5);
+        assert!(!validator.is_valid(&numeric_parent));
     }
 }
 

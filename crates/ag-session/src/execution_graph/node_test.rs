@@ -4,8 +4,8 @@ use ag_protocol::ProtocolRequestProfile;
 
 use crate::execution_graph::test_support::reader;
 use crate::{
-    GraphContext, GraphContractError, GraphExecutionProfile, GraphPostProcessing,
-    GraphWorkspaceAccess, PermissionMode,
+    GraphContext, GraphContractError, GraphExecutionProfile, GraphNode, GraphNodePlacement,
+    GraphPostProcessing, GraphWorkspaceAccess, PermissionMode,
 };
 
 #[test]
@@ -133,4 +133,50 @@ fn task_workflow_profiles_allow_ordered_effects_and_optional_shared_budgets() {
 
     // Assert
     assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn hierarchy_order_places_children_under_their_parent_in_declaration_order() {
+    // Arrange: children declared before and after their parent, a child of
+    // a node outside the slice, and a child of a child.
+    let child = |id: &str, parent: &str| GraphNode {
+        parent_id: Some(parent.into()),
+        ..reader(id)
+    };
+    let nodes = [
+        child("late-test", "build"),
+        reader("research"),
+        reader("build"),
+        child("orphan", "existing"),
+        child("docs", "build"),
+        child("nested", "docs"),
+        child("notes", "research"),
+    ];
+
+    // Act
+    let order = GraphNode::hierarchy_order(&nodes);
+
+    // Assert
+    assert_eq!(
+        order
+            .iter()
+            .map(|placement| (nodes[placement.index].id.as_str(), placement.is_child))
+            .collect::<Vec<_>>(),
+        [
+            ("research", false),
+            ("notes", true),
+            ("build", false),
+            ("late-test", true),
+            ("docs", true),
+            ("orphan", false),
+            ("nested", false),
+        ]
+    );
+    assert_eq!(
+        order.first(),
+        Some(&GraphNodePlacement {
+            index: 1,
+            is_child: false
+        })
+    );
 }
