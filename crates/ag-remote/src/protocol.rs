@@ -340,12 +340,10 @@ pub enum RemoteRequest {
 /// session the host does not list. The id inside stays private to this
 /// module; elsewhere the value only compares and hashes, which is how the
 /// requests that change one session queue behind each other. It travels
-/// as a plain string.
+/// as a plain string, which the protocol schema inlines into each field
+/// that carries one.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, JsonSchema, PartialEq, Serialize)]
-#[schemars(
-    description = "A session id, as a session listing or snapshot names it in `id`. A request \
-                   reaches only a session the host lists."
-)]
+#[schemars(inline)]
 #[serde(transparent)]
 pub struct RequestedSessionId(String);
 
@@ -386,13 +384,10 @@ impl From<&str> for RequestedSessionId {
 /// [`ProjectScope::Project`] from a device's id, so a request cannot reach
 /// a project the host does not list. The id inside stays private to this
 /// module. It travels as a string, so no client has to keep a large integer
-/// exact.
+/// exact, and the protocol schema inlines it into each field that carries
+/// one.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[schemars(
-    description = "A project id: the decimal `id` of an entry `list_projects` returned, sent as a \
-                   string so no client has to keep a large integer exact. A request reaches only \
-                   a project the host lists."
-)]
+#[schemars(inline)]
 #[serde(transparent)]
 pub struct RequestedProjectId(String);
 

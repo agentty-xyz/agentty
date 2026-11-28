@@ -437,7 +437,7 @@
           "description": "Output of `node_id` that `accept` accepts."
         },
         "session_id": {
-          "$ref": "#/$defs/RequestedSessionId",
+          "type": "string",
           "description": "Session that owns the graph."
         },
         "snapshot": {
@@ -1216,7 +1216,7 @@
               "description": "The snapshot's `graph_question_target` of the `graph_questions`\nanswered; absent when answering the turn's `questions`."
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session that asked the questions."
             }
           },
@@ -1235,7 +1235,7 @@
               "const": "cancel_session"
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session to cancel."
             }
           },
@@ -1258,13 +1258,9 @@
               "default": "regular"
             },
             "project_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/RequestedProjectId"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "string",
+                "null"
               ],
               "description": "Listed project to create the session in, as `list_projects`\nnames it; absent for the active project. Understood only by a\nserver that offers `projects`."
             }
@@ -1286,7 +1282,7 @@
               "description": "Task the graph should carry out."
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session that owns the proposal."
             }
           },
@@ -1305,13 +1301,9 @@
               "const": "get_host"
             },
             "project_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/RequestedProjectId"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "string",
+                "null"
               ],
               "description": "Listed project to describe, as `list_projects` names it; absent\nfor the active project. Understood only by a server that offers\n`projects`."
             }
@@ -1336,7 +1328,7 @@
               "description": "Changed file whose patch to return, as the file list names it."
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session to read."
             }
           },
@@ -1354,7 +1346,7 @@
               "const": "get_session"
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session to load."
             }
           },
@@ -1393,7 +1385,7 @@
               "description": "Node of the selected graph whose details and outputs to return.\nWithout it, or when the graph has no such node, the first node."
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session to read."
             }
           },
@@ -1411,13 +1403,9 @@
               "const": "list_project_files"
             },
             "project_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/RequestedProjectId"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "string",
+                "null"
               ],
               "description": "Listed project whose checkout to list, as `list_projects` names\nit; absent for the active project. Understood only by a server\nthat offers `projects`."
             }
@@ -1448,7 +1436,7 @@
               "const": "list_session_files"
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session whose worktree to list."
             }
           },
@@ -1466,13 +1454,9 @@
               "const": "list_sessions"
             },
             "project_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/RequestedProjectId"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "string",
+                "null"
               ],
               "description": "Listed project whose sessions to list, as `list_projects` names\nit; absent for the active project. Understood only by a server\nthat offers `projects`."
             }
@@ -1494,7 +1478,7 @@
               "description": "Whether to merge by bypassing branch protections; it must be\ntrue for a `ready_with_bypass` pull request and false for a\n`ready` one. Absent means false."
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session whose pull request merges."
             }
           },
@@ -1512,7 +1496,7 @@
               "const": "merge_session"
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session to merge."
             }
           },
@@ -1530,7 +1514,7 @@
               "const": "publish_session"
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session to publish."
             }
           },
@@ -1559,7 +1543,7 @@
               "description": "Message text."
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session that receives the message."
             }
           },
@@ -1578,7 +1562,7 @@
               "const": "stop_turn"
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session whose turn stops."
             }
           },
@@ -1596,13 +1580,9 @@
               "const": "sync_project"
             },
             "project_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/RequestedProjectId"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "string",
+                "null"
               ],
               "description": "Listed project to sync, as `list_projects` names it; absent for\nthe active project. Understood only by a server that offers\n`projects`."
             }
@@ -1620,7 +1600,7 @@
               "const": "sync_session"
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session whose branch is synced."
             }
           },
@@ -1666,7 +1646,7 @@
               "description": "Style of the agent's answers, such as `concise`."
             },
             "session_id": {
-              "$ref": "#/$defs/RequestedSessionId",
+              "type": "string",
               "description": "Session whose settings change."
             },
             "speed_mode": {
@@ -2414,14 +2394,6 @@
         "updated_at"
       ],
       "description": "Listing entry for one session.\n\nThe stats fields are optional: a host that lists only summaries, or an\nolder server, omits them, and a page hides what is missing."
-    },
-    "RequestedProjectId": {
-      "type": "string",
-      "description": "A project id: the decimal `id` of an entry `list_projects` returned, sent as a string so no client has to keep a large integer exact. A request reaches only a project the host lists."
-    },
-    "RequestedSessionId": {
-      "type": "string",
-      "description": "A session id, as a session listing or snapshot names it in `id`. A request reaches only a session the host lists."
     },
     "ServerFrame": {
       "oneOf": [

@@ -62,8 +62,22 @@ pub(super) fn render_module(schema: &Value, regenerate: &str) -> Result<String, 
 
 /// Renders one definition after `=`: a union one variant per line, and
 /// any other type on the same line.
+///
+/// A definition that is only a JSON primitive, such as a transparent
+/// string newtype, would render as a redundant alias of that primitive,
+/// so it fails; its type is inlined with `#[schemars(inline)]` instead.
 fn render_definition(definition: &Value) -> Result<String, String> {
     let Some(variants) = union_variants(definition)? else {
+        let is_primitive = definition
+            .get("type")
+            .is_some_and(|name| !["array", "object"].contains(&name.as_str().unwrap_or("object")))
+            && definition.get("const").is_none();
+        if is_primitive {
+            return Err(
+                ": a primitive-only definition; mark its type `#[schemars(inline)]`".to_string(),
+            );
+        }
+
         return Ok(format!(" {}", render_type(definition, "")?));
     };
     let mut lines = vec![String::new()];

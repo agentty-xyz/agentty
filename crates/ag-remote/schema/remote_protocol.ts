@@ -212,7 +212,7 @@ export type RemoteGraphActionRequest = {
   /** Output of `node_id` that `accept` accepts. */
   output_id?: string | null;
   /** Session that owns the graph. */
-  session_id: RequestedSessionId;
+  session_id: string;
   /**
    * The graph's `snapshot` in the `graphs` response the action was
    * chosen from.
@@ -645,7 +645,7 @@ export type RemoteRequest =
        */
       graph_question_target?: string | null;
       /** Session that asked the questions. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Cancels the whole session, not only its current turn.
@@ -657,7 +657,7 @@ export type RemoteRequest =
   | {
       method: "cancel_session";
       /** Session to cancel. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Creates a session in the host's active project, or the one
@@ -676,7 +676,7 @@ export type RemoteRequest =
        * names it; absent for the active project. Understood only by a
        * server that offers `projects`.
        */
-      project_id?: RequestedProjectId | null;
+      project_id?: string | null;
     }
   /**
    * Starts model work that proposes an execution graph for the task in
@@ -691,7 +691,7 @@ export type RemoteRequest =
       /** Task the graph should carry out. */
       message: string;
       /** Session that owns the proposal. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Describes the host's active project, or the one `project_id` names,
@@ -704,7 +704,7 @@ export type RemoteRequest =
        * for the active project. Understood only by a server that offers
        * `projects`.
        */
-      project_id?: RequestedProjectId | null;
+      project_id?: string | null;
     }
   /**
    * Reads what a session changes against its base branch. Without `path`
@@ -716,13 +716,13 @@ export type RemoteRequest =
       /** Changed file whose patch to return, as the file list names it. */
       path?: string | null;
       /** Session to read. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /** Loads one session snapshot. */
   | {
       method: "get_session";
       /** Session to load. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Reads a session's graph proposal and execution graphs as the
@@ -749,7 +749,7 @@ export type RemoteRequest =
        */
       node_id?: string | null;
       /** Session to read. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Lists the names of the files and directories in the checkout of the
@@ -765,7 +765,7 @@ export type RemoteRequest =
        * it; absent for the active project. Understood only by a server
        * that offers `projects`.
        */
-      project_id?: RequestedProjectId | null;
+      project_id?: string | null;
     }
   /**
    * Lists the projects the host lists, in its project switcher's order:
@@ -784,7 +784,7 @@ export type RemoteRequest =
   | {
       method: "list_session_files";
       /** Session whose worktree to list. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Lists the sessions of the host's active project, or of the one
@@ -797,7 +797,7 @@ export type RemoteRequest =
        * it; absent for the active project. Understood only by a server
        * that offers `projects`.
        */
-      project_id?: RequestedProjectId | null;
+      project_id?: string | null;
     }
   /**
    * Merges the session's open GitHub pull request on GitHub, with the
@@ -824,7 +824,7 @@ export type RemoteRequest =
        */
       bypass?: boolean;
       /** Session whose pull request merges. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Merges a review-ready session into its base branch in the host's
@@ -833,7 +833,7 @@ export type RemoteRequest =
   | {
       method: "merge_session";
       /** Session to merge. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Pushes a session to the branch it was published to before, or under
@@ -844,7 +844,7 @@ export type RemoteRequest =
   | {
       method: "publish_session";
       /** Session to publish. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /** Sends one chat message, starting, resuming, or queueing a turn. */
   | {
@@ -859,7 +859,7 @@ export type RemoteRequest =
       /** Message text. */
       message: string;
       /** Session that receives the message. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Stops the session's running turn and returns the session to review,
@@ -869,7 +869,7 @@ export type RemoteRequest =
   | {
       method: "stop_turn";
       /** Session whose turn stops. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Syncs the branch of the host's active project, or of the one
@@ -886,7 +886,7 @@ export type RemoteRequest =
        * the active project. Understood only by a server that offers
        * `projects`.
        */
-      project_id?: RequestedProjectId | null;
+      project_id?: string | null;
     }
   /**
    * Rebases the session branch onto its base branch, or queues the rebase
@@ -896,7 +896,7 @@ export type RemoteRequest =
   | {
       method: "sync_session";
       /** Session whose branch is synced. */
-      session_id: RequestedSessionId;
+      session_id: string;
     }
   /**
    * Changes the session's settings for later turns; an omitted setting
@@ -922,7 +922,7 @@ export type RemoteRequest =
       /** Style of the agent's answers, such as `concise`. */
       response_style?: string | null;
       /** Session whose settings change. */
-      session_id: RequestedSessionId;
+      session_id: string;
       /** Speed preference, `normal` or `fast`. */
       speed_mode?: string | null;
     };
@@ -1335,12 +1335,6 @@ export type RemoteSessionSummary = {
    */
   upstream_behind?: number;
 };
-
-/** A project id: the decimal `id` of an entry `list_projects` returned, sent as a string so no client has to keep a large integer exact. A request reaches only a project the host lists. */
-export type RequestedProjectId = string;
-
-/** A session id, as a session listing or snapshot names it in `id`. A request reaches only a session the host lists. */
-export type RequestedSessionId = string;
 
 /** A frame sent by the server. */
 export type ServerFrame =
