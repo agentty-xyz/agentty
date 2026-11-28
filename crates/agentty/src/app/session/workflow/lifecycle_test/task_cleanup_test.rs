@@ -161,7 +161,7 @@ async fn graph_runtime_cleanup_uses_the_durable_host_uuid_before_cascade() {
                 graph.revision,
                 "first",
                 context_id,
-                std::path::Path::new("workspace"),
+                &ag_worker::GraphEnvLocation::Folder("workspace".into()),
             )
             .await
             .expect("claim");

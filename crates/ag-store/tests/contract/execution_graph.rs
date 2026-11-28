@@ -13,7 +13,7 @@ use ag_session::{
     GraphWorkspaceAccess, SubmitTaskRequest,
 };
 use ag_store::{Database, GraphEvidence, GraphExecutionRecord, GraphOutputReplyRecord};
-use ag_worker::{RunInfo, RunState};
+use ag_worker::{GraphEnvLocation, RunInfo, RunState};
 
 #[tokio::test]
 async fn explicit_graph_continuation_and_cancellation_survive_reopening_without_replay()
@@ -31,7 +31,7 @@ async fn explicit_graph_continuation_and_cancellation_survive_reopening_without_
             snapshot.revision,
             "plan",
             &uuid::Uuid::new_v4().to_string(),
-            std::path::Path::new("workspace"),
+            &GraphEnvLocation::Folder("workspace".into()),
         )
         .await?;
     let dispatch = match admission {
@@ -76,7 +76,7 @@ async fn explicit_graph_continuation_and_cancellation_survive_reopening_without_
             snapshot.revision,
             "plan",
             "ignored-redelivery-id",
-            std::path::Path::new("workspace"),
+            &GraphEnvLocation::Folder("workspace".into()),
         )
         .await?;
     let retry = match admission {
@@ -116,7 +116,7 @@ async fn explicit_graph_continuation_and_cancellation_survive_reopening_without_
                 snapshot.revision,
                 "review",
                 "never-dispatched",
-                std::path::Path::new("workspace")
+                &GraphEnvLocation::Folder("workspace".into())
             )
             .await?,
         ag_worker::GraphAdmission::Blocked

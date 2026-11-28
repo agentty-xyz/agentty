@@ -7,7 +7,7 @@ use ag_contracts::{MockOneShotClient, OneShotSubmission, PermissionMode, TurnUsa
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment};
 use ag_session::{GraphContext, GraphExecutionRef};
 
-use crate::graph::support_test::dispatch;
+use crate::graph::support_test::{dispatch, workspace};
 use crate::graph::{GraphNodeRunner, GraphRunRequest, GraphUtilityRunner};
 use crate::run::mock::MockRunRepository;
 use crate::{HeartbeatClock, RunWorker};
@@ -46,7 +46,7 @@ async fn malformed_dispatches_are_rejected_before_utility_submission() {
         let result = runner
             .run(GraphRunRequest {
                 dispatch,
-                folder: "workspace".into(),
+                location: workspace(),
                 permission_mode: PermissionMode::ReadOnly,
                 provider_call_budget: None,
             })
@@ -113,7 +113,7 @@ async fn fresh_utility_nodes_send_request_images_after_their_data() {
     let result = runner
         .run(GraphRunRequest {
             dispatch,
-            folder: "workspace".into(),
+            location: workspace(),
             permission_mode: PermissionMode::ReadOnly,
             provider_call_budget: None,
         })

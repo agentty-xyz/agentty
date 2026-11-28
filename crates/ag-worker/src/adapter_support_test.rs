@@ -1,13 +1,46 @@
 //! Explicit adapter fixtures for offline worker integration tests.
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use ag_contracts::OneShotError;
 pub use ag_runtime::test_support::{
     AgentBackend, AgentBackendError, AppServerClient, AppServerError, AppServerTurnResponse,
     MockAgentBackend, MockAppServerClient, RealOneShotClient, instruction_bootstrap_key,
 };
-use ag_session::AgentKind;
+use ag_session::{AgentKind, GraphNode};
+use async_trait::async_trait;
 
-use crate::{RuntimeConfig, SessionRunClient};
+use crate::{GraphDispatch, GraphEnvLocation, GraphEnvResolver, RuntimeConfig, SessionRunClient};
+
+/// Env resolver locating every node in one folder, as a host whose nodes all
+/// run in the session worktree does. Preparation always succeeds.
+pub struct FolderEnvs(PathBuf);
+
+impl FolderEnvs {
+    /// Locates every node in `folder`.
+    pub fn resolver(folder: impl Into<PathBuf>) -> Arc<dyn GraphEnvResolver> {
+        Arc::new(Self(folder.into()))
+    }
+}
+
+#[async_trait]
+impl GraphEnvResolver for FolderEnvs {
+    async fn locate(
+        &self,
+        _graph_id: &str,
+        _node: &GraphNode,
+    ) -> Result<Option<GraphEnvLocation>, OneShotError> {
+        Ok(Some(GraphEnvLocation::Folder(self.0.clone())))
+    }
+
+    async fn prepare(
+        &self,
+        _dispatch: &GraphDispatch,
+        _location: &GraphEnvLocation,
+    ) -> Result<(), OneShotError> {
+        Ok(())
+    }
+}
 
 /// Creates a worker client backed by a scripted CLI transport.
 pub fn cli_session(

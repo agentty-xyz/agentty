@@ -12,7 +12,9 @@ use ag_git::{DiffStats, GitError, MockGitClient};
 use ag_protocol::QuestionItem;
 use ag_session::{ExecutionGraph, GraphPostProcessing, GraphWorkspaceAccess, TaskAttemptStatus};
 use ag_store::SessionMessageRow;
-use ag_worker::{GraphRunRequest, MockRunClient, ScheduledWork, SessionRunClient, WorkerHost};
+use ag_worker::{
+    GraphEnvLocation, GraphRunRequest, MockRunClient, ScheduledWork, SessionRunClient, WorkerHost,
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -544,7 +546,7 @@ async fn graph_task_command(
                 graph.revision,
                 &graph.nodes[0].id,
                 "aaaaaaaa-0000-0000-0000-000000000001",
-                &context.folder,
+                &GraphEnvLocation::Folder(context.folder.clone()),
             )
             .await
             .expect("claim"),
@@ -582,7 +584,7 @@ async fn graph_task_command(
         operation_id,
         request: GraphRunRequest {
             dispatch,
-            folder: context.folder.clone(),
+            location: GraphEnvLocation::Folder(context.folder.clone()),
             permission_mode: if scenario == "readonly" {
                 PermissionMode::ReadOnly
             } else {

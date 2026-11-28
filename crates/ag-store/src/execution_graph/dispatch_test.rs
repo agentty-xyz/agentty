@@ -2,15 +2,14 @@
 //! Env exclusion, and rollback.
 
 use std::num::NonZeroU64;
-use std::path::Path;
 
 use ag_session::{
     GraphCompletionGate, GraphContext, GraphDependency, GraphExecutionRef, GraphPostProcessing,
     GraphWorkspaceAccess,
 };
-use ag_worker::{GraphAdmission, GraphDispatch, GraphExecutionRecord, RunState};
+use ag_worker::{GraphAdmission, GraphDispatch, GraphEnvLocation, GraphExecutionRecord, RunState};
 
-use crate::execution_graph::support_test::{evidence, graph, reader, run};
+use crate::execution_graph::support_test::{evidence, graph, reader, run, workspace};
 use crate::{Database, GraphEvidence};
 
 async fn database() -> Database {
@@ -27,7 +26,7 @@ async fn database() -> Database {
 async fn claim(database: &Database, node: &str, id: &str) -> GraphAdmission {
     database
         .graph_dispatch()
-        .claim("graph", NonZeroU64::MIN, node, id, Path::new("workspace"))
+        .claim("graph", NonZeroU64::MIN, node, id, &workspace())
         .await
         .expect("admission")
 }
@@ -253,13 +252,7 @@ async fn read_branches_share_env_but_writers_and_other_host_work_exclude_them() 
     assert_eq!(
         database
             .graph_dispatch()
-            .claim(
-                "other",
-                graph.revision,
-                "other",
-                "blocked",
-                Path::new("workspace")
-            )
+            .claim("other", graph.revision, "other", "blocked", &workspace())
             .await
             .expect("admission"),
         GraphAdmission::Blocked
@@ -272,13 +265,7 @@ async fn read_branches_share_env_but_writers_and_other_host_work_exclude_them() 
     assert!(matches!(
         database
             .graph_dispatch()
-            .claim(
-                "other",
-                graph.revision,
-                "other",
-                "other-run",
-                Path::new("workspace")
-            )
+            .claim("other", graph.revision, "other", "other-run", &workspace())
             .await
             .expect("admission"),
         GraphAdmission::Claimed(_)
@@ -316,7 +303,7 @@ async fn background_readers_overlap_host_work_but_writers_exclude_them() {
         async move {
             database
                 .graph_dispatch()
-                .claim(graph, NonZeroU64::MIN, node, id, Path::new("workspace"))
+                .claim(graph, NonZeroU64::MIN, node, id, &workspace())
                 .await
                 .expect("admission")
         }
@@ -432,13 +419,7 @@ async fn task_admission_is_atomic_and_failures_never_reopen_terminal_authorities
     assert!(
         database
             .graph_dispatch()
-            .claim(
-                "other",
-                graph.revision,
-                "first",
-                "hijack",
-                Path::new("workspace")
-            )
+            .claim("other", graph.revision, "first", "hijack", &workspace())
             .await
             .is_err()
     );
@@ -474,7 +455,13 @@ async fn invalid_admission_and_settlement_roll_back_without_orphan_records() {
     ] {
         assert!(
             dispatch
-                .claim(graph, revision, node, id, Path::new(folder))
+                .claim(
+                    graph,
+                    revision,
+                    node,
+                    id,
+                    &GraphEnvLocation::Folder(folder.into())
+                )
                 .await
                 .is_err()
         );
@@ -492,13 +479,7 @@ async fn invalid_admission_and_settlement_roll_back_without_orphan_records() {
         .expect("close admission");
     assert!(
         dispatch
-            .claim(
-                "graph",
-                NonZeroU64::MIN,
-                "first",
-                "closed",
-                Path::new("workspace")
-            )
+            .claim("graph", NonZeroU64::MIN, "first", "closed", &workspace())
             .await
             .is_err()
     );
@@ -533,13 +514,7 @@ async fn admission_rejects_a_corrupt_previous_execution_reference() {
     // Act
     let admission = database
         .graph_dispatch()
-        .claim(
-            "graph",
-            NonZeroU64::MIN,
-            "first",
-            "repeat",
-            Path::new("workspace"),
-        )
+        .claim("graph", NonZeroU64::MIN, "first", "repeat", &workspace())
         .await;
 
     // Assert

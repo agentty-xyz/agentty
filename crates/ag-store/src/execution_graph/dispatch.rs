@@ -7,12 +7,13 @@ use std::path::Path;
 use ag_contracts::OneShotError;
 use ag_protocol::parse_protocol_response_strict;
 use ag_session::{
-    DurableMessageVisibility, ExecutionGraph, GraphCompletionGate, GraphContext, GraphDependency,
-    GraphExecutionRef, GraphNode, GraphResultRef, GraphResultState, GraphWorkspaceAccess,
-    SubmitTaskRequest,
+    DurableMessageVisibility, EnvId, ExecutionGraph, GraphCompletionGate, GraphContext,
+    GraphDependency, GraphExecutionRef, GraphNode, GraphResultRef, GraphResultState,
+    GraphWorkspaceAccess, SubmitTaskRequest,
 };
 use ag_worker::{
-    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphInputValue,
+    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphEnvLocation, GraphExecutionRecord,
+    GraphInputValue,
 };
 use async_trait::async_trait;
 use sqlx::SqliteConnection;
@@ -38,11 +39,19 @@ impl GraphDispatchRepository for SqliteGraphRepository {
         revision: NonZeroU64,
         node_id: &str,
         execution_id: &str,
-        folder: &Path,
+        location: &GraphEnvLocation,
     ) -> Result<GraphAdmission, OneShotError> {
-        self.claim_node(graph_id, revision, node_id, (execution_id, folder), false)
-            .await
-            .map_err(Self::dispatch_error)
+        let GraphEnvLocation::Folder(folder) = location;
+
+        self.claim_node(
+            graph_id,
+            revision,
+            node_id,
+            (execution_id, folder.as_path()),
+            false,
+        )
+        .await
+        .map_err(Self::dispatch_error)
     }
 
     async fn finish(&self, dispatch: &GraphDispatch, body: &str) -> Result<(), OneShotError> {
@@ -419,15 +428,19 @@ impl SqliteGraphRepository {
         Ok(None)
     }
 
-    /// Durable graph claims exclude conflicting active work across graphs.
-    /// Other host work must also use the shared `GraphResources` Env lease.
-    /// Writers exclude every active execution, including background readers.
-    /// Graph node activity markers stand for executions counted here already.
+    /// Durable graph claims exclude conflicting active work in the node's Env
+    /// across graphs; work in another Env never conflicts. Other host work
+    /// must also use the shared `GraphResources` Env lease. Session work that
+    /// is not a graph node, such as chat turns, sync, merges, publication,
+    /// and session utilities, runs in the session worktree; a graph node's
+    /// execution runs in its node's Env. Graph node activity markers stand
+    /// for executions counted here already.
     pub(super) async fn env_busy(
         connection: &mut SqliteConnection,
         graph: &ExecutionGraph,
         node: &GraphNode,
     ) -> Result<bool, DbError> {
+        let session_env = EnvId::SessionWorktree(graph.session_id.clone());
         let active: Vec<Option<String>> = sqlx::query_scalar(
             "SELECT e.reference FROM session_operation o LEFT JOIN task_attempt a ON \
              a.session_operation_id = o.id LEFT JOIN execution_graph_execution e ON \
@@ -442,17 +455,12 @@ impl SqliteGraphRepository {
         .fetch_all(&mut *connection)
         .await?;
         for reference in active {
-            if node.execution.workspace_access == GraphWorkspaceAccess::ExclusiveWrite {
-                return Ok(true);
-            }
-            // Background readers overlap ordinary operations and utilities;
-            // only active graph writers exclude them.
             let Some(reference) = reference else {
-                if node.execution.workspace_access == GraphWorkspaceAccess::BackgroundRead {
-                    continue;
+                if Self::env_conflict(node, &session_env, None) {
+                    return Ok(true);
                 }
 
-                return Ok(true);
+                continue;
             };
             let execution = serde_json::from_str(&reference)
                 .map_err(|error| Self::invalid(error.to_string()))?;
@@ -460,16 +468,51 @@ impl SqliteGraphRepository {
                 .await?
                 .ok_or_else(|| Self::invalid("Missing active execution"))?;
             let other = Self::current(connection, &record.graph_id, record.graph_revision).await?;
-            let writer = other.nodes.iter().any(|candidate| {
-                candidate.id == record.node_id
-                    && candidate.execution.workspace_access == GraphWorkspaceAccess::ExclusiveWrite
-            });
-            if writer {
+            // Expansions keep every node, so the active one is always found;
+            // an unknown holder fails closed.
+            let holder = other
+                .nodes
+                .iter()
+                .find(|candidate| candidate.id == record.node_id);
+            if holder.is_none_or(|holder| {
+                Self::env_conflict(
+                    node,
+                    &holder.env_id,
+                    Some(holder.execution.workspace_access),
+                )
+            }) {
                 return Ok(true);
             }
         }
 
         Ok(false)
+    }
+
+    /// Whether `node` conflicts with active work in `env`: a graph node with
+    /// `holder` access, or other session work when `holder` is `None`.
+    ///
+    /// Work in another Env never conflicts. In the same Env, a writer
+    /// excludes everything; other session work holds its Env exclusively
+    /// except against background readers, which only graph writers exclude.
+    pub(super) fn env_conflict(
+        node: &GraphNode,
+        env: &EnvId,
+        holder: Option<GraphWorkspaceAccess>,
+    ) -> bool {
+        if node.env_id != *env {
+            return false;
+        }
+
+        match (node.execution.workspace_access, holder) {
+            (GraphWorkspaceAccess::ExclusiveWrite, _)
+            | (GraphWorkspaceAccess::SharedRead, None)
+            | (_, Some(GraphWorkspaceAccess::ExclusiveWrite)) => true,
+            (GraphWorkspaceAccess::BackgroundRead, None)
+            | (
+                GraphWorkspaceAccess::SharedRead | GraphWorkspaceAccess::BackgroundRead,
+                Some(GraphWorkspaceAccess::SharedRead | GraphWorkspaceAccess::BackgroundRead),
+            ) => false,
+        }
     }
 
     async fn finish_node(&self, dispatch: &GraphDispatch, body: &str) -> Result<(), DbError> {

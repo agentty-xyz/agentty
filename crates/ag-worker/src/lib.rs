@@ -27,8 +27,9 @@ pub use ag_runtime::TrustedCargoCache;
 /// Without the call, their commands run unsandboxed and every turn warns.
 pub use ag_runtime::dispatch_sandbox_helper;
 pub use graph::{
-    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,
-    GraphInputValue, GraphNodeRunner, GraphResources, GraphRunRequest, GraphUtilityRunner,
+    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphEnvLocation, GraphEnvResolver,
+    GraphExecutionRecord, GraphExecutor, GraphInputValue, GraphNodeRunner, GraphResources,
+    GraphRunRequest, GraphUtilityRunner,
 };
 pub use lifecycle::{Clock, HeartbeatClock, execute, recover};
 #[cfg(any(test, feature = "test-utils"))]

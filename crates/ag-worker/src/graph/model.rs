@@ -1,5 +1,5 @@
-//! Graph dispatch records, admission outcomes, and the repository and node
-//! runner traits.
+//! Graph dispatch records, admission outcomes, Env locations, and the
+//! repository, Env resolver, and node runner traits.
 
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -67,13 +67,15 @@ pub trait GraphDispatchRepository: Send + Sync {
     /// Under a writer lock, rechecks revision and every dependency, pins
     /// results, creates a task attempt or utility run, and links its receipt.
     /// An existing node is acknowledged without allocating or replaying work.
+    /// `location` is where the node's Env resolver located the run; a fresh
+    /// utility run records it, a task attempt does not.
     async fn claim(
         &self,
         graph_id: &str,
         revision: NonZeroU64,
         node_id: &str,
         execution_id: &str,
-        folder: &std::path::Path,
+        location: &GraphEnvLocation,
     ) -> Result<GraphAdmission, OneShotError>;
 
     /// Saves the complete response only after authoritative successful
@@ -85,12 +87,84 @@ pub trait GraphDispatchRepository: Send + Sync {
     async fn fail(&self, record: &GraphExecutionRecord, error: &str) -> Result<(), OneShotError>;
 }
 
+/// Where one node's run happens, as the host's [`GraphEnvResolver`] located
+/// it. The executor never inspects it: it passes it to the durable claim and
+/// hands it to the runner unchanged, so a new kind of Env changes the
+/// resolver, the repository, and the runners, never the executor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphEnvLocation {
+    /// A directory on this host.
+    Folder(PathBuf),
+}
+
+/// Host port that places each node in its Env around durable admission.
+///
+/// For every node it tries to admit, the executor first reserves the node's
+/// first provider call, then:
+///
+/// 1. `locate` returns where the node would run, or nothing while its Env
+///    cannot be offered, which leaves the node unclaimed for a later pass, as
+///    an exhausted budget does.
+/// 2. `claim` receives that location. A blocked or already admitted node
+///    creates no execution, and the location is simply dropped.
+/// 3. `prepare` makes the location ready for an execution `claim` just created,
+///    before its runner starts.
+///
+/// The port holds no reservation, so nothing needs releasing when a claim
+/// creates no execution. The in-memory Env lease in
+/// [`crate::GraphResources`] is separate and still keyed by the node's
+/// `EnvId`.
+///
+/// A host that provisions an Env per node keeps the provisioning durable
+/// outside this port:
+///
+/// - It reserves the Env inside the claim transaction, keyed by graph and node,
+///   so a limit is checked atomically with admission and a blocked or finished
+///   node writes nothing.
+/// - It takes the session status lease before preparation, not only when the
+///   runner starts, so a slow preparation still shows the session busy.
+/// - Its conflict rule attributes a node's child utility runs to that node's
+///   Env rather than to the session worktree.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait GraphEnvResolver: Send + Sync {
+    /// Returns where node `node` of graph `graph_id` would run, or `None`
+    /// while its Env cannot be offered now.
+    ///
+    /// It performs no durable effect and must not wait for an Env to become
+    /// available. When an Env it refused may be available again, the host
+    /// wakes the graph's drivers, which locate the node on their next pass.
+    ///
+    /// # Errors
+    /// Fails the dispatch pass before anything is admitted, as a storage
+    /// failure in `claim` does.
+    async fn locate(
+        &self,
+        graph_id: &str,
+        node: &GraphNode,
+    ) -> Result<Option<GraphEnvLocation>, OneShotError>;
+
+    /// Makes `location` ready for `dispatch`, the execution just claimed
+    /// there, before its runner starts. A live executor calls it at most once
+    /// per claim and never for redelivery; a claim whose process stopped
+    /// before preparation is prepared when it is retried.
+    ///
+    /// # Errors
+    /// The executor records the error as the execution's failure, through
+    /// the same durable path as a runner failure.
+    async fn prepare(
+        &self,
+        dispatch: &GraphDispatch,
+        location: &GraphEnvLocation,
+    ) -> Result<(), OneShotError>;
+}
+
 /// Enforced resource ceilings passed to a trusted worker adapter.
 pub struct GraphRunRequest {
     /// Durable claim, captured definition, and exact input bodies.
     pub dispatch: GraphDispatch,
-    /// Host-resolved Env directory.
-    pub folder: PathBuf,
+    /// Prepared Env location, the same one the claim received.
+    pub location: GraphEnvLocation,
     /// Intersection of session, definition, and graph requirements.
     pub permission_mode: PermissionMode,
     /// One shared counter, including provider retries and protocol repair.

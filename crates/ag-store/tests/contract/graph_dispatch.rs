@@ -7,7 +7,6 @@ mod support;
 use std::collections::HashMap;
 use std::error::Error;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::Path;
 use std::sync::Arc;
 
 use ag_contracts::test_support::token_usage;
@@ -21,7 +20,7 @@ use ag_worker::{
 };
 use support::{
     BusyProvider, CleanupProvider, PanickingRunner, PausedAdmission, Provider, ScannedAdmission,
-    assert_panicked_execution_failed, graph, populate,
+    assert_panicked_execution_failed, environments, graph, populate, workspace,
 };
 use tokio::sync::Notify;
 
@@ -107,7 +106,7 @@ async fn graph_task_history_is_immutable_and_accounts_usage_before_effects()
             utility.revision,
             "first",
             "utility",
-            Path::new("workspace"),
+            &workspace(),
         )
         .await?
     else {
@@ -144,13 +143,7 @@ async fn task_history_fixture() -> Result<TaskHistoryFixture, Box<dyn Error>> {
     database.graphs().save_graph(&graph, None).await?;
     let GraphAdmission::Claimed(dispatch) = database
         .graph_dispatch()
-        .claim(
-            "graph",
-            graph.revision,
-            "first",
-            "attempt",
-            Path::new("workspace"),
-        )
+        .claim("graph", graph.revision, "first", "attempt", &workspace())
         .await?
     else {
         return Err("task was not admitted".into());
@@ -322,7 +315,7 @@ async fn queued_readers_reserve_calls_before_admission_and_resume_with_a_fresh_b
             .run_ready(
                 "graph",
                 NonZeroU64::MIN,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly,
             )
             .await
@@ -363,7 +356,7 @@ async fn queued_readers_reserve_calls_before_admission_and_resume_with_a_fresh_b
     .run_ready(
         "graph",
         graph.revision,
-        Path::new("workspace"),
+        &environments(),
         PermissionMode::ReadOnly,
     )
     .await?;
@@ -422,7 +415,7 @@ async fn exhausted_budgets_leave_nodes_unclaimed_for_a_fresh_budget() -> Result<
             .run_ready(
                 "graph",
                 graph.revision,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly,
             )
             .await?;
@@ -455,7 +448,7 @@ async fn exhausted_budgets_leave_nodes_unclaimed_for_a_fresh_budget() -> Result<
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await?;
@@ -522,7 +515,7 @@ async fn runner_panic_fails_the_authority_and_unblocks_conflicting_env_work()
                     .run_ready(
                         "graph",
                         NonZeroU64::MIN,
-                        Path::new("workspace"),
+                        &environments(),
                         PermissionMode::ReadOnly,
                     )
                     .await
@@ -543,7 +536,7 @@ async fn runner_panic_fails_the_authority_and_unblocks_conflicting_env_work()
                     follow_up.revision,
                     "first",
                     "premature",
-                    Path::new("workspace"),
+                    &workspace(),
                 )
                 .await?,
             GraphAdmission::Blocked
@@ -564,7 +557,7 @@ async fn runner_panic_fails_the_authority_and_unblocks_conflicting_env_work()
                 .run_ready(
                     "graph",
                     workflow.revision,
-                    Path::new("workspace"),
+                    &environments(),
                     PermissionMode::ReadOnly,
                 )
                 .await?,
@@ -578,7 +571,7 @@ async fn runner_panic_fails_the_authority_and_unblocks_conflicting_env_work()
                     follow_up.revision,
                     "first",
                     "next",
-                    Path::new("workspace"),
+                    &workspace(),
                 )
                 .await?,
             GraphAdmission::Claimed(_)
@@ -619,7 +612,7 @@ async fn admission_failure_reaches_the_driver_without_executing_work() -> Result
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await;
@@ -673,7 +666,7 @@ async fn serial_dispatch_scans_past_blocked_and_existing_nodes() -> Result<(), B
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await?;
@@ -726,7 +719,7 @@ async fn dropped_driver_during_committed_admission_keeps_an_owner_until_settleme
                 .run_ready(
                     "graph",
                     NonZeroU64::MIN,
-                    Path::new("workspace"),
+                    &environments(),
                     PermissionMode::ReadOnly,
                 )
                 .await
@@ -753,7 +746,7 @@ async fn dropped_driver_during_committed_admission_keeps_an_owner_until_settleme
             .run_ready(
                 "graph",
                 graph.revision,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly
             )
             .await?,
@@ -781,7 +774,7 @@ async fn dropped_driver_during_committed_admission_keeps_an_owner_until_settleme
             .run_ready(
                 "graph",
                 graph.revision,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly
             )
             .await?,
@@ -828,7 +821,7 @@ async fn utility_profiles_keep_their_wire_schema_and_worker_default_budget()
             .run_ready(
                 "graph",
                 graph.revision,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::AutoEdit,
             )
             .await?;
@@ -890,7 +883,7 @@ async fn dropped_driver_retains_env_until_inherited_cancellation_cleanup_settles
             .run_ready(
                 "graph",
                 NonZeroU64::MIN,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::ReadOnly,
             )
             .await
@@ -953,7 +946,7 @@ async fn failed_branch_settles_peers_and_blocks_join_without_retrying() -> Resul
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::AutoEdit,
         )
         .await;
@@ -961,7 +954,7 @@ async fn failed_branch_settles_peers_and_blocks_join_without_retrying() -> Resul
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::AutoEdit,
         )
         .await?;
@@ -1030,7 +1023,7 @@ async fn parallel_branches_join_through_workers_and_keep_exact_inputs_without_re
         .run_ready(
             &graph.id,
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::AutoEdit,
         )
         .await?;
@@ -1038,7 +1031,7 @@ async fn parallel_branches_join_through_workers_and_keep_exact_inputs_without_re
         .run_ready(
             &graph.id,
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::AutoEdit,
         )
         .await?;
@@ -1097,23 +1090,12 @@ async fn competing_admission_has_one_winner_and_reopening_does_not_replay()
     database.graphs().save_graph(&graph(), None).await?;
     let first = database.graph_dispatch();
     let second = database.graph_dispatch();
+    let location = workspace();
 
     // Act
     let (first, second) = tokio::join!(
-        first.claim(
-            "graph",
-            NonZeroU64::MIN,
-            "first",
-            "delivery-1",
-            Path::new("workspace")
-        ),
-        second.claim(
-            "graph",
-            NonZeroU64::MIN,
-            "first",
-            "delivery-2",
-            Path::new("workspace")
-        )
+        first.claim("graph", NonZeroU64::MIN, "first", "delivery-1", &location),
+        second.claim("graph", NonZeroU64::MIN, "first", "delivery-2", &location)
     );
     let admissions = [first?, second?];
     database.pool().close().await;
@@ -1121,13 +1103,7 @@ async fn competing_admission_has_one_winner_and_reopening_does_not_replay()
     let reopened = Database::open(&path).await?;
     let redelivery = reopened
         .graph_dispatch()
-        .claim(
-            "graph",
-            NonZeroU64::MIN,
-            "first",
-            "restart",
-            Path::new("workspace"),
-        )
+        .claim("graph", NonZeroU64::MIN, "first", "restart", &workspace())
         .await?;
 
     // Assert
@@ -1185,7 +1161,7 @@ async fn explicit_acceptance_releases_a_blocked_join_on_the_next_call() -> Resul
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await?;
@@ -1211,7 +1187,7 @@ async fn explicit_acceptance_releases_a_blocked_join_on_the_next_call() -> Resul
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await?;
@@ -1263,7 +1239,7 @@ async fn unsupported_profiles_and_unknown_budgets_fail_before_admission()
             .run_ready(
                 "graph",
                 graph.revision,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::AutoEdit,
             )
             .await;
@@ -1319,7 +1295,7 @@ async fn external_env_lease_defers_dispatch_until_the_host_releases_it()
             .run_ready(
                 "graph",
                 graph.revision,
-                Path::new("workspace"),
+                &environments(),
                 PermissionMode::AutoEdit
             )
             .await?,
@@ -1330,7 +1306,7 @@ async fn external_env_lease_defers_dispatch_until_the_host_releases_it()
         .run_ready(
             "graph",
             graph.revision,
-            Path::new("workspace"),
+            &environments(),
             PermissionMode::ReadOnly,
         )
         .await?;

@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 use std::future;
 use std::num::NonZeroU64;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -17,7 +16,7 @@ use ag_session::{
 };
 use ag_store::MockGraphRepository;
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
-use ag_worker::{GraphExecutor, GraphNodeRunner, GraphRunRequest};
+use ag_worker::{GraphEnvLocation, GraphExecutor, GraphNodeRunner, GraphRunRequest};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tokio::sync::oneshot;
@@ -450,7 +449,7 @@ async fn graph_lifecycle_progress_preserves_dispatchable_and_queued_work() {
                     NonZeroU64::MIN,
                     "first",
                     &uuid::Uuid::new_v4().to_string(),
-                    Path::new("workspace"),
+                    &GraphEnvLocation::Folder("workspace".into()),
                 )
                 .await
                 .expect("queued claim");

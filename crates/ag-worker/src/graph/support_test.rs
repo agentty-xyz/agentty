@@ -1,6 +1,7 @@
-//! Graph and dispatch fixtures shared by the graph worker tests.
+//! Graph, dispatch, and Env fixtures shared by the graph worker tests.
 
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::{
@@ -8,7 +9,18 @@ use ag_session::{
     GraphExecutionProfile, GraphExecutionRef, GraphNode, GraphPostProcessing, GraphWorkspaceAccess,
 };
 
-use crate::graph::{GraphDispatch, GraphExecutionRecord};
+use crate::graph::{GraphDispatch, GraphEnvLocation, GraphEnvResolver, GraphExecutionRecord};
+use crate::test_support::FolderEnvs;
+
+/// Resolver locating every node in [`workspace`].
+pub(super) fn environments() -> Arc<dyn GraphEnvResolver> {
+    FolderEnvs::resolver("workspace")
+}
+
+/// The folder fixture nodes run in.
+pub(super) fn workspace() -> GraphEnvLocation {
+    GraphEnvLocation::Folder("workspace".into())
+}
 
 pub(super) fn graph() -> ExecutionGraph {
     ExecutionGraph {

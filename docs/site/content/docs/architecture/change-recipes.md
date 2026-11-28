@@ -39,9 +39,9 @@ Follow the [execution graph contracts](@/docs/architecture/execution-graphs.md).
 model-authored proposals in `ag-protocol`, pure graph shapes and resolution in
 `ag-session`, durable snapshots, results, and atomic admission in `ag-store`, and
 dispatch in the `ag-worker` `GraphExecutor`. Inject worker adapters through
-`GraphNodeRunner` and share `GraphResources` Env leases with other host work. Test
-structural rules without storage or workers, storage invariants with SQLite, and
-dispatch through the public API.
+`GraphNodeRunner`, place nodes in their Envs through `GraphEnvResolver`, and share
+`GraphResources` Env leases with other host work. Test structural rules without storage
+or workers, storage invariants with SQLite, and dispatch through the public API.
 
 ## Add a New Agent Backend or Model
 

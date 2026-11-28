@@ -2,7 +2,6 @@
 //! and work addressed to revisions that only expansions followed.
 
 use std::num::NonZeroU64;
-use std::path::Path;
 
 use ag_session::{
     ContinueGraphNodeRequest, ExecutionGraph, ExecutionGraphStatus, ExpandExecutionGraphRequest,
@@ -12,7 +11,7 @@ use ag_session::{
 use ag_worker::{GraphAdmission, GraphDispatch, RunState};
 
 use crate::Database;
-use crate::execution_graph::support_test::{evidence, graph, reader};
+use crate::execution_graph::support_test::{evidence, graph, reader, workspace};
 
 #[tokio::test]
 async fn expanded_nodes_dispatch_with_inputs_pinned_under_the_earlier_revision() {
@@ -377,13 +376,7 @@ async fn claim(
 ) -> GraphAdmission {
     database
         .graph_dispatch()
-        .claim(
-            "graph",
-            revision,
-            node,
-            execution_id,
-            Path::new("workspace"),
-        )
+        .claim("graph", revision, node, execution_id, &workspace())
         .await
         .expect("admission")
 }

@@ -2,7 +2,6 @@
 //! node history.
 
 use std::num::NonZeroU64;
-use std::path::Path;
 
 use ag_contracts::TurnUsage;
 use ag_protocol::TurnPromptAttachment;
@@ -14,7 +13,7 @@ use ag_session::{
 use ag_worker::{GraphAdmission, GraphDispatch, RunState};
 
 use crate::Database;
-use crate::execution_graph::support_test::{evidence, graph, produced, reader, record};
+use crate::execution_graph::support_test::{evidence, graph, produced, reader, record, workspace};
 
 type ContinuationMutation = fn(&mut ContinueGraphNodeRequest);
 
@@ -55,7 +54,7 @@ async fn claim(database: &Database, node: &str) -> GraphDispatch {
             NonZeroU64::MIN,
             node,
             &uuid::Uuid::new_v4().to_string(),
-            Path::new("workspace"),
+            &workspace(),
         )
         .await
         .expect("admit");
@@ -398,21 +397,10 @@ async fn graph_lifecycle_retry_is_idempotent_and_keeps_the_source_inputs() {
     // Act
     assert!(repository.continue_node(&request).await.expect("authorize"));
     let dispatch_repository = database.graph_dispatch();
+    let location = workspace();
     let (first, second) = tokio::join!(
-        dispatch_repository.claim(
-            "graph",
-            NonZeroU64::MIN,
-            "second",
-            "ignored-a",
-            Path::new("workspace")
-        ),
-        dispatch_repository.claim(
-            "graph",
-            NonZeroU64::MIN,
-            "second",
-            "ignored-b",
-            Path::new("workspace")
-        ),
+        dispatch_repository.claim("graph", NonZeroU64::MIN, "second", "ignored-a", &location),
+        dispatch_repository.claim("graph", NonZeroU64::MIN, "second", "ignored-b", &location),
     );
     let retry = match (first.expect("claim"), second.expect("redelivery")) {
         (GraphAdmission::Claimed(dispatch), GraphAdmission::Existing(_))
@@ -504,13 +492,7 @@ async fn graph_lifecycle_cancellation_closes_admission_and_rejects_late_actions(
     assert!(matches!(
         database
             .graph_dispatch()
-            .claim(
-                "graph",
-                NonZeroU64::MIN,
-                "second",
-                "no-work",
-                Path::new("workspace")
-            )
+            .claim("graph", NonZeroU64::MIN, "second", "no-work", &workspace())
             .await
             .expect("closed admission"),
         GraphAdmission::Blocked
@@ -1204,13 +1186,7 @@ async fn graph_lifecycle_retry_rejects_a_missing_pinned_result() {
     // Act
     let result = database
         .graph_dispatch()
-        .claim(
-            "graph",
-            NonZeroU64::MIN,
-            "second",
-            "unused",
-            Path::new("workspace"),
-        )
+        .claim("graph", NonZeroU64::MIN, "second", "unused", &workspace())
         .await;
 
     // Assert
@@ -1258,13 +1234,7 @@ async fn graph_lifecycle_retry_rolls_back_when_its_inserted_receipt_disappears()
     // Act
     let result = database
         .graph_dispatch()
-        .claim(
-            "graph",
-            NonZeroU64::MIN,
-            "first",
-            "unused",
-            Path::new("workspace"),
-        )
+        .claim("graph", NonZeroU64::MIN, "first", "unused", &workspace())
         .await;
 
     // Assert

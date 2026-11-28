@@ -10,9 +10,14 @@ use ag_session::{
     GraphInputBinding, GraphNode, GraphOutput, GraphPostProcessing, GraphResultRef,
     GraphWorkspaceAccess,
 };
-use ag_worker::{RunInfo, RunState};
+use ag_worker::{GraphEnvLocation, RunInfo, RunState};
 
 use crate::{Database, GraphEvidence, GraphExecutionRecord};
+
+/// The folder fixture nodes are claimed in.
+pub(super) fn workspace() -> GraphEnvLocation {
+    GraphEnvLocation::Folder("workspace".into())
+}
 
 pub(super) fn graph() -> ExecutionGraph {
     let first = reader("first");
