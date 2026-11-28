@@ -667,7 +667,7 @@ repos:
         pass_filenames: false
       - id: check-standards
         name: standards manifest
-        description: Check that `standards.toml` names existing exports, that exported instruction sections, skills, shared ast-grep rules, and design files name no workspace crate, hook, or unexported repository path, and that design exports load nothing beyond the exported files beside them. It runs on every change because any new path or crate can make an export unportable.
+        description: Check that `standards.toml` names existing exports, that exported instruction sections, skills, shared ast-grep rules, and design files name no workspace crate, hook, or unexported repository path, that design exports load nothing beyond the exported files beside them, and that the protocol schema and its TypeScript types reference nothing outside themselves and name the same protocol version. It runs on every change because any new path or crate can make an export unportable.
         entry: cargo run -q --locked -p ag-xtask -- check-standards
         language: system
         always_run: true

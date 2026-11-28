@@ -59,9 +59,10 @@ enum Command {
     /// declare child modules and re-exports.
     #[command(name = "check-module-routers")]
     ModuleRouters,
-    /// Validates that `standards.toml` names existing exports and that
+    /// Validates that `standards.toml` names existing exports, that
     /// exported instructions, skills, and rules name nothing only this
-    /// workspace has.
+    /// workspace has, and that the exported protocol schema and types stand
+    /// alone and name one protocol version.
     #[command(name = "check-standards")]
     Standards,
     /// Compares repeated CI timing artifacts with matching provenance.

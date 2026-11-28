@@ -1,14 +1,25 @@
 //! Standards manifest, export existence, and portability check unit tests.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(unix)]
+use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::Command;
 
-use crate::check_standard::{ASSET_LIMIT, Host, MockHost, RealHost, StandardCheck, run};
+#[cfg(unix)]
+use tempfile::tempdir;
+
+use crate::check_standard::{
+    ASSET_LIMIT, Host, MockHost, PROTOCOL_LIMIT, RealHost, StandardCheck, run,
+};
 
 const ROOT: &str = "repo";
 
-const MANIFEST: &str = r#"version = 3
+const MANIFEST: &str = r#"version = 4
 files = [".rustfmt.toml"]
 skills = ["review"]
 
@@ -31,7 +42,48 @@ guide = "design/DESIGN.md"
 files = ["design/tokens.css", "design/base.css"]
 tokens = "design/tokens.json"
 assets = ["design/mark.svg", "design/icon.ico", "design/gallery.html"]
+
+[protocol]
+schema = "crates/ag-demo/schema/protocol.json"
+types = "crates/ag-demo/schema/protocol.ts"
 "#;
+
+const SCHEMA_PATH: &str = "crates/ag-demo/schema/protocol.json";
+
+const TYPES_PATH: &str = "crates/ag-demo/schema/protocol.ts";
+
+/// A protocol schema that names its crate, references its root and a
+/// definition, and has a property named like a reference keyword.
+const SCHEMA: &str = r##"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Frames of ag-demo.",
+  "x-protocol-version": 2,
+  "oneOf": [{ "$ref": "#/$defs/Hello" }, { "$ref": "#" }],
+  "$defs": {
+    "Hello": {
+      "type": "object",
+      "properties": { "$ref": { "type": "string" }, "type": { "const": "hello" } }
+    }
+  }
+}
+"##;
+
+/// Protocol types whose comments and literal types mention imports and
+/// versions without making either.
+const TYPES: &str = "// Generated from the `ag-demo` protocol types; see https://example.com/x.
+/**
+ * import { Other } from \"./other\"; export type ProtocolVersion = 9;
+ */
+export type ProtocolVersion = 2;
+
+export type Hello = {
+  type: \"hello\";
+  from: \"import 'x'\";
+  note: 'from \"a\"';
+  path: \"require(`b`)\";
+  label: \"héllo // not a comment\";
+};
+";
 
 const DESIGN_GUIDE: &str = "# Design
 
@@ -96,7 +148,9 @@ struct Fixture {
     binaries: BTreeMap<PathBuf, Vec<u8>>,
     failures: BTreeMap<PathBuf, io::ErrorKind>,
     files: BTreeMap<PathBuf, String>,
+    links: BTreeSet<PathBuf>,
     listed: BTreeSet<PathBuf>,
+    unlisted: BTreeSet<PathBuf>,
 }
 
 impl Fixture {
@@ -105,7 +159,9 @@ impl Fixture {
             binaries: BTreeMap::new(),
             failures: BTreeMap::new(),
             files: BTreeMap::new(),
+            links: BTreeSet::new(),
             listed: BTreeSet::new(),
+            unlisted: BTreeSet::new(),
         };
         fixture.write("standards.toml", MANIFEST);
         fixture.write("AGENTS.md", "# Instructions\n");
@@ -150,6 +206,8 @@ impl Fixture {
         fixture.write("design/mark.svg", MARK);
         fixture.write_binary("design/icon.ico", &ICON);
         fixture.write("design/gallery.html", GALLERY);
+        fixture.write(SCHEMA_PATH, SCHEMA);
+        fixture.write(TYPES_PATH, TYPES);
 
         fixture
     }
@@ -177,6 +235,18 @@ impl Fixture {
         self.failures.insert(PathBuf::from(path), kind);
     }
 
+    /// Makes an existing `path` read as a symbolic link rather than a
+    /// regular file, though reading through it still succeeds.
+    fn link(&mut self, path: &str) {
+        self.links.insert(PathBuf::from(path));
+    }
+
+    /// Keeps an existing `path` out of the Git inventory, as for an ignored
+    /// file or one reached through a linked directory.
+    fn unlist(&mut self, path: &str) {
+        self.unlisted.insert(PathBuf::from(path));
+    }
+
     fn check(&self) -> Result<usize, String> {
         let mut host = MockHost::new();
         let inventory: Vec<_> = self
@@ -184,6 +254,7 @@ impl Fixture {
             .keys()
             .chain(self.binaries.keys())
             .chain(&self.listed)
+            .filter(|path| !self.unlisted.contains(*path))
             .cloned()
             .collect();
         host.expect_inventory()
@@ -195,6 +266,18 @@ impl Fixture {
             .map(|(path, text)| (path.clone(), text.clone().into_bytes()))
             .collect();
         contents.extend(self.binaries.clone());
+        let entries: BTreeMap<PathBuf, bool> = contents
+            .keys()
+            .map(|path| (path.clone(), !self.links.contains(path)))
+            .collect();
+        host.expect_is_file().returning(move |path| {
+            let relative = path.strip_prefix(ROOT).unwrap_or(path);
+
+            entries
+                .get(relative)
+                .copied()
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        });
         let read_bytes = move |path: &Path| -> io::Result<Vec<u8>> {
             let relative = path.strip_prefix(ROOT).unwrap_or(path);
 
@@ -246,7 +329,7 @@ fn portable_exports_pass_and_count_each_checked_document() {
     let result = fixture.check();
 
     // Assert
-    assert_eq!(result, Ok(12));
+    assert_eq!(result, Ok(14));
 }
 
 #[test]
@@ -315,6 +398,7 @@ fn manifest_paths_that_do_not_exist_are_reported() {
         "design/base.css",
         "design/tokens.json",
         "design/icon.ico",
+        SCHEMA_PATH,
     ] {
         fixture.remove(path);
     }
@@ -340,6 +424,7 @@ fn manifest_paths_that_do_not_exist_are_reported() {
             "standards.toml: missing path design/base.css",
             "standards.toml: missing path design/tokens.json",
             "standards.toml: missing path design/icon.ico",
+            "standards.toml: missing path crates/ag-demo/schema/protocol.json",
         ]
     );
 }
@@ -541,6 +626,322 @@ fn design_assets_are_bounded_typed_and_listed_once() {
 }
 
 #[test]
+fn protocol_files_reference_nothing_outside_themselves() {
+    // Arrange
+    let mut fixture = Fixture::new();
+    fixture.write(
+        SCHEMA_PATH,
+        r##"{
+  "x-protocol-version": 2,
+  "oneOf": [{ "$ref": "other.json#/$defs/A" }, { "items": [{ "$ref": "#/$defs/Missing" }] }],
+  "$defs": { "A": { "$dynamicRef": "#meta", "$recursiveRef": "https://example.com/s" } }
+}
+"##,
+    );
+    fixture.write(
+        TYPES_PATH,
+        "/// <reference types=\"node\" />\nimport type { A } from \"./a\";\nexport * from \
+         'b';\nexport type C = import(\"c\").C;\nimport d = require(\"d\");\nexport type \
+         ProtocolVersion = 2;\n  /// <amd-dependency path=\"e\" />\n",
+    );
+
+    // Act
+    let errors = fixture.errors();
+
+    // Assert
+    let schema = "an exported protocol schema references only JSON pointers into itself";
+    let types = "exported protocol types import nothing";
+    assert_eq!(
+        errors,
+        [
+            format!("{SCHEMA_PATH}: references other.json#/$defs/A; {schema}"),
+            format!("{SCHEMA_PATH}: references #/$defs/Missing; {schema}"),
+            format!("{SCHEMA_PATH}: references #meta; {schema}"),
+            format!("{SCHEMA_PATH}: references https://example.com/s; {schema}"),
+            format!("{TYPES_PATH}:1: holds a triple-slash directive; {types}"),
+            format!("{TYPES_PATH}:7: holds a triple-slash directive; {types}"),
+            format!("{TYPES_PATH}:2: imports ./a; {types}"),
+            format!("{TYPES_PATH}:3: imports b; {types}"),
+            format!("{TYPES_PATH}:4: imports c; {types}"),
+            format!("{TYPES_PATH}:5: imports d; {types}"),
+        ]
+    );
+}
+
+#[test]
+fn protocol_schemas_name_no_base_uri_anchor_or_other_dialect() {
+    // Arrange
+    let mut identified = Fixture::new();
+    identified.write(
+        SCHEMA_PATH,
+        r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/protocol.json",
+  "x-protocol-version": 2,
+  "$defs": {
+    "A": {
+      "$id": "a.json",
+      "$anchor": "a",
+      "$dynamicAnchor": "d",
+      "$recursiveAnchor": true,
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+  }
+}
+"#,
+    );
+    let mut dialect = Fixture::new();
+    dialect.write(
+        SCHEMA_PATH,
+        &SCHEMA.replace(
+            "https://json-schema.org/draft/2020-12/schema",
+            "https://example.com/meta",
+        ),
+    );
+
+    // Act
+    let identified = identified.errors();
+    let dialect = dialect.errors();
+
+    // Assert
+    let named = "an exported protocol schema names no base URI or anchor, so every reference is a \
+                 JSON pointer into it";
+    let declared =
+        "an exported protocol schema declares only https://json-schema.org/draft/2020-12/schema, \
+         at its root";
+    assert_eq!(
+        identified,
+        [
+            format!("{SCHEMA_PATH}: holds $id; {named}"),
+            format!("{SCHEMA_PATH}: holds $id; {named}"),
+            format!("{SCHEMA_PATH}: holds $anchor; {named}"),
+            format!("{SCHEMA_PATH}: holds $dynamicAnchor; {named}"),
+            format!("{SCHEMA_PATH}: holds $recursiveAnchor; {named}"),
+            format!(
+                "{SCHEMA_PATH}: declares the dialect \
+                 \"https://json-schema.org/draft/2020-12/schema\"; {declared}"
+            ),
+        ]
+    );
+    assert_eq!(
+        dialect,
+        [format!(
+            "{SCHEMA_PATH}: declares the dialect \"https://example.com/meta\"; {declared}"
+        )]
+    );
+}
+
+#[test]
+fn protocol_types_hold_no_template_literal_or_unterminated_string() {
+    // Arrange
+    let mut fixture = Fixture::new();
+    fixture.write(
+        TYPES_PATH,
+        "export type ProtocolVersion = 2;\nexport type A = `${import(\"x\")}`;\nexport type B = \
+         \"open;\nexport type C = 'closed';\n",
+    );
+
+    // Act
+    let errors = fixture.errors();
+
+    // Assert
+    let template =
+        "holds a template literal; template literals are not allowed in the exported types";
+    assert_eq!(
+        errors,
+        [
+            format!("{TYPES_PATH}:2: {template}"),
+            format!("{TYPES_PATH}:2: {template}"),
+            format!(
+                "{TYPES_PATH}:3: holds an unterminated string; a string literal in the exported \
+                 types ends on its own line"
+            ),
+            format!("{TYPES_PATH}:2: imports x; exported protocol types import nothing"),
+        ]
+    );
+}
+
+#[test]
+fn protocol_files_name_one_version_and_agree_on_it() {
+    // Arrange
+    let unnamed = format!(
+        "{SCHEMA_PATH}: the protocol schema must name its version in an integer x-protocol-version"
+    );
+    let undeclared = format!(
+        "{TYPES_PATH}: the protocol types must declare one export type ProtocolVersion = \
+         <integer>;"
+    );
+    for (path, text, expected) in [
+        (
+            SCHEMA_PATH,
+            SCHEMA.replace("\"x-protocol-version\": 2,", ""),
+            unnamed.clone(),
+        ),
+        (
+            SCHEMA_PATH,
+            SCHEMA.replace("\"x-protocol-version\": 2", "\"x-protocol-version\": \"2\""),
+            unnamed,
+        ),
+        (
+            TYPES_PATH,
+            TYPES.replace("ProtocolVersion = 2;", "ProtocolVersion = 3;"),
+            format!(
+                "{TYPES_PATH}: ProtocolVersion 3 differs from x-protocol-version 2 in \
+                 {SCHEMA_PATH}"
+            ),
+        ),
+        (
+            TYPES_PATH,
+            TYPES.replace("export type ProtocolVersion = 2;", ""),
+            undeclared.clone(),
+        ),
+        (
+            TYPES_PATH,
+            format!("{TYPES}export type ProtocolVersion = 2;\n"),
+            undeclared.clone(),
+        ),
+        (
+            TYPES_PATH,
+            TYPES.replace(
+                "ProtocolVersion = 2;",
+                "ProtocolVersion = 99999999999999999999999;",
+            ),
+            undeclared.clone(),
+        ),
+        (
+            TYPES_PATH,
+            TYPES.replace("ProtocolVersion = 2;", "ProtocolVersion = 02;"),
+            undeclared.clone(),
+        ),
+        (
+            TYPES_PATH,
+            TYPES.replace("ProtocolVersion = 2;", "ProtocolVersion = 2 | 3;"),
+            undeclared.clone(),
+        ),
+        (
+            TYPES_PATH,
+            TYPES.replace("ProtocolVersion = 2;", "ProtocolVersion = -2;"),
+            undeclared,
+        ),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.write(path, &text);
+
+        // Act
+        let errors = fixture.errors();
+
+        // Assert
+        assert_eq!(errors, [expected], "{text}");
+    }
+}
+
+#[test]
+fn comments_between_the_protocol_version_tokens_are_whitespace() {
+    // Arrange
+    let mut fixture = Fixture::new();
+    fixture.write(
+        TYPES_PATH,
+        &TYPES.replace(
+            "export type ProtocolVersion = 2;",
+            "export /* the */ type ProtocolVersion =\n  // version\n  2 /* now */;",
+        ),
+    );
+
+    // Act
+    let result = fixture.check();
+
+    // Assert
+    assert_eq!(result, Ok(14));
+}
+
+#[test]
+fn protocol_files_are_bounded_regular_text_of_their_kind() {
+    // Arrange
+    let mut linked = Fixture::new();
+    linked.link(SCHEMA_PATH);
+    let mut behind_link = Fixture::new();
+    behind_link.unlist(TYPES_PATH);
+    let mut binary = Fixture::new();
+    binary.remove(TYPES_PATH);
+    binary.write_binary(TYPES_PATH, &vec![0xff; PROTOCOL_LIMIT + 1]);
+    let mut marked = Fixture::new();
+    marked.write(TYPES_PATH, &format!("\u{feff}{TYPES}"));
+    let mut unparsed = Fixture::new();
+    unparsed.write(SCHEMA_PATH, "{\n  unterminated\n");
+    let mut listed = Fixture::new();
+    listed.write(SCHEMA_PATH, "[]\n");
+    let mut mistyped = Fixture::new();
+    mistyped.write(
+        "standards.toml",
+        &MANIFEST
+            .replace("protocol.json", "protocol.yaml")
+            .replace("protocol.ts", "protocol.js"),
+    );
+    mistyped.write("crates/ag-demo/schema/protocol.yaml", SCHEMA);
+    mistyped.write("crates/ag-demo/schema/protocol.js", TYPES);
+    for (fixture, expected) in [
+        (
+            linked,
+            vec![format!(
+                "{SCHEMA_PATH}: a protocol file must be a regular file, not a link or directory"
+            )],
+        ),
+        (
+            behind_link,
+            vec![format!(
+                "{TYPES_PATH}: Git does not list this protocol file; it must not be ignored or \
+                 lie behind a linked directory"
+            )],
+        ),
+        (
+            binary,
+            vec![
+                format!(
+                    "{TYPES_PATH}: {} bytes is over the {PROTOCOL_LIMIT}-byte limit for a \
+                     protocol file",
+                    PROTOCOL_LIMIT + 1
+                ),
+                format!("{TYPES_PATH}: a protocol file must be UTF-8 text"),
+            ],
+        ),
+        (
+            marked,
+            vec![format!(
+                "{TYPES_PATH}: starts with a byte order mark; a protocol file is plain UTF-8 text"
+            )],
+        ),
+        (
+            unparsed,
+            vec![format!(
+                "{SCHEMA_PATH}: the protocol schema is not valid JSON: key must be a string at \
+                 line 2 column 3"
+            )],
+        ),
+        (
+            listed,
+            vec![format!(
+                "{SCHEMA_PATH}: the protocol schema's root must be a schema object"
+            )],
+        ),
+        (
+            mistyped,
+            vec![
+                "crates/ag-demo/schema/protocol.yaml: the protocol schema must be a .json file"
+                    .to_owned(),
+                "crates/ag-demo/schema/protocol.js: the protocol types must be a .ts file"
+                    .to_owned(),
+            ],
+        ),
+    ] {
+        // Act
+        let errors = fixture.errors();
+
+        // Assert
+        assert_eq!(errors, expected);
+    }
+}
+
+#[test]
 fn invalid_manifests_and_unsupported_versions_fail() {
     // Arrange
     for (manifest, expected) in [
@@ -553,18 +954,32 @@ fn invalid_manifests_and_unsupported_versions_fail() {
             "standards.toml: invalid manifest:",
         ),
         (
-            MANIFEST.replace("version = 3", "version = 2"),
-            "standards.toml: unsupported version 2; expected 3",
+            MANIFEST.replace("version = 4", "version = 3"),
+            "standards.toml: unsupported version 3; expected 4",
+        ),
+        // A version 3 manifest has no `[protocol]` table.
+        (
+            MANIFEST
+                .replace("version = 4", "version = 3")
+                .split("\n[protocol]")
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+            "standards.toml: invalid manifest:",
         ),
         // A version 2 manifest has no design `tokens` or `assets`.
         (
             MANIFEST
-                .replace("version = 3", "version = 2")
+                .replace("version = 4", "version = 2")
                 .replace("tokens = \"design/tokens.json\"\n", ""),
             "standards.toml: invalid manifest:",
         ),
         (
             MANIFEST.replace("assets = [", "assets = 1\nicons = ["),
+            "standards.toml: invalid manifest:",
+        ),
+        (
+            MANIFEST.replace("types = ", "typescript = "),
             "standards.toml: invalid manifest:",
         ),
     ] {
@@ -771,6 +1186,10 @@ fn unreadable_inputs_are_errors() {
             "design/icon.ico",
             "Failed to read repo/design/icon.ico: denied",
         ),
+        (
+            TYPES_PATH,
+            "Failed to read repo/crates/ag-demo/schema/protocol.ts: denied",
+        ),
     ] {
         let mut fixture = Fixture::new();
         fixture.fail(path, io::ErrorKind::PermissionDenied);
@@ -823,10 +1242,14 @@ fn real_adapter_reads_files_and_lists_the_git_checkout() {
     // Act
     let manifest = host.read(&crate_root.join("Cargo.toml"));
     let bytes = host.read_bytes(&crate_root.join("Cargo.toml"));
+    let is_file = host.is_file(&crate_root.join("Cargo.toml"));
+    let is_directory_a_file = host.is_file(crate_root);
     let listing = host.inventory(crate_root);
 
     // Assert
     assert!(manifest.expect("crate manifest").contains("ag-xtask"));
+    assert!(is_file.expect("crate manifest metadata"));
+    assert!(!is_directory_a_file.expect("crate directory metadata"));
     assert!(
         bytes
             .expect("crate manifest bytes")
@@ -837,6 +1260,35 @@ fn real_adapter_reads_files_and_lists_the_git_checkout() {
             .expect("real Git inventory")
             .contains(&PathBuf::from("src/check_standard.rs"))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn real_git_lists_a_linked_directory_but_not_the_files_behind_it() {
+    // Arrange
+    let directory = tempdir().expect("Git fixture directory");
+    let root = directory.path();
+    let init = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(root)
+        .status();
+    fs::create_dir(root.join("generated")).expect("generated directory");
+    fs::write(root.join("generated/protocol.ts"), TYPES).expect("generated types");
+    symlink("generated", root.join("schema")).expect("linked directory");
+    let host = RealHost {
+        git: PathBuf::from("git"),
+    };
+
+    // Act
+    let listing = host.inventory(root).expect("real Git inventory");
+    let is_file = host.is_file(&root.join("schema/protocol.ts"));
+
+    // Assert
+    assert!(init.expect("git init").success());
+    assert!(listing.contains(&PathBuf::from("generated/protocol.ts")));
+    assert!(listing.contains(&PathBuf::from("schema")));
+    assert!(!listing.contains(&PathBuf::from("schema/protocol.ts")));
+    assert!(is_file.expect("metadata through the linked directory"));
 }
 
 #[test]

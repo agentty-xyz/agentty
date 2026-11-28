@@ -93,8 +93,18 @@ four keys:
   and `design/gallery.html` and `design/gallery-check.mjs`, the component gallery and
   the script that compares a page's stylesheets with it.
 
-The manifest's `version` is 3 since `tokens` and `assets` were added; a reader of an
-older version rejects it, and every table rejects keys it does not know.
+Its `[protocol]` table lets another workspace's remote-control clients speak the same
+frames. It has exactly two keys, both files generated from the protocol types, as the
+[remote-control design](@/docs/architecture/remote-control-design.md#frame-schema)
+describes:
+
+- `schema`: the JSON Schema of every frame,
+  `crates/ag-remote/schema/remote_protocol.json`.
+- `types`: the TypeScript declarations rendered from it,
+  `crates/ag-remote/schema/remote_protocol.ts`.
+
+The manifest's `version` is 4 since `[protocol]` was added; a reader of an older version
+rejects it, and every table rejects keys it does not know.
 
 Exported means portable. An exported section, skill, rule, guide, stylesheet, token
 file, or text asset names no crate, hook, or repository path that only this workspace
@@ -115,6 +125,25 @@ the network or from outside the export:
 - An SVG asset holds no script or event handler and references only its own fragments
   and `data:` URIs.
 - Every asset is at most 256 KiB, and a stylesheet belongs in `files`, not `assets`.
+
+The protocol files describe this workspace's own protocol, so they may name the crate
+they are generated from, but each stands alone:
+
+- Each is a regular file that Git lists, tracked or untracked but not ignored, so it is
+  neither a link nor a file reached through a linked directory. It is UTF-8 text with no
+  byte order mark and at most 512 KiB.
+- The schema is a JSON object whose string `$ref`, `$dynamicRef`, and `$recursiveRef`
+  values are JSON pointer fragments, such as `#/$defs/ClientFrame`, that resolve inside
+  it. It holds no `$id`, `$anchor`, `$dynamicAnchor`, or `$recursiveAnchor` key
+  anywhere, and its only `$schema` is `https://json-schema.org/draft/2020-12/schema`, at
+  the root.
+- The types import nothing: outside comments and string literals they hold no `import`
+  or `export ... from` statement, `import()` type, `require` call, or triple-slash
+  directive such as `/// <reference>`. They hold no template literal, and every string
+  literal ends on its own line.
+- The schema's integer `x-protocol-version` equals the one
+  `export type ProtocolVersion = <integer>;` the types declare, written without a sign
+  or leading zero, so the pair cannot be exported out of step.
 
 The `check-standards` hook enforces this and checks that every path, skill, and heading
 the manifest names exists and that no design export is listed twice.
