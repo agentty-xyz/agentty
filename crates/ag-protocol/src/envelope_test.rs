@@ -98,7 +98,8 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(normalized_prompt.contains("Do not create commits; do not suggest creating them"));
     assert!(!normalized_prompt.contains("`subtasks`"));
     assert!(normalized_prompt.contains("Emit `review_comment_outcomes` only"));
-    assert!(normalized_prompt.contains("otherwise use an empty array"));
+    assert!(normalized_prompt.contains("`notes` only when the turn explicitly invites"));
+    assert!(normalized_prompt.contains("otherwise use empty arrays"));
     assert!(rendered_prompt.contains("\"answer\""));
     assert!(rendered_prompt.contains("\"questions\""));
     assert!(rendered_prompt.contains("\"title\""));

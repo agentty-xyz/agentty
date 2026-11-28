@@ -124,7 +124,7 @@ impl SessionMessage {
     }
 
     /// Returns whether this is a workflow notice only the user reads, such as
-    /// a context compaction or sandbox notice.
+    /// a context compaction, sandbox, or session notes notice.
     fn is_user_only_notice(&self) -> bool {
         let content = self.content.trim_start();
 
@@ -134,6 +134,7 @@ impl SessionMessage {
                 TranscriptNotice::ContextWarning,
                 TranscriptNotice::Sandbox,
                 TranscriptNotice::SandboxWarning,
+                TranscriptNotice::SessionNotesWarning,
             ]
             .iter()
             .any(|notice| content.starts_with(&format!("{} ", notice.prefix())))

@@ -26,6 +26,7 @@ pub(super) mod published_branch;
 pub(super) mod refresh;
 pub(super) mod review;
 mod sandbox;
+mod session_document;
 mod steering;
 pub(super) mod task;
 mod task_turn;

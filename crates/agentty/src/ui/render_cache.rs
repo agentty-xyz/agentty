@@ -18,6 +18,7 @@ pub struct RenderCacheStore {
     /// Each draw resets it before painting.
     greeting_animated: Cell<bool>,
     markdown_render: markdown::MarkdownRenderCache,
+    session_document_layout: component::session_document_overlay::SessionDocumentLayoutCache,
     session_output_layout: component::session_output::SessionOutputLayoutCache,
 }
 
@@ -36,6 +37,13 @@ impl RenderCacheStore {
     /// Returns the cache for styled markdown lines.
     pub(crate) fn markdown_render_cache(&self) -> &markdown::MarkdownRenderCache {
         &self.markdown_render
+    }
+
+    /// Returns the cache for the session notes panel's wrapped entries.
+    pub(crate) fn session_document_layout_cache(
+        &self,
+    ) -> &component::session_document_overlay::SessionDocumentLayoutCache {
+        &self.session_document_layout
     }
 
     /// Returns the cache for fully assembled session-output layouts.

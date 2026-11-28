@@ -284,6 +284,32 @@ fn test_parse_agent_response_strict_accepts_questions_without_answer() {
 }
 
 #[test]
+/// Parser reads session notes beside an answer, but an object carrying only
+/// notes, alone or quoted at the end of prose, is not a response.
+fn test_parse_agent_response_strict_reads_notes_only_beside_a_protocol_key() {
+    // Arrange
+    let with_answer = r#"{"answer":"Mapped it.","notes":["Parser lives in src/parse.rs."]}"#;
+    let notes_only = [
+        r#"{"notes":["Parser lives in src/parse.rs."]}"#,
+        "The schema has a notes field, for example {\"notes\": [\"Parser lives in \
+         src/parse.rs.\"]}",
+        "Example:\n```json\n{\"notes\": [\"Parser lives in src/parse.rs.\"]}\n```",
+    ];
+
+    // Act
+    let response = parse_agent_response_strict(with_answer);
+
+    // Assert
+    assert_eq!(
+        response.expect("parser should accept notes").notes,
+        ["Parser lives in src/parse.rs."]
+    );
+    for raw in notes_only {
+        assert!(parse_agent_response_strict(raw).is_err(), "{raw}");
+    }
+}
+
+#[test]
 /// Parser accepts a review-comment outcome without an `answer` key because
 /// it is a recognized protocol field.
 fn test_parse_agent_response_strict_accepts_review_outcome_without_answer() {

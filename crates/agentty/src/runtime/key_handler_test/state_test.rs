@@ -101,6 +101,79 @@ async fn usage_key_opens_the_panel_above_the_session_view_and_esc_closes_it() {
 }
 
 #[tokio::test]
+async fn notes_key_opens_the_panel_from_the_session_view_and_the_graph_inspector() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("sess")
+            .build(),
+    );
+    app.mode = AppMode::View {
+        scroll_offset: Some(2),
+        session_id: "sess".into(),
+    };
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+    let presentation = PresentationState::default();
+    let notes_key = KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
+
+    // Act
+    let opened = handle_key_event(&mut app, &presentation, &mut terminal, notes_key).await;
+    let is_view_notes_open = matches!(&app.mode, AppMode::SessionDocument(panel)
+        if panel.restore.session_id() == "sess"
+            && panel.document.as_ref().is_ok_and(|document| document.version == 0));
+    let is_ticking = app.has_visible_tick_driven_ui();
+    let scrolled = handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    )
+    .await;
+    handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await
+    .expect("close from the session view");
+    let is_view_restored = matches!(
+        &app.mode,
+        AppMode::View { session_id, scroll_offset: Some(2) } if session_id == "sess"
+    );
+    let mut inspector = graph_view();
+    inspector.restore.session_id = "sess".into();
+    inspector.selected_node = 1;
+    app.mode = AppMode::ExecutionGraph(Box::new(inspector));
+    handle_key_event(&mut app, &presentation, &mut terminal, notes_key)
+        .await
+        .expect("open from the graph inspector");
+    let is_graph_notes_open = matches!(&app.mode, AppMode::SessionDocument(_));
+    handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("close to the graph inspector");
+
+    // Assert
+    assert!(matches!(opened, Ok(EventResult::Continue)));
+    assert!(is_view_notes_open);
+    assert!(!is_ticking);
+    assert!(matches!(scrolled, Ok(EventResult::Continue)));
+    assert!(is_view_restored);
+    assert!(is_graph_notes_open);
+    assert!(matches!(
+        &app.mode,
+        AppMode::ExecutionGraph(view) if view.selected_node == 1
+    ));
+}
+
+#[tokio::test]
 async fn test_handle_key_event_routes_prompt_history_and_restores_draft() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_test_app().await;

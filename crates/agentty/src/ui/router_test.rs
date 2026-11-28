@@ -33,6 +33,7 @@ use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::platform::{PlatformTabView, PlatformView};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::remote_control::{RemoteControlView, RemoteDeviceView, RemoteRelayView};
+use crate::presentation::session_document::{SessionDocumentPanel, SessionDocumentRestore};
 use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
     SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
@@ -896,6 +897,41 @@ fn render_usage_panel_above_its_session_view() {
     assert!(text.contains("model-live rebase"));
     assert!(!text.contains("model-elsewhere"));
     assert!(text.contains("Session total"));
+}
+
+#[test]
+fn notes_panels_keep_the_session_view_surface_of_the_page_that_opened_them() {
+    // Arrange
+    let view = ConfirmationViewMode {
+        scroll_offset: Some(5),
+        session_id: "session-overlay".into(),
+    };
+    let panel = |restore| {
+        AppMode::SessionDocument(Box::new(SessionDocumentPanel::new(
+            Ok(ag_session::SessionDocument::default()),
+            restore,
+        )))
+    };
+    let over_view = panel(SessionDocumentRestore::View(view.clone()));
+    let over_graph = panel(SessionDocumentRestore::Graph(Box::new(
+        crate::presentation::execution_graph::GraphView::new(view),
+    )));
+
+    // Act
+    let (handled, _) = render_list_backed_mode(&over_view);
+
+    // Assert
+    for mode in [&over_view, &over_graph] {
+        assert!(matches!(
+            surface_for_mode(mode),
+            Surface::Session {
+                mode: SessionSurfaceMode::View,
+                scroll_offset: Some(5),
+                session_id: "session-overlay",
+            }
+        ));
+    }
+    assert!(handled);
 }
 
 #[test]

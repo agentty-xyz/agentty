@@ -29,6 +29,7 @@ use crate::presentation::chatgpt_sign_in::{
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::platform::PlatformTabView;
+use crate::presentation::session_document::{SessionDocumentPanel, SessionDocumentRestore};
 use crate::presentation::setting::SettingsScreenSnapshot;
 use crate::ui::component::confirmation_overlay::ConfirmationOverlay;
 use crate::ui::component::diff_comment_submit_overlay::DiffCommentSubmitOverlay;
@@ -36,8 +37,8 @@ use crate::ui::component::info_overlay::InfoOverlay;
 use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
 use crate::ui::usage_readout::UsageReadout;
 use crate::ui::{
-    Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
-    style, usage_format,
+    Component, Page, RenderCacheStore, RenderContext, SessionReviewSnapshot, component, markdown,
+    overlay, page, style, usage_format,
 };
 
 /// Shared mutable routing data reused across app modes in `route_frame`.
@@ -238,14 +239,7 @@ impl<'a> FrameResources<'a> {
 
 /// Routes the content-area render path by active `AppMode`.
 pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<'_>) {
-    if let AppMode::ExecutionGraph(view) = context.mode {
-        page::execution_graph::render(
-            frame,
-            area,
-            view,
-            context.render_cache_store.markdown_render_cache(),
-        );
-
+    if route_graph_page(frame, area, &context) {
         return;
     }
     let RenderContext {
@@ -328,6 +322,40 @@ pub(crate) fn route_frame(frame: &mut Frame, area: Rect, context: RenderContext<
 
     render_surface(frame, area, surface_for_mode(mode), &mut shared, resources);
     render_mode_overlay(frame, area, mode, &shared, resources);
+    if let AppMode::SessionDocument(panel) = mode {
+        render_session_document_overlay(frame, area, sessions, panel, render_cache_store);
+    }
+}
+
+/// Paints the graph inspector page, with the notes panel above it when the
+/// inspector opened the panel, and returns whether it did; other modes
+/// paint nothing here.
+fn route_graph_page(frame: &mut Frame, area: Rect, context: &RenderContext<'_>) -> bool {
+    let (view, panel) = match context.mode {
+        AppMode::ExecutionGraph(view) => (view, None),
+        AppMode::SessionDocument(panel) => match &panel.restore {
+            SessionDocumentRestore::Graph(view) => (view, Some(panel)),
+            SessionDocumentRestore::View(_) => return false,
+        },
+        _ => return false,
+    };
+    page::execution_graph::render(
+        frame,
+        area,
+        view,
+        context.render_cache_store.markdown_render_cache(),
+    );
+    if let Some(panel) = panel {
+        render_session_document_overlay(
+            frame,
+            area,
+            context.sessions,
+            panel,
+            context.render_cache_store,
+        );
+    }
+
+    true
 }
 
 /// Resolves the stable base-page identity for terminal transition handling.
@@ -350,11 +378,9 @@ pub(crate) fn active_project_name(
 /// Resolves the base page painted for every mode before any overlay.
 fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
     match mode {
-        AppMode::ExecutionGraph(view) => Surface::Session {
-            mode: SessionSurfaceMode::View,
-            scroll_offset: view.restore.scroll_offset,
-            session_id: &view.restore.session_id,
-        },
+        AppMode::ExecutionGraph(view) => {
+            session_view_surface(&view.restore.session_id, view.restore.scroll_offset)
+        }
         AppMode::Confirmation {
             confirmation_intent:
                 ConfirmationIntent::ContinueSession
@@ -384,11 +410,12 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Confirmation { .. } => Surface::List,
         AppMode::Help { context, .. } => surface_for_help_context(context),
-        AppMode::Usage(panel) => Surface::Session {
-            mode: SessionSurfaceMode::View,
-            scroll_offset: panel.restore.scroll_offset(),
-            session_id: panel.restore.session_id(),
-        },
+        AppMode::Usage(panel) => {
+            session_view_surface(panel.restore.session_id(), panel.restore.scroll_offset())
+        }
+        AppMode::SessionDocument(panel) => {
+            session_view_surface(panel.restore.session_id(), panel.restore.scroll_offset())
+        }
         AppMode::View {
             session_id,
             scroll_offset,
@@ -448,6 +475,16 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
                     review_comments.sidebar_focus
                 }),
         },
+    }
+}
+
+/// Resolves the session view of `session_id` at `scroll_offset`, painted
+/// behind a page or panel opened from it.
+fn session_view_surface(session_id: &str, scroll_offset: Option<usize>) -> Surface<'_> {
+    Surface::Session {
+        mode: SessionSurfaceMode::View,
+        scroll_offset,
+        session_id,
     }
 }
 
@@ -599,8 +636,10 @@ fn render_mode_overlay(
     resources: FrameResources<'_>,
 ) {
     match mode {
+        // The notes panel draws after this, with the render caches it needs.
         AppMode::List
         | AppMode::ExecutionGraph(_)
+        | AppMode::SessionDocument(_)
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
@@ -713,6 +752,28 @@ fn render_usage_overlay(
     component::usage_overlay::UsageOverlay::new(&content, session_title)
         .scroll_offset(panel.scroll_offset)
         .render(frame, area);
+}
+
+/// Renders the notes panel, titled with the session's display title.
+fn render_session_document_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    sessions: &[Session],
+    panel: &SessionDocumentPanel,
+    render_cache_store: &RenderCacheStore,
+) {
+    let session_id = panel.restore.session_id();
+    let session_title = sessions
+        .iter()
+        .find(|session| session.id == *session_id)
+        .map_or("", Session::display_title);
+
+    component::session_document_overlay::SessionDocumentOverlay::new(
+        panel,
+        session_title,
+        render_cache_store.session_document_layout_cache(),
+    )
+    .render(frame, area);
 }
 
 /// Previews pending diff comments while the leave-diff confirmation is open.

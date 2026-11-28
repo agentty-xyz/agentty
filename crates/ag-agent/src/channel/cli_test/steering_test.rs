@@ -218,8 +218,10 @@ fn follow_up_response_joins_only_nonempty_answers_and_keeps_questions() {
 
     for (primary_answer, follow_up_answer, follow_up_questions, expected_answer) in cases {
         let mut response = AgentResponse::plain(primary_answer);
+        response.notes = vec!["First note.".to_string()];
         let mut follow_up = AgentResponse::plain(follow_up_answer);
         follow_up.questions.clone_from(&follow_up_questions);
+        follow_up.notes = vec!["Follow-up note.".to_string()];
 
         // Act
         append_follow_up_response(&mut response, follow_up);
@@ -227,6 +229,7 @@ fn follow_up_response_joins_only_nonempty_answers_and_keeps_questions() {
         // Assert
         assert_eq!(response.answer, expected_answer);
         assert_eq!(response.questions, follow_up_questions);
+        assert_eq!(response.notes, ["First note.", "Follow-up note."]);
     }
 }
 

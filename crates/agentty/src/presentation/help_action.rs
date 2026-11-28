@@ -415,6 +415,11 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         "Inspect session execution graphs",
     ));
     actions.push(HelpAction::new(
+        "notes",
+        "N",
+        "Show the session's shared notes",
+    ));
+    actions.push(HelpAction::new(
         "usage",
         "u",
         "Show token usage and estimated cost",

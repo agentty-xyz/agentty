@@ -71,6 +71,8 @@ pub enum TranscriptNotice {
     Sandbox,
     /// Commands running without the native sandbox, with the fix.
     SandboxWarning,
+    /// A graph node's note that the session document refused.
+    SessionNotesWarning,
     /// Draft session start failure.
     StartError,
     /// Completed-turn metadata persistence failure.
@@ -111,6 +113,7 @@ impl TranscriptNotice {
             Self::ReviewWatch => "[Review Watch]",
             Self::Sandbox => "[Sandbox]",
             Self::SandboxWarning => "[Sandbox Warning]",
+            Self::SessionNotesWarning => "[Session Notes Warning]",
             Self::StartError => "[Start Error]",
             Self::TurnMetadataError => "[Turn Metadata Error]",
         }

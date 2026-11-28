@@ -26,6 +26,7 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::help_action::{self, ViewSessionState};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
+use crate::presentation::session_document::SessionDocumentRestore;
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
@@ -308,6 +309,15 @@ async fn handle_view_key(
     if key.code == KeyCode::Char('u') && is_insertable_char_key(key) {
         app.open_usage_panel(UsageRestore::View(confirmation_view_mode(view_context)))
             .await;
+
+        return false;
+    }
+
+    if key.code == KeyCode::Char('N') && is_insertable_char_key(key) {
+        app.open_session_document(SessionDocumentRestore::View(confirmation_view_mode(
+            view_context,
+        )))
+        .await;
 
         return false;
     }

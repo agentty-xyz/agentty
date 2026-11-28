@@ -16,6 +16,7 @@ use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::graph_chat::GraphChatSnapshot;
 use crate::presentation::platform::PlatformTabView;
+use crate::presentation::session_document::SessionDocumentRestore;
 use crate::presentation::setting::SettingsScreenSnapshot;
 
 /// Focused-review display state for the visible session.
@@ -169,6 +170,10 @@ pub(super) fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         AppMode::ChatGptSignIn { dialog } => Some(dialog.session_id()),
         AppMode::ApiKeyInput { dialog } => Some(dialog.session_id()),
         AppMode::Usage(panel) => Some(panel.restore.session_id()),
+        AppMode::SessionDocument(panel) => match &panel.restore {
+            SessionDocumentRestore::View(view) => Some(&view.session_id),
+            SessionDocumentRestore::Graph(_) => None,
+        },
         AppMode::ExecutionGraph(_)
         | AppMode::List
         | AppMode::SessionCreation { .. }

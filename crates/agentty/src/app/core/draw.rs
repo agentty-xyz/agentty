@@ -6,6 +6,7 @@ use crate::domain::agent::AgentKind;
 use crate::domain::session::{Session, Status};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::presentation::graph_chat::GraphChatSnapshot;
+use crate::presentation::session_document::SessionDocumentRestore;
 
 impl App {
     /// Returns the active project identifier.
@@ -108,6 +109,11 @@ impl App {
             }
             AppMode::ApiKeyInput { dialog } => self.session_has_tick_driven_ui(dialog.session_id()),
             AppMode::Usage(panel) => self.session_has_tick_driven_ui(panel.restore.session_id()),
+            // The graph inspector behind the panel never ticks.
+            AppMode::SessionDocument(panel) => {
+                matches!(panel.restore, SessionDocumentRestore::View(_))
+                    && self.session_has_tick_driven_ui(panel.restore.session_id())
+            }
             AppMode::ExecutionGraph(_) | AppMode::DiffLoading { .. } | AppMode::Diff { .. } => {
                 false
             }

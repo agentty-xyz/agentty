@@ -1011,6 +1011,10 @@ pub enum AppMode {
     /// session page that opened it.
     Usage(Box<UsagePanel>),
 
+    /// Displays one session's shared notes document above the session view
+    /// or graph inspector that opened it; its one action clears it.
+    SessionDocument(Box<super::session_document::SessionDocumentPanel>),
+
     /// Displays context-sensitive keybindings above the originating page.
     Help {
         /// Originating page state used for help content and restoration.

@@ -10,6 +10,7 @@ use crate::app::graph_view::GraphViewAction;
 use crate::domain::input::InputState;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::execution_graph::{GraphEditKind, GraphEditor, GraphView};
+use crate::presentation::session_document::SessionDocumentRestore;
 use crate::runtime::EventResult;
 
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> EventResult {
@@ -60,6 +61,12 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> EventResult {
                 };
             }
         }
+        GraphKeyAction::OpenDocument => {
+            app.open_session_document(SessionDocumentRestore::Graph(view))
+                .await;
+
+            return EventResult::Continue;
+        }
         GraphKeyAction::Reconcile => {
             view.notice = match app.reconcile_graph_editor(&mut view).await {
                 Ok(()) => {
@@ -77,6 +84,8 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> EventResult {
 
 enum GraphKeyAction {
     None,
+    /// Opens the session notes panel, which restores this inspector.
+    OpenDocument,
     Reconcile,
     Refresh,
     Submit(GraphViewAction),
@@ -97,6 +106,7 @@ fn resolve_key(view: &mut GraphView, key: KeyEvent) -> GraphKeyAction {
             return GraphKeyAction::Refresh;
         }
         KeyCode::Char('r') => return GraphKeyAction::Refresh,
+        KeyCode::Char('N') => return GraphKeyAction::OpenDocument,
         KeyCode::Char('[' | ']') if !view.graphs.is_empty() => {
             view.is_proposal_selected = false;
             let count = view.graphs.len();

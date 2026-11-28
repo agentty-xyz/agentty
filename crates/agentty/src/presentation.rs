@@ -24,4 +24,6 @@ pub mod prompt;
 pub mod remote_control;
 /// Stable selection projection for grouped review-comment snapshots.
 pub(crate) mod review_comment;
+/// Session notes panel, its clear confirmation, and the page it restores.
+pub mod session_document;
 pub(crate) mod setting;

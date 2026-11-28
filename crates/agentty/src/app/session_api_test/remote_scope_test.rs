@@ -927,6 +927,12 @@ fn session_reads(remote: &SessionService, id: &SessionId) -> Vec<(&'static str, 
                 })
             }),
         ),
+        (
+            "document",
+            request(|remote, id| {
+                boxed(async move { remote.get_session_document(&id).await.map(|_| true) })
+            }),
+        ),
     ]
 }
 

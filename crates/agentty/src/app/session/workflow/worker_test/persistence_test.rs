@@ -94,6 +94,7 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
     };
     let turn_result = Ok(TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: "Implemented the change.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
@@ -202,6 +203,7 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
     };
     let turn_result = Ok(TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: "Hey! How can I help you today?".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
@@ -281,6 +283,7 @@ async fn test_apply_turn_result_persists_harness_turn_report_and_usage() {
     let report = r#"{"model_requests":[]}"#;
     let turn_result = Ok(TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: "Done.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
@@ -394,6 +397,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
     };
     let turn_result = Ok(TurnResult {
         assistant_message: AgentResponse {
+            notes: Vec::new(),
             answer: "Implemented the change.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),

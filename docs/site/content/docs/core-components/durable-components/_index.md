@@ -29,3 +29,5 @@ relate.
   reusable instructions and restrictions captured by tasks and graph nodes.
 - [Env](@/docs/core-components/durable-components/env.md): the session-owned workspace
   where turns execute.
+- [Session Document](@/docs/core-components/durable-components/session-document.md):
+  shared notes that a session's graph nodes read and add to.

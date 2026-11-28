@@ -159,10 +159,10 @@ queue behind it, and it settles only after every child finishes cleanup, keeping
 lease until then.
 
 Explicitly launched graphs admit fresh nodes only as shared readers, routing writers
-through task conversations. Each task node starts an isolated conversation; its
-responses, provider continuation, and usage persist before effects, and failed effects
-cannot publish a validated output. Ordinary chat history and pending questions remain
-separate.
+through task conversations. Each task node starts an isolated conversation, which also
+reads the [session document](#session-document); its responses, provider continuation,
+and usage persist before effects, and failed effects cannot publish a validated output
+or session notes. Ordinary chat history and pending questions remain separate.
 
 Writing task nodes run on the session's serial worker, so their effects stay ordered
 with chat turns, sync, and publication. Read-only task nodes run beside it, so
@@ -204,6 +204,43 @@ newest approved proposal launched while it can still run, captures its current
 revision's snapshot, and a read-only run proposes new nodes against it. Otherwise the
 request proposes a new graph. Approving the exact version appends them in the approval
 transaction, then wakes the retained driver or resumes a stopped one.
+
+## Session Document
+
+Each session keeps one
+[session document](@/docs/core-components/durable-components/session-document.md) of
+shared notes that the task nodes of all its graphs read and add to.
+`SessionDocumentRepository` writes it one transaction at a time: an append takes the
+next version, so overlapping nodes lose no note, and replacing the body requires the
+expected current version.
+
+At admission, a task-conversation node's prompt carries the document's entries since its
+newest replacement, not its rendered body: a fenced JSON array in which the host records
+each entry's version, author, and kind, and only `text` is the author's, with characters
+that could close a tag or form a mention or image placeholder escaped. No note can
+therefore forge a heading, an author, or a host remark. The entries fit a 16 KiB budget
+counted on each entry's raw text plus a fixed overhead, so escaping evicts nothing. Past
+it, the oldest entries are left out whole, except that a replacement opening the entries
+keeps its newest part; the host text says what it left out and whether the document is
+full. Sentences before and after the block say it is reference data, never instructions.
+A document that cannot be read fails no node: the node runs without the section, and one
+warning per graph says so.
+
+The same prompt invites up to five notes through the response's optional `notes` field,
+which every other turn leaves empty and every host ignores. Notes stay out of the saved
+response and the output that bound consumers read. The host publishes them after the
+turn's effects succeed, when it asked no questions, and before the node settles. A turn
+that fails or is canceled before then, asks questions, or whose effects fail publishes
+nothing; a cancel or failure while the node settles can leave published notes in place.
+Each retry or continuation of a node is a new execution, which may publish similar notes
+again. Storage strips characters that render as nothing from every note and body, and
+attributes each note to the node's execution. Publication runs in one transaction, and
+an execution that already wrote an entry adds nothing more, so a redelivered turn adds
+nothing twice, even with different notes, and repeats no warning. Notes the document
+refuses become one session notice, and a document that cannot be written leaves a
+warning instead of failing the node. A crash between the saved response and the
+publication loses that turn's notes. Fresh utility nodes neither read the document nor
+add to it. `SessionService::get_session_document` reads it for hosts.
 
 ## Focused Review Graph
 

@@ -3,6 +3,9 @@
 #[path = "session_api_test/support_test.rs"]
 pub(crate) mod support;
 
+#[path = "session_api_test/document_test.rs"]
+mod document;
+
 #[path = "session_api_test/file_test.rs"]
 mod file;
 

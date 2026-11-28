@@ -114,6 +114,19 @@ where
 
             Ok(mode::usage::handle(&mut app.mode, max_scroll_offset, key))
         }
+        AppMode::SessionDocument(_) => {
+            let size = terminal.size().map_err(backend_err)?;
+            let content_area = content_area_for_terminal(Rect::new(0, 0, size.width, size.height));
+            let max_scroll_offset = mode::session_document::max_scroll_offset(
+                app,
+                presentation
+                    .render_cache_store()
+                    .session_document_layout_cache(),
+                content_area,
+            );
+
+            Ok(mode::session_document::handle(app, max_scroll_offset, key).await)
+        }
     };
 
     if result.is_ok() {

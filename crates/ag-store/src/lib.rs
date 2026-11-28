@@ -12,6 +12,7 @@ mod repository;
 mod review;
 mod run;
 mod session;
+mod session_document;
 mod session_message;
 mod session_preparation;
 mod session_snapshot;
@@ -55,6 +56,7 @@ pub use session::{
     SessionAgentModelRow, SessionDetailRow, SessionFocusedReviewRow, SessionListRow,
     SessionMessageRow, SessionRepository, SessionReviewAuditRow, SessionRow, SessionTurnMetadata,
 };
+pub use session_document::SessionDocumentRepository;
 pub use session_preparation::{
     SessionPreparationRepository, SessionPreparationRow, SessionPreparationState,
 };

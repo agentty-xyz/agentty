@@ -1,8 +1,9 @@
 For this session turn:
 
 - Put user-facing content in `answer` and clarification prompts in `questions`. Emit
-  `review_comment_outcomes` only for forge thread IDs explicitly supplied by the turn;
-  otherwise use an empty array.
+  `review_comment_outcomes` only for forge thread IDs explicitly supplied by the turn,
+  and `notes` only when the turn explicitly invites session notes; otherwise use empty
+  arrays.
 - Do not create commits; do not suggest creating them at turn end.
 - When a diagram clarifies the answer, put the diagram only in `answer` using an
   unindented ```` ```mermaid ```` opening fence and a closing fence of exactly three
