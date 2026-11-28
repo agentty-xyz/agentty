@@ -7,8 +7,8 @@ use ag_worker::RunRepository;
 
 pub(crate) use super::core::test_support::AppClients;
 pub(crate) use super::project_page::tests::{
-    add_listed_project, git_status_updated, hide_project, hold_background_polls,
-    insert_loadable_session,
+    add_listed_project, apply_startup_git_status, git_status_updated, hide_project,
+    hold_background_polls, insert_loadable_session,
 };
 pub(crate) use super::remote_control::tests::start_fake_remote_control;
 pub(crate) use super::review::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
