@@ -8,14 +8,14 @@
 // surface, this script renders the gallery's markup once with those
 // stylesheets alone and once with the surface's whole stylesheet chain in
 // their place, in both themes, on a desktop and a touch phone viewport and
-// on a desktop with reduced motion, at rest and with each interactive
-// element hovered, focused, and pressed. It fails when any computed style of
-// an element inside a `data-specimen` element differs, other than the
-// properties that place or size a component in its page, and when a surface
-// rule names a shared component to set any other property. With `--markup`,
-// the surface's templates and scripts, a rule on a class the markup sets
-// beside a shared class counts as naming that component too. It reads only
-// local files: the browser refuses every request but a `data:` URI, and the
+// on desktops with reduced motion and with more contrast, at rest and with
+// each interactive element hovered, focused, and pressed. It fails when any
+// computed style of an element inside a `data-specimen` element differs,
+// other than the properties that place or size a component in its page, and
+// when a surface rule names a shared component to set any other property.
+// With `--markup`, the surface's templates and scripts, a rule on a class
+// the markup sets beside a shared class counts as naming that component
+// too. It reads only local files: the browser refuses every request but a `data:` URI, and the
 // check fails on any it refused. It needs a Chromium-based browser: set
 // CHROME_PATH, or it looks in the usual places.
 
@@ -81,12 +81,15 @@ export const THEMES = [
   { className: "theme-dark", name: "dark" },
 ];
 
-// Viewports: a desktop with a mouse, a phone with touch, and a desktop
-// whose reader asks for reduced motion, where live statuses stop pulsing.
+// Viewports: a desktop with a mouse, a phone with touch, a desktop whose
+// reader asks for reduced motion, where live statuses stop pulsing, and a
+// desktop whose reader asks for more contrast, where the high-contrast token
+// values apply.
 export const VIEWPORTS = [
-  { height: 900, mobile: false, name: "desktop", reducedMotion: false, width: 1280 },
-  { height: 844, mobile: true, name: "phone", reducedMotion: false, width: 390 },
-  { height: 900, mobile: false, name: "desktop, reduced motion", reducedMotion: true, width: 1280 },
+  { height: 900, mobile: false, moreContrast: false, name: "desktop", reducedMotion: false, width: 1280 },
+  { height: 844, mobile: true, moreContrast: false, name: "phone", reducedMotion: false, width: 390 },
+  { height: 900, mobile: false, moreContrast: false, name: "desktop, reduced motion", reducedMotion: true, width: 1280 },
+  { height: 900, mobile: false, moreContrast: true, name: "desktop, more contrast", reducedMotion: false, width: 1280 },
 ];
 
 // Forced states and the pseudo-classes each forces on the element and on
@@ -996,7 +999,10 @@ export class Page {
     });
     await this.send("Emulation.setTouchEmulationEnabled", { enabled: viewport.mobile, maxTouchPoints: 1 });
     await this.send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-reduced-motion", value: viewport.reducedMotion ? "reduce" : "no-preference" }],
+      features: [
+        { name: "prefers-reduced-motion", value: viewport.reducedMotion ? "reduce" : "no-preference" },
+        { name: "prefers-contrast", value: viewport.moreContrast ? "more" : "no-preference" },
+      ],
     });
     this.external = [];
     const { frameTree } = await this.send("Page.getFrameTree");

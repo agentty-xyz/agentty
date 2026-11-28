@@ -98,7 +98,7 @@
   --color-muted: #adadad;
   --color-dim: #919191;
   --color-border: #333333;
-  --color-border-strong: #646464;
+  --color-border-strong: #6b6b6b;
   --color-focus: #ffffff;
   --glyph-0: #262626;
   --glyph-1: #363636;
@@ -110,4 +110,18 @@
   --glyph-7: #f4f4f4;
   --glyph-hot: #ffffff;
   --shadow-logo: 0 0 12px rgba(224, 224, 224, 0.2);
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --color-accent-dim: #86c995;
+    --color-muted: #a5c8ad;
+    --color-dim: #94ba9d;
+  }
+
+  :root.theme-dark {
+    --color-accent-dim: #c8c8c8;
+    --color-muted: #bababa;
+    --color-dim: #ababab;
+  }
 }

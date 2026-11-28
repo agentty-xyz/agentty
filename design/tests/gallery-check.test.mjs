@@ -412,7 +412,7 @@ test("check renders the reference and each surface in every theme and viewport, 
   const result = await check(fakeBrowser(page), { gallery: GALLERY, reference: "", surfaces: [{ css: "", name: "site" }] });
 
   assert.deepEqual(result, {
-    captures: 12,
+    captures: 16,
     loads: [],
     passed: true,
     specimens: 1,
@@ -427,12 +427,16 @@ test("check renders the reference and each surface in every theme and viewport, 
       [false, "phone"],
       [false, "desktop, reduced motion"],
       [false, "desktop, reduced motion"],
+      [false, "desktop, more contrast"],
+      [false, "desktop, more contrast"],
       [true, "desktop"],
       [true, "desktop"],
       [true, "phone"],
       [true, "phone"],
       [true, "desktop, reduced motion"],
       [true, "desktop, reduced motion"],
+      [true, "desktop, more contrast"],
+      [true, "desktop, more contrast"],
     ],
   );
   // The link is hovered with no specimen ancestors to force; the badge in
@@ -583,7 +587,7 @@ test("main checks the surfaces against the gallery and exits with the result", a
 
     const same = [gallery, "--surface", "same=" + join(directory, "base.css"), "--markup", "same=" + directory];
     assert.equal(await main(same, environment, io, launch), 0);
-    assert.deepEqual(output.log, ["Gallery check: same render all 1 specimens as the gallery does (12 renders)."]);
+    assert.deepEqual(output.log, ["Gallery check: same render all 1 specimens as the gallery does (16 renders)."]);
     assert.equal(browser.closed, true);
     assert.deepEqual(launches, [[SCRIPT, { linux: process.platform === "linux" }]]);
     assert.equal(await main([gallery, "--surface", "site=" + join(directory, "site.css")], environment, io, launch), 1);
@@ -651,11 +655,12 @@ test("a page loads markup in a viewport, runs collectors, lists nodes, and force
   const browser = new Browser(child, child.stdio[3], child.stdio[4], directory);
 
   const page = await browser.newPage();
-  await page.load("<p>", { height: 844, mobile: true, name: "phone", reducedMotion: false, width: 390 });
+  await page.load("<p>", { height: 844, mobile: true, moreContrast: false, name: "phone", reducedMotion: false, width: 390 });
   const list = await page.evaluate(collectPage, { focus: SELECTORS.focus, hover: SELECTORS.hover, mode: "list", selector: SELECTORS.specimens });
   const nodes = await page.nodes(SELECTORS.specimens);
   await page.force(7, ["hover"]);
-  await page.load("<p>", { height: 900, mobile: false, name: "desktop, reduced motion", reducedMotion: true, width: 1280 });
+  await page.load("<p>", { height: 900, mobile: false, moreContrast: false, name: "desktop, reduced motion", reducedMotion: true, width: 1280 });
+  await page.load("<p>", { height: 900, mobile: false, moreContrast: true, name: "desktop, more contrast", reducedMotion: false, width: 1280 });
 
   assert.equal(list.length, 4);
   assert.deepEqual(nodes, [7, 8]);
@@ -687,7 +692,20 @@ test("a page loads markup in a viewport, runs collectors, lists nodes, and force
   const media = child.received.filter((message) => message.method === "Emulation.setEmulatedMedia");
   assert.deepEqual(
     media.map((message) => message.params.features),
-    [[{ name: "prefers-reduced-motion", value: "no-preference" }], [{ name: "prefers-reduced-motion", value: "reduce" }]],
+    [
+      [
+        { name: "prefers-reduced-motion", value: "no-preference" },
+        { name: "prefers-contrast", value: "no-preference" },
+      ],
+      [
+        { name: "prefers-reduced-motion", value: "reduce" },
+        { name: "prefers-contrast", value: "no-preference" },
+      ],
+      [
+        { name: "prefers-reduced-motion", value: "no-preference" },
+        { name: "prefers-contrast", value: "more" },
+      ],
+    ],
   );
   assert.deepEqual(child.received[16].params, { forcedPseudoClasses: ["hover"], nodeId: 7 });
   setImmediate(() => child.emit("exit", 0));

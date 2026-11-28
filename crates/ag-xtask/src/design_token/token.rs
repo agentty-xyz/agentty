@@ -20,6 +20,13 @@ pub(super) const THEMES: [&str; 2] = [DEFAULT_THEME, DARK_THEME];
 /// Token extension that holds the value in themes other than the default.
 const THEME_EXTENSION: &str = "xyz.agentty.theme";
 
+/// Token extension that holds the value in each theme when the system asks
+/// for more contrast.
+const HIGH_CONTRAST_EXTENSION: &str = "xyz.agentty.highContrast";
+
+/// Media query that selects the high-contrast values on a web page.
+const HIGH_CONTRAST_MEDIA: &str = "@media (prefers-contrast: more)";
+
 /// Root extension that lists the colour pairs whose contrast is checked.
 const CONTRAST_EXTENSION: &str = "xyz.agentty.contrast";
 
@@ -170,6 +177,37 @@ impl TokenSet {
             text.push('\n');
             text.push_str(&Self::rule(":root.theme-dark", dark.into_iter()));
         }
+        let high_contrast: Vec<_> = selected
+            .iter()
+            .filter_map(|token| token.high_contrast.as_ref().map(|values| (*token, values)))
+            .collect();
+        if !high_contrast.is_empty() {
+            let rules = [
+                Self::rule(
+                    ":root",
+                    high_contrast
+                        .iter()
+                        .map(|(token, values)| (*token, &values.default)),
+                ),
+                Self::rule(
+                    ":root.theme-dark",
+                    high_contrast
+                        .iter()
+                        .map(|(token, values)| (*token, &values.dark)),
+                ),
+            ];
+            text.push('\n');
+            text.push_str(HIGH_CONTRAST_MEDIA);
+            text.push_str(" {\n");
+            for line in rules.join("\n").lines() {
+                if !line.is_empty() {
+                    text.push_str("  ");
+                    text.push_str(line);
+                }
+                text.push('\n');
+            }
+            text.push_str("}\n");
+        }
 
         text
     }
@@ -191,6 +229,7 @@ impl TokenSet {
 /// One token, flattened from its group path.
 pub(super) struct Token {
     pub(super) dark: Option<Value>,
+    pub(super) high_contrast: Option<HighContrast>,
     pub(super) name: String,
     pub(super) path: String,
     pub(super) surface: Option<String>,
@@ -198,13 +237,32 @@ pub(super) struct Token {
 }
 
 impl Token {
-    /// Returns the value in `theme`, falling back to the default.
-    pub(super) fn value_in(&self, theme: &str) -> &Value {
-        match &self.dark {
-            Some(dark) if theme == DARK_THEME => dark,
+    /// Returns the value in `theme` at `contrast`: the high-contrast value
+    /// when the token has one and the system asks for more contrast, and
+    /// otherwise the theme's value, falling back to the default.
+    pub(super) fn value_in(&self, theme: &str, contrast: Contrast) -> &Value {
+        match (&self.high_contrast, &self.dark) {
+            (Some(values), _) if contrast == Contrast::High && theme == DARK_THEME => &values.dark,
+            (Some(values), _) if contrast == Contrast::High => &values.default,
+            (_, Some(dark)) if theme == DARK_THEME => dark,
             _ => &self.value,
         }
     }
+}
+
+/// A token's values in each theme when the system asks for more contrast.
+pub(super) struct HighContrast {
+    pub(super) dark: Value,
+    pub(super) default: Value,
+}
+
+/// The contrast the system asks for: on the web, `prefers-contrast: more`
+/// selects `High`.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Contrast {
+    High,
+    Standard,
 }
 
 /// A token value: a colour, kept for contrast checks, or rendered CSS text.
@@ -463,6 +521,10 @@ impl Color {
 #[serde(deny_unknown_fields)]
 pub(super) struct ContrastGroup {
     pub(super) backgrounds: Vec<String>,
+    /// The one contrast level the pairs are checked at; without it, they
+    /// are checked at every level.
+    #[serde(default)]
+    pub(super) contrast: Option<Contrast>,
     pub(super) foregrounds: Vec<String>,
     pub(super) minimum: f64,
     #[serde(rename = "use")]
@@ -575,20 +637,69 @@ impl Parser {
         };
         let value = Value::parse(kind, &token["$value"]);
         let dark = Self::dark(kind, token);
+        let high_contrast = Self::high_contrast(kind, token);
         let unit = Self::unit(kind, token);
-        match (value, dark, unit) {
-            (Ok(value), Ok(dark), Ok(unit)) => self.tokens.push(Token {
+        match (value, dark, high_contrast, unit) {
+            (Ok(value), Ok(dark), Ok(high_contrast), Ok(unit)) => self.tokens.push(Token {
                 dark: dark.map(|dark| dark.in_unit(unit)),
+                high_contrast: high_contrast.map(|values| HighContrast {
+                    dark: values.dark.in_unit(unit),
+                    default: values.default.in_unit(unit),
+                }),
                 name: scope.name.join("-"),
                 path: scope.path.join("."),
                 surface: scope.surface.clone(),
                 value: value.in_unit(unit),
             }),
-            (value, dark, unit) => {
-                for error in [value.err(), dark.err(), unit.err()].into_iter().flatten() {
+            (value, dark, high_contrast, unit) => {
+                let errors = [value.err(), dark.err()]
+                    .into_iter()
+                    .flatten()
+                    .chain(high_contrast.err().into_iter().flatten())
+                    .chain(unit.err());
+                for error in errors {
                     self.error(scope, &error);
                 }
             }
+        }
+    }
+
+    /// Reads the value in each theme at high contrast from the high-contrast
+    /// extension, which names every theme.
+    fn high_contrast(
+        kind: &str,
+        token: &Map<String, Json>,
+    ) -> Result<Option<HighContrast>, Vec<String>> {
+        let Some(themes) = token
+            .get("$extensions")
+            .and_then(|extensions| extensions.get(HIGH_CONTRAST_EXTENSION))
+        else {
+            return Ok(None);
+        };
+        let themes = themes.as_object().ok_or_else(|| {
+            vec!["the high-contrast extension must map theme names to values".to_owned()]
+        })?;
+        if let Some(theme) = themes
+            .keys()
+            .find(|theme| !THEMES.contains(&theme.as_str()))
+        {
+            return Err(vec![format!(
+                "the high-contrast extension names unknown theme {theme}; it names {}",
+                THEMES.join(" and ")
+            )]);
+        }
+        let value = |theme: &str| {
+            themes
+                .get(theme)
+                .ok_or_else(|| format!("the high-contrast extension has no {theme} value"))
+                .and_then(|value| {
+                    Value::parse(kind, value)
+                        .map_err(|error| format!("high contrast {theme}: {error}"))
+                })
+        };
+        match (value(DEFAULT_THEME), value(DARK_THEME)) {
+            (Ok(default), Ok(dark)) => Ok(Some(HighContrast { dark, default })),
+            (default, dark) => Err([default.err(), dark.err()].into_iter().flatten().collect()),
         }
     }
 
